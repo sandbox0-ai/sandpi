@@ -2,6 +2,7 @@ import type { Environment } from "@/lib/types";
 
 export const SESSION_HARD_TTL_DAYS = 30;
 export const SESSION_HARD_TTL_SECONDS = SESSION_HARD_TTL_DAYS * 24 * 60 * 60;
+export const SESSION_WORKSPACE_ROOT = "/workspace";
 
 export interface SessionForkPlanInput {
   environment: Pick<
@@ -30,6 +31,7 @@ export interface SessionForkPlan {
   environmentRevision: number;
   credentialRevision: number;
   hardTtlSeconds: number;
+  workspaceRoot: string;
   steps: SessionForkStep[];
 }
 
@@ -41,6 +43,7 @@ export function buildSessionForkPlan(input: SessionForkPlanInput): SessionForkPl
     environmentRevision: environment.revision,
     credentialRevision: environment.credentialRevision,
     hardTtlSeconds: SESSION_HARD_TTL_SECONDS,
+    workspaceRoot: SESSION_WORKSPACE_ROOT,
     steps: [
       {
         id: "fork-workspace",
@@ -57,7 +60,7 @@ export function buildSessionForkPlan(input: SessionForkPlanInput): SessionForkPl
         input: {
           templateId: environment.templateId,
           snapshotId: environment.rootfsSnapshotId,
-          mountPoint: "/workspace",
+          mountPoint: SESSION_WORKSPACE_ROOT,
           hardTtl: SESSION_HARD_TTL_SECONDS,
         },
       },
@@ -76,7 +79,7 @@ export function buildSessionForkPlan(input: SessionForkPlanInput): SessionForkPl
         input: {
           name: sessionName,
           harness: environment.codingAgent.harness,
-          cwd: "/workspace",
+          cwd: SESSION_WORKSPACE_ROOT,
           recoverFromEvents: true,
         },
       },

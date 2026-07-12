@@ -17,11 +17,13 @@ The mock UI does not require credentials. A Sandpi deployment selects its Sandbo
 
 - An **Environment** groups Sessions and binds a coding-agent harness, official agent authentication, Sandbox template and network policy.
 - A **Session** gets an isolated Sandbox and a private fork of the Environment workspace Volume.
+- `/workspace` is an arbitrary directory, not an implicit Git repository. It may contain zero, one or multiple repositories, which are discovered as nested workspace context rather than stored as Session-level branch state.
 - Starting a new Session opens an empty conversation immediately; the first instruction triggers the Environment fork and Supervisor Session creation.
 - The native coding-agent harness runs as a Sandbox0 Supervisor Session. Durable events allow the browser to disconnect and resume from a cursor.
 - The native coding-agent harness and its official authentication are bound to an Environment. Sessions cannot switch harnesses. Codex is the first implementation; Claude Code, OpenCode and Pi are future Environment types.
 - Session Sandboxes have a fixed 30-day hard TTL.
 - Sessions can be renamed, archived or pinned to the top of their own Environment group.
+- Sessions can be searched across titles, Environments and coding agents from the Sidebar or with `Cmd/Ctrl+K`.
 - A Web Terminal connects to the same Sandbox Supervisor boundary and spans the conversation plus inspector width.
 - Personal Preferences live at `/preferences` as a standalone page.
 

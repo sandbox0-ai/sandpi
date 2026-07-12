@@ -124,12 +124,12 @@ export interface CodingSession {
   harness: HarnessId;
   harnessLabel: string;
   modelLabel: string;
-  branch: string;
   createdAt: string;
   updatedAt: string;
   hardExpiresAt: string;
   sandboxId: string;
   supervisorSessionId: string;
+  workspaceRoot: string;
   workspaceVolumeId: string;
   environmentRevision: number;
   messages: ChatMessage[];

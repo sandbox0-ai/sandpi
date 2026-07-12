@@ -6,15 +6,12 @@ import {
   AtSign,
   Check,
   Files,
-  Gauge,
-  GitBranch,
   Menu,
   MoreHorizontal,
   PanelRight,
   Paperclip,
   RotateCcw,
   Settings2,
-  ShieldCheck,
   SquareTerminal,
 } from "lucide-react";
 import { useState } from "react";
@@ -40,13 +37,6 @@ function activityIcon(status: ToolActivity["status"]) {
     return <Check size={13} strokeWidth={2.6} />;
   }
   return <span className="activity-spinner" />;
-}
-
-function formatExpiry(value: string) {
-  return new Intl.DateTimeFormat("en", {
-    month: "short",
-    day: "numeric",
-  }).format(new Date(value));
 }
 
 export function Conversation({
@@ -89,7 +79,7 @@ export function Conversation({
           >
             <Menu size={19} />
           </button>
-          <div>
+          <div className="conversation-title-line">
             <div className="conversation-breadcrumb">
               <button type="button" onClick={onOpenSettings}>
                 {environment.name}
@@ -97,13 +87,15 @@ export function Conversation({
               <span>/</span>
               <span>{session.title}</span>
             </div>
-            <div className="conversation-meta">
-              <span className={`live-indicator status-${session.status}`} />
-              <span>{session.status === "running" ? "Agent running" : session.status}</span>
-              <span className="meta-separator">·</span>
-              <GitBranch size={12} />
-              <span>{session.branch}</span>
-            </div>
+            <span className="conversation-context">
+              <span className={`live-indicator status-${session.status}`} aria-hidden="true" />
+              <span>{session.status === "running" ? "Running" : session.status}</span>
+              <span aria-hidden="true">·</span>
+              <span className="conversation-context-summary">
+                {session.harnessLabel} · {session.modelLabel} · Environment r
+                {session.environmentRevision}
+              </span>
+            </span>
           </div>
         </div>
 
@@ -118,22 +110,6 @@ export function Conversation({
           </button>
           <button
             type="button"
-            className="header-action-button"
-            onClick={() => onOpenInspector("audit")}
-          >
-            <ShieldCheck size={15} />
-            <span>Audit</span>
-          </button>
-          <button
-            type="button"
-            className="header-action-button"
-            onClick={() => onOpenInspector("metrics")}
-          >
-            <Gauge size={15} />
-            <span>Metrics</span>
-          </button>
-          <button
-            type="button"
             className={`icon-button ${inspectorOpen ? "is-active" : ""}`}
             aria-label={inspectorOpen ? "Close inspector" : "Open inspector"}
             onClick={onToggleInspector}
@@ -145,16 +121,6 @@ export function Conversation({
           </button>
         </div>
       </header>
-
-      <div className="session-context-strip">
-        <span>
-          <SquareTerminal size={13} />
-          {session.harnessLabel} · {session.modelLabel}
-        </span>
-        <span>Environment r{session.environmentRevision}</span>
-        <span className="context-spacer" />
-        <span>Hard TTL · {formatExpiry(session.hardExpiresAt)}</span>
-      </div>
 
       <div className="conversation-scroll">
         <div className="message-column">
@@ -250,6 +216,11 @@ export function Conversation({
                   </div>
                 ) : null}
               </div>
+              {message.role === "user" ? (
+                <div className="user-avatar" role="img" aria-label="You">
+                  YA
+                </div>
+              ) : null}
             </article>
           ))}
         </div>

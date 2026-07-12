@@ -7,6 +7,7 @@ import type {
   SandpiPreferences,
   WorkspaceFile,
 } from "@/lib/types";
+import { SESSION_WORKSPACE_ROOT } from "@/lib/environment-blueprint";
 
 function metricSeries(values: number[]): MetricPoint[] {
   return values.map((value, index) => ({
@@ -304,12 +305,12 @@ const primarySession: CodingSession = {
   harness: "codex",
   harnessLabel: "Codex",
   modelLabel: "Auto",
-  branch: "fix/auth-callback-race",
   createdAt: "2026-07-12T09:17:41+08:00",
   updatedAt: "2026-07-12T09:25:03+08:00",
   hardExpiresAt: "2026-08-11T09:17:41+08:00",
   sandboxId: "sbx_7f2a91",
   supervisorSessionId: "ses_cdx_01J2",
+  workspaceRoot: SESSION_WORKSPACE_ROOT,
   workspaceVolumeId: "vol_session_7f2a91",
   environmentRevision: 12,
   messages: [
@@ -381,7 +382,6 @@ function compactSession(
   title: string,
   status: CodingSession["status"],
   updatedAt: string,
-  branch: string,
 ): CodingSession {
   return {
     ...primarySession,
@@ -390,7 +390,6 @@ function compactSession(
     title,
     status,
     updatedAt,
-    branch,
     sandboxId: `sbx_${id.slice(-6)}`,
     supervisorSessionId: `ses_${id.slice(-6)}`,
     workspaceVolumeId: `vol_${id.slice(-6)}`,
@@ -413,7 +412,6 @@ export const mockSessions: CodingSession[] = [
     "Make event stream resumable",
     "waiting",
     "2026-07-12T08:42:00+08:00",
-    "feat/resumable-events",
   ),
   compactSession(
     "session-settings",
@@ -421,7 +419,6 @@ export const mockSessions: CodingSession[] = [
     "Polish environment settings",
     "paused",
     "2026-07-11T18:12:00+08:00",
-    "ui/environment-settings",
   ),
   compactSession(
     "session-sdk-release",
@@ -429,7 +426,6 @@ export const mockSessions: CodingSession[] = [
     "Prepare sdk-js release",
     "completed",
     "2026-07-11T15:34:00+08:00",
-    "release/v0.1.13",
   ),
 ];
 
@@ -459,12 +455,12 @@ export function createMockSession(
     status: "running",
     harness: environment.codingAgent.harness,
     harnessLabel: environment.codingAgent.label,
-    branch: "main",
     createdAt: now.toISOString(),
     updatedAt: now.toISOString(),
     hardExpiresAt: expires.toISOString(),
     sandboxId: `sbx_${crypto.randomUUID().slice(0, 6)}`,
     supervisorSessionId: `ses_${crypto.randomUUID().slice(0, 8)}`,
+    workspaceRoot: SESSION_WORKSPACE_ROOT,
     workspaceVolumeId: `vol_${crypto.randomUUID().slice(0, 8)}`,
     environmentRevision: environment.revision,
     messages: [
@@ -478,7 +474,7 @@ export function createMockSession(
         id: `message-${crypto.randomUUID().slice(0, 8)}`,
         role: "assistant",
         content:
-          "The Environment fork is ready. I’m connected to the new Codex session and will start by inspecting the repository.",
+          "The Environment fork is ready. I’m connected to the new Codex session and will start by inspecting the workspace.",
         createdAt: now.toISOString(),
         activities: [
           {

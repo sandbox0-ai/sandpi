@@ -16,6 +16,7 @@ import {
   X,
 } from "lucide-react";
 
+import { SessionSearchDialog } from "@/components/session-search-dialog";
 import type { CodingSession, Environment } from "@/lib/types";
 import { visibleSessionsForEnvironment } from "@/lib/session-list";
 
@@ -60,6 +61,7 @@ export function Sidebar({
   onCloseMobile,
 }: SidebarProps) {
   const [openSessionMenuId, setOpenSessionMenuId] = useState<string | null>(null);
+  const [sessionSearchOpen, setSessionSearchOpen] = useState(false);
   const [sessionMenuPosition, setSessionMenuPosition] =
     useState<SessionMenuPosition | null>(null);
   const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
@@ -67,6 +69,20 @@ export function Sidebar({
   const sessionMenuRef = useRef<HTMLDivElement>(null);
   const sessionMenuTriggerRef = useRef<HTMLButtonElement>(null);
   const skipRenameCommitRef = useRef(false);
+
+  useEffect(() => {
+    const handleSearchShortcut = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLocaleLowerCase() === "k") {
+        event.preventDefault();
+        setOpenSessionMenuId(null);
+        setSessionMenuPosition(null);
+        setSessionSearchOpen(true);
+      }
+    };
+
+    document.addEventListener("keydown", handleSearchShortcut);
+    return () => document.removeEventListener("keydown", handleSearchShortcut);
+  }, []);
 
   useEffect(() => {
     if (!openSessionMenuId) {
@@ -210,7 +226,8 @@ export function Sidebar({
   };
 
   return (
-    <aside className="sidebar" aria-label="Sandpi navigation">
+    <>
+      <aside className="sidebar" aria-label="Sandpi navigation">
       <div className="sidebar-brand-row">
         <div className="brand-lockup" aria-label="Sandpi">
           <span className="brand-mark" aria-hidden="true">
@@ -235,7 +252,13 @@ export function Sidebar({
         <span className="keyboard-hint">⌘ ⇧ N</span>
       </button>
 
-      <button className="sidebar-search" type="button">
+      <button
+        className="sidebar-search"
+        type="button"
+        aria-haspopup="dialog"
+        aria-expanded={sessionSearchOpen}
+        onClick={() => setSessionSearchOpen(true)}
+      >
         <Search size={16} aria-hidden="true" />
         <span>Search sessions</span>
         <span className="keyboard-hint">⌘ K</span>
@@ -305,6 +328,13 @@ export function Sidebar({
                       >
                         {isRenaming ? (
                           <span className="session-rename-shell">
+                            {session.pinned ? (
+                              <Pin
+                                className="session-pinned-icon"
+                                size={10}
+                                aria-label="Pinned"
+                              />
+                            ) : null}
                             <StatusDot status={session.status} />
                             <input
                               className="session-rename-input"
@@ -336,8 +366,6 @@ export function Sidebar({
                             type="button"
                             onClick={() => onSelectSession(session.id)}
                           >
-                            <StatusDot status={session.status} />
-                            <span className="session-title">{session.title}</span>
                             {session.pinned ? (
                               <Pin
                                 className="session-pinned-icon"
@@ -345,6 +373,8 @@ export function Sidebar({
                                 aria-label="Pinned"
                               />
                             ) : null}
+                            <StatusDot status={session.status} />
+                            <span className="session-title">{session.title}</span>
                           </button>
                         )}
 
@@ -443,6 +473,18 @@ export function Sidebar({
           <FolderKanban size={15} />
         </div>
       </div>
-    </aside>
+      </aside>
+      {sessionSearchOpen ? (
+        <SessionSearchDialog
+          environments={environments}
+          sessions={sessions}
+          onClose={() => setSessionSearchOpen(false)}
+          onSelect={(sessionId) => {
+            setSessionSearchOpen(false);
+            onSelectSession(sessionId);
+          }}
+        />
+      ) : null}
+    </>
   );
 }

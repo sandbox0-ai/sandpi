@@ -65,7 +65,7 @@ function mockOutput(command: string, session: CodingSession): Omit<TerminalLine,
         content: [
           "Available mock commands:",
           "  pwd, ls, whoami, hostname, date, env",
-          "  git status, git branch --show-current",
+          "  git status (the workspace root may not be a repository)",
           "  node --version, npm test, cat README.md",
           "  echo <text>, clear, help",
         ].join("\n"),
@@ -74,7 +74,7 @@ function mockOutput(command: string, session: CodingSession): Omit<TerminalLine,
   }
 
   if (normalized === "pwd") {
-    return [{ kind: "output", content: "/workspace" }];
+    return [{ kind: "output", content: session.workspaceRoot }];
   }
 
   if (normalized === "ls" || normalized === "ls -la") {
@@ -114,7 +114,7 @@ function mockOutput(command: string, session: CodingSession): Omit<TerminalLine,
         kind: "output",
         content: [
           "HOME=/home/sandpi",
-          "PWD=/workspace",
+          `PWD=${session.workspaceRoot}`,
           "SHELL=/bin/bash",
           `SANDPI_SESSION_ID=${session.id}`,
           `SANDBOX_ID=${session.sandboxId}`,
@@ -123,22 +123,13 @@ function mockOutput(command: string, session: CodingSession): Omit<TerminalLine,
     ];
   }
 
-  if (normalized === "git status") {
+  if (normalized === "git status" || normalized === "git branch --show-current") {
     return [
       {
-        kind: "output",
-        content: [
-          `On branch ${session.branch}`,
-          `Your branch is up to date with 'origin/${session.branch}'.`,
-          "",
-          "nothing to commit, working tree clean",
-        ].join("\n"),
+        kind: "error",
+        content: `fatal: not a git repository (or any parent up to mount point ${session.workspaceRoot})`,
       },
     ];
-  }
-
-  if (normalized === "git branch --show-current") {
-    return [{ kind: "output", content: session.branch }];
   }
 
   if (normalized === "node --version" || normalized === "node -v") {
@@ -171,7 +162,11 @@ function mockOutput(command: string, session: CodingSession): Omit<TerminalLine,
     ];
   }
 
-  if (normalized === "cd" || normalized === "cd /workspace" || normalized === "cd ~") {
+  if (
+    normalized === "cd" ||
+    normalized === `cd ${session.workspaceRoot}` ||
+    normalized === "cd ~"
+  ) {
     return [];
   }
 
@@ -331,7 +326,7 @@ function TerminalDockSession({ session, onClose, onExpand }: TerminalDockProps) 
             <div className={`${styles.line} ${styles[line.kind]}`} key={line.id}>
               {line.kind === "command" ? (
                 <span className={styles.previousPrompt} aria-hidden="true">
-                  sandpi@{session.sandboxId}:<b>/workspace</b>$
+                  sandpi@{session.sandboxId}:<b>{session.workspaceRoot}</b>$
                 </span>
               ) : null}
               <span>{line.content}</span>
@@ -344,7 +339,7 @@ function TerminalDockSession({ session, onClose, onExpand }: TerminalDockProps) 
             Terminal command
           </label>
           <span className={styles.prompt} aria-hidden="true">
-            <span>sandpi@{session.sandboxId}</span>:<b>/workspace</b>$
+            <span>sandpi@{session.sandboxId}</span>:<b>{session.workspaceRoot}</b>$
           </span>
           <input
             id={inputId}

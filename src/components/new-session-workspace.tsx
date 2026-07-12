@@ -24,7 +24,7 @@ interface NewSessionWorkspaceProps {
 }
 
 const starterPrompts = [
-  "Inspect this repository and explain its architecture",
+  "Inspect this workspace and explain its structure",
   "Find the highest-risk bug and fix it",
   "Run the tests and resolve any failures",
 ];

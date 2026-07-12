@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   buildSessionForkPlan,
   SESSION_HARD_TTL_SECONDS,
+  SESSION_WORKSPACE_ROOT,
 } from "./environment-blueprint";
 
 test("builds an isolated session from one Environment revision", () => {
@@ -32,6 +33,7 @@ test("builds an isolated session from one Environment revision", () => {
 
   assert.equal(plan.hardTtlSeconds, 30 * 24 * 60 * 60);
   assert.equal(plan.credentialRevision, 4);
+  assert.equal(plan.workspaceRoot, SESSION_WORKSPACE_ROOT);
   assert.deepEqual(
     plan.steps.map((step) => step.sdkMethod),
     [
@@ -43,5 +45,6 @@ test("builds an isolated session from one Environment revision", () => {
   );
   assert.equal(plan.steps[1].input.hardTtl, SESSION_HARD_TTL_SECONDS);
   assert.equal(plan.steps[1].input.mountPoint, "/workspace");
+  assert.equal(plan.steps[3].input.cwd, "/workspace");
   assert.equal(plan.steps[3].input.harness, "codex");
 });

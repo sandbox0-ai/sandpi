@@ -22,6 +22,8 @@ test("binds the coding agent to an Environment and every derived Session", () =>
   assert.equal(session.environmentRevision, environment.revision);
   assert.equal(session.pinned, false);
   assert.equal(session.archived, false);
+  assert.equal(session.workspaceRoot, "/workspace");
+  assert.equal("branch" in session, false);
   assert.equal("repository" in environment, false);
   assert.equal("initScript" in environment, false);
   assert.equal("sandbox0ConnectionId" in environment, false);
