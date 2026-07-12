@@ -82,6 +82,11 @@ async function copyText(content: string) {
   fallback.remove();
 }
 
+function syncComposerHeight(textarea: HTMLTextAreaElement) {
+  textarea.style.height = "auto";
+  textarea.style.height = `${textarea.scrollHeight}px`;
+}
+
 export function Conversation({
   language,
   sendShortcut,
@@ -121,6 +126,12 @@ export function Conversation({
     setDeleteMessageId(null);
     setEditingMessageId(null);
   }, [session.id]);
+
+  useEffect(() => {
+    if (composerRef.current) {
+      syncComposerHeight(composerRef.current);
+    }
+  }, [draft]);
 
   function submitMessage() {
     const content = draft.trim();
@@ -475,7 +486,10 @@ export function Conversation({
             name="message"
             autoComplete="off"
             value={draft}
-            onChange={(event) => setDraft(event.target.value)}
+            onChange={(event) => {
+              setDraft(event.target.value);
+              syncComposerHeight(event.currentTarget);
+            }}
             onKeyDown={(event) => {
               if (
                 shouldSubmitComposer(
