@@ -9,7 +9,6 @@ interface UpdatePreferencesRequest {
   general?: Partial<SandpiPreferences["general"]>;
   appearance?: Partial<SandpiPreferences["appearance"]>;
   notifications?: Partial<SandpiPreferences["notifications"]>;
-  sandbox0?: { defaultConnectionId?: string };
 }
 
 export async function GET() {
@@ -49,25 +48,6 @@ export async function PUT(request: Request) {
   }
   if (typeof body.notifications?.needsAttention === "boolean") {
     next.notifications.needsAttention = body.notifications.needsAttention;
-  }
-
-  const defaultConnectionId = body.sandbox0?.defaultConnectionId;
-  if (defaultConnectionId) {
-    const connectionExists = mockPreferences.sandbox0.connections.some(
-      (connection) => connection.id === defaultConnectionId,
-    );
-    if (!connectionExists) {
-      return NextResponse.json(
-        {
-          error: {
-            code: "sandbox0_connection_not_found",
-            message: "Select an available Sandbox0 connection.",
-          },
-        },
-        { status: 400 },
-      );
-    }
-    next.sandbox0.defaultConnectionId = defaultConnectionId;
   }
 
   return NextResponse.json({

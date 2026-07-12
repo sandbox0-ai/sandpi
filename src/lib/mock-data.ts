@@ -207,10 +207,6 @@ export const mockEnvironments: Environment[] = [
     templateId: "coding-agent",
     rootfsSnapshotId: "rootfs-snap-default-r12",
     workspaceVolumeId: "vol-default-seed",
-    sandbox0ConnectionId: "connection-sandbox0-cloud",
-    repository: "sandbox0-ai/sandpi",
-    branch: "main",
-    initScript: "npm install\nnpm run typecheck",
     credentialRevision: 4,
     codingAgent: {
       harness: "codex",
@@ -233,23 +229,15 @@ export const mockEnvironments: Environment[] = [
       {
         id: "git-prewarm",
         name: "Git prewarm",
-        description: "Pull, install and publish a fresh Environment revision on push.",
+        description: "Warm repository objects and dependency caches after a Git push.",
         kind: "webhook",
         status: "active",
         lastRun: "18 min ago",
       },
       {
-        id: "refresh-baseline",
-        name: "Refresh baseline",
-        description: "Run initialization and publish a new revision on demand.",
-        kind: "manual",
-        status: "active",
-        lastRun: "2 days ago",
-      },
-      {
         id: "scheduled-refresh",
-        name: "Scheduled refresh",
-        description: "Keep dependencies warm on a recurring schedule.",
+        name: "Scheduled maintenance",
+        description: "Run an Environment maintenance function on a recurring schedule.",
         kind: "cron",
         status: "coming-soon",
       },
@@ -265,10 +253,6 @@ export const mockEnvironments: Environment[] = [
     templateId: "coding-agent",
     rootfsSnapshotId: "rootfs-snap-release-r7",
     workspaceVolumeId: "vol-release-seed",
-    sandbox0ConnectionId: "connection-sandbox0-cloud",
-    repository: "sandbox0-ai/sdk-js",
-    branch: "main",
-    initScript: "npm ci\nnpm run build",
     credentialRevision: 2,
     codingAgent: {
       harness: "codex",
@@ -308,31 +292,15 @@ export const mockPreferences: SandpiPreferences = {
     sessionCompleted: true,
     needsAttention: true,
   },
-  sandbox0: {
-    defaultConnectionId: "connection-sandbox0-cloud",
-    connections: [
-      {
-        id: "connection-sandbox0-cloud",
-        name: "Sandbox0 Cloud",
-        apiHost: "https://api.sandbox0.ai",
-        targetKind: "cloud",
-        managedBy: "deployment",
-        readOnly: true,
-        status: "connected",
-        apiKeyConfigured: true,
-        apiKeyLast4: "7H2K",
-        lastCheckedAt: "2026-07-12T09:24:00+08:00",
-      },
-    ],
-  },
 };
 
 const primarySession: CodingSession = {
   id: "session-auth-race",
   environmentId: "env-default",
-  sandbox0ConnectionId: "connection-sandbox0-cloud",
   title: "Fix auth callback race",
   status: "running",
+  pinned: false,
+  archived: false,
   harness: "codex",
   harnessLabel: "Codex",
   modelLabel: "Auto",
@@ -419,9 +387,6 @@ function compactSession(
     ...primarySession,
     id,
     environmentId,
-    sandbox0ConnectionId:
-      mockEnvironments.find((environment) => environment.id === environmentId)
-        ?.sandbox0ConnectionId ?? "connection-sandbox0-cloud",
     title,
     status,
     updatedAt,
@@ -490,7 +455,6 @@ export function createMockSession(
     ...structuredClone(primarySession),
     id,
     environmentId: environment.id,
-    sandbox0ConnectionId: environment.sandbox0ConnectionId,
     title: input.title,
     status: "running",
     harness: environment.codingAgent.harness,
@@ -530,12 +494,7 @@ export function createMockSession(
   };
 }
 
-export function createMockEnvironment(input: {
-  name: string;
-  repository: string;
-  branch: string;
-  sandbox0ConnectionId: string;
-}): Environment {
+export function createMockEnvironment(input: { name: string }): Environment {
   const idSuffix = crypto.randomUUID().slice(0, 8);
 
   return {
@@ -547,9 +506,6 @@ export function createMockEnvironment(input: {
     revision: 1,
     rootfsSnapshotId: `rootfs-snap-${idSuffix}-r1`,
     workspaceVolumeId: `vol-${idSuffix}-seed`,
-    sandbox0ConnectionId: input.sandbox0ConnectionId,
-    repository: input.repository,
-    branch: input.branch,
     credentialRevision: 1,
     codingAgent: {
       harness: "codex",

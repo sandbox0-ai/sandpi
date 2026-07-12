@@ -11,7 +11,6 @@ export interface SessionForkPlanInput {
     | "templateId"
     | "rootfsSnapshotId"
     | "workspaceVolumeId"
-    | "sandbox0ConnectionId"
     | "credentialRevision"
     | "codingAgent"
     | "networkPolicy"
@@ -28,7 +27,6 @@ export interface SessionForkStep {
 
 export interface SessionForkPlan {
   environmentId: string;
-  sandbox0ConnectionId: string;
   environmentRevision: number;
   credentialRevision: number;
   hardTtlSeconds: number;
@@ -40,7 +38,6 @@ export function buildSessionForkPlan(input: SessionForkPlanInput): SessionForkPl
 
   return {
     environmentId: environment.id,
-    sandbox0ConnectionId: environment.sandbox0ConnectionId,
     environmentRevision: environment.revision,
     credentialRevision: environment.credentialRevision,
     hardTtlSeconds: SESSION_HARD_TTL_SECONDS,

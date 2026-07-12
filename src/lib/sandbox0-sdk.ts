@@ -2,12 +2,7 @@ import "server-only";
 
 import { Client, SandboxRuntimeMetricName } from "sandbox0";
 
-import {
-  normalizeSandbox0ApiHost,
-  requireSandbox0ApiKey,
-} from "@/lib/sandbox0-connection";
-
-export interface Sandbox0ClientConnection {
+export interface Sandbox0DeploymentConfig {
   apiHost: string;
   apiKey: string;
 }
@@ -51,10 +46,23 @@ export const sandbox0SdkCapabilities = [
   },
 ] as const;
 
-export function createSandbox0Client(connection: Sandbox0ClientConnection): Client {
+export function createSandbox0Client(config: Sandbox0DeploymentConfig): Client {
+  const apiKey = config.apiKey.trim();
+  const apiHost = config.apiHost.trim().replace(/\/+$/, "");
+  if (!apiKey) {
+    throw new Error("SANDBOX0_API_KEY is required");
+  }
+  if (!apiHost) {
+    throw new Error("SANDBOX0_API_HOST is required");
+  }
+  const url = new URL(apiHost);
+  if (url.protocol !== "https:" && url.protocol !== "http:") {
+    throw new Error("SANDBOX0_API_HOST must use http:// or https://");
+  }
+
   return new Client({
-    token: requireSandbox0ApiKey(connection.apiKey),
-    baseUrl: normalizeSandbox0ApiHost(connection.apiHost),
+    token: apiKey,
+    baseUrl: apiHost,
     userAgent: "sandpi/0.1.0",
   });
 }

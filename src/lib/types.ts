@@ -35,29 +35,10 @@ export interface Environment {
   templateId: string;
   rootfsSnapshotId: string;
   workspaceVolumeId: string;
-  sandbox0ConnectionId: string;
-  repository: string;
-  branch: string;
-  initScript: string;
   credentialRevision: number;
   codingAgent: HarnessAccount;
   networkPolicy: NetworkPolicy;
   functions: EnvironmentFunction[];
-}
-
-export type Sandbox0ConnectionStatus = "connected" | "unverified" | "error";
-
-export interface Sandbox0ConnectionSummary {
-  id: string;
-  name: string;
-  apiHost: string;
-  targetKind: "cloud" | "self-hosted";
-  managedBy: "deployment" | "team";
-  readOnly: boolean;
-  status: Sandbox0ConnectionStatus;
-  apiKeyConfigured: boolean;
-  apiKeyLast4?: string;
-  lastCheckedAt?: string;
 }
 
 export interface SandpiPreferences {
@@ -73,10 +54,6 @@ export interface SandpiPreferences {
   notifications: {
     sessionCompleted: boolean;
     needsAttention: boolean;
-  };
-  sandbox0: {
-    defaultConnectionId: string;
-    connections: Sandbox0ConnectionSummary[];
   };
 }
 
@@ -140,9 +117,10 @@ export interface SessionMetrics {
 export interface CodingSession {
   id: string;
   environmentId: string;
-  sandbox0ConnectionId: string;
   title: string;
   status: SessionStatus;
+  pinned: boolean;
+  archived: boolean;
   harness: HarnessId;
   harnessLabel: string;
   modelLabel: string;

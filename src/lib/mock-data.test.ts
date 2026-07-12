@@ -1,14 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createMockEnvironment, createMockSession } from "./mock-data";
+import {
+  createMockEnvironment,
+  createMockSession,
+  mockPreferences,
+} from "./mock-data";
 
 test("binds the coding agent to an Environment and every derived Session", () => {
   const environment = createMockEnvironment({
     name: "Agent binding test",
-    repository: "sandbox0-ai/sandpi",
-    branch: "main",
-    sandbox0ConnectionId: "connection-private",
   });
   const session = createMockSession(environment, {
     title: "Verify binding",
@@ -19,6 +20,10 @@ test("binds the coding agent to an Environment and every derived Session", () =>
   assert.equal(session.harness, environment.codingAgent.harness);
   assert.equal(session.harnessLabel, environment.codingAgent.label);
   assert.equal(session.environmentRevision, environment.revision);
-  assert.equal(environment.sandbox0ConnectionId, "connection-private");
-  assert.equal(session.sandbox0ConnectionId, environment.sandbox0ConnectionId);
+  assert.equal(session.pinned, false);
+  assert.equal(session.archived, false);
+  assert.equal("repository" in environment, false);
+  assert.equal("initScript" in environment, false);
+  assert.equal("sandbox0ConnectionId" in environment, false);
+  assert.equal("sandbox0" in mockPreferences, false);
 });

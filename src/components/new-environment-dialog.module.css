@@ -144,8 +144,7 @@
   gap: 10px;
 }
 
-.required,
-.optional {
+.required {
   color: var(--ink-faint, #8a8982);
   font-size: 9px;
   font-weight: 600;
@@ -153,9 +152,7 @@
   text-transform: uppercase;
 }
 
-.field > input,
-.field > select,
-.inputWithIcon {
+.field > input {
   width: 100%;
   height: 42px;
   border: 1px solid #d1cfc7;
@@ -163,9 +160,7 @@
   background: var(--panel-strong, #fff);
 }
 
-.field > input,
-.field > select,
-.inputWithIcon input {
+.field > input {
   min-width: 0;
   color: var(--ink, #171716);
   font-size: 12px;
@@ -176,111 +171,18 @@
   padding: 0 11px;
 }
 
-.field > select {
-  padding: 0 34px 0 11px;
-  color: var(--ink, #171716);
-}
-
-.inputWithIcon {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 10px;
-}
-
-.inputWithIcon > svg {
-  flex: 0 0 auto;
-  color: var(--ink-faint, #8a8982);
-}
-
-.inputWithIcon input {
-  height: 100%;
-  flex: 1;
-  padding: 0;
-  border: 0;
-  outline: 0;
-  background: transparent;
-}
-
-.field > input::placeholder,
-.inputWithIcon input::placeholder {
+.field > input::placeholder {
   color: #a4a29b;
 }
 
-.field > input:hover:not(:disabled),
-.field > select:hover:not(:disabled),
-.inputWithIcon:hover {
+.field > input:hover:not(:disabled) {
   border-color: #bcb9b0;
 }
 
-.field > input:focus-visible,
-.field > select:focus-visible,
-.inputWithIcon:focus-within {
+.field > input:focus-visible {
   border-color: #7e91a5;
   outline: 0;
   box-shadow: 0 0 0 3px rgb(65 109 157 / 11%);
-}
-
-.connectionGrid {
-  display: grid;
-  grid-template-columns: minmax(190px, 0.8fr) minmax(0, 1.2fr);
-  gap: 13px;
-}
-
-.connectionSummary {
-  display: grid;
-  min-width: 0;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
-  gap: 9px;
-  padding: 9px 10px;
-  border: 1px solid var(--line, #deddd7);
-  border-radius: 8px;
-  background: #f5f4f0;
-}
-
-.connectionSummary > span:first-child {
-  display: inline-flex;
-  width: 30px;
-  height: 30px;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid #d4d1c8;
-  border-radius: 7px;
-  background: var(--panel-strong, #fff);
-  color: var(--ink-soft, #62615c);
-}
-
-.connectionSummary > div {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 3px;
-}
-
-.connectionSummary strong,
-.connectionSummary code {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.connectionSummary strong {
-  font-size: 11px;
-}
-
-.connectionSummary code {
-  color: var(--ink-soft, #62615c);
-  font-size: 9.5px;
-}
-
-.connectionBinding {
-  grid-column: 2;
-  color: var(--ink-faint, #8a8982);
-  font-size: 9px;
-  font-weight: 650;
-  letter-spacing: 0.035em;
-  text-transform: uppercase;
 }
 
 .field > input[aria-invalid="true"] {
@@ -311,13 +213,6 @@
   font-size: 10px;
   font-weight: 540;
   line-height: 1.4;
-}
-
-.repositoryGrid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.7fr) minmax(130px, 0.8fr);
-  gap: 13px;
-  margin-top: 14px;
 }
 
 .agentOption {
@@ -435,57 +330,6 @@
   color: var(--ink-faint, #8a8982);
 }
 
-.initialization {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 10px;
-  padding: 12px;
-  border: 1px solid var(--line, #deddd7);
-  border-radius: 9px;
-  background: #f5f4f0;
-}
-
-.initializationIcon {
-  display: inline-flex;
-  width: 30px;
-  height: 30px;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid #d4d1c8;
-  border-radius: 7px;
-  background: var(--panel-strong, #fff);
-  color: var(--ink-soft, #62615c);
-}
-
-.initialization strong {
-  display: block;
-  color: var(--ink, #171716);
-  font-size: 11px;
-  font-weight: 680;
-}
-
-.initialization p {
-  margin: 4px 0 8px;
-  color: var(--ink-soft, #62615c);
-  font-size: 10.5px;
-  line-height: 1.5;
-}
-
-.initializationFlow {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  color: var(--ink-faint, #8a8982);
-  font-size: 8.5px;
-  font-weight: 640;
-  letter-spacing: 0.015em;
-  text-transform: uppercase;
-}
-
-.initializationFlow svg {
-  flex: 0 0 auto;
-}
-
 .submitError {
   margin: 0;
   padding: 9px 10px;
@@ -577,9 +421,7 @@
 .closeButton:focus-visible,
 .primaryButton:focus-visible,
 .secondaryButton:focus-visible,
-.field > input:focus-visible,
-.field > select:focus-visible,
-.inputWithIcon input:focus-visible {
+.field > input:focus-visible {
   outline: 2px solid #6e8bad;
   outline-offset: 2px;
 }
@@ -632,14 +474,6 @@
     padding: 17px;
   }
 
-  .repositoryGrid {
-    grid-template-columns: 1fr;
-  }
-
-  .connectionGrid {
-    grid-template-columns: 1fr;
-  }
-
   .agentOption {
     grid-template-columns: auto auto minmax(0, 1fr);
   }
@@ -671,15 +505,6 @@
 @media (max-width: 390px) {
   .header h1 {
     font-size: 19px;
-  }
-
-  .initializationFlow {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .initializationFlow svg {
-    display: none;
   }
 
   .actions {

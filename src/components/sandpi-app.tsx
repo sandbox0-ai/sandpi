@@ -8,9 +8,9 @@ import { EnvironmentSettings } from "@/components/environment-settings";
 import { Inspector, type InspectorTab } from "@/components/inspector";
 import { NewEnvironmentDialog } from "@/components/new-environment-dialog";
 import { NewSessionWorkspace } from "@/components/new-session-workspace";
-import { PreferencesDrawer } from "@/components/preferences-drawer";
 import { Sidebar } from "@/components/sidebar";
 import { TerminalDock } from "@/components/terminal-dock";
+import { visibleSessionsForEnvironment } from "@/lib/session-list";
 import type {
   ChatMessage,
   CodingSession,
@@ -25,7 +25,6 @@ interface SandpiAppProps {
 export function SandpiApp({ initialData }: SandpiAppProps) {
   const [environments, setEnvironments] = useState(initialData.environments);
   const [sessions, setSessions] = useState(initialData.sessions);
-  const [preferences, setPreferences] = useState(initialData.preferences);
   const [selectedEnvironmentId, setSelectedEnvironmentId] = useState(
     initialData.selectedEnvironmentId,
   );
@@ -33,7 +32,6 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
   const [settingsEnvironmentId, setSettingsEnvironmentId] = useState<string | null>(null);
   const [newSessionEnvironmentId, setNewSessionEnvironmentId] = useState<string | null>(null);
   const [newEnvironmentOpen, setNewEnvironmentOpen] = useState(false);
-  const [preferencesOpen, setPreferencesOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("files");
@@ -78,21 +76,11 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
     [environments, settingsEnvironmentId],
   );
 
-  const settingsSandbox0Connection = useMemo(
-    () =>
-      preferences.sandbox0.connections.find(
-        (connection) => connection.id === settingsEnvironment?.sandbox0ConnectionId,
-      ),
-    [preferences.sandbox0.connections, settingsEnvironment?.sandbox0ConnectionId],
-  );
-
   const handleSelectEnvironment = useCallback(
     (environmentId: string) => {
       setNewSessionEnvironmentId(null);
       setSelectedEnvironmentId(environmentId);
-      const firstSession = sessions.find(
-        (session) => session.environmentId === environmentId,
-      );
+      const firstSession = visibleSessionsForEnvironment(sessions, environmentId)[0];
       if (firstSession) {
         setSelectedSessionId(firstSession.id);
       } else {
@@ -106,7 +94,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
   const handleSelectSession = useCallback(
     (sessionId: string) => {
       setNewSessionEnvironmentId(null);
-      const session = sessions.find((item) => item.id === sessionId);
+      const session = sessions.find((item) => item.id === sessionId && !item.archived);
       if (session) {
         setSelectedSessionId(sessionId);
         setSelectedEnvironmentId(session.environmentId);
@@ -130,6 +118,50 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
     setSelectedSessionId(session.id);
     setNewSessionEnvironmentId(null);
   }, []);
+
+  const handleRenameSession = useCallback((sessionId: string, title: string) => {
+    setSessions((current) =>
+      current.map((session) =>
+        session.id === sessionId
+          ? { ...session, title, updatedAt: new Date().toISOString() }
+          : session,
+      ),
+    );
+  }, []);
+
+  const handleTogglePinSession = useCallback((sessionId: string) => {
+    setSessions((current) =>
+      current.map((session) =>
+        session.id === sessionId ? { ...session, pinned: !session.pinned } : session,
+      ),
+    );
+  }, []);
+
+  const handleArchiveSession = useCallback(
+    (sessionId: string) => {
+      const archivedSession = sessions.find((session) => session.id === sessionId);
+      if (!archivedSession) {
+        return;
+      }
+
+      setSessions((current) =>
+        current.map((session) =>
+          session.id === sessionId ? { ...session, archived: true } : session,
+        ),
+      );
+
+      if (selectedSessionId === sessionId) {
+        const nextSession = visibleSessionsForEnvironment(
+          sessions,
+          archivedSession.environmentId,
+          sessionId,
+        )[0];
+        setSelectedSessionId(nextSession?.id ?? "");
+        setNewSessionEnvironmentId(null);
+      }
+    },
+    [selectedSessionId, sessions],
+  );
 
   const handleEnvironmentCreated = useCallback((environment: Environment) => {
     setEnvironments((current) => [...current, environment]);
@@ -213,10 +245,9 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
           handleSelectEnvironment(environmentId);
           setSettingsEnvironmentId(environmentId);
         }}
-        onPreferences={() => {
-          setPreferencesOpen(true);
-          setSidebarOpen(false);
-        }}
+        onRenameSession={handleRenameSession}
+        onArchiveSession={handleArchiveSession}
+        onTogglePinSession={handleTogglePinSession}
         onCloseMobile={() => setSidebarOpen(false)}
       />
 
@@ -277,7 +308,6 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
       {settingsEnvironment ? (
         <EnvironmentSettings
           environment={settingsEnvironment}
-          sandbox0Connection={settingsSandbox0Connection}
           onChange={handleEnvironmentChange}
           onClose={() => setSettingsEnvironmentId(null)}
         />
@@ -286,18 +316,8 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
       {newEnvironmentOpen ? (
         <NewEnvironmentDialog
           environments={environments}
-          sandbox0Connections={preferences.sandbox0.connections}
-          defaultSandbox0ConnectionId={preferences.sandbox0.defaultConnectionId}
           onCreated={handleEnvironmentCreated}
           onClose={() => setNewEnvironmentOpen(false)}
-        />
-      ) : null}
-
-      {preferencesOpen ? (
-        <PreferencesDrawer
-          preferences={preferences}
-          onChange={setPreferences}
-          onClose={() => setPreferencesOpen(false)}
         />
       ) : null}
     </main>

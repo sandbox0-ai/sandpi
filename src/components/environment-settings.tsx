@@ -2,12 +2,10 @@
 
 import {
   Check,
-  ChevronRight,
   CircleDot,
   Clock3,
   Copy,
   ExternalLink,
-  GitBranch,
   Globe2,
   KeyRound,
   LockKeyhole,
@@ -17,7 +15,6 @@ import {
   RefreshCw,
   Settings2,
   Share2,
-  TerminalSquare,
   Webhook,
   X,
 } from "lucide-react";
@@ -28,11 +25,10 @@ import {
   useState,
 } from "react";
 
-import type { Environment, Sandbox0ConnectionSummary } from "@/lib/types";
+import type { Environment } from "@/lib/types";
 
 type SettingsTab =
   | "general"
-  | "initialization"
   | "credentials"
   | "network"
   | "functions"
@@ -40,7 +36,6 @@ type SettingsTab =
 
 interface EnvironmentSettingsProps {
   environment: Environment;
-  sandbox0Connection?: Sandbox0ConnectionSummary;
   onChange: (environment: Environment) => void;
   onClose: () => void;
 }
@@ -51,7 +46,6 @@ const tabs: Array<{
   icon: React.ComponentType<{ size?: number }>;
 }> = [
   { id: "general", label: "General", icon: Settings2 },
-  { id: "initialization", label: "Initialization", icon: TerminalSquare },
   { id: "credentials", label: "Coding agent", icon: KeyRound },
   { id: "network", label: "Network", icon: Network },
   { id: "functions", label: "Functions", icon: Webhook },
@@ -83,7 +77,6 @@ function Toggle({
 
 export function EnvironmentSettings({
   environment,
-  sandbox0Connection,
   onChange,
   onClose,
 }: EnvironmentSettingsProps) {
@@ -216,7 +209,9 @@ export function EnvironmentSettings({
                 >
                   <Icon size={16} />
                   {tab.label}
-                  {tab.id === "functions" ? <span className="nav-count">3</span> : null}
+                  {tab.id === "functions" ? (
+                    <span className="nav-count">{draft.functions.length}</span>
+                  ) : null}
                 </button>
               );
             })}
@@ -279,25 +274,6 @@ export function EnvironmentSettings({
                   <DefinitionRow label="Template" value={draft.templateId} code />
                   <DefinitionRow label="Rootfs snapshot" value={draft.rootfsSnapshotId} code />
                   <DefinitionRow label="Workspace seed" value={draft.workspaceVolumeId} code />
-                  <DefinitionRow
-                    label="Sandbox0 connection"
-                    value={sandbox0Connection?.name ?? draft.sandbox0ConnectionId}
-                  />
-                  <DefinitionRow
-                    label="Sandbox0 API Host"
-                    value={sandbox0Connection?.apiHost ?? "Connection unavailable"}
-                    code
-                  />
-                </div>
-                <div className="setting-row immutable-row">
-                  <div>
-                    <strong>Control-plane binding</strong>
-                    <p>
-                      This Environment and every derived Session stay on the Sandbox0 connection
-                      selected at creation. Rotate the key in Preferences without moving resources.
-                    </p>
-                  </div>
-                  <span className="fixed-value">Fixed</span>
                 </div>
                 <div className="setting-row immutable-row">
                   <div>
@@ -306,72 +282,6 @@ export function EnvironmentSettings({
                   </div>
                   <span className="fixed-value">30 days · fixed</span>
                 </div>
-              </SettingsSection>
-            ) : null}
-
-            {activeTab === "initialization" ? (
-              <SettingsSection
-                eyebrow="Reproducible baseline"
-                title="Initialization"
-                description="Publishing a revision captures the rootfs, workspace seed and current Environment credential state."
-              >
-                <label className="full-field">
-                  Git repository
-                  <span className="input-with-icon">
-                    <GitBranch size={15} />
-                    <input
-                      name="repository"
-                      autoComplete="off"
-                      spellCheck={false}
-                      value={draft.repository}
-                      onChange={(event) =>
-                        setDraft((current) => ({ ...current, repository: event.target.value }))
-                      }
-                    />
-                  </span>
-                </label>
-                <div className="field-grid two-columns">
-                  <label>
-                    Branch
-                    <input
-                      name="branch"
-                      autoComplete="off"
-                      spellCheck={false}
-                      value={draft.branch}
-                      onChange={(event) =>
-                        setDraft((current) => ({ ...current, branch: event.target.value }))
-                      }
-                    />
-                  </label>
-                  <label>
-                    Mount point
-                    <input name="mount-point" readOnly value="/workspace" />
-                  </label>
-                </div>
-                <label className="full-field">
-                  Initialization script
-                  <textarea
-                    name="initialization-script"
-                    autoComplete="off"
-                    spellCheck={false}
-                    className="code-textarea"
-                    rows={7}
-                    value={draft.initScript}
-                    onChange={(event) =>
-                      setDraft((current) => ({ ...current, initScript: event.target.value }))
-                    }
-                  />
-                </label>
-                <div className="revision-flow" aria-label="Environment revision flow">
-                  <span>Seed sandbox</span>
-                  <ChevronRight size={15} />
-                  <span>Run initialization</span>
-                  <ChevronRight size={15} />
-                  <span>Publish r{draft.revision + 1}</span>
-                </div>
-                <button type="button" className="secondary-action-button">
-                  <Play size={15} /> Run and publish new revision
-                </button>
               </SettingsSection>
             ) : null}
 
@@ -545,7 +455,7 @@ export function EnvironmentSettings({
               <SettingsSection
                 eyebrow="Environment automation"
                 title="Functions"
-                description="Built-in sandbox jobs update the Environment baseline without consuming a user Session."
+                description="Built-in sandbox jobs run Environment automation without consuming a user Session."
               >
                 <div className="function-list">
                   {draft.functions.map((fn) => (
@@ -594,8 +504,7 @@ export function EnvironmentSettings({
                     </button>
                   </div>
                   <p>
-                    On push: resume initializer → fetch → install → publish rootfs and workspace
-                    revision → pause.
+                    On push: validate event → start sandbox function → warm caches → record result.
                   </p>
                 </div>
               </SettingsSection>

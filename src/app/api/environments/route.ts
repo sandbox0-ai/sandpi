@@ -4,9 +4,6 @@ import { createMockEnvironment, mockEnvironments } from "@/lib/mock-data";
 
 interface CreateEnvironmentRequest {
   name?: string;
-  repository?: string;
-  branch?: string;
-  sandbox0ConnectionId?: string;
 }
 
 export async function GET() {
@@ -26,10 +23,6 @@ export async function POST(request: Request) {
 
   const environment = createMockEnvironment({
     name,
-    repository: body.repository?.trim() || "",
-    branch: body.branch?.trim() || "main",
-    sandbox0ConnectionId:
-      body.sandbox0ConnectionId?.trim() || "connection-sandbox0-cloud",
   });
 
   return NextResponse.json(

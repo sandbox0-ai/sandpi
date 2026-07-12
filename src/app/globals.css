@@ -298,10 +298,6 @@ pre,
   display: flex;
   width: 100%;
   align-items: center;
-  border: 0;
-  background: transparent;
-  text-align: left;
-  cursor: pointer;
 }
 
 .environment-row {
@@ -394,9 +390,9 @@ pre,
 }
 
 .session-row {
+  position: relative;
   min-height: 31px;
-  gap: 9px;
-  padding: 0 8px 0 10px;
+  padding: 0 3px 0 0;
   border-radius: 6px;
   color: var(--ink-soft);
   font-size: 12.5px;
@@ -410,6 +406,130 @@ pre,
 .session-row.is-selected {
   background: var(--selected);
   color: var(--ink);
+}
+
+.session-row:focus-within,
+.session-row.menu-is-open {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+.session-row.is-selected:focus-within,
+.session-row.is-selected.menu-is-open {
+  background: var(--selected);
+}
+
+.session-main-button,
+.session-rename-shell {
+  display: flex;
+  min-width: 0;
+  min-height: 31px;
+  flex: 1;
+  align-items: center;
+  gap: 9px;
+  padding: 0 4px 0 10px;
+}
+
+.session-main-button {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.session-main-button:focus-visible {
+  border-radius: 5px;
+  outline-offset: -1px;
+}
+
+.session-more-button {
+  display: inline-flex;
+  width: 25px;
+  height: 25px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ink-faint);
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.session-row:hover .session-more-button,
+.session-row:focus-within .session-more-button,
+.session-row.menu-is-open .session-more-button {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.session-more-button:hover,
+.session-more-button[aria-expanded="true"] {
+  background: #d8d6cf;
+  color: var(--ink);
+}
+
+.session-action-menu {
+  position: fixed;
+  z-index: 40;
+  display: flex;
+  width: 158px;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px;
+  border: 1px solid #d4d2ca;
+  border-radius: 8px;
+  background: var(--panel-strong);
+  box-shadow: 0 10px 28px rgb(24 24 20 / 18%);
+}
+
+.session-action-menu button {
+  display: flex;
+  width: 100%;
+  height: 33px;
+  align-items: center;
+  gap: 9px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ink-soft);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.session-action-menu button:hover,
+.session-action-menu button:focus-visible {
+  background: var(--hover);
+  color: var(--ink);
+  outline: 0;
+}
+
+.session-action-menu button.is-destructive {
+  color: var(--red);
+}
+
+.session-action-menu button.is-destructive:hover,
+.session-action-menu button.is-destructive:focus-visible {
+  background: var(--red-soft);
+  color: var(--red);
+}
+
+.session-rename-input {
+  width: 100%;
+  min-width: 0;
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid #a9a69d;
+  border-radius: 5px;
+  background: var(--panel-strong);
+  color: var(--ink);
+  font-size: 12px;
 }
 
 .session-status-dot {
@@ -438,9 +558,15 @@ pre,
 
 .session-title {
   min-width: 0;
+  flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.session-pinned-icon {
+  flex: 0 0 auto;
+  color: var(--ink-faint);
 }
 
 .sidebar-footer {
@@ -462,6 +588,7 @@ pre,
   color: var(--ink-soft);
   font-size: 12px;
   text-align: left;
+  text-decoration: none;
   cursor: pointer;
 }
 
@@ -2046,47 +2173,6 @@ pre,
   background: #efeee9;
   color: var(--ink-soft);
   font-size: 9px;
-}
-
-.input-with-icon {
-  position: relative;
-  display: flex;
-  align-items: center;
-}
-
-.input-with-icon svg {
-  position: absolute;
-  left: 10px;
-  color: var(--ink-faint);
-}
-
-.input-with-icon input {
-  padding-left: 32px;
-}
-
-.code-textarea {
-  background: #f1f0ec !important;
-  font-family: "SFMono-Regular", Consolas, monospace;
-  font-size: 10px !important;
-}
-
-.revision-flow {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  padding: 13px;
-  border: 1px dashed #cbc9c1;
-  border-radius: 8px;
-  color: var(--ink-faint);
-  font-size: 9px;
-}
-
-.revision-flow span {
-  padding: 5px 7px;
-  border-radius: 5px;
-  background: #eceae5;
-  color: var(--ink-soft);
 }
 
 .secondary-action-button,

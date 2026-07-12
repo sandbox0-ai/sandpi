@@ -1,9 +1,15 @@
 "use client";
 
+import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import {
+  Archive,
   CircleHelp,
   FolderKanban,
   MoreHorizontal,
+  Pencil,
+  Pin,
+  PinOff,
   Plus,
   Search,
   Settings,
@@ -11,6 +17,7 @@ import {
 } from "lucide-react";
 
 import type { CodingSession, Environment } from "@/lib/types";
+import { visibleSessionsForEnvironment } from "@/lib/session-list";
 
 interface SidebarProps {
   environments: Environment[];
@@ -22,8 +29,15 @@ interface SidebarProps {
   onNewEnvironment: () => void;
   onNewSession: (environmentId: string) => void;
   onEnvironmentSettings: (environmentId: string) => void;
-  onPreferences: () => void;
+  onRenameSession: (sessionId: string, title: string) => void;
+  onArchiveSession: (sessionId: string) => void;
+  onTogglePinSession: (sessionId: string) => void;
   onCloseMobile: () => void;
+}
+
+interface SessionMenuPosition {
+  top: number;
+  left: number;
 }
 
 function StatusDot({ status }: { status: CodingSession["status"] }) {
@@ -40,9 +54,161 @@ export function Sidebar({
   onNewEnvironment,
   onNewSession,
   onEnvironmentSettings,
-  onPreferences,
+  onRenameSession,
+  onArchiveSession,
+  onTogglePinSession,
   onCloseMobile,
 }: SidebarProps) {
+  const [openSessionMenuId, setOpenSessionMenuId] = useState<string | null>(null);
+  const [sessionMenuPosition, setSessionMenuPosition] =
+    useState<SessionMenuPosition | null>(null);
+  const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
+  const sessionMenuRef = useRef<HTMLDivElement>(null);
+  const sessionMenuTriggerRef = useRef<HTMLButtonElement>(null);
+  const skipRenameCommitRef = useRef(false);
+
+  useEffect(() => {
+    if (!openSessionMenuId) {
+      return;
+    }
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+
+      if (
+        !sessionMenuRef.current?.contains(target) &&
+        !sessionMenuTriggerRef.current?.contains(target)
+      ) {
+        setOpenSessionMenuId(null);
+        setSessionMenuPosition(null);
+      }
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") {
+        return;
+      }
+
+      event.preventDefault();
+      setOpenSessionMenuId(null);
+      setSessionMenuPosition(null);
+      sessionMenuTriggerRef.current?.focus();
+    };
+
+    const handleViewportChange = () => {
+      setOpenSessionMenuId(null);
+      setSessionMenuPosition(null);
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("resize", handleViewportChange);
+    window.addEventListener("scroll", handleViewportChange, true);
+
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("resize", handleViewportChange);
+      window.removeEventListener("scroll", handleViewportChange, true);
+    };
+  }, [openSessionMenuId]);
+
+  useEffect(() => {
+    if (!openSessionMenuId) {
+      return;
+    }
+
+    const animationFrame = window.requestAnimationFrame(() => {
+      sessionMenuRef.current
+        ?.querySelector<HTMLButtonElement>("[role='menuitem']")
+        ?.focus();
+    });
+
+    return () => window.cancelAnimationFrame(animationFrame);
+  }, [openSessionMenuId]);
+
+  const closeSessionMenu = () => {
+    setOpenSessionMenuId(null);
+    setSessionMenuPosition(null);
+  };
+
+  const toggleSessionMenu = (
+    sessionId: string,
+    trigger: HTMLButtonElement,
+  ) => {
+    if (openSessionMenuId === sessionId) {
+      closeSessionMenu();
+      return;
+    }
+
+    const triggerRect = trigger.getBoundingClientRect();
+    const menuWidth = 158;
+    const menuHeight = 112;
+    const viewportGap = 8;
+    const top =
+      triggerRect.bottom + 4 + menuHeight <= window.innerHeight - viewportGap
+        ? triggerRect.bottom + 4
+        : triggerRect.top - menuHeight - 4;
+
+    sessionMenuTriggerRef.current = trigger;
+    setSessionMenuPosition({
+      top: Math.max(viewportGap, top),
+      left: Math.min(
+        Math.max(viewportGap, triggerRect.right - menuWidth),
+        window.innerWidth - menuWidth - viewportGap,
+      ),
+    });
+    setOpenSessionMenuId(sessionId);
+  };
+
+  const beginRename = (session: CodingSession) => {
+    closeSessionMenu();
+    skipRenameCommitRef.current = false;
+    setRenameDraft(session.title);
+    setRenamingSessionId(session.id);
+  };
+
+  const commitRename = (session: CodingSession) => {
+    const nextTitle = renameDraft.trim();
+
+    if (nextTitle && nextTitle !== session.title) {
+      onRenameSession(session.id, nextTitle);
+    }
+
+    setRenamingSessionId(null);
+    setRenameDraft("");
+  };
+
+  const cancelRename = () => {
+    skipRenameCommitRef.current = true;
+    setRenamingSessionId(null);
+    setRenameDraft("");
+  };
+
+  const handleMenuKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const menuItems = Array.from(
+      event.currentTarget.querySelectorAll<HTMLButtonElement>("[role='menuitem']"),
+    );
+    const activeIndex = menuItems.indexOf(document.activeElement as HTMLButtonElement);
+    let nextIndex: number | null = null;
+
+    if (event.key === "ArrowDown") {
+      nextIndex = activeIndex < menuItems.length - 1 ? activeIndex + 1 : 0;
+    } else if (event.key === "ArrowUp") {
+      nextIndex = activeIndex > 0 ? activeIndex - 1 : menuItems.length - 1;
+    } else if (event.key === "Home") {
+      nextIndex = 0;
+    } else if (event.key === "End") {
+      nextIndex = menuItems.length - 1;
+    }
+
+    if (nextIndex !== null) {
+      event.preventDefault();
+      menuItems[nextIndex]?.focus();
+    }
+  };
+
   return (
     <aside className="sidebar" aria-label="Sandpi navigation">
       <div className="sidebar-brand-row">
@@ -82,8 +248,9 @@ export function Sidebar({
 
         <div className="environment-list">
           {environments.map((environment) => {
-            const environmentSessions = sessions.filter(
-              (session) => session.environmentId === environment.id,
+            const environmentSessions = visibleSessionsForEnvironment(
+              sessions,
+              environment.id,
             );
             const selected = environment.id === selectedEnvironmentId;
 
@@ -125,19 +292,132 @@ export function Sidebar({
                 </div>
 
                 <div className="session-list">
-                  {environmentSessions.map((session) => (
-                    <button
-                      className={`session-row ${
-                        session.id === selectedSessionId ? "is-selected" : ""
-                      }`}
-                      type="button"
-                      key={session.id}
-                      onClick={() => onSelectSession(session.id)}
-                    >
-                      <StatusDot status={session.status} />
-                      <span className="session-title">{session.title}</span>
-                    </button>
-                  ))}
+                  {environmentSessions.map((session) => {
+                    const menuIsOpen = openSessionMenuId === session.id;
+                    const isRenaming = renamingSessionId === session.id;
+
+                    return (
+                      <div
+                        className={`session-row ${
+                          session.id === selectedSessionId ? "is-selected" : ""
+                        } ${menuIsOpen ? "menu-is-open" : ""}`}
+                        key={session.id}
+                      >
+                        {isRenaming ? (
+                          <span className="session-rename-shell">
+                            <StatusDot status={session.status} />
+                            <input
+                              className="session-rename-input"
+                              aria-label={`Rename ${session.title}`}
+                              autoFocus
+                              value={renameDraft}
+                              onChange={(event) => setRenameDraft(event.target.value)}
+                              onBlur={() => {
+                                if (skipRenameCommitRef.current) {
+                                  skipRenameCommitRef.current = false;
+                                  return;
+                                }
+                                commitRename(session);
+                              }}
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter") {
+                                  event.preventDefault();
+                                  commitRename(session);
+                                } else if (event.key === "Escape") {
+                                  event.preventDefault();
+                                  cancelRename();
+                                }
+                              }}
+                            />
+                          </span>
+                        ) : (
+                          <button
+                            className="session-main-button"
+                            type="button"
+                            onClick={() => onSelectSession(session.id)}
+                          >
+                            <StatusDot status={session.status} />
+                            <span className="session-title">{session.title}</span>
+                            {session.pinned ? (
+                              <Pin
+                                className="session-pinned-icon"
+                                size={10}
+                                aria-label="Pinned"
+                              />
+                            ) : null}
+                          </button>
+                        )}
+
+                        <button
+                          className="session-more-button"
+                          type="button"
+                          aria-label={`Session actions for ${session.title}`}
+                          aria-haspopup="menu"
+                          aria-expanded={menuIsOpen}
+                          onClick={(event) =>
+                            toggleSessionMenu(session.id, event.currentTarget)
+                          }
+                          onKeyDown={(event) => {
+                            if (event.key === "ArrowDown") {
+                              event.preventDefault();
+                              if (!menuIsOpen) {
+                                toggleSessionMenu(session.id, event.currentTarget);
+                              }
+                            }
+                          }}
+                        >
+                          <MoreHorizontal size={15} aria-hidden="true" />
+                        </button>
+
+                        {menuIsOpen && sessionMenuPosition ? (
+                          <div
+                            className="session-action-menu"
+                            ref={sessionMenuRef}
+                            role="menu"
+                            aria-label={`Actions for ${session.title}`}
+                            style={sessionMenuPosition}
+                            onKeyDown={handleMenuKeyDown}
+                          >
+                            <button
+                              type="button"
+                              role="menuitem"
+                              onClick={() => {
+                                closeSessionMenu();
+                                onTogglePinSession(session.id);
+                              }}
+                            >
+                              {session.pinned ? (
+                                <PinOff size={14} aria-hidden="true" />
+                              ) : (
+                                <Pin size={14} aria-hidden="true" />
+                              )}
+                              {session.pinned ? "Unpin" : "Pin"}
+                            </button>
+                            <button
+                              type="button"
+                              role="menuitem"
+                              onClick={() => beginRename(session)}
+                            >
+                              <Pencil size={14} aria-hidden="true" />
+                              Rename
+                            </button>
+                            <button
+                              className="is-destructive"
+                              type="button"
+                              role="menuitem"
+                              onClick={() => {
+                                closeSessionMenu();
+                                onArchiveSession(session.id);
+                              }}
+                            >
+                              <Archive size={14} aria-hidden="true" />
+                              Archive
+                            </button>
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
                 </div>
               </section>
             );
@@ -146,10 +426,10 @@ export function Sidebar({
       </div>
 
       <div className="sidebar-footer">
-        <button type="button" className="sidebar-footer-button" onClick={onPreferences}>
+        <Link className="sidebar-footer-button" href="/preferences">
           <Settings size={16} />
           Preferences
-        </button>
+        </Link>
         <button type="button" className="sidebar-footer-button">
           <CircleHelp size={16} />
           Help & feedback

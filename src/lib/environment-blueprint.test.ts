@@ -14,7 +14,6 @@ test("builds an isolated session from one Environment revision", () => {
       templateId: "coding-agent",
       rootfsSnapshotId: "snap-rootfs-12",
       workspaceVolumeId: "vol-seed",
-      sandbox0ConnectionId: "connection-private",
       credentialRevision: 4,
       codingAgent: {
         harness: "codex",
@@ -33,7 +32,6 @@ test("builds an isolated session from one Environment revision", () => {
 
   assert.equal(plan.hardTtlSeconds, 30 * 24 * 60 * 60);
   assert.equal(plan.credentialRevision, 4);
-  assert.equal(plan.sandbox0ConnectionId, "connection-private");
   assert.deepEqual(
     plan.steps.map((step) => step.sdkMethod),
     [

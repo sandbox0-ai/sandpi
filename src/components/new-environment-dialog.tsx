@@ -3,12 +3,8 @@
 import {
   ArrowRight,
   Check,
-  ChevronRight,
-  GitBranch,
   LoaderCircle,
   LockKeyhole,
-  Server,
-  TerminalSquare,
   X,
 } from "lucide-react";
 import {
@@ -21,14 +17,12 @@ import {
   useState,
 } from "react";
 
-import type { Environment, Sandbox0ConnectionSummary } from "@/lib/types";
+import type { Environment } from "@/lib/types";
 
 import styles from "./new-environment-dialog.module.css";
 
 interface NewEnvironmentDialogProps {
   environments: Environment[];
-  sandbox0Connections: Sandbox0ConnectionSummary[];
-  defaultSandbox0ConnectionId: string;
   onCreated: (environment: Environment) => void;
   onClose: () => void;
 }
@@ -44,8 +38,6 @@ function normalizedName(value: string) {
 
 export function NewEnvironmentDialog({
   environments,
-  sandbox0Connections,
-  defaultSandbox0ConnectionId,
   onCreated,
   onClose,
 }: NewEnvironmentDialogProps) {
@@ -58,13 +50,6 @@ export function NewEnvironmentDialog({
   const dialogRef = useRef<HTMLElement>(null);
 
   const [name, setName] = useState("");
-  const [repository, setRepository] = useState("");
-  const [branch, setBranch] = useState("main");
-  const [sandbox0ConnectionId, setSandbox0ConnectionId] = useState(
-    sandbox0Connections.some((connection) => connection.id === defaultSandbox0ConnectionId)
-      ? defaultSandbox0ConnectionId
-      : (sandbox0Connections[0]?.id ?? ""),
-  );
   const [nameError, setNameError] = useState("");
   const [submitError, setSubmitError] = useState("");
   const [creating, setCreating] = useState(false);
@@ -164,9 +149,6 @@ export function NewEnvironmentDialog({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: name.trim(),
-          repository: repository.trim(),
-          branch: branch.trim(),
-          sandbox0ConnectionId,
         }),
       });
 
@@ -192,10 +174,6 @@ export function NewEnvironmentDialog({
     }
   }
 
-  const selectedSandbox0Connection = sandbox0Connections.find(
-    (connection) => connection.id === sandbox0ConnectionId,
-  );
-
   return (
     <div
       className={styles.backdrop}
@@ -220,10 +198,10 @@ export function NewEnvironmentDialog({
         <form className={styles.form} noValidate onSubmit={createEnvironment}>
           <header className={styles.header}>
             <div>
-              <span className={styles.kicker}>Create a reusable baseline</span>
+              <span className={styles.kicker}>Create a reusable workspace</span>
               <h1 id={titleId}>New Environment</h1>
               <p id={descriptionId}>
-                Configure the versioned workspace that every new Session will fork.
+                Name the workspace and choose the coding agent every new Session will use.
               </p>
             </div>
             <button
@@ -280,85 +258,6 @@ export function NewEnvironmentDialog({
                 ) : null}
               </label>
 
-              <div className={styles.repositoryGrid}>
-                <label className={styles.field}>
-                  <span className={styles.labelRow}>
-                    <span>Git repository</span>
-                    <span className={styles.optional}>Optional</span>
-                  </span>
-                  <span className={styles.inputWithIcon}>
-                    <GitBranch size={16} aria-hidden="true" />
-                    <input
-                      name="repository"
-                      type="text"
-                      autoComplete="off"
-                      spellCheck={false}
-                      maxLength={240}
-                      value={repository}
-                      placeholder="e.g. sandbox0-ai/sandpi…"
-                      onChange={(event) => setRepository(event.target.value)}
-                    />
-                  </span>
-                  <span className={styles.fieldHint}>Leave empty for a blank /workspace.</span>
-                </label>
-
-                <label className={styles.field}>
-                  <span className={styles.labelRow}>
-                    <span>Branch</span>
-                  </span>
-                  <input
-                    name="branch"
-                    type="text"
-                    autoComplete="off"
-                    spellCheck={false}
-                    maxLength={120}
-                    value={branch}
-                    placeholder="e.g. main…"
-                    onChange={(event) => setBranch(event.target.value)}
-                  />
-                  <span className={styles.fieldHint}>Defaults to main when left empty.</span>
-                </label>
-              </div>
-            </fieldset>
-
-            <fieldset className={styles.fieldset} disabled={creating}>
-              <legend>Sandbox0 control plane</legend>
-              <div className={styles.connectionGrid}>
-                <label className={styles.field}>
-                  <span className={styles.labelRow}>
-                    <span>Connection</span>
-                    <span className={styles.required}>Required</span>
-                  </span>
-                  <select
-                    name="sandbox0-connection"
-                    value={sandbox0ConnectionId}
-                    required
-                    onChange={(event) => setSandbox0ConnectionId(event.target.value)}
-                  >
-                    {sandbox0Connections.map((connection) => (
-                      <option key={connection.id} value={connection.id}>
-                        {connection.name}
-                      </option>
-                    ))}
-                  </select>
-                  <span className={styles.fieldHint}>
-                    The default comes from Preferences and can be changed for this Environment.
-                  </span>
-                </label>
-                <div className={styles.connectionSummary}>
-                  <span aria-hidden="true">
-                    <Server size={17} />
-                  </span>
-                  <div>
-                    <strong>{selectedSandbox0Connection?.name ?? "No connection"}</strong>
-                    <code>
-                      {selectedSandbox0Connection?.apiHost ??
-                        "Add a Sandbox0 connection in Preferences"}
-                    </code>
-                  </div>
-                  <span className={styles.connectionBinding}>Bound at creation</span>
-                </div>
-              </div>
             </fieldset>
 
             <fieldset className={styles.fieldset} disabled={creating}>
@@ -395,27 +294,6 @@ export function NewEnvironmentDialog({
               </p>
             </fieldset>
 
-            <section className={styles.initialization} aria-labelledby={`${titleId}-initialization`}>
-              <span className={styles.initializationIcon} aria-hidden="true">
-                <TerminalSquare size={18} />
-              </span>
-              <div>
-                <strong id={`${titleId}-initialization`}>Initialization creates revision 1</strong>
-                <p>
-                  Sandpi prepares a seed Sandbox. If you provide a repository, it checks out the
-                  selected branch into /workspace before publishing the rootfs and workspace
-                  baseline. Each Session receives an isolated fork of that revision.
-                </p>
-                <div className={styles.initializationFlow} aria-hidden="true">
-                  <span>Seed Sandbox</span>
-                  <ChevronRight size={13} />
-                  <span>Initialize</span>
-                  <ChevronRight size={13} />
-                  <span>Publish r1</span>
-                </div>
-              </div>
-            </section>
-
             {submitError ? (
               <p className={styles.submitError} role="alert">
                 {submitError}
@@ -424,7 +302,7 @@ export function NewEnvironmentDialog({
           </div>
 
           <footer className={styles.footer}>
-            <span className={styles.footerNote}>You can edit initialization settings later.</span>
+            <span className={styles.footerNote}>Each Session gets an isolated Sandbox.</span>
             <div className={styles.actions}>
               <button
                 type="button"
