@@ -19,11 +19,23 @@ import {
 } from "lucide-react";
 import { useMemo, useState } from "react";
 
-import type { AuditEvent, CodingSession, MetricPoint, WorkspaceFile } from "@/lib/types";
+import {
+  formatAuditTime,
+  getOperationUiCopy,
+  type OperationLanguage,
+} from "@/lib/operation-ui";
+import type {
+  AuditEvent,
+  CodingSession,
+  MetricPoint,
+  WorkspaceFile,
+} from "@/lib/types";
 
 export type InspectorTab = "files" | "audit" | "metrics";
 
 interface InspectorProps {
+  language: OperationLanguage;
+  timeZone: string;
   session: CodingSession;
   activeTab: InspectorTab;
   onTabChange: (tab: InspectorTab) => void;
@@ -31,7 +43,10 @@ interface InspectorProps {
 }
 
 function flattenFiles(files: WorkspaceFile[]): WorkspaceFile[] {
-  return files.flatMap((file) => [file, ...(file.children ? flattenFiles(file.children) : [])]);
+  return files.flatMap((file) => [
+    file,
+    ...(file.children ? flattenFiles(file.children) : []),
+  ]);
 }
 
 function FileIcon({ file }: { file: WorkspaceFile }) {
@@ -76,7 +91,10 @@ function FileTree({
               style={{ paddingLeft: `${10 + depth * 14}px` }}
               onClick={() => {
                 if (isFolder) {
-                  setCollapsed((current) => ({ ...current, [file.id]: !isCollapsed }));
+                  setCollapsed((current) => ({
+                    ...current,
+                    [file.id]: !isCollapsed,
+                  }));
                 } else {
                   onSelect(file);
                 }
@@ -117,7 +135,15 @@ function FileTree({
   );
 }
 
-function Sparkline({ points, max }: { points: MetricPoint[]; max?: number }) {
+function Sparkline({
+  points,
+  max,
+  title,
+}: {
+  points: MetricPoint[];
+  max?: number;
+  title: string;
+}) {
   const width = 286;
   const height = 76;
   const values = points.map((point) => point.value);
@@ -133,40 +159,55 @@ function Sparkline({ points, max }: { points: MetricPoint[]; max?: number }) {
 
   return (
     <svg className="sparkline" viewBox={`0 0 ${width} ${height}`} role="img">
-      <title>Metric values over the last hour</title>
-      <path className="sparkline-grid" d={`M0,20 H${width} M0,40 H${width} M0,60 H${width}`} />
+      <title>{title}</title>
+      <path
+        className="sparkline-grid"
+        d={`M0,20 H${width} M0,40 H${width} M0,60 H${width}`}
+      />
       <path className="sparkline-area" d={area} />
       <path className="sparkline-line" d={path} />
     </svg>
   );
 }
 
-function formatAuditTime(timestamp: string) {
-  return new Intl.DateTimeFormat("en", {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-  }).format(new Date(timestamp));
-}
-
-function AuditRow({ event }: { event: AuditEvent }) {
+function AuditRow({
+  event,
+  language,
+  timeZone,
+}: {
+  event: AuditEvent;
+  language: OperationLanguage;
+  timeZone: string;
+}) {
   return (
     <div className="audit-row">
       <span className={`audit-marker outcome-${event.outcome}`} />
       <div className="audit-copy">
         <div>
           <strong>{event.action}</strong>
-          <span className={`source-tag source-${event.source}`}>{event.source}</span>
+          <span className={`source-tag source-${event.source}`}>
+            {event.source}
+          </span>
         </div>
         <p>{event.detail}</p>
-        <time dateTime={event.timestamp}>{formatAuditTime(event.timestamp)}</time>
+        <time dateTime={event.timestamp}>
+          {formatAuditTime(event.timestamp, language, timeZone)}
+        </time>
       </div>
     </div>
   );
 }
 
-function ShareDialog({ file, onClose }: { file: WorkspaceFile; onClose: () => void }) {
+function ShareDialog({
+  file,
+  language,
+  onClose,
+}: {
+  file: WorkspaceFile;
+  language: OperationLanguage;
+  onClose: () => void;
+}) {
+  const ui = getOperationUiCopy(language).inspector;
   const [permission, setPermission] = useState("viewer");
   const [expiry, setExpiry] = useState("7-days");
   const [copied, setCopied] = useState(false);
@@ -182,7 +223,11 @@ function ShareDialog({ file, onClose }: { file: WorkspaceFile; onClose: () => vo
   }
 
   return (
-    <div className="modal-layer modal-layer-local" role="presentation" onMouseDown={onClose}>
+    <div
+      className="modal-layer modal-layer-local"
+      role="presentation"
+      onMouseDown={onClose}
+    >
       <section
         className="share-dialog"
         role="dialog"
@@ -192,53 +237,55 @@ function ShareDialog({ file, onClose }: { file: WorkspaceFile; onClose: () => vo
       >
         <header>
           <div>
-            <span className="dialog-kicker">Volume file</span>
-            <h2 id="share-dialog-title">Share {file.name}</h2>
+            <span className="dialog-kicker">{ui.volumeFile}</span>
+            <h2 id="share-dialog-title">{ui.share(file.name)}</h2>
           </div>
-          <button type="button" className="icon-button" aria-label="Close" onClick={onClose}>
+          <button
+            type="button"
+            className="icon-button"
+            aria-label={ui.closeDialog}
+            onClick={onClose}
+          >
             <X size={18} />
           </button>
         </header>
         <p className="share-path">{file.path}</p>
         <div className="share-form-grid">
           <label>
-            Permission
+            {ui.permission}
             <select
               name="share-permission"
               value={permission}
               onChange={(event) => setPermission(event.target.value)}
             >
-              <option value="viewer">Can view</option>
-              <option value="download">Can view & download</option>
+              <option value="viewer">{ui.canView}</option>
+              <option value="download">{ui.canDownload}</option>
             </select>
           </label>
           <label>
-            Link expires
+            {ui.linkExpires}
             <select
               name="share-expiry"
               value={expiry}
               onChange={(event) => setExpiry(event.target.value)}
             >
-              <option value="24-hours">24 hours</option>
-              <option value="7-days">7 days</option>
-              <option value="30-days">30 days</option>
+              <option value="24-hours">{ui.hours24}</option>
+              <option value="7-days">{ui.days7}</option>
+              <option value="30-days">{ui.days30}</option>
             </select>
           </label>
         </div>
         <label className="share-link-label">
-          Private link
+          {ui.privateLink}
           <span className="share-link-row">
             <input name="share-link" readOnly value={link} />
             <button type="button" onClick={copyLink}>
               {copied ? <CheckIcon /> : <Copy size={15} />}
-              {copied ? "Copied" : "Copy"}
+              {copied ? ui.copied : ui.copy}
             </button>
           </span>
         </label>
-        <p className="share-security-note">
-          The control plane validates this grant before proxying read-only Volume access. The
-          sandbox is never exposed directly.
-        </p>
+        <p className="share-security-note">{ui.shareBoundary}</p>
       </section>
     </div>
   );
@@ -248,7 +295,15 @@ function CheckIcon() {
   return <span className="mini-check">✓</span>;
 }
 
-export function Inspector({ session, activeTab, onTabChange, onClose }: InspectorProps) {
+export function Inspector({
+  language,
+  timeZone,
+  session,
+  activeTab,
+  onTabChange,
+  onClose,
+}: InspectorProps) {
+  const ui = getOperationUiCopy(language).inspector;
   const allFiles = useMemo(() => flattenFiles(session.files), [session.files]);
   const initialFile =
     allFiles.find((file) => file.id === "auth-callback") ??
@@ -260,32 +315,37 @@ export function Inspector({ session, activeTab, onTabChange, onClose }: Inspecto
     allFiles.find((file) => file.id === selectedFileId) ?? initialFile;
 
   return (
-    <aside className="inspector" aria-label="Session inspector">
+    <aside className="inspector" aria-label={ui.label}>
       <header className="inspector-header">
-        <nav aria-label="Inspector views">
+        <nav aria-label={ui.views}>
           <button
             type="button"
             className={activeTab === "files" ? "is-active" : ""}
             onClick={() => onTabChange("files")}
           >
-            <FileCode2 size={14} /> Files
+            <FileCode2 size={14} /> {ui.files}
           </button>
           <button
             type="button"
             className={activeTab === "audit" ? "is-active" : ""}
             onClick={() => onTabChange("audit")}
           >
-            <ShieldCheck size={14} /> Audit
+            <ShieldCheck size={14} /> {ui.audit}
           </button>
           <button
             type="button"
             className={activeTab === "metrics" ? "is-active" : ""}
             onClick={() => onTabChange("metrics")}
           >
-            <Activity size={14} /> Metrics
+            <Activity size={14} /> {ui.metrics}
           </button>
         </nav>
-        <button type="button" className="icon-button" aria-label="Close inspector" onClick={onClose}>
+        <button
+          type="button"
+          className="icon-button"
+          aria-label={ui.close}
+          onClick={onClose}
+        >
           <X size={17} />
         </button>
       </header>
@@ -293,7 +353,7 @@ export function Inspector({ session, activeTab, onTabChange, onClose }: Inspecto
       {activeTab === "files" ? (
         <div className="inspector-panel files-panel">
           <div className="file-workbench">
-            <div className="file-tree" aria-label="Workspace files">
+            <div className="file-tree" aria-label={ui.workspaceFiles}>
               <FileTree
                 files={session.files}
                 selectedFileId={selectedFile?.id ?? ""}
@@ -310,12 +370,22 @@ export function Inspector({ session, activeTab, onTabChange, onClose }: Inspecto
                   <span className="file-preview-actions">
                     <button
                       type="button"
-                      aria-label={`Share ${selectedFile.name}`}
+                      aria-label={ui.shareFile(selectedFile.name)}
                       onClick={() => setShareOpen(true)}
                     >
                       <Share2 size={14} />
                     </button>
-                    <button type="button" aria-label="Open in new view">
+                    {/*
+                     * Cross-client contract: opening a Volume file in a new tab must launch the
+                     * dedicated Sandpi Cloud IDE, never expose a raw Volume or Sandbox URL.
+                     * Keep this action disabled until the Cloud IDE session/route contract exists.
+                     */}
+                    <button
+                      type="button"
+                      aria-label={ui.openNewView}
+                      title={ui.openNewView}
+                      disabled
+                    >
                       <ExternalLink size={14} />
                     </button>
                   </span>
@@ -327,12 +397,14 @@ export function Inspector({ session, activeTab, onTabChange, onClose }: Inspecto
                 </div>
                 <pre className="code-preview">
                   <code>
-                    {(selectedFile.content ?? "").split("\n").map((line, index) => (
-                      <span className="code-line" key={`${line}-${index}`}>
-                        <b>{index + 1}</b>
-                        <i>{line || " "}</i>
-                      </span>
-                    ))}
+                    {(selectedFile.content ?? "")
+                      .split("\n")
+                      .map((line, index) => (
+                        <span className="code-line" key={`${line}-${index}`}>
+                          <b>{index + 1}</b>
+                          <i>{line || " "}</i>
+                        </span>
+                      ))}
                   </code>
                 </pre>
               </div>
@@ -340,7 +412,7 @@ export function Inspector({ session, activeTab, onTabChange, onClose }: Inspecto
           </div>
           <div className="inspector-status-bar">
             <span className="status-led" />
-            Volume live · {session.workspaceVolumeId}
+            {ui.volumeLive(session.workspaceVolumeId)}
           </div>
         </div>
       ) : null}
@@ -349,38 +421,44 @@ export function Inspector({ session, activeTab, onTabChange, onClose }: Inspecto
         <div className="inspector-panel audit-panel">
           <div className="panel-intro">
             <div>
-              <span className="panel-eyebrow">Sandbox activity</span>
-              <h2>Audit events</h2>
+              <span className="panel-eyebrow">{ui.sandboxActivity}</span>
+              <h2>{ui.auditEvents}</h2>
             </div>
             <button type="button" className="filter-button">
-              All sources <ChevronDown size={13} />
+              {ui.allSources} <ChevronDown size={13} />
             </button>
           </div>
           <div className="audit-summary">
             <div>
               <strong>{session.auditEvents.length}</strong>
-              <span>Recent events</span>
+              <span>{ui.recentEvents}</span>
             </div>
             <div>
               <strong>
-                {session.auditEvents.filter((event) => event.outcome === "blocked").length}
+                {
+                  session.auditEvents.filter(
+                    (event) => event.outcome === "blocked",
+                  ).length
+                }
               </strong>
-              <span>Blocked</span>
+              <span>{ui.blocked}</span>
             </div>
             <div>
               <strong>2</strong>
-              <span>Sources</span>
+              <span>{ui.sources}</span>
             </div>
           </div>
           <div className="audit-list">
             {session.auditEvents.map((event) => (
-              <AuditRow event={event} key={event.id} />
+              <AuditRow
+                event={event}
+                key={event.id}
+                language={language}
+                timeZone={timeZone}
+              />
             ))}
           </div>
-          <p className="data-boundary-note">
-            Sandbox0 supplies lifecycle and network audit events. Supervisor session events are
-            shown as a separate source; file audit is not inferred from Volume access.
-          </p>
+          <p className="data-boundary-note">{ui.auditBoundary}</p>
         </div>
       ) : null}
 
@@ -388,11 +466,11 @@ export function Inspector({ session, activeTab, onTabChange, onClose }: Inspecto
         <div className="inspector-panel metrics-panel">
           <div className="panel-intro">
             <div>
-              <span className="panel-eyebrow">Last hour</span>
-              <h2>Runtime metrics</h2>
+              <span className="panel-eyebrow">{ui.lastHour}</span>
+              <h2>{ui.runtimeMetrics}</h2>
             </div>
             <button type="button" className="filter-button">
-              1 hour <ChevronDown size={13} />
+              {ui.oneHour} <ChevronDown size={13} />
             </button>
           </div>
           <section className="metric-card">
@@ -402,51 +480,67 @@ export function Inspector({ session, activeTab, onTabChange, onClose }: Inspecto
               </span>
               <strong>{session.metrics.currentCpuPercent}%</strong>
             </header>
-            <Sparkline points={session.metrics.cpuPercent} max={100} />
+            <Sparkline
+              points={session.metrics.cpuPercent}
+              max={100}
+              title={ui.metricChart}
+            />
             <footer>
-              <span>avg 18%</span>
-              <span>peak 38%</span>
+              <span>{ui.average(18)}</span>
+              <span>{ui.peak(38)}</span>
             </footer>
           </section>
           <section className="metric-card">
             <header>
               <span>
-                <Activity size={15} /> Memory
+                <Activity size={15} /> {ui.memory}
               </span>
               <strong>{session.metrics.currentMemoryMiB} MiB</strong>
             </header>
             <Sparkline
               points={session.metrics.memoryMiB}
               max={session.metrics.memoryLimitMiB}
+              title={ui.metricChart}
             />
             <footer>
-              <span>{Math.round((session.metrics.currentMemoryMiB / session.metrics.memoryLimitMiB) * 100)}% of limit</span>
-              <span>{session.metrics.memoryLimitMiB / 1024} GiB limit</span>
+              <span>
+                {ui.percentOfLimit(
+                  Math.round(
+                    (session.metrics.currentMemoryMiB /
+                      session.metrics.memoryLimitMiB) *
+                      100,
+                  ),
+                )}
+              </span>
+              <span>
+                {ui.memoryLimit(session.metrics.memoryLimitMiB / 1024)}
+              </span>
             </footer>
           </section>
           <section className="runtime-facts">
             <div>
-              <span>Sandbox</span>
+              <span>{ui.sandbox}</span>
               <code>{session.sandboxId}</code>
             </div>
             <div>
-              <span>Supervisor session</span>
+              <span>{ui.supervisorSession}</span>
               <code>{session.supervisorSessionId}</code>
             </div>
             <div>
-              <span>Runtime generation</span>
+              <span>{ui.runtimeGeneration}</span>
               <strong>3</strong>
             </div>
           </section>
-          <p className="data-boundary-note">
-            Chart-ready runtime series from Sandbox0 observability. Billing and metering remain a
-            separate usage-truth path.
-          </p>
+          <p className="data-boundary-note">{ui.metricsBoundary}</p>
         </div>
       ) : null}
 
       {shareOpen && selectedFile ? (
-        <ShareDialog file={selectedFile} onClose={() => setShareOpen(false)} />
+        <ShareDialog
+          file={selectedFile}
+          language={language}
+          onClose={() => setShareOpen(false)}
+        />
       ) : null}
     </aside>
   );

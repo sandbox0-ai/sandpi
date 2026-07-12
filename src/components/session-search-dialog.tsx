@@ -117,6 +117,7 @@ export function SessionSearchDialog({
           <input
             ref={inputRef}
             type="text"
+            name="session-search"
             inputMode="search"
             role="searchbox"
             aria-controls={resultsId}

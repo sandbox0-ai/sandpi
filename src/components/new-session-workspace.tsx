@@ -6,35 +6,41 @@ import {
   GitFork,
   LockKeyhole,
   Menu,
+  PanelLeftOpen,
   Paperclip,
   Settings2,
   Sparkles,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
+import {
+  getOperationUiCopy,
+  shouldSubmitComposer,
+  type OperationLanguage,
+  type SendShortcut,
+} from "@/lib/operation-ui";
 import type { CodingSession, Environment } from "@/lib/types";
 
 import styles from "./new-session-workspace.module.css";
 
 interface NewSessionWorkspaceProps {
+  language: OperationLanguage;
+  sendShortcut: SendShortcut;
   environment: Environment;
   onCreated: (session: CodingSession) => void;
   onOpenSettings: () => void;
   onToggleSidebar: () => void;
 }
 
-const starterPrompts = [
-  "Inspect this workspace and explain its structure",
-  "Find the highest-risk bug and fix it",
-  "Run the tests and resolve any failures",
-];
-
 export function NewSessionWorkspace({
+  language,
+  sendShortcut,
   environment,
   onCreated,
   onOpenSettings,
   onToggleSidebar,
 }: NewSessionWorkspaceProps) {
+  const ui = getOperationUiCopy(language).newSession;
   const [prompt, setPrompt] = useState("");
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
@@ -44,14 +50,16 @@ export function NewSessionWorkspace({
     if (!window.matchMedia("(min-width: 641px)").matches) {
       return;
     }
-    const focusFrame = window.requestAnimationFrame(() => promptRef.current?.focus());
+    const focusFrame = window.requestAnimationFrame(() =>
+      promptRef.current?.focus(),
+    );
     return () => window.cancelAnimationFrame(focusFrame);
   }, []);
 
   async function createSession() {
     const instruction = prompt.trim();
     if (!instruction) {
-      setError(`Tell ${environment.codingAgent.label} what to work on.`);
+      setError(ui.emptyInstruction(environment.codingAgent.label));
       promptRef.current?.focus();
       return;
     }
@@ -72,13 +80,11 @@ export function NewSessionWorkspace({
         error?: { message?: string };
       };
       if (!response.ok || !payload.data) {
-        throw new Error(payload.error?.message || "Could not start the Session. Try again.");
+        throw new Error(payload.error?.message || ui.startFailed);
       }
       onCreated(payload.data);
     } catch (cause) {
-      setError(
-        cause instanceof Error ? cause.message : "Could not start the Session. Try again.",
-      );
+      setError(cause instanceof Error ? cause.message : ui.startFailed);
       setCreating(false);
     }
   }
@@ -88,8 +94,17 @@ export function NewSessionWorkspace({
       <header className={styles.header}>
         <button
           type="button"
+          className={styles.desktopExpandButton}
+          aria-label={ui.expandSidebar}
+          title={ui.expandSidebar}
+          onClick={onToggleSidebar}
+        >
+          <PanelLeftOpen size={19} aria-hidden="true" />
+        </button>
+        <button
+          type="button"
           className={styles.mobileMenuButton}
-          aria-label="Open navigation"
+          aria-label={ui.openNavigation}
           onClick={onToggleSidebar}
         >
           <Menu size={19} aria-hidden="true" />
@@ -98,17 +113,17 @@ export function NewSessionWorkspace({
           <div className={styles.breadcrumb}>
             <span>{environment.name}</span>
             <i>/</i>
-            <strong>New session</strong>
+            <strong>{ui.title}</strong>
           </div>
           <div className={styles.meta}>
             <span className={styles.readyDot} aria-hidden="true" />
-            Ready to fork Environment r{environment.revision}
+            {ui.readyToFork(environment.revision)}
           </div>
         </div>
         <button
           type="button"
           className={styles.settingsButton}
-          aria-label={`${environment.name} settings`}
+          aria-label={ui.environmentSettings(environment.name)}
           onClick={onOpenSettings}
         >
           <Settings2 size={17} aria-hidden="true" />
@@ -120,19 +135,18 @@ export function NewSessionWorkspace({
           <span className={styles.agentMark} aria-hidden="true">
             <span />
           </span>
-          <h1>What should {environment.codingAgent.label} work on?</h1>
-          <p>
-            The first instruction creates an isolated Sandbox from {environment.name} and starts
-            its bound native coding agent.
-          </p>
+          <h1>{ui.question(environment.codingAgent.label)}</h1>
+          <p>{ui.introduction(environment.name)}</p>
           <div className={styles.facts}>
             <span>
-              <GitFork size={13} aria-hidden="true" /> Environment r{environment.revision}
+              <GitFork size={13} aria-hidden="true" />{" "}
+              {ui.environmentRevision(environment.revision)}
             </span>
             <span>
-              <LockKeyhole size={13} aria-hidden="true" /> {environment.codingAgent.label} bound
+              <LockKeyhole size={13} aria-hidden="true" />{" "}
+              {ui.agentBound(environment.codingAgent.label)}
             </span>
-            <span>30-day hard TTL</span>
+            <span>{ui.hardTtl}</span>
           </div>
         </div>
 
@@ -143,7 +157,7 @@ export function NewSessionWorkspace({
             autoComplete="off"
             rows={3}
             value={prompt}
-            placeholder={`Ask ${environment.codingAgent.label} to work on something…`}
+            placeholder={ui.placeholder(environment.codingAgent.label)}
             onChange={(event) => {
               setPrompt(event.target.value);
               if (error && event.target.value.trim()) {
@@ -151,7 +165,18 @@ export function NewSessionWorkspace({
               }
             }}
             onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey) {
+              if (
+                shouldSubmitComposer(
+                  {
+                    key: event.key,
+                    shiftKey: event.shiftKey,
+                    metaKey: event.metaKey,
+                    ctrlKey: event.ctrlKey,
+                    isComposing: event.nativeEvent.isComposing,
+                  },
+                  sendShortcut,
+                )
+              ) {
                 event.preventDefault();
                 void createSession();
               }
@@ -159,26 +184,30 @@ export function NewSessionWorkspace({
           />
           <div className={styles.composerToolbar}>
             <div>
-              <button type="button" aria-label="Attach file">
+              <button type="button" aria-label={ui.attachFile}>
                 <Paperclip size={17} aria-hidden="true" />
               </button>
-              <button type="button" aria-label="Mention file">
+              <button type="button" aria-label={ui.mentionFile}>
                 <AtSign size={17} aria-hidden="true" />
               </button>
               <span className={styles.boundAgent}>
                 <span className={styles.boundAgentMark} aria-hidden="true" />
                 {environment.codingAgent.label}
-                <small>Environment</small>
+                <small>{ui.environment}</small>
               </span>
             </div>
             <button
               type="button"
               className={styles.sendButton}
-              aria-label={creating ? "Starting Session" : "Send instruction and start Session"}
+              aria-label={creating ? ui.starting : ui.sendAndStart}
               disabled={creating}
               onClick={() => void createSession()}
             >
-              {creating ? <span className={styles.spinner} /> : <ArrowUp size={18} aria-hidden="true" />}
+              {creating ? (
+                <span className={styles.spinner} />
+              ) : (
+                <ArrowUp size={18} aria-hidden="true" />
+              )}
             </button>
           </div>
         </div>
@@ -189,8 +218,8 @@ export function NewSessionWorkspace({
           </p>
         ) : null}
 
-        <div className={styles.starters} aria-label="Starter instructions">
-          {starterPrompts.map((starter) => (
+        <div className={styles.starters} aria-label={ui.starterLabel}>
+          {ui.starters.map((starter) => (
             <button
               type="button"
               key={starter}

@@ -206,7 +206,7 @@
   min-width: 182px;
   height: 38px;
   padding: 0 30px 0 11px;
-  border: 1px solid #d3d1c9;
+  border: 1px solid var(--line, #deddd7);
   border-radius: 7px;
   background: var(--panel-strong, #fff);
   color: var(--ink, #171716);
@@ -217,11 +217,10 @@
   position: relative;
   width: 38px;
   height: 22px;
-  flex: 0 0 auto;
   padding: 0;
-  border: 1px solid #c8c6be;
+  border: 1px solid var(--line, #deddd7);
   border-radius: 999px;
-  background: #d8d6cf;
+  background: var(--selected, #dfddd5);
   cursor: pointer;
   transition: background 130ms ease;
 }
@@ -233,7 +232,7 @@
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  background: #fff;
+  background: var(--panel-strong, #fff);
   box-shadow: 0 1px 2px rgb(0 0 0 / 20%);
   transition: transform 130ms ease;
 }
@@ -266,7 +265,7 @@
   padding: 4px;
   border: 1px solid var(--line, #deddd7);
   border-radius: 9px;
-  background: #efeee9;
+  background: var(--sidebar, #efeee9);
 }
 
 .segmented button {
@@ -309,8 +308,8 @@
 
 .densityGrid button:hover,
 .densityGrid button.selected {
-  border-color: #91a2b4;
-  background: #f4f7f9;
+  border-color: var(--blue, #416d9d);
+  background: var(--blue-soft, #e8eef6);
   color: var(--ink, #171716);
   box-shadow: 0 0 0 2px rgb(65 109 157 / 8%);
 }
@@ -365,7 +364,7 @@
   padding: 13px 14px;
   border: 1px solid var(--line, #deddd7);
   border-radius: 9px;
-  background: #f2f1ed;
+  background: var(--sidebar, #efeee9);
   color: var(--ink-soft, #62615c);
 }
 
@@ -398,7 +397,7 @@
   align-items: center;
   justify-content: center;
   border-radius: 8px;
-  background: #efeee9;
+  background: var(--sidebar, #efeee9);
   color: var(--ink-soft, #62615c);
 }
 
@@ -436,7 +435,7 @@
   display: grid;
   grid-template-columns: 244px minmax(0, 1fr);
   border-top: 1px solid var(--line, #deddd7);
-  background: rgb(251 250 247 / 96%);
+  background: var(--panel, #fbfaf7);
   backdrop-filter: blur(12px);
 }
 
@@ -488,15 +487,24 @@
 .primaryButton {
   border: 1px solid var(--ink, #171716);
   background: var(--ink, #171716);
-  color: #fff;
+  color: var(--canvas, #f7f6f2);
 }
 
 .primaryButton:hover:not(:disabled) {
-  background: #30302e;
+  border-color: var(--ink-soft, #62615c);
+  background: var(--ink-soft, #62615c);
+  color: var(--canvas, #f7f6f2);
+}
+
+.primaryButton:active:not(:disabled) {
+  border-color: var(--ink, #171716);
+  background: var(--ink, #171716);
+  color: var(--canvas, #f7f6f2);
+  transform: translateY(1px);
 }
 
 .secondaryButton {
-  border: 1px solid #d1cfc7;
+  border: 1px solid var(--line, #deddd7);
   background: var(--panel-strong, #fff);
   color: var(--ink-soft, #62615c);
 }
@@ -506,14 +514,61 @@
   color: var(--ink, #171716);
 }
 
-.primaryButton:disabled,
 .secondaryButton:disabled {
   cursor: not-allowed;
   opacity: 0.45;
 }
 
+.primaryButton:disabled {
+  border-color: var(--line, #deddd7);
+  background: var(--selected, #dfddd5);
+  color: var(--ink-soft, #62615c);
+  cursor: not-allowed;
+}
+
 .spinner {
   animation: spin 850ms linear infinite;
+}
+
+:global(html[data-density="compact"]) .sidebar {
+  padding-top: 12px;
+  padding-bottom: 16px;
+}
+
+:global(html[data-density="compact"]) .sidebarHeading {
+  margin-top: 17px;
+}
+
+:global(html[data-density="compact"]) .navigation {
+  gap: 1px;
+  margin-top: 18px;
+}
+
+:global(html[data-density="compact"]) .navigation button {
+  min-height: 32px;
+}
+
+:global(html[data-density="compact"]) .section {
+  padding-top: 38px;
+}
+
+:global(html[data-density="compact"]) .sectionBody {
+  gap: 12px;
+  margin-top: 24px;
+}
+
+:global(html[data-density="compact"]) .preferenceRow {
+  min-height: 58px;
+  padding-block: 9px;
+}
+
+:global(html[data-density="compact"]) .rowControl select {
+  height: 33px;
+}
+
+:global(html[data-density="compact"]) .capabilityCard,
+:global(html[data-density="compact"]) .callout {
+  padding: 10px 12px;
 }
 
 @keyframes spin {

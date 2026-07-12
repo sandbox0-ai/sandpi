@@ -20,6 +20,7 @@ test("binds the coding agent to an Environment and every derived Session", () =>
   assert.equal(session.harness, environment.codingAgent.harness);
   assert.equal(session.harnessLabel, environment.codingAgent.label);
   assert.equal(session.environmentRevision, environment.revision);
+  assert.equal(session.unread, false);
   assert.equal(session.pinned, false);
   assert.equal(session.archived, false);
   assert.equal(session.workspaceRoot, "/workspace");

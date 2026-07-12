@@ -65,6 +65,7 @@
   background: var(--green);
 }
 
+.desktopExpandButton,
 .mobileMenuButton,
 .settingsButton {
   display: inline-flex;
@@ -81,10 +82,12 @@
   cursor: pointer;
 }
 
+.desktopExpandButton,
 .mobileMenuButton {
   display: none;
 }
 
+.desktopExpandButton:hover,
 .mobileMenuButton:hover,
 .settingsButton:hover {
   background: var(--hover);
@@ -126,7 +129,7 @@
   height: 10px;
   border: 1.5px solid currentColor;
   border-radius: 50%;
-  color: #fff;
+  color: var(--canvas);
   box-shadow:
     4px 0 0 -2.5px currentColor,
     -4px 0 0 -2.5px currentColor;
@@ -165,7 +168,7 @@
   padding: 0 8px;
   border: 1px solid var(--line);
   border-radius: 6px;
-  background: #f1f0ec;
+  background: var(--sidebar);
   color: var(--ink-soft);
   font-size: 9px;
 }
@@ -173,14 +176,14 @@
 .composer {
   margin-top: 30px;
   padding: 11px 11px 9px;
-  border: 1px solid #c7c5bd;
+  border: 1px solid var(--line);
   border-radius: 15px;
   background: var(--panel-strong);
   box-shadow: 0 8px 28px rgb(30 30 24 / 7%);
 }
 
 .composer:focus-within {
-  border-color: #8f8d85;
+  border-color: var(--ink-faint);
   box-shadow: 0 8px 30px rgb(30 30 24 / 10%);
 }
 
@@ -200,7 +203,7 @@
 }
 
 .composer textarea::placeholder {
-  color: #96948c;
+  color: var(--ink-faint);
 }
 
 .composerToolbar,
@@ -245,7 +248,7 @@
   margin-left: 3px;
   padding: 0 8px;
   border-radius: 6px;
-  background: #f2f1ed;
+  background: var(--sidebar);
   color: var(--ink-soft);
   font-size: 10px;
 }
@@ -258,7 +261,7 @@
 
 .boundAgent small {
   padding-left: 6px;
-  border-left: 1px solid #d3d1ca;
+  border-left: 1px solid var(--line);
   color: var(--ink-faint);
   font-size: 8px;
 }
@@ -274,17 +277,17 @@
   border: 0;
   border-radius: 8px;
   background: var(--ink);
-  color: #fff;
+  color: var(--canvas);
   cursor: pointer;
 }
 
 .sendButton:hover:not(:disabled) {
-  background: #383733;
+  background: var(--ink-soft);
 }
 
 .sendButton:disabled {
-  background: #d7d5ce;
-  color: #96948c;
+  background: var(--selected);
+  color: var(--ink-faint);
 }
 
 .spinner {
@@ -334,14 +337,20 @@
 }
 
 .starters button:hover {
-  border-color: #c4c1b9;
-  background: #f0efeb;
+  border-color: var(--ink-faint);
+  background: var(--hover);
   color: var(--ink);
 }
 
 @keyframes spin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+@media (min-width: 961px) {
+  :global(.sidebar-is-collapsed) .desktopExpandButton {
+    display: inline-flex;
   }
 }
 

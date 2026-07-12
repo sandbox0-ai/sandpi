@@ -16,8 +16,21 @@ import {
   SlidersHorizontal,
 } from "lucide-react";
 import Link from "next/link";
-import { type ComponentType, type ReactNode, useMemo, useState } from "react";
+import {
+  type ComponentType,
+  type ReactNode,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
+import {
+  applyClientPreferences,
+  buildAppearancePreviewPreferences,
+  loadClientPreferences,
+  saveClientPreferences,
+} from "@/lib/client-preferences";
 import type { SandpiPreferences } from "@/lib/types";
 
 import styles from "./preferences-page.module.css";
@@ -45,35 +58,80 @@ const tabs: Array<{
   { id: "advanced", label: "Advanced", icon: SlidersHorizontal },
 ];
 
-function getErrorMessage(payload: unknown) {
-  if (!payload || typeof payload !== "object") {
-    return undefined;
-  }
-
-  const error = (payload as { error?: unknown }).error;
-  if (typeof error === "string") {
-    return error;
-  }
-  if (error && typeof error === "object") {
-    const message = (error as { message?: unknown }).message;
-    return typeof message === "string" ? message : undefined;
-  }
-  return undefined;
-}
-
 export function PreferencesPage({ initialPreferences }: PreferencesPageProps) {
   const [activeTab, setActiveTab] = useState<PreferenceTab>("general");
   const [baseline, setBaseline] = useState(initialPreferences);
   const [draft, setDraft] = useState(initialPreferences);
+  const [hydrated, setHydrated] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveState, setSaveState] = useState<
     { tone: "success" | "error"; message: string } | undefined
   >();
+  const baselineRef = useRef(initialPreferences);
 
   const hasChanges = useMemo(
     () => JSON.stringify(draft) !== JSON.stringify(baseline),
     [baseline, draft],
   );
+  const isZh = baseline.general.language === "zh-CN";
+  const text = (english: string, chinese: string) =>
+    isZh ? chinese : english;
+
+  useEffect(() => {
+    const stored = loadClientPreferences(initialPreferences);
+    baselineRef.current = stored;
+    setBaseline(stored);
+    setDraft(stored);
+    applyClientPreferences(stored);
+    setHydrated(true);
+
+    const restoreSavedPreferences = () =>
+      applyClientPreferences(baselineRef.current);
+    const restoreBeforeLinkNavigation = (event: MouseEvent) => {
+      if (!(event.target instanceof Element)) {
+        return;
+      }
+
+      const link = event.target.closest<HTMLAnchorElement>("a[href]");
+      if (!link) {
+        return;
+      }
+
+      const destination = new URL(link.href, window.location.href);
+      if (
+        destination.origin !== window.location.origin ||
+        destination.pathname !== window.location.pathname
+      ) {
+        restoreSavedPreferences();
+      }
+    };
+
+    document.addEventListener("click", restoreBeforeLinkNavigation, true);
+    window.addEventListener("popstate", restoreSavedPreferences);
+    window.addEventListener("pagehide", restoreSavedPreferences);
+    window.addEventListener("beforeunload", restoreSavedPreferences);
+
+    return () => {
+      document.removeEventListener("click", restoreBeforeLinkNavigation, true);
+      window.removeEventListener("popstate", restoreSavedPreferences);
+      window.removeEventListener("pagehide", restoreSavedPreferences);
+      window.removeEventListener("beforeunload", restoreSavedPreferences);
+      restoreSavedPreferences();
+    };
+  }, [initialPreferences]);
+
+  useEffect(() => {
+    if (!hydrated) {
+      return;
+    }
+
+    applyClientPreferences(
+      buildAppearancePreviewPreferences(
+        baselineRef.current,
+        draft.appearance,
+      ),
+    );
+  }, [draft.appearance, hydrated]);
 
   function markChanged() {
     setSaveState(undefined);
@@ -116,7 +174,7 @@ export function PreferencesPage({ initialPreferences }: PreferencesPageProps) {
     markChanged();
   }
 
-  async function savePreferences() {
+  function savePreferences() {
     if (!hasChanges || saving) {
       return;
     }
@@ -124,26 +182,15 @@ export function PreferencesPage({ initialPreferences }: PreferencesPageProps) {
     setSaving(true);
     setSaveState(undefined);
     try {
-      const response = await fetch("/api/preferences", {
-        method: "PUT",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          general: draft.general,
-          appearance: draft.appearance,
-          notifications: draft.notifications,
-        }),
-      });
-      const payload: unknown = await response.json().catch(() => undefined);
-      if (!response.ok) {
-        throw new Error(
-          getErrorMessage(payload) ?? "Preferences could not be saved.",
-        );
-      }
-
+      saveClientPreferences(draft);
+      baselineRef.current = draft;
       setBaseline(draft);
       setSaveState({
         tone: "success",
-        message: "Saved for this preview.",
+        message:
+          draft.general.language === "zh-CN"
+            ? "已保存在此设备上。"
+            : "Saved on this device.",
       });
     } catch (error) {
       setSaveState({
@@ -151,7 +198,7 @@ export function PreferencesPage({ initialPreferences }: PreferencesPageProps) {
         message:
           error instanceof Error
             ? error.message
-            : "Preferences could not be saved.",
+            : text("Preferences could not be saved.", "无法保存偏好设置。"),
       });
     } finally {
       setSaving(false);
@@ -159,26 +206,33 @@ export function PreferencesPage({ initialPreferences }: PreferencesPageProps) {
   }
 
   function discardChanges() {
-    setDraft(baseline);
+    const saved = baselineRef.current;
+    setDraft(saved);
+    applyClientPreferences(saved);
     setSaveState(undefined);
   }
 
   return (
     <div className={styles.page}>
       <a className={styles.skipLink} href="#preferences-content">
-        Skip to preferences
+        {text("Skip to preferences", "跳到偏好设置")}
       </a>
 
       <div className={styles.shell}>
         <aside className={styles.sidebar}>
           <Link className={styles.sidebarBackLink} href="/">
             <ArrowLeft size={15} aria-hidden="true" />
-            Back to workspace
+            {text("Back to workspace", "返回工作区")}
           </Link>
           <div className={styles.sidebarHeading}>
-            <span>Settings</span>
-            <h1>Preferences</h1>
-            <p>Personal choices for how Sandpi looks and behaves.</p>
+            <span>{text("Settings", "设置")}</span>
+            <h1>{text("Preferences", "偏好设置")}</h1>
+            <p>
+              {text(
+                "Personal choices for how Sandpi looks and behaves.",
+                "设置 Sandpi 的外观和交互方式。",
+              )}
+            </p>
           </div>
           <nav className={styles.navigation} aria-label="Preference sections">
             {tabs.map((tab) => {
@@ -192,26 +246,46 @@ export function PreferencesPage({ initialPreferences }: PreferencesPageProps) {
                   onClick={() => setActiveTab(tab.id)}
                 >
                   <Icon size={16} aria-hidden />
-                  <span>{tab.label}</span>
+                  <span>
+                    {text(
+                      tab.label,
+                      {
+                        General: "通用",
+                        Appearance: "外观",
+                        Notifications: "通知",
+                        Security: "安全",
+                        Advanced: "高级",
+                      }[tab.label] ?? tab.label,
+                    )}
+                  </span>
                 </button>
               );
             })}
           </nav>
           <p className={styles.sidebarNote}>
-            Environment and coding agent settings live with each Environment.
+            {text(
+              "Environment and coding agent settings live with each Environment.",
+              "Environment 和 coding agent 设置由各 Environment 独立管理。",
+            )}
           </p>
         </aside>
 
         <main className={styles.content} id="preferences-content">
           {activeTab === "general" ? (
             <PreferenceSection
-              eyebrow="Personal preferences"
-              title="General"
-              description="Choose how Sandpi behaves for you. These choices do not change Environment or Session configuration."
+              eyebrow={text("Personal preferences", "个人偏好")}
+              title={text("General", "通用")}
+              description={text(
+                "Choose how Sandpi behaves for you. These choices do not change Environment or Session configuration.",
+                "选择 Sandpi 的个人交互方式。这些设置不会改变 Environment 或 Session 配置。",
+              )}
             >
               <PreferenceRow
-                title="Language"
-                description="Language used by the Sandpi interface."
+                title={text("Language", "语言")}
+                description={text(
+                  "Language used by the Sandpi interface.",
+                  "Sandpi 界面使用的语言。",
+                )}
                 control={
                   <select
                     aria-label="Interface language"
@@ -230,8 +304,11 @@ export function PreferencesPage({ initialPreferences }: PreferencesPageProps) {
                 }
               />
               <PreferenceRow
-                title="Time zone"
-                description="Used for Session activity, audit events and scheduled features."
+                title={text("Time zone", "时区")}
+                description={text(
+                  "Used for Session activity, audit events and scheduled features.",
+                  "用于 Session 活动、审计事件和定时功能。",
+                )}
                 control={
                   <select
                     aria-label="Time zone"
@@ -240,7 +317,9 @@ export function PreferencesPage({ initialPreferences }: PreferencesPageProps) {
                       updateGeneral("timeZone", event.target.value)
                     }
                   >
-                    <option value="auto">System default</option>
+                    <option value="auto">
+                      {text("System default", "跟随系统")}
+                    </option>
                     <option value="Asia/Shanghai">Asia/Shanghai</option>
                     <option value="UTC">UTC</option>
                     <option value="America/Los_Angeles">
@@ -250,8 +329,11 @@ export function PreferencesPage({ initialPreferences }: PreferencesPageProps) {
                 }
               />
               <PreferenceRow
-                title="Send message"
-                description="Select the keyboard shortcut that sends a prompt."
+                title={text("Send message", "发送消息")}
+                description={text(
+                  "Select the keyboard shortcut that sends a prompt.",
+                  "选择用于发送提示词的键盘快捷键。",
+                )}
                 control={
                   <select
                     aria-label="Send message shortcut"
@@ -274,11 +356,14 @@ export function PreferencesPage({ initialPreferences }: PreferencesPageProps) {
 
           {activeTab === "appearance" ? (
             <PreferenceSection
-              eyebrow="Interface"
-              title="Appearance"
-              description="Adjust Sandpi’s visual treatment without changing the content of a Session."
+              eyebrow={text("Interface", "界面")}
+              title={text("Appearance", "外观")}
+              description={text(
+                "Adjust Sandpi’s visual treatment without changing the content of a Session.",
+                "调整 Sandpi 的视觉表现，不会改变 Session 内容。",
+              )}
             >
-              <OptionGroup label="Theme">
+              <OptionGroup label={text("Theme", "主题")}>
                 <div className={styles.segmented}>
                   {(["system", "light", "dark"] as const).map((theme) => (
                     <button
@@ -292,12 +377,17 @@ export function PreferencesPage({ initialPreferences }: PreferencesPageProps) {
                       aria-pressed={draft.appearance.theme === theme}
                       onClick={() => updateAppearance("theme", theme)}
                     >
-                      {theme[0].toUpperCase() + theme.slice(1)}
+                      {text(
+                        theme[0].toUpperCase() + theme.slice(1),
+                        { system: "跟随系统", light: "浅色", dark: "深色" }[
+                          theme
+                        ],
+                      )}
                     </button>
                   ))}
                 </div>
               </OptionGroup>
-              <OptionGroup label="Density">
+              <OptionGroup label={text("Density", "密度")}>
                 <div className={styles.densityGrid}>
                   {(["comfortable", "compact"] as const).map((density) => (
                     <button
@@ -318,12 +408,15 @@ export function PreferencesPage({ initialPreferences }: PreferencesPageProps) {
                       </span>
                       <span>
                         <strong>
-                          {density[0].toUpperCase() + density.slice(1)}
+                          {text(
+                            density[0].toUpperCase() + density.slice(1),
+                            density === "comfortable" ? "舒适" : "紧凑",
+                          )}
                         </strong>
                         <small>
                           {density === "comfortable"
-                            ? "More breathing room"
-                            : "More content at once"}
+                            ? text("More breathing room", "更多留白")
+                            : text("More content at once", "同时显示更多内容")}
                         </small>
                       </span>
                     </button>
@@ -335,80 +428,118 @@ export function PreferencesPage({ initialPreferences }: PreferencesPageProps) {
 
           {activeTab === "notifications" ? (
             <PreferenceSection
-              eyebrow="Stay informed"
-              title="Notifications"
-              description="Choose which remote Session state changes should get your attention."
+              eyebrow={text("Stay informed", "及时了解")}
+              title={text("Notifications", "通知")}
+              description={text(
+                "Choose which remote Session state changes should get your attention.",
+                "选择需要提醒你的远程 Session 状态变化。",
+              )}
             >
               <ToggleRow
-                title="Session completed"
-                description="Notify when a coding agent finishes a turn."
+                title={text("Session completed", "Session 已完成")}
+                description={text(
+                  "Notify when a coding agent finishes a turn.",
+                  "coding agent 完成一轮任务时通知。",
+                )}
                 checked={draft.notifications.sessionCompleted}
                 onChange={(checked) =>
                   updateNotification("sessionCompleted", checked)
                 }
               />
               <ToggleRow
-                title="Needs attention"
-                description="Notify when a Session needs approval, clarification or credentials."
+                title={text("Needs attention", "需要处理")}
+                description={text(
+                  "Notify when a Session needs approval, clarification or credentials.",
+                  "Session 需要审批、澄清或凭证时通知。",
+                )}
                 checked={draft.notifications.needsAttention}
                 onChange={(checked) =>
                   updateNotification("needsAttention", checked)
                 }
               />
               <Callout icon={<Bell size={17} aria-hidden="true" />}>
-                Browser notifications require permission. Mobile push and
-                email delivery will be configured here when those channels are
-                available.
+                {text(
+                  "Browser notifications require permission. Mobile push and email delivery will be configured here when those channels are available.",
+                  "浏览器通知需要授权。移动推送和邮件可用后也将在这里配置。",
+                )}
               </Callout>
             </PreferenceSection>
           ) : null}
 
           {activeTab === "security" ? (
             <PreferenceSection
-              eyebrow="Deployment managed"
-              title="Security"
-              description="Security policy belongs to the Sandpi deployment, not to an individual browser."
+              eyebrow={text("Deployment managed", "部署管理")}
+              title={text("Security", "安全")}
+              description={text(
+                "Security policy belongs to the Sandpi deployment, not to an individual browser.",
+                "安全策略属于 Sandpi 部署配置，不由单个浏览器管理。",
+              )}
             >
               <CapabilityCard
                 icon={<LockKeyhole size={18} aria-hidden="true" />}
-                title="Authentication and runtime credentials"
-                badge="Deployment managed"
-                description="Identity providers, runtime endpoints and credentials are configured by the Sandpi operator. End users cannot override them from Preferences."
+                title={text(
+                  "Authentication and runtime credentials",
+                  "认证与运行时凭证",
+                )}
+                badge={text("Deployment managed", "部署管理")}
+                description={text(
+                  "Identity providers, runtime endpoints and credentials are configured by the Sandpi operator. End users cannot override them from Preferences.",
+                  "身份提供方、运行时端点和凭证由 Sandpi 运维方配置，用户不能在偏好设置中覆盖。",
+                )}
               />
               <CapabilityCard
                 icon={<ShieldCheck size={18} aria-hidden="true" />}
-                title="Active devices and sessions"
-                badge="Coming later"
-                description="Review signed-in devices and revoke browser sessions from one place."
+                title={text(
+                  "Active devices and sessions",
+                  "活跃设备与登录会话",
+                )}
+                badge={text("Coming later", "后续支持")}
+                description={text(
+                  "Review signed-in devices and revoke browser sessions from one place.",
+                  "集中查看已登录设备并撤销浏览器会话。",
+                )}
               />
               <Callout icon={<Info size={17} aria-hidden="true" />}>
-                Environment network policy, sharing permissions and audit data
-                remain scoped to the relevant Environment or Session.
+                {text(
+                  "Environment network policy, sharing permissions and audit data remain scoped to the relevant Environment or Session.",
+                  "网络策略、分享权限和审计数据仍由对应的 Environment 或 Session 管理。",
+                )}
               </Callout>
             </PreferenceSection>
           ) : null}
 
           {activeTab === "advanced" ? (
             <PreferenceSection
-              eyebrow="Local tools"
-              title="Advanced"
-              description="Troubleshooting controls will stay local to this browser unless a deployment explicitly enables upload."
+              eyebrow={text("Local tools", "本地工具")}
+              title={text("Advanced", "高级")}
+              description={text(
+                "Troubleshooting controls will stay local to this browser unless a deployment explicitly enables upload.",
+                "除非部署明确启用上传，否则故障排查数据只保留在此浏览器。",
+              )}
             >
               <CapabilityCard
                 icon={<Database size={18} aria-hidden="true" />}
-                title="Diagnostics bundle"
-                badge="Coming later"
-                description="Export local UI logs and browser metadata for support without including workspace files or prompts."
+                title={text("Diagnostics bundle", "诊断包")}
+                badge={text("Coming later", "后续支持")}
+                description={text(
+                  "Export local UI logs and browser metadata for support without including workspace files or prompts.",
+                  "导出本地界面日志和浏览器元数据用于支持，不包含 workspace 文件或提示词。",
+                )}
               />
               <CapabilityCard
                 icon={<Clock3 size={18} aria-hidden="true" />}
-                title="Local cache controls"
-                badge="Coming later"
-                description="Inspect and clear browser-only interface state without affecting running coding agent Sessions."
+                title={text("Local cache controls", "本地缓存控制")}
+                badge={text("Coming later", "后续支持")}
+                description={text(
+                  "Inspect and clear browser-only interface state without affecting running coding agent Sessions.",
+                  "查看和清理仅限浏览器的界面状态，不影响运行中的 coding agent Session。",
+                )}
               />
               <Callout icon={<CircleAlert size={17} aria-hidden="true" />}>
-                This preview uses mock data. Advanced controls are intentionally
-                read-only until their storage and privacy contracts are defined.
+                {text(
+                  "This preview uses mock data. Advanced controls are intentionally read-only until their storage and privacy contracts are defined.",
+                  "当前预览使用 mock 数据。在明确存储和隐私契约之前，高级控制保持只读。",
+                )}
               </Callout>
             </PreferenceSection>
           ) : null}
@@ -431,9 +562,9 @@ export function PreferencesPage({ initialPreferences }: PreferencesPageProps) {
               {saveState.message}
             </span>
           ) : hasChanges ? (
-            <span>You have unsaved changes.</span>
+            <span>{text("You have unsaved changes.", "有尚未保存的更改。")}</span>
           ) : (
-            <span>Preferences are up to date.</span>
+            <span>{text("Preferences are up to date.", "偏好设置已是最新。")}</span>
           )}
         </div>
         <div className={styles.saveActions}>
@@ -443,7 +574,7 @@ export function PreferencesPage({ initialPreferences }: PreferencesPageProps) {
             disabled={!hasChanges || saving}
             onClick={discardChanges}
           >
-            Discard
+            {text("Discard", "放弃更改")}
           </button>
           <button
             type="button"
@@ -460,7 +591,9 @@ export function PreferencesPage({ initialPreferences }: PreferencesPageProps) {
             ) : (
               <Check size={15} aria-hidden="true" />
             )}
-            {saving ? "Saving…" : "Save changes"}
+            {saving
+              ? text("Saving…", "保存中…")
+              : text("Save changes", "保存更改")}
           </button>
         </div>
       </footer>

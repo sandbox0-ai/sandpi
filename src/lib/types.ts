@@ -114,11 +114,26 @@ export interface SessionMetrics {
   memoryLimitMiB: number;
 }
 
+export interface SessionOrigin {
+  kind: "environment" | "session" | "turn";
+  label: string;
+  sourceSessionId?: string;
+  sourceMessageId?: string;
+}
+
+/**
+ * Persistence boundary for the future backend:
+ * - Session fork branches Sandbox rootfs plus the current Workspace Volume.
+ * - Each completed Turn owns a Workspace Volume snapshot; Turn fork/edit/rollback never
+ *   branch or restore the Session rootfs.
+ */
 export interface CodingSession {
   id: string;
   environmentId: string;
   title: string;
   status: SessionStatus;
+  /** User-facing unread activity; independent from runtime status. */
+  unread: boolean;
   pinned: boolean;
   archived: boolean;
   harness: HarnessId;
@@ -132,6 +147,7 @@ export interface CodingSession {
   workspaceRoot: string;
   workspaceVolumeId: string;
   environmentRevision: number;
+  origin?: SessionOrigin;
   messages: ChatMessage[];
   files: WorkspaceFile[];
   auditEvents: AuditEvent[];

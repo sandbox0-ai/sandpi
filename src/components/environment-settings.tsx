@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Archive,
   Check,
   CircleDot,
   Clock3,
@@ -13,6 +14,7 @@ import {
   Play,
   Plus,
   RefreshCw,
+  RotateCcw,
   Settings2,
   Share2,
   Webhook,
@@ -25,10 +27,11 @@ import {
   useState,
 } from "react";
 
-import type { Environment } from "@/lib/types";
+import type { CodingSession, Environment } from "@/lib/types";
 
 type SettingsTab =
   | "general"
+  | "archived-sessions"
   | "credentials"
   | "network"
   | "functions"
@@ -36,7 +39,9 @@ type SettingsTab =
 
 interface EnvironmentSettingsProps {
   environment: Environment;
+  archivedSessions: CodingSession[];
   onChange: (environment: Environment) => void;
+  onRestoreSession: (sessionId: string) => void;
   onClose: () => void;
 }
 
@@ -46,6 +51,7 @@ const tabs: Array<{
   icon: React.ComponentType<{ size?: number }>;
 }> = [
   { id: "general", label: "General", icon: Settings2 },
+  { id: "archived-sessions", label: "Archived sessions", icon: Archive },
   { id: "credentials", label: "Coding agent", icon: KeyRound },
   { id: "network", label: "Network", icon: Network },
   { id: "functions", label: "Functions", icon: Webhook },
@@ -75,9 +81,23 @@ function Toggle({
   );
 }
 
+function formatArchivedSessionTime(timestamp: string) {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) {
+    return timestamp;
+  }
+
+  return new Intl.DateTimeFormat("en", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(date);
+}
+
 export function EnvironmentSettings({
   environment,
+  archivedSessions,
   onChange,
+  onRestoreSession,
   onClose,
 }: EnvironmentSettingsProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>("general");
@@ -89,7 +109,9 @@ export function EnvironmentSettings({
 
   useEffect(() => {
     const previouslyFocused = document.activeElement as HTMLElement | null;
-    const focusFrame = window.requestAnimationFrame(() => closeButtonRef.current?.focus());
+    const focusFrame = window.requestAnimationFrame(() =>
+      closeButtonRef.current?.focus(),
+    );
 
     function handleEscape(event: KeyboardEvent) {
       if (event.key === "Escape") {
@@ -197,7 +219,10 @@ export function EnvironmentSettings({
         </header>
 
         <div className="settings-body">
-          <nav className="settings-nav" aria-label="Environment settings sections">
+          <nav
+            className="settings-nav"
+            aria-label="Environment settings sections"
+          >
             {tabs.map((tab) => {
               const Icon = tab.icon;
               return (
@@ -211,6 +236,8 @@ export function EnvironmentSettings({
                   {tab.label}
                   {tab.id === "functions" ? (
                     <span className="nav-count">{draft.functions.length}</span>
+                  ) : tab.id === "archived-sessions" ? (
+                    <span className="nav-count">{archivedSessions.length}</span>
                   ) : null}
                 </button>
               );
@@ -232,7 +259,10 @@ export function EnvironmentSettings({
                       autoComplete="off"
                       value={draft.name}
                       onChange={(event) =>
-                        setDraft((current) => ({ ...current, name: event.target.value }))
+                        setDraft((current) => ({
+                          ...current,
+                          name: event.target.value,
+                        }))
                       }
                     />
                   </label>
@@ -244,7 +274,10 @@ export function EnvironmentSettings({
                         name="environment-color-picker"
                         value={draft.color}
                         onChange={(event) =>
-                          setDraft((current) => ({ ...current, color: event.target.value }))
+                          setDraft((current) => ({
+                            ...current,
+                            color: event.target.value,
+                          }))
                         }
                       />
                       <input
@@ -252,7 +285,10 @@ export function EnvironmentSettings({
                         autoComplete="off"
                         value={draft.color}
                         onChange={(event) =>
-                          setDraft((current) => ({ ...current, color: event.target.value }))
+                          setDraft((current) => ({
+                            ...current,
+                            color: event.target.value,
+                          }))
                         }
                       />
                     </span>
@@ -265,23 +301,108 @@ export function EnvironmentSettings({
                     autoComplete="off"
                     value={draft.description}
                     onChange={(event) =>
-                      setDraft((current) => ({ ...current, description: event.target.value }))
+                      setDraft((current) => ({
+                        ...current,
+                        description: event.target.value,
+                      }))
                     }
                   />
                 </label>
                 <div className="settings-card definition-card">
-                  <DefinitionRow label="Current revision" value={`r${draft.revision}`} />
-                  <DefinitionRow label="Template" value={draft.templateId} code />
-                  <DefinitionRow label="Rootfs snapshot" value={draft.rootfsSnapshotId} code />
-                  <DefinitionRow label="Workspace seed" value={draft.workspaceVolumeId} code />
+                  <DefinitionRow
+                    label="Current revision"
+                    value={`r${draft.revision}`}
+                  />
+                  <DefinitionRow
+                    label="Template"
+                    value={draft.templateId}
+                    code
+                  />
+                  <DefinitionRow
+                    label="Rootfs snapshot"
+                    value={draft.rootfsSnapshotId}
+                    code
+                  />
+                  <DefinitionRow
+                    label="Workspace seed"
+                    value={draft.workspaceVolumeId}
+                    code
+                  />
                 </div>
                 <div className="setting-row immutable-row">
                   <div>
                     <strong>Session hard TTL</strong>
-                    <p>All Sandpi session Sandboxes are permanently removed after this limit.</p>
+                    <p>
+                      All Sandpi session Sandboxes are permanently removed after
+                      this limit.
+                    </p>
                   </div>
                   <span className="fixed-value">30 days · fixed</span>
                 </div>
+              </SettingsSection>
+            ) : null}
+
+            {activeTab === "archived-sessions" ? (
+              <SettingsSection
+                eyebrow="Session history"
+                title="Archived sessions"
+                description="Archived Sessions are hidden from the Environment sidebar. Restore one to make it available again without changing its Sandbox lifecycle or hard TTL."
+              >
+                {archivedSessions.length > 0 ? (
+                  <div
+                    className="archived-sessions-list"
+                    aria-label="Archived Sessions"
+                  >
+                    {archivedSessions.map((session) => (
+                      <article
+                        className="archived-session-row"
+                        key={session.id}
+                      >
+                        <span
+                          className="archived-session-icon"
+                          aria-hidden="true"
+                        >
+                          <Archive size={16} />
+                        </span>
+                        <div className="archived-session-main">
+                          <strong className="archived-session-title">
+                            {session.title}
+                          </strong>
+                          <span className="archived-session-meta">
+                            <span>{session.harnessLabel}</span>
+                            <span aria-hidden="true">·</span>
+                            <span>
+                              Archived / updated{" "}
+                              <time dateTime={session.updatedAt}>
+                                {formatArchivedSessionTime(session.updatedAt)}
+                              </time>
+                            </span>
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          className="archived-session-restore"
+                          aria-label={`Restore ${session.title}`}
+                          onClick={() => onRestoreSession(session.id)}
+                        >
+                          <RotateCcw size={14} aria-hidden="true" />
+                          Restore
+                        </button>
+                      </article>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="archived-sessions-empty">
+                    <span aria-hidden="true">
+                      <Archive size={22} />
+                    </span>
+                    <strong>No archived Sessions</strong>
+                    <p>
+                      Sessions archived from this Environment will appear here
+                      and can be restored at any time while they still exist.
+                    </p>
+                  </div>
+                )}
               </SettingsSection>
             ) : null}
 
@@ -294,10 +415,12 @@ export function EnvironmentSettings({
                 <div className="immutable-agent-callout">
                   <LockKeyhole size={17} />
                   <div>
-                    <strong>{draft.codingAgent.label} is fixed for this Environment</strong>
+                    <strong>
+                      {draft.codingAgent.label} is fixed for this Environment
+                    </strong>
                     <p>
-                      Create another Environment to use Claude Code, OpenCode or Pi later. A
-                      running Session cannot switch harnesses.
+                      Create another Environment to use Claude Code, OpenCode or
+                      Pi later. A running Session cannot switch harnesses.
                     </p>
                   </div>
                   <span>Immutable</span>
@@ -305,10 +428,12 @@ export function EnvironmentSettings({
                 <div className="credential-callout">
                   <LockKeyhole size={17} />
                   <div>
-                    <strong>Credential revision {draft.credentialRevision}</strong>
+                    <strong>
+                      Credential revision {draft.credentialRevision}
+                    </strong>
                     <p>
-                      Stored with the Environment baseline and materialized only into isolated
-                      session Sandboxes.
+                      Stored with the Environment baseline and materialized only
+                      into isolated session Sandboxes.
                     </p>
                   </div>
                 </div>
@@ -323,7 +448,8 @@ export function EnvironmentSettings({
                     <div>
                       <strong>{draft.codingAgent.label}</strong>
                       <p>
-                        {draft.codingAgent.account} · verified {draft.codingAgent.lastVerified}
+                        {draft.codingAgent.account} · verified{" "}
+                        {draft.codingAgent.lastVerified}
                       </p>
                     </div>
                     <span className="connected-badge">
@@ -333,15 +459,17 @@ export function EnvironmentSettings({
                 </div>
                 <div className="credential-actions">
                   <button type="button" className="secondary-action-button">
-                    <RefreshCw size={15} /> Re-authenticate {draft.codingAgent.label}
+                    <RefreshCw size={15} /> Re-authenticate{" "}
+                    {draft.codingAgent.label}
                   </button>
                   <button type="button" className="text-action-button">
                     Open official auth details <ExternalLink size={13} />
                   </button>
                 </div>
                 <p className="settings-footnote">
-                  Refresh-token concurrency and account revocation must be validated against the
-                  native Codex auth flow before enabling real multi-session credential materialization.
+                  Refresh-token concurrency and account revocation must be
+                  validated against the native Codex auth flow before enabling
+                  real multi-session credential materialization.
                 </p>
               </SettingsSection>
             ) : null}
@@ -353,15 +481,31 @@ export function EnvironmentSettings({
                 description="The Environment policy is applied to each new Session Sandbox before the coding agent starts."
               >
                 <div className="network-mode-grid">
-                  {([
-                    ["restricted", "Restricted", "Allow listed destinations and block the rest."],
-                    ["allow-all", "Allow all", "Permit outbound traffic without a domain allowlist."],
-                    ["block-all", "Block all", "Disable all outbound network traffic."],
-                  ] as const).map(([mode, label, description]) => (
+                  {(
+                    [
+                      [
+                        "restricted",
+                        "Restricted",
+                        "Allow listed destinations and block the rest.",
+                      ],
+                      [
+                        "allow-all",
+                        "Allow all",
+                        "Permit outbound traffic without a domain allowlist.",
+                      ],
+                      [
+                        "block-all",
+                        "Block all",
+                        "Disable all outbound network traffic.",
+                      ],
+                    ] as const
+                  ).map(([mode, label, description]) => (
                     <button
                       type="button"
                       key={mode}
-                      className={draft.networkPolicy.mode === mode ? "is-selected" : ""}
+                      className={
+                        draft.networkPolicy.mode === mode ? "is-selected" : ""
+                      }
                       onClick={() =>
                         setDraft((current) => ({
                           ...current,
@@ -370,7 +514,9 @@ export function EnvironmentSettings({
                       }
                     >
                       <span className="radio-mark">
-                        {draft.networkPolicy.mode === mode ? <CircleDot size={15} /> : null}
+                        {draft.networkPolicy.mode === mode ? (
+                          <CircleDot size={15} />
+                        ) : null}
                       </span>
                       <strong>{label}</strong>
                       <p>{description}</p>
@@ -397,9 +543,10 @@ export function EnvironmentSettings({
                               ...current,
                               networkPolicy: {
                                 ...current.networkPolicy,
-                                allowedDomains: current.networkPolicy.allowedDomains.filter(
-                                  (item) => item !== domain,
-                                ),
+                                allowedDomains:
+                                  current.networkPolicy.allowedDomains.filter(
+                                    (item) => item !== domain,
+                                  ),
                               },
                             }))
                           }
@@ -472,7 +619,9 @@ export function EnvironmentSettings({
                       <div>
                         <strong>{fn.name}</strong>
                         <p>{fn.description}</p>
-                        {fn.lastRun ? <small>Last run {fn.lastRun}</small> : null}
+                        {fn.lastRun ? (
+                          <small>Last run {fn.lastRun}</small>
+                        ) : null}
                       </div>
                       {fn.status === "coming-soon" ? (
                         <span className="coming-soon-badge">Coming soon</span>
@@ -485,7 +634,10 @@ export function EnvironmentSettings({
                               ...current,
                               functions: current.functions.map((item) =>
                                 item.id === fn.id
-                                  ? { ...item, status: checked ? "active" : "disabled" }
+                                  ? {
+                                      ...item,
+                                      status: checked ? "active" : "disabled",
+                                    }
                                   : item,
                               ),
                             }))
@@ -496,7 +648,9 @@ export function EnvironmentSettings({
                   ))}
                 </div>
                 <div className="settings-card webhook-card">
-                  <span className="settings-card-label">Git webhook endpoint</span>
+                  <span className="settings-card-label">
+                    Git webhook endpoint
+                  </span>
                   <div className="copy-value-row">
                     <code>https://api.sandpi.dev/v1/hooks/env-default/git</code>
                     <button type="button" aria-label="Copy webhook endpoint">
@@ -504,7 +658,8 @@ export function EnvironmentSettings({
                     </button>
                   </div>
                   <p>
-                    On push: validate event → start sandbox function → warm caches → record result.
+                    On push: validate event → start sandbox function → warm
+                    caches → record result.
                   </p>
                 </div>
               </SettingsSection>
@@ -519,14 +674,24 @@ export function EnvironmentSettings({
                 <div className="setting-row">
                   <div>
                     <strong>Allow file sharing</strong>
-                    <p>Members can create expiring links from the /workspace file browser.</p>
+                    <p>
+                      Members can create expiring links from the /workspace file
+                      browser.
+                    </p>
                   </div>
-                  <Toggle label="Allow file sharing" checked onChange={() => undefined} />
+                  <Toggle
+                    label="Allow file sharing"
+                    checked
+                    onChange={() => undefined}
+                  />
                 </div>
                 <div className="field-grid two-columns">
                   <label>
                     Default permission
-                    <select name="default-share-permission" defaultValue="viewer">
+                    <select
+                      name="default-share-permission"
+                      defaultValue="viewer"
+                    >
                       <option value="viewer">Can view</option>
                       <option value="download">Can view & download</option>
                     </select>
@@ -543,7 +708,10 @@ export function EnvironmentSettings({
                 <div className="empty-grants-card">
                   <Share2 size={22} />
                   <strong>No active Environment links</strong>
-                  <p>Session file links will appear here with their path, permission and expiry.</p>
+                  <p>
+                    Session file links will appear here with their path,
+                    permission and expiry.
+                  </p>
                 </div>
               </SettingsSection>
             ) : null}
@@ -561,10 +729,18 @@ export function EnvironmentSettings({
             )}
           </span>
           <div>
-            <button type="button" className="button-secondary" onClick={onClose}>
+            <button
+              type="button"
+              className="button-secondary"
+              onClick={onClose}
+            >
               Cancel
             </button>
-            <button type="button" className="button-primary" onClick={saveAndClose}>
+            <button
+              type="button"
+              className="button-primary"
+              onClick={saveAndClose}
+            >
               Save changes
             </button>
           </div>

@@ -17,11 +17,12 @@
   max-height: min(680px, calc(100dvh - 22vh));
   grid-template-rows: auto auto minmax(0, 1fr) auto;
   overflow: hidden;
-  border: 1px solid #c9c7bf;
+  border: 1px solid var(--line);
   border-radius: 14px;
-  background: var(--panel-strong, #fff);
+  background: var(--panel-strong);
   box-shadow: 0 26px 80px rgb(24 24 20 / 24%);
   animation: enter 150ms ease-out;
+  overscroll-behavior: contain;
 }
 
 .searchBar {
@@ -30,12 +31,12 @@
   align-items: center;
   gap: 10px;
   padding: 0 13px 0 17px;
-  border-bottom: 1px solid var(--line, #deddd7);
+  border-bottom: 1px solid var(--line);
 }
 
 .searchBar > svg {
   flex: 0 0 auto;
-  color: var(--ink-faint, #8a8982);
+  color: var(--ink-faint);
 }
 
 .searchBar input {
@@ -46,12 +47,17 @@
   border: 0;
   outline: 0;
   background: transparent;
-  color: var(--ink, #171716);
+  color: var(--ink);
+  color-scheme: inherit;
   font-size: 14px;
 }
 
 .searchBar input::placeholder {
-  color: #9b9992;
+  color: var(--ink-faint);
+}
+
+.searchBar:focus-within {
+  box-shadow: inset 0 0 0 1px var(--blue);
 }
 
 .searchBar button {
@@ -65,13 +71,13 @@
   border: 0;
   border-radius: 6px;
   background: transparent;
-  color: var(--ink-faint, #8a8982);
+  color: var(--ink-faint);
   cursor: pointer;
 }
 
 .searchBar button:hover {
-  background: var(--hover, #e8e6df);
-  color: var(--ink, #171716);
+  background: var(--hover);
+  color: var(--ink);
 }
 
 .resultHeading {
@@ -80,8 +86,8 @@
   align-items: center;
   justify-content: space-between;
   padding: 0 17px;
-  background: #f5f4f0;
-  color: var(--ink-faint, #8a8982);
+  background: var(--sidebar);
+  color: var(--ink-faint);
   font-size: 9px;
   font-weight: 690;
   letter-spacing: 0.055em;
@@ -113,15 +119,19 @@
   border: 0;
   border-radius: 8px;
   background: transparent;
-  color: var(--ink-soft, #62615c);
+  color: var(--ink-soft);
   text-align: left;
   cursor: pointer;
 }
 
-.results > button:hover,
+.results > button:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+
 .results > button.active {
-  background: #eeece6;
-  color: var(--ink, #171716);
+  background: var(--selected);
+  color: var(--ink);
 }
 
 .resultLeading {
@@ -131,29 +141,29 @@
   height: 31px;
   align-items: center;
   justify-content: center;
-  border: 1px solid var(--line, #deddd7);
+  border: 1px solid var(--line);
   border-radius: 8px;
-  background: var(--panel-strong, #fff);
-  color: var(--ink-faint, #8a8982);
+  background: var(--panel-strong);
+  color: var(--ink-faint);
 }
 
 .resultLeading > i {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: #aaa8a1;
+  background: var(--ink-faint);
 }
 
 .resultLeading > i[data-status="running"] {
-  background: var(--green, #258658);
+  background: var(--green);
 }
 
 .resultLeading > i[data-status="waiting"] {
-  background: var(--amber, #a96d22);
+  background: var(--amber);
 }
 
 .resultLeading > i[data-status="completed"] {
-  background: var(--blue, #416d9d);
+  background: var(--blue);
 }
 
 .resultLeading > svg {
@@ -161,9 +171,9 @@
   top: -4px;
   left: -4px;
   padding: 2px;
-  border: 1px solid #d1cfc7;
+  border: 1px solid var(--line);
   border-radius: 4px;
-  background: #f7f6f2;
+  background: var(--sidebar);
 }
 
 .resultCopy {
@@ -181,13 +191,13 @@
 }
 
 .resultCopy strong {
-  color: var(--ink, #171716);
+  color: var(--ink);
   font-size: 11.5px;
   font-weight: 650;
 }
 
 .resultCopy small {
-  color: var(--ink-faint, #8a8982);
+  color: var(--ink-faint);
   font-size: 9.5px;
 }
 
@@ -198,8 +208,8 @@
 .resultMeta {
   padding: 3px 6px;
   border-radius: 999px;
-  background: #f3f1ed;
-  color: var(--ink-faint, #8a8982);
+  background: var(--sidebar);
+  color: var(--ink-faint);
   font-size: 8px;
   text-transform: capitalize;
 }
@@ -210,13 +220,13 @@
   align-items: center;
   justify-content: center;
   flex-direction: column;
-  color: var(--ink-faint, #8a8982);
+  color: var(--ink-faint);
   text-align: center;
 }
 
 .emptyState strong {
   margin-top: 9px;
-  color: var(--ink-soft, #62615c);
+  color: var(--ink-soft);
   font-size: 11px;
 }
 
@@ -231,9 +241,9 @@
   align-items: center;
   gap: 14px;
   padding: 0 15px;
-  border-top: 1px solid var(--line, #deddd7);
-  background: #f5f4f0;
-  color: var(--ink-faint, #8a8982);
+  border-top: 1px solid var(--line);
+  background: var(--sidebar);
+  color: var(--ink-faint);
   font-size: 8.5px;
 }
 
@@ -245,9 +255,9 @@
 
 .footer kbd {
   padding: 2px 4px;
-  border: 1px solid #d1cfc7;
+  border: 1px solid var(--line);
   border-radius: 4px;
-  background: var(--panel-strong, #fff);
+  background: var(--panel-strong);
   font: inherit;
 }
 

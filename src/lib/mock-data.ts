@@ -1,3 +1,5 @@
+import { SESSION_WORKSPACE_ROOT } from "@/lib/environment-blueprint";
+import { createId, randomToken } from "@/lib/id";
 import type {
   AuditEvent,
   CodingSession,
@@ -7,7 +9,6 @@ import type {
   SandpiPreferences,
   WorkspaceFile,
 } from "@/lib/types";
-import { SESSION_WORKSPACE_ROOT } from "@/lib/environment-blueprint";
 
 function metricSeries(values: number[]): MetricPoint[] {
   return values.map((value, index) => ({
@@ -300,6 +301,7 @@ const primarySession: CodingSession = {
   environmentId: "env-default",
   title: "Fix auth callback race",
   status: "running",
+  unread: false,
   pinned: false,
   archived: false,
   harness: "codex",
@@ -382,6 +384,7 @@ function compactSession(
   title: string,
   status: CodingSession["status"],
   updatedAt: string,
+  unread: boolean,
 ): CodingSession {
   return {
     ...primarySession,
@@ -389,6 +392,7 @@ function compactSession(
     environmentId,
     title,
     status,
+    unread,
     updatedAt,
     sandboxId: `sbx_${id.slice(-6)}`,
     supervisorSessionId: `ses_${id.slice(-6)}`,
@@ -412,6 +416,7 @@ export const mockSessions: CodingSession[] = [
     "Make event stream resumable",
     "waiting",
     "2026-07-12T08:42:00+08:00",
+    true,
   ),
   compactSession(
     "session-settings",
@@ -419,6 +424,7 @@ export const mockSessions: CodingSession[] = [
     "Polish environment settings",
     "paused",
     "2026-07-11T18:12:00+08:00",
+    false,
   ),
   compactSession(
     "session-sdk-release",
@@ -426,6 +432,7 @@ export const mockSessions: CodingSession[] = [
     "Prepare sdk-js release",
     "completed",
     "2026-07-11T15:34:00+08:00",
+    true,
   ),
 ];
 
@@ -443,7 +450,7 @@ export function createMockSession(
   environment: Environment,
   input: { title: string; prompt: string },
 ): CodingSession {
-  const id = `session-${crypto.randomUUID().slice(0, 8)}`;
+  const id = createId("session", 8);
   const now = new Date();
   const expires = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
 
@@ -453,25 +460,30 @@ export function createMockSession(
     environmentId: environment.id,
     title: input.title,
     status: "running",
+    unread: false,
     harness: environment.codingAgent.harness,
     harnessLabel: environment.codingAgent.label,
     createdAt: now.toISOString(),
     updatedAt: now.toISOString(),
     hardExpiresAt: expires.toISOString(),
-    sandboxId: `sbx_${crypto.randomUUID().slice(0, 6)}`,
-    supervisorSessionId: `ses_${crypto.randomUUID().slice(0, 8)}`,
+    sandboxId: `sbx_${randomToken(6)}`,
+    supervisorSessionId: `ses_${randomToken(8)}`,
     workspaceRoot: SESSION_WORKSPACE_ROOT,
-    workspaceVolumeId: `vol_${crypto.randomUUID().slice(0, 8)}`,
+    workspaceVolumeId: `vol_${randomToken(8)}`,
     environmentRevision: environment.revision,
+    origin: {
+      kind: "environment",
+      label: environment.name,
+    },
     messages: [
       {
-        id: `message-${crypto.randomUUID().slice(0, 8)}`,
+        id: createId("message", 8),
         role: "user",
         content: input.prompt,
         createdAt: now.toISOString(),
       },
       {
-        id: `message-${crypto.randomUUID().slice(0, 8)}`,
+        id: createId("message", 8),
         role: "assistant",
         content:
           "The Environment fork is ready. I’m connected to the new Codex session and will start by inspecting the workspace.",
@@ -491,7 +503,7 @@ export function createMockSession(
 }
 
 export function createMockEnvironment(input: { name: string }): Environment {
-  const idSuffix = crypto.randomUUID().slice(0, 8);
+  const idSuffix = randomToken(8);
 
   return {
     ...structuredClone(mockEnvironments[0]),
