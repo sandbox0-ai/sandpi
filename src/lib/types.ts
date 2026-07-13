@@ -9,20 +9,13 @@ export type SessionStatus = "running" | "waiting" | "paused" | "completed";
 
 export type TeamRole = "owner" | "admin" | "member";
 
+export type SandpiPlanId = "free" | "pro" | "max";
+
 export interface SandpiUser {
   id: string;
   name: string;
   email: string;
   avatarInitials: string;
-}
-
-export interface TeamMember {
-  id: string;
-  teamId: string;
-  user: SandpiUser;
-  role: TeamRole;
-  status: "active" | "invited";
-  joinedAt: string;
 }
 
 export interface MeteredQuota {
@@ -37,41 +30,73 @@ export interface WeeklyExecutionQuota extends MeteredQuota {
   resetsAt: string;
 }
 
-export interface TeamSubscription {
+export interface SandpiPlan {
+  id: SandpiPlanId;
+  name: string;
+  execution: {
+    weeklyLimitMinutes: number;
+    concurrentSessionLimit: number;
+  };
+  storage: {
+    snapshotLimitGiB: number;
+  };
+}
+
+/**
+ * A Plan belongs to one Team Membership, not to the global User or the Team itself. The Team
+ * reached through `membership.teamId` sponsors this assignment and receives its cost on the
+ * consolidated Team bill. The effective limits are snapshotted here so existing assignments
+ * remain stable when the public Plan catalog is revised.
+ */
+export interface MembershipPlanAssignment {
   id: string;
-  planId: string;
-  planName: string;
-  status: "trialing" | "active" | "past-due" | "canceled";
-  billingCadence: "monthly";
+  planId: SandpiPlanId;
+  status: "active" | "pending" | "suspended";
   currentPeriodStartsAt: string;
   currentPeriodEndsAt: string;
-  seats: {
-    used: number;
-    included: number;
-  };
   quotas: {
-    /**
-     * Shared Team pool for Sandpi-managed active execution time. It never represents
-     * coding-agent model tokens, requests or provider-plan usage.
-     */
     weeklyExecution: WeeklyExecutionQuota;
     concurrentSessions: MeteredQuota & { unit: "session" };
     snapshotStorage: MeteredQuota & { unit: "gibibyte" };
   };
 }
 
+export interface TeamMembership {
+  id: string;
+  teamId: string;
+  user: SandpiUser;
+  role: TeamRole;
+  status: "active" | "invited";
+  planAssignment: MembershipPlanAssignment;
+  joinedAt: string;
+}
+
 /**
- * Team is Sandpi's only tenant boundary. A single-person account is represented by a
- * one-member Team instead of a second personal-resource ownership model.
+ * Payment and invoice owner for all Membership Plan assignments sponsored by a Team. A billing
+ * account deliberately has no Plan: one Team may fund a different Free, Pro or Max assignment
+ * for every member.
+ */
+export interface TeamBillingAccount {
+  id: string;
+  status: "public-beta" | "active" | "past-due" | "deployment-managed";
+  billingCadence: "monthly";
+  billingEmail: string;
+  currentPeriodStartsAt: string;
+  currentPeriodEndsAt: string;
+}
+
+/**
+ * Team is Sandpi's only tenant and billing-attribution boundary. Every User must retain at
+ * least one Team Membership; signup creates a one-member Team with a Free Plan assignment.
  */
 export interface Team {
   id: string;
   name: string;
   slug: string;
   color: string;
-  currentUserRole: TeamRole;
+  /** Server-derived list summary, never the membership source of truth. */
   memberCount: number;
-  subscription: TeamSubscription;
+  billingAccount: TeamBillingAccount;
   createdAt: string;
 }
 
@@ -284,6 +309,9 @@ export interface CodingSession<
 export interface SandpiBootstrap {
   viewer: SandpiUser;
   teams: Team[];
+  /** Exactly one entry per Team available to the viewer. */
+  viewerMemberships: TeamMembership[];
+  plans: SandpiPlan[];
   deployment: SandpiDeploymentSummary;
   environments: Environment[];
   sessions: CodingSession[];

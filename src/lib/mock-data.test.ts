@@ -7,7 +7,9 @@ import {
   getMockBootstrap,
   mockEnvironments,
   mockPreferences,
+  mockSandpiPlans,
   mockSessions,
+  mockTeamMemberships,
   mockTeams,
 } from "./mock-data";
 import { getDefaultMockCodexModel } from "../harnesses/codex/models";
@@ -73,10 +75,23 @@ test("bootstraps one selected Team without exposing deployment credentials", () 
   assert.equal(bootstrap.deployment.runtime.configurationScope, "deployment");
   assert.equal("apiHost" in bootstrap.deployment.runtime, false);
   assert.equal("apiKey" in bootstrap.deployment.runtime, false);
-  assert.equal(mockTeams[0]?.subscription.billingCadence, "monthly");
+  assert.equal(mockTeams[0]?.billingAccount.billingCadence, "monthly");
+  assert.equal("subscription" in (mockTeams[0] ?? {}), false);
+  assert.deepEqual(
+    mockSandpiPlans.map((plan) => plan.id),
+    ["free", "pro", "max"],
+  );
+  assert.equal(bootstrap.viewerMemberships.length, 2);
   assert.equal(
-    mockTeams[0]?.subscription.quotas.weeklyExecution.window,
-    "weekly",
+    bootstrap.viewerMemberships.find(
+      (membership) => membership.teamId === bootstrap.selectedTeamId,
+    )?.planAssignment.planId,
+    "pro",
+  );
+  assert.ok(
+    mockTeamMemberships.every(
+      (membership) => membership.planAssignment.quotas.weeklyExecution.window === "weekly",
+    ),
   );
 });
 

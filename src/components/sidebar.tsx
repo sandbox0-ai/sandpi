@@ -23,12 +23,14 @@ import {
 } from "@/components/sidebar-primitives";
 import { AppSidebar } from "@/components/app-frame";
 import { getOperationUiCopy, type OperationLanguage } from "@/lib/operation-ui";
-import { quotaPercent } from "@/lib/team";
+import { planForAssignment, quotaPercent } from "@/lib/team";
 import type {
   CodingSession,
   Environment,
+  SandpiPlan,
   SandpiUser,
   Team,
+  TeamMembership,
 } from "@/lib/types";
 import { visibleSessionsForEnvironment } from "@/lib/session-list";
 
@@ -36,6 +38,8 @@ interface SidebarProps {
   language: OperationLanguage;
   viewer: SandpiUser;
   teams: Team[];
+  viewerMemberships: TeamMembership[];
+  plans: SandpiPlan[];
   selectedTeamId: string;
   environments: Environment[];
   sessions: CodingSession[];
@@ -82,6 +86,8 @@ export function Sidebar({
   language,
   viewer,
   teams,
+  viewerMemberships,
+  plans,
   selectedTeamId,
   environments,
   sessions,
@@ -103,6 +109,12 @@ export function Sidebar({
   const ui = getOperationUiCopy(language).sidebar;
   const selectedTeam =
     teams.find((team) => team.id === selectedTeamId) ?? teams[0];
+  const selectedMembership = viewerMemberships.find(
+    (membership) => membership.teamId === selectedTeam?.id,
+  );
+  const selectedPlan = selectedMembership
+    ? planForAssignment(plans, selectedMembership.planAssignment)
+    : undefined;
   const unreadLabel = language === "zh-CN" ? "未读" : "Unread";
   const [sessionSearchOpen, setSessionSearchOpen] = useState(false);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
@@ -225,6 +237,12 @@ export function Sidebar({
           <div className="account-team-list" role="group" aria-label={ui.teams}>
             {teams.map((team) => {
               const selected = team.id === selectedTeamId;
+              const membership = viewerMemberships.find(
+                (candidate) => candidate.teamId === team.id,
+              );
+              const plan = membership
+                ? planForAssignment(plans, membership.planAssignment)
+                : undefined;
               return (
                 <button
                   type="button"
@@ -245,24 +263,27 @@ export function Sidebar({
                   </span>
                   <span className="account-team-copy">
                     <strong>{team.name}</strong>
-                    <small>{ui.members(team.memberCount)}</small>
+                    <small>
+                      {ui.members(team.memberCount)}
+                      {plan ? ` · ${plan.name}` : ""}
+                    </small>
                   </span>
                   {selected ? <Check size={14} aria-label={ui.currentTeam} /> : null}
                 </button>
               );
             })}
           </div>
-          {selectedTeam ? (
+          {selectedTeam && selectedMembership ? (
             <div className="account-quota-summary">
               <div>
                 <span>
                   <CreditCard size={13} aria-hidden="true" />
-                  {selectedTeam.subscription.planName}
+                  {selectedPlan?.name ?? selectedMembership.planAssignment.planId}
                 </span>
                 <strong>
                   {quotaPercent(
-                    selectedTeam.subscription.quotas.weeklyExecution.used,
-                    selectedTeam.subscription.quotas.weeklyExecution.limit,
+                    selectedMembership.planAssignment.quotas.weeklyExecution.used,
+                    selectedMembership.planAssignment.quotas.weeklyExecution.limit,
                   )}
                   %
                 </strong>
@@ -271,8 +292,8 @@ export function Sidebar({
                 <i
                   style={{
                     width: `${quotaPercent(
-                      selectedTeam.subscription.quotas.weeklyExecution.used,
-                      selectedTeam.subscription.quotas.weeklyExecution.limit,
+                      selectedMembership.planAssignment.quotas.weeklyExecution.used,
+                      selectedMembership.planAssignment.quotas.weeklyExecution.limit,
                     )}%`,
                   }}
                 />
@@ -280,10 +301,12 @@ export function Sidebar({
               <small>
                 {ui.weeklyExecution(
                   Math.round(
-                    selectedTeam.subscription.quotas.weeklyExecution.used / 60,
+                    selectedMembership.planAssignment.quotas.weeklyExecution.used /
+                      60,
                   ),
                   Math.round(
-                    selectedTeam.subscription.quotas.weeklyExecution.limit / 60,
+                    selectedMembership.planAssignment.quotas.weeklyExecution.limit /
+                      60,
                   ),
                 )}
               </small>

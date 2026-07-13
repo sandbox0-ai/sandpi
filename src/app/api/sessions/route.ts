@@ -5,9 +5,11 @@ import {
   createMockSession,
   mockEnvironments,
   mockSessions,
+  mockTeamMemberships,
   mockTeams,
+  mockViewer,
 } from "@/lib/mock-data";
-import { canStartTeamExecution } from "@/lib/team";
+import { canStartMembershipExecution } from "@/lib/team";
 
 interface CreateSessionRequest {
   environmentId?: string;
@@ -21,9 +23,10 @@ export async function GET() {
 }
 
 /**
- * Production checks the Team's Sandpi subscription and weekly execution allowance before
- * provisioning the first Turn. The allowance covers Sandpi-managed runtime only; model access
- * and model usage continue to come from the user's native coding-agent account.
+ * Production admits the first Turn against the acting Team Membership's Plan assignment while
+ * the Team remains the payer and resource owner. Every later Turn writes the same teamId plus
+ * its actorMembershipId to Sandpi's usage ledger, outside the native harness event stream.
+ * Model access and usage continue to come from the native coding-agent account.
  */
 export async function POST(request: Request) {
   const body = (await request.json()) as CreateSessionRequest;
@@ -43,12 +46,30 @@ export async function POST(request: Request) {
       { status: 409 },
     );
   }
-  if (!canStartTeamExecution(team.subscription)) {
+  const membership = mockTeamMemberships.find(
+    (item) =>
+      item.teamId === team.id &&
+      item.user.id === mockViewer.id &&
+      item.status === "active",
+  );
+  if (!membership) {
     return NextResponse.json(
       {
         error: {
-          code: "team_quota_exhausted",
-          message: "The Team cannot start more execution in this quota window.",
+          code: "team_membership_required",
+          message: "An active Team Membership is required.",
+        },
+      },
+      { status: 403 },
+    );
+  }
+  if (!canStartMembershipExecution(membership, team)) {
+    return NextResponse.json(
+      {
+        error: {
+          code: "membership_execution_unavailable",
+          message:
+            "This Team Membership cannot start more execution in the current Plan window.",
         },
       },
       { status: 429 },
@@ -82,11 +103,14 @@ export async function POST(request: Request) {
         codingAgent: environment.codingAgent.harness,
         codingAgentMutable: false,
         nativeProtocol: "codex-app-server-v2",
-        teamId: team.id,
+        billingTeamId: team.id,
+        membershipId: membership.id,
+        planId: membership.planAssignment.planId,
         quota: {
           status: "admitted",
           kind: "weekly_execution_minutes",
-          resetsAt: team.subscription.quotas.weeklyExecution.resetsAt,
+          resetsAt:
+            membership.planAssignment.quotas.weeklyExecution.resetsAt,
         },
         provisioningPlan: plan,
       },

@@ -372,6 +372,8 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
         language={preferences.general.language}
         viewer={initialData.viewer}
         teams={initialData.teams}
+        viewerMemberships={initialData.viewerMemberships}
+        plans={initialData.plans}
         selectedTeamId={selectedTeam.id}
         environments={teamEnvironments}
         sessions={teamSessions}

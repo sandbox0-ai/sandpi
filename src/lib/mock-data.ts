@@ -9,13 +9,15 @@ import { createId, randomToken } from "@/lib/id";
 import type {
   AuditEvent,
   Environment,
+  MembershipPlanAssignment,
   RuntimeMetricSeries,
+  SandpiPlan,
   SandpiDeploymentSummary,
   SandpiBootstrap,
   SandpiPreferences,
   SandpiUser,
   Team,
-  TeamMember,
+  TeamMembership,
   WorkspaceFile,
 } from "@/lib/types";
 
@@ -239,42 +241,95 @@ export const mockDeployment: SandpiDeploymentSummary = {
   },
 };
 
+/** Mock catalog only. Production clients load effective Plan definitions from Sandpi. */
+export const mockSandpiPlans: SandpiPlan[] = [
+  {
+    id: "free",
+    name: "Free",
+    execution: {
+      weeklyLimitMinutes: 600,
+      concurrentSessionLimit: 1,
+    },
+    storage: { snapshotLimitGiB: 5 },
+  },
+  {
+    id: "pro",
+    name: "Pro",
+    execution: {
+      weeklyLimitMinutes: 1_800,
+      concurrentSessionLimit: 3,
+    },
+    storage: { snapshotLimitGiB: 20 },
+  },
+  {
+    id: "max",
+    name: "Max",
+    execution: {
+      weeklyLimitMinutes: 7_200,
+      concurrentSessionLimit: 12,
+    },
+    storage: { snapshotLimitGiB: 80 },
+  },
+];
+
+function mockPlanAssignment(input: {
+  id: string;
+  planId: MembershipPlanAssignment["planId"];
+  usedMinutes: number;
+  runningSessions: number;
+  snapshotStorageGiB: number;
+  resetsAt: string;
+  periodStartsAt: string;
+  periodEndsAt: string;
+  status?: MembershipPlanAssignment["status"];
+}): MembershipPlanAssignment {
+  const plan = mockSandpiPlans.find((candidate) => candidate.id === input.planId);
+  if (!plan) {
+    throw new Error(`Mock Sandpi Plan ${input.planId} is not available.`);
+  }
+
+  return {
+    id: input.id,
+    planId: input.planId,
+    status: input.status ?? "active",
+    currentPeriodStartsAt: input.periodStartsAt,
+    currentPeriodEndsAt: input.periodEndsAt,
+    quotas: {
+      weeklyExecution: {
+        used: input.usedMinutes,
+        limit: plan.execution.weeklyLimitMinutes,
+        unit: "minute",
+        window: "weekly",
+        resetsAt: input.resetsAt,
+      },
+      concurrentSessions: {
+        used: input.runningSessions,
+        limit: plan.execution.concurrentSessionLimit,
+        unit: "session",
+      },
+      snapshotStorage: {
+        used: input.snapshotStorageGiB,
+        limit: plan.storage.snapshotLimitGiB,
+        unit: "gibibyte",
+      },
+    },
+  };
+}
+
 export const mockTeams: Team[] = [
   {
     id: "team-sandpi-labs",
     name: "Sandpi Labs",
     slug: "sandpi-labs",
     color: "#315c4b",
-    currentUserRole: "owner",
     memberCount: 5,
-    subscription: {
-      id: "sub-sandpi-labs",
-      planId: "team",
-      planName: "Sandpi Team",
-      status: "active",
+    billingAccount: {
+      id: "billing-sandpi-labs",
+      status: "public-beta",
       billingCadence: "monthly",
+      billingEmail: "billing@sandpi.dev",
       currentPeriodStartsAt: "2026-07-01T00:00:00Z",
       currentPeriodEndsAt: "2026-08-01T00:00:00Z",
-      seats: { used: 5, included: 8 },
-      quotas: {
-        weeklyExecution: {
-          used: 3_240,
-          limit: 7_200,
-          unit: "minute",
-          window: "weekly",
-          resetsAt: "2026-07-20T00:00:00Z",
-        },
-        concurrentSessions: {
-          used: 3,
-          limit: 12,
-          unit: "session",
-        },
-        snapshotStorage: {
-          used: 18.6,
-          limit: 80,
-          unit: "gibibyte",
-        },
-      },
     },
     createdAt: "2026-05-18T08:30:00Z",
   },
@@ -283,48 +338,36 @@ export const mockTeams: Team[] = [
     name: "Side Projects",
     slug: "side-projects",
     color: "#6b5478",
-    currentUserRole: "owner",
     memberCount: 1,
-    subscription: {
-      id: "sub-side-projects",
-      planId: "individual",
-      planName: "Sandpi Individual",
-      status: "active",
+    billingAccount: {
+      id: "billing-side-projects",
+      status: "public-beta",
       billingCadence: "monthly",
+      billingEmail: "yan@sandpi.dev",
       currentPeriodStartsAt: "2026-07-08T00:00:00Z",
       currentPeriodEndsAt: "2026-08-08T00:00:00Z",
-      seats: { used: 1, included: 1 },
-      quotas: {
-        weeklyExecution: {
-          used: 410,
-          limit: 1_800,
-          unit: "minute",
-          window: "weekly",
-          resetsAt: "2026-07-15T00:00:00Z",
-        },
-        concurrentSessions: {
-          used: 1,
-          limit: 3,
-          unit: "session",
-        },
-        snapshotStorage: {
-          used: 4.2,
-          limit: 20,
-          unit: "gibibyte",
-        },
-      },
     },
     createdAt: "2026-06-03T12:15:00Z",
   },
 ];
 
-export const mockTeamMembers: TeamMember[] = [
+export const mockTeamMemberships: TeamMembership[] = [
   {
     id: "member-yan-labs",
     teamId: "team-sandpi-labs",
     user: mockViewer,
     role: "owner",
     status: "active",
+    planAssignment: mockPlanAssignment({
+      id: "plan-yan-labs",
+      planId: "max",
+      usedMinutes: 3_240,
+      runningSessions: 3,
+      snapshotStorageGiB: 18.6,
+      resetsAt: "2026-07-20T00:00:00Z",
+      periodStartsAt: "2026-07-01T00:00:00Z",
+      periodEndsAt: "2026-08-01T00:00:00Z",
+    }),
     joinedAt: "2026-05-18T08:30:00Z",
   },
   {
@@ -338,6 +381,16 @@ export const mockTeamMembers: TeamMember[] = [
     },
     role: "admin",
     status: "active",
+    planAssignment: mockPlanAssignment({
+      id: "plan-mira-labs",
+      planId: "pro",
+      usedMinutes: 820,
+      runningSessions: 1,
+      snapshotStorageGiB: 5.8,
+      resetsAt: "2026-07-20T00:00:00Z",
+      periodStartsAt: "2026-07-01T00:00:00Z",
+      periodEndsAt: "2026-08-01T00:00:00Z",
+    }),
     joinedAt: "2026-05-20T10:00:00Z",
   },
   {
@@ -351,6 +404,16 @@ export const mockTeamMembers: TeamMember[] = [
     },
     role: "member",
     status: "active",
+    planAssignment: mockPlanAssignment({
+      id: "plan-leo-labs",
+      planId: "pro",
+      usedMinutes: 530,
+      runningSessions: 0,
+      snapshotStorageGiB: 3.2,
+      resetsAt: "2026-07-20T00:00:00Z",
+      periodStartsAt: "2026-07-01T00:00:00Z",
+      periodEndsAt: "2026-08-01T00:00:00Z",
+    }),
     joinedAt: "2026-06-02T09:20:00Z",
   },
   {
@@ -364,6 +427,16 @@ export const mockTeamMembers: TeamMember[] = [
     },
     role: "member",
     status: "active",
+    planAssignment: mockPlanAssignment({
+      id: "plan-ada-labs",
+      planId: "free",
+      usedMinutes: 160,
+      runningSessions: 0,
+      snapshotStorageGiB: 1.1,
+      resetsAt: "2026-07-20T00:00:00Z",
+      periodStartsAt: "2026-07-01T00:00:00Z",
+      periodEndsAt: "2026-08-01T00:00:00Z",
+    }),
     joinedAt: "2026-06-12T14:10:00Z",
   },
   {
@@ -377,6 +450,17 @@ export const mockTeamMembers: TeamMember[] = [
     },
     role: "member",
     status: "invited",
+    planAssignment: mockPlanAssignment({
+      id: "plan-noah-labs",
+      planId: "free",
+      usedMinutes: 0,
+      runningSessions: 0,
+      snapshotStorageGiB: 0,
+      resetsAt: "2026-07-20T00:00:00Z",
+      periodStartsAt: "2026-07-01T00:00:00Z",
+      periodEndsAt: "2026-08-01T00:00:00Z",
+      status: "pending",
+    }),
     joinedAt: "2026-07-12T06:40:00Z",
   },
   {
@@ -385,6 +469,16 @@ export const mockTeamMembers: TeamMember[] = [
     user: mockViewer,
     role: "owner",
     status: "active",
+    planAssignment: mockPlanAssignment({
+      id: "plan-yan-side-projects",
+      planId: "pro",
+      usedMinutes: 410,
+      runningSessions: 1,
+      snapshotStorageGiB: 4.2,
+      resetsAt: "2026-07-15T00:00:00Z",
+      periodStartsAt: "2026-07-08T00:00:00Z",
+      periodEndsAt: "2026-08-08T00:00:00Z",
+    }),
     joinedAt: "2026-06-03T12:15:00Z",
   },
 ];
@@ -694,8 +788,20 @@ export const mockSessions: CodexSession[] = [
 ];
 
 export function getMockBootstrap(requestedTeamId?: string): SandpiBootstrap {
+  const viewerMemberships = mockTeamMemberships.filter(
+    (membership) => membership.user.id === mockViewer.id,
+  );
+  const viewerTeamIds = new Set(
+    viewerMemberships.map((membership) => membership.teamId),
+  );
+  const teams = mockTeams.filter((team) => viewerTeamIds.has(team.id));
   const selectedTeam =
-    mockTeams.find((team) => team.id === requestedTeamId) ?? mockTeams[0];
+    teams.find((team) => team.id === requestedTeamId) ?? teams[0];
+  if (!selectedTeam) {
+    // Signup creates a one-member Team and Free assignment atomically, so production should
+    // never render an authenticated account without at least one Team Membership.
+    throw new Error("The mock viewer must belong to at least one Team.");
+  }
   const selectedEnvironment =
     mockEnvironments.find((environment) => environment.teamId === selectedTeam.id) ??
     mockEnvironments[0];
@@ -705,7 +811,9 @@ export function getMockBootstrap(requestedTeamId?: string): SandpiBootstrap {
 
   return structuredClone({
     viewer: mockViewer,
-    teams: mockTeams,
+    teams,
+    viewerMemberships,
+    plans: mockSandpiPlans,
     deployment: mockDeployment,
     environments: mockEnvironments,
     sessions: mockSessions,

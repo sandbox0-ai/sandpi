@@ -58,7 +58,8 @@
 .sectionHeader > div > span,
 .panel small,
 .statCard small,
-.quotaCard small {
+.quotaCard small,
+.planCountCard small {
   color: var(--ink-faint, #8a8982);
   font-size: 9px;
   font-weight: 720;
@@ -171,21 +172,28 @@
 }
 
 .statGrid,
-.quotaGrid {
+.quotaGrid,
+.planMixGrid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
 }
 
+.twoColumnGrid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .statCard,
 .quotaCard,
+.planCountCard,
 .panel {
   border: 1px solid var(--line, #deddd7);
   background: var(--panel-strong, #fff);
 }
 
 .statCard,
-.quotaCard {
+.quotaCard,
+.planCountCard {
   display: flex;
   min-width: 0;
   min-height: 112px;
@@ -333,7 +341,7 @@
 .memberRow {
   display: grid;
   min-height: 62px;
-  grid-template-columns: 31px minmax(0, 1fr) auto 72px;
+  grid-template-columns: 31px minmax(0, 1fr) auto 72px 96px;
   align-items: center;
   gap: 10px;
   padding: 9px 13px;
@@ -403,6 +411,29 @@
   background: var(--selected, #dfddd5);
   color: var(--ink-soft, #62615c);
   text-align: center;
+}
+
+.memberPlanSelect {
+  width: 96px;
+  min-height: 30px;
+  padding: 0 25px 0 9px;
+  border: 1px solid var(--line, #deddd7);
+  border-radius: 7px;
+  background: var(--panel-strong, #fff);
+  color: var(--ink, #171716);
+  font-size: 9.5px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.memberPlanSelect:hover:not(:disabled) {
+  border-color: var(--ink-faint, #8a8982);
+}
+
+.memberPlanSelect:disabled {
+  color: var(--ink-faint, #8a8982);
+  cursor: not-allowed;
+  opacity: 0.7;
 }
 
 .planPanel {
@@ -483,6 +514,19 @@
   font-size: 9px;
 }
 
+.planCountCard strong {
+  margin-top: 15px;
+  font-size: 24px;
+  font-weight: 710;
+  letter-spacing: -0.04em;
+}
+
+.planCountCard p {
+  margin: 4px 0 0;
+  color: var(--ink-faint, #8a8982);
+  font-size: 9px;
+}
+
 @media (max-width: 760px) {
   .page {
     height: auto;
@@ -540,17 +584,19 @@
   }
 
   .statGrid,
-  .quotaGrid {
+  .quotaGrid,
+  .planMixGrid {
     grid-template-columns: 1fr;
   }
 }
 
 @media (max-width: 520px) {
   .memberRow {
-    grid-template-columns: 31px minmax(0, 1fr) auto;
+    grid-template-columns: 31px minmax(0, 1fr) 96px;
   }
 
-  .memberStatus {
+  .memberStatus,
+  .roleBadge {
     display: none;
   }
 

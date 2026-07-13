@@ -4,14 +4,15 @@ import { notFound } from "next/navigation";
 import { TeamSettingsPage } from "@/components/team-settings-page";
 import {
   mockEnvironments,
-  mockTeamMembers,
+  mockSandpiPlans,
+  mockTeamMemberships,
   mockTeams,
   mockViewer,
 } from "@/lib/mock-data";
 
 export const metadata: Metadata = {
   title: "Team settings · Sandpi",
-  description: "Manage a Sandpi Team, members, subscription and usage.",
+  description: "Manage a Sandpi Team, member Plans, billing and usage.",
 };
 
 interface TeamSettingsRouteProps {
@@ -27,14 +28,24 @@ export default async function TeamSettingsRoute({
   if (!team) {
     notFound();
   }
+  const memberships = mockTeamMemberships.filter(
+    (membership) => membership.teamId === team.id,
+  );
+  if (
+    !memberships.some(
+      (membership) =>
+        membership.user.id === mockViewer.id && membership.status === "active",
+    )
+  ) {
+    notFound();
+  }
 
   return (
     <TeamSettingsPage
       team={structuredClone(team)}
       viewer={structuredClone(mockViewer)}
-      members={structuredClone(
-        mockTeamMembers.filter((member) => member.teamId === team.id),
-      )}
+      memberships={structuredClone(memberships)}
+      plans={structuredClone(mockSandpiPlans)}
       environmentCount={mockEnvironments.filter(
         (environment) => environment.teamId === team.id,
       ).length}

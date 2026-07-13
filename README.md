@@ -4,7 +4,7 @@ Sandpi is a remote, multi-harness coding agent application built on Sandbox0. Th
 
 This first slice is a Next.js full-stack interaction prototype. The UI and API routes use mock data, while the backend already imports the local [`sdk-js`](../sdk-js) package behind a server-only integration boundary.
 
-Sandpi is an independent product with its own users, Teams, subscriptions and quotas. Sandpi does not include, resell or pay for model usage: users connect their own provider account through the native coding-agent harness, and provider billing and limits remain between that user and the provider.
+Sandpi is an independent product with its own users, Teams, member Plan assignments, billing accounts and quotas. Sandpi does not include, resell or pay for model usage: provider billing and limits remain with the account authenticated through the native coding-agent harness.
 
 ## Local development
 
@@ -17,7 +17,8 @@ The mock UI does not require credentials. A Sandpi deployment selects its Sandbo
 
 ## Product model
 
-- A **Team** is the only Sandpi tenant and resource-ownership boundary. A one-person account is represented by a one-member Team rather than a separate personal ownership model.
+- A **Team** is the only Sandpi tenant, resource-ownership and billing-attribution boundary. Every User belongs to at least one Team; signup atomically creates a one-member Team, Owner Membership and Free Plan assignment.
+- A **Membership Plan** is scoped to one User-Team relationship. A Team can sponsor different Free, Pro or Max Plans for different members and receives their consolidated bill; the Team itself has no Plan.
 - An **Environment** groups Sessions and binds a coding-agent harness, official agent authentication, Sandbox template and network policy.
 - A **Session** gets an isolated Sandbox and a private fork of the Environment workspace Volume.
 - `/workspace` is an arbitrary directory, not an implicit Git repository. It may contain zero, one or multiple repositories, which are discovered as nested workspace context rather than stored as Session-level branch state.
@@ -31,7 +32,7 @@ The mock UI does not require credentials. A Sandpi deployment selects its Sandbo
 - Sessions can be searched across titles, Environments and coding agents from the Sidebar or with `Cmd/Ctrl+K`.
 - A Web Terminal connects to the same Sandbox Supervisor boundary and spans the conversation plus inspector width.
 - Personal Preferences live at `/preferences` as a standalone page.
-- Team membership, subscription and quota state live at `/team` in the mock frontend.
+- Team membership, per-member Plans, billing and quota state live at `/team` in the mock frontend.
 
 The mock provisioning contract is implemented in `src/lib/environment-blueprint.ts` and exposed by `POST /api/sessions`.
 
@@ -45,11 +46,13 @@ The mock provisioning contract is implemented in `src/lib/environment-blueprint.
 
 ## Commercial boundary
 
-- Sandpi owns its subscription and quota ledger independently from Sandbox0. The current frontend uses mock plan and usage data; billing is not connected yet.
-- Sandpi subscriptions are billed monthly. The Team's shared active-execution allowance resets weekly and does not roll over; concurrency and snapshot storage are separate quota dimensions.
+- Sandpi owns its Plan-assignment, billing and quota ledger independently from Sandbox0. The current frontend uses mock Plan and usage data; billing is not connected yet.
+- Free, Pro and Max are assigned to individual Team Memberships and funded by that Team's billing account. Paid assignments are billed monthly; every Membership has an independent weekly execution allowance plus its own concurrency and attributed snapshot limits.
+- A User in multiple Teams can have a different Plan and quota in each Team. Entitlements never follow the global User across Team boundaries and cannot be combined between Teams.
+- Runtime admission and usage records carry both `team_id` (payer and resource owner) and `membership_id` (Plan and quota consumer). Per-Turn attribution stays outside native coding-agent event payloads.
 - Sandpi plans may charge for Sandpi-managed runtime, storage, networking and product services only. They must not bundle coding-agent model usage.
 - Every provider account is authenticated through its native harness. Sandpi must not pool accounts, resell a consumer coding plan or present provider usage as Sandpi usage.
-- Sandbox0 metering may supply infrastructure observations, but Sandpi's subscription periods, entitlements and admission decisions belong to the Sandpi backend.
+- Sandbox0 metering may supply infrastructure observations, but Sandpi's billing periods, Membership entitlements and admission decisions belong to the Sandpi backend.
 - Self-hosted Sandpi uses the operator-selected Sandbox0 deployment. Sandbox0 and Sandpi remain separate products with separate identity and commercial boundaries.
 
 ## Identity and deployment boundary
@@ -66,6 +69,7 @@ The mock provisioning contract is implemented in `src/lib/environment-blueprint.
 - `GET|POST /api/environments`
 - `GET|POST /api/sessions`
 - `GET /api/teams`
+- `PUT /api/teams/{teamId}/members/{membershipId}/plan`
 - `GET /api/sessions/{sessionId}/events`
 - `GET /api/sessions/{sessionId}/terminal`
 - `GET /api/integrations/sandbox0/capabilities`
@@ -76,7 +80,7 @@ The mock provisioning contract is implemented in `src/lib/environment-blueprint.
 Preferences are split by ownership instead of putting every setting into one user record:
 
 - Personal: language, time zone, send shortcut, appearance and notifications.
-- Team: members, roles, subscription, weekly execution allowance and resource quotas.
+- Team: billing account, members, roles and per-Membership Plan assignments.
 - Environment: coding agent, network policy, functions and sharing.
 - Deployment administrator: Sandpi public URL, Cloud Auth0 or private OIDC, database, Sandbox0 API Host/API Key, secret delivery and observability.
 

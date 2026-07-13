@@ -3,7 +3,9 @@ import { NextResponse } from "next/server";
 import {
   createMockEnvironment,
   mockEnvironments,
+  mockTeamMemberships,
   mockTeams,
+  mockViewer,
 } from "@/lib/mock-data";
 
 interface CreateEnvironmentRequest {
@@ -24,6 +26,24 @@ export async function POST(request: Request) {
     return NextResponse.json(
       { error: { code: "team_not_found", message: "Team not found." } },
       { status: 404 },
+    );
+  }
+
+  const membership = mockTeamMemberships.find(
+    (item) =>
+      item.teamId === team.id &&
+      item.user.id === mockViewer.id &&
+      item.status === "active",
+  );
+  if (!membership) {
+    return NextResponse.json(
+      {
+        error: {
+          code: "team_membership_required",
+          message: "An active Team Membership is required.",
+        },
+      },
+      { status: 403 },
     );
   }
 
