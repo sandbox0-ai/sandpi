@@ -65,11 +65,25 @@ export interface ToolActivity {
   duration?: string;
 }
 
+export interface MessageImageAttachment {
+  id: string;
+  kind: "image";
+  name: string;
+  mimeType: string;
+  sizeBytes: number;
+  /**
+   * Mock-only data URL. Production clients upload into Session-scoped storage and send the
+   * resulting reference through the native harness attachment contract.
+   */
+  previewUrl: string;
+}
+
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
   createdAt: string;
+  attachments?: MessageImageAttachment[];
   activities?: ToolActivity[];
   diff?: {
     file: string;
@@ -138,6 +152,7 @@ export interface CodingSession {
   archived: boolean;
   harness: HarnessId;
   harnessLabel: string;
+  /** Available values are discovered from the native coding-agent harness. */
   modelLabel: string;
   createdAt: string;
   updatedAt: string;

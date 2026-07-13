@@ -3,6 +3,7 @@
 import {
   ArrowUp,
   AtSign,
+  ChevronDown,
   GitFork,
   LockKeyhole,
   Menu,
@@ -19,6 +20,10 @@ import {
   type OperationLanguage,
   type SendShortcut,
 } from "@/lib/operation-ui";
+import {
+  getDefaultMockCodingAgentModel,
+  getMockCodingAgentModels,
+} from "@/lib/coding-agent-models";
 import type { CodingSession, Environment } from "@/lib/types";
 
 import styles from "./new-session-workspace.module.css";
@@ -41,7 +46,13 @@ export function NewSessionWorkspace({
   onToggleSidebar,
 }: NewSessionWorkspaceProps) {
   const ui = getOperationUiCopy(language).newSession;
+  const modelOptions = getMockCodingAgentModels(
+    environment.codingAgent.harness,
+  );
   const [prompt, setPrompt] = useState("");
+  const [selectedModelLabel, setSelectedModelLabel] = useState(
+    getDefaultMockCodingAgentModel(environment.codingAgent.harness).label,
+  );
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
   const promptRef = useRef<HTMLTextAreaElement>(null);
@@ -55,6 +66,12 @@ export function NewSessionWorkspace({
     );
     return () => window.cancelAnimationFrame(focusFrame);
   }, []);
+
+  useEffect(() => {
+    setSelectedModelLabel(
+      getDefaultMockCodingAgentModel(environment.codingAgent.harness).label,
+    );
+  }, [environment.codingAgent.harness, environment.id]);
 
   async function createSession() {
     const instruction = prompt.trim();
@@ -73,6 +90,7 @@ export function NewSessionWorkspace({
         body: JSON.stringify({
           environmentId: environment.id,
           prompt: instruction,
+          modelLabel: selectedModelLabel,
         }),
       });
       const payload = (await response.json()) as {
@@ -192,8 +210,31 @@ export function NewSessionWorkspace({
               </button>
               <span className={styles.boundAgent}>
                 <span className={styles.boundAgentMark} aria-hidden="true" />
-                {environment.codingAgent.label}
-                <small>{ui.environment}</small>
+                <span className={styles.harnessLabel}>
+                  {environment.codingAgent.label}
+                </span>
+                <label className={styles.modelPicker}>
+                  <span className={styles.srOnly}>
+                    {ui.selectModel(environment.codingAgent.label)}
+                  </span>
+                  <select
+                    name="new-session-model"
+                    aria-label={ui.selectModel(
+                      environment.codingAgent.label,
+                    )}
+                    value={selectedModelLabel}
+                    onChange={(event) =>
+                      setSelectedModelLabel(event.target.value)
+                    }
+                  >
+                    {modelOptions.map((model) => (
+                      <option value={model.label} key={model.id}>
+                        {model.label}
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown size={12} aria-hidden="true" />
+                </label>
               </span>
             </div>
             <button

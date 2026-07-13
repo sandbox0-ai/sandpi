@@ -25,6 +25,7 @@ import type {
   ChatMessage,
   CodingSession,
   Environment,
+  MessageImageAttachment,
   SandpiBootstrap,
 } from "@/lib/types";
 
@@ -40,6 +41,7 @@ function createMockTurn(
   content: string,
   codingAgentLabel: string,
   createdAt: string,
+  attachments: MessageImageAttachment[] = [],
 ): ChatMessage[] {
   return [
     {
@@ -47,6 +49,7 @@ function createMockTurn(
       role: "user",
       content,
       createdAt,
+      attachments: attachments.length ? attachments : undefined,
     },
     {
       id: createId("message"),
@@ -374,12 +377,13 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
   }, []);
 
   const handleSendMessage = useCallback(
-    (content: string) => {
+    (content: string, attachments: MessageImageAttachment[]) => {
       const now = new Date().toISOString();
       const turn = createMockTurn(
         content,
         selectedEnvironment?.codingAgent.label ?? "coding agent",
         now,
+        attachments,
       );
 
       setSessions((current) =>
@@ -395,6 +399,17 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
       );
     },
     [selectedEnvironment?.codingAgent.label, selectedSessionId],
+  );
+
+  const handleSelectSessionModel = useCallback(
+    (sessionId: string, modelLabel: string) => {
+      setSessions((current) =>
+        current.map((session) =>
+          session.id === sessionId ? { ...session, modelLabel } : session,
+        ),
+      );
+    },
+    [],
   );
 
   const handleDeleteUserMessage = useCallback(
@@ -419,12 +434,17 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
   );
 
   const handleEditUserMessage = useCallback(
-    (messageId: string, content: string) => {
+    (
+      messageId: string,
+      content: string,
+      attachments: MessageImageAttachment[],
+    ) => {
       const now = new Date().toISOString();
       const replacement = createMockTurn(
         content,
         selectedEnvironment?.codingAgent.label ?? "coding agent",
         now,
+        attachments,
       );
       // Editing shares the Turn rollback boundary with delete, then submits a replacement
       // instruction and persists a new Workspace Volume snapshot before completing the Turn.
@@ -465,6 +485,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
           sourceMessage.content,
           selectedEnvironment.codingAgent.label,
           createdAt,
+          sourceMessage.attachments,
         ),
       );
       if (!messages) {
@@ -565,6 +586,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
             setInspectorOpen(true);
           }}
           onSendMessage={handleSendMessage}
+          onSelectModel={handleSelectSessionModel}
           onDeleteUserMessage={handleDeleteUserMessage}
           onEditUserMessage={handleEditUserMessage}
           onForkUserMessage={handleForkUserMessage}

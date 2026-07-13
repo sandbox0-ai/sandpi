@@ -30,3 +30,20 @@ test("binds the coding agent to an Environment and every derived Session", () =>
   assert.equal("sandbox0ConnectionId" in environment, false);
   assert.equal("sandbox0" in mockPreferences, false);
 });
+
+test("uses only a model exposed by the Environment harness mock", () => {
+  const environment = createMockEnvironment({ name: "Model selection test" });
+  const selected = createMockSession(environment, {
+    title: "Selected model",
+    prompt: "Use the selected model.",
+    modelLabel: "GPT-5.2 Codex",
+  });
+  const fallback = createMockSession(environment, {
+    title: "Unknown model",
+    prompt: "Reject an unknown model.",
+    modelLabel: "Not a native Codex model",
+  });
+
+  assert.equal(selected.modelLabel, "GPT-5.2 Codex");
+  assert.equal(fallback.modelLabel, "GPT-5.2 Codex");
+});

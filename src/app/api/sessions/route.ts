@@ -7,6 +7,7 @@ interface CreateSessionRequest {
   environmentId?: string;
   title?: string;
   prompt?: string;
+  modelLabel?: string;
 }
 
 export async function GET() {
@@ -33,7 +34,11 @@ export async function POST(request: Request) {
   }
 
   const title = body.title?.trim() || prompt.slice(0, 56);
-  const session = createMockSession(environment, { title, prompt });
+  const session = createMockSession(environment, {
+    title,
+    prompt,
+    modelLabel: body.modelLabel,
+  });
   const plan = buildSessionForkPlan({
     environment,
     sessionName: title,

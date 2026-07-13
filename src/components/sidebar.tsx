@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   CircleHelp,
@@ -82,6 +82,9 @@ export function Sidebar({
   const ui = getOperationUiCopy(language).sidebar;
   const unreadLabel = language === "zh-CN" ? "未读" : "Unread";
   const [sessionSearchOpen, setSessionSearchOpen] = useState(false);
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const accountMenuRef = useRef<HTMLDivElement>(null);
+  const accountTriggerRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     const handleSearchShortcut = (event: KeyboardEvent) => {
@@ -97,6 +100,68 @@ export function Sidebar({
     document.addEventListener("keydown", handleSearchShortcut);
     return () => document.removeEventListener("keydown", handleSearchShortcut);
   }, []);
+
+  useEffect(() => {
+    if (!accountMenuOpen) {
+      return;
+    }
+
+    const focusFrame = window.requestAnimationFrame(() => {
+      accountMenuRef.current
+        ?.querySelector<HTMLElement>("[role='menuitem']")
+        ?.focus();
+    });
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (
+        !accountMenuRef.current?.contains(target) &&
+        !accountTriggerRef.current?.contains(target)
+      ) {
+        setAccountMenuOpen(false);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") {
+        return;
+      }
+      event.preventDefault();
+      setAccountMenuOpen(false);
+      window.requestAnimationFrame(() => accountTriggerRef.current?.focus());
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [accountMenuOpen]);
+
+  function handleAccountMenuKeyDown(
+    event: React.KeyboardEvent<HTMLDivElement>,
+  ) {
+    const menuItems = Array.from(
+      event.currentTarget.querySelectorAll<HTMLElement>("[role='menuitem']"),
+    );
+    const activeIndex = menuItems.indexOf(document.activeElement as HTMLElement);
+    let nextIndex: number | null = null;
+
+    if (event.key === "ArrowDown") {
+      nextIndex = activeIndex < menuItems.length - 1 ? activeIndex + 1 : 0;
+    } else if (event.key === "ArrowUp") {
+      nextIndex = activeIndex > 0 ? activeIndex - 1 : menuItems.length - 1;
+    } else if (event.key === "Home") {
+      nextIndex = 0;
+    } else if (event.key === "End") {
+      nextIndex = menuItems.length - 1;
+    }
+
+    if (nextIndex !== null) {
+      event.preventDefault();
+      menuItems[nextIndex]?.focus();
+    }
+  }
 
   return (
     <>
@@ -251,21 +316,56 @@ export function Sidebar({
         </div>
 
         <div className="sidebar-footer">
-          <Link className="sidebar-footer-button" href="/preferences">
-            <Settings size={16} />
-            {ui.preferences}
-          </Link>
-          <button type="button" className="sidebar-footer-button">
-            <CircleHelp size={16} />
-            {ui.help}
-          </button>
-          <div className="account-row">
+          <button
+            ref={accountTriggerRef}
+            type="button"
+            className={`account-menu-trigger ${accountMenuOpen ? "is-open" : ""}`}
+            aria-label={ui.accountMenu}
+            aria-haspopup="menu"
+            aria-expanded={accountMenuOpen}
+            onClick={() => setAccountMenuOpen((open) => !open)}
+            onKeyDown={(event) => {
+              if (
+                !accountMenuOpen &&
+                (event.key === "ArrowUp" || event.key === "ArrowDown")
+              ) {
+                event.preventDefault();
+                setAccountMenuOpen(true);
+              }
+            }}
+          >
             <span className="account-avatar">YA</span>
             <span className="account-copy">
               <strong>Yan Assistant</strong>
               <small>{ui.personalTeam}</small>
             </span>
-          </div>
+          </button>
+          {accountMenuOpen ? (
+            <div
+              ref={accountMenuRef}
+              className="sidebar-account-menu"
+              role="menu"
+              aria-label={ui.accountActions}
+              onKeyDown={handleAccountMenuKeyDown}
+            >
+              <Link
+                href="/preferences"
+                role="menuitem"
+                onClick={() => setAccountMenuOpen(false)}
+              >
+                <Settings size={15} aria-hidden="true" />
+                {ui.preferences}
+              </Link>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => setAccountMenuOpen(false)}
+              >
+                <CircleHelp size={15} aria-hidden="true" />
+                {ui.help}
+              </button>
+            </div>
+          ) : null}
         </div>
       </aside>
       {sessionSearchOpen ? (

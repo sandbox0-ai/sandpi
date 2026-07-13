@@ -1,4 +1,8 @@
 import { SESSION_WORKSPACE_ROOT } from "@/lib/environment-blueprint";
+import {
+  getDefaultMockCodingAgentModel,
+  getMockCodingAgentModels,
+} from "@/lib/coding-agent-models";
 import { createId, randomToken } from "@/lib/id";
 import type {
   AuditEvent,
@@ -306,7 +310,7 @@ const primarySession: CodingSession = {
   archived: false,
   harness: "codex",
   harnessLabel: "Codex",
-  modelLabel: "Auto",
+  modelLabel: "GPT-5.2 Codex",
   createdAt: "2026-07-12T09:17:41+08:00",
   updatedAt: "2026-07-12T09:25:03+08:00",
   hardExpiresAt: "2026-08-11T09:17:41+08:00",
@@ -448,7 +452,7 @@ export function getMockBootstrap(): SandpiBootstrap {
 
 export function createMockSession(
   environment: Environment,
-  input: { title: string; prompt: string },
+  input: { title: string; prompt: string; modelLabel?: string },
 ): CodingSession {
   const id = createId("session", 8);
   const now = new Date();
@@ -463,6 +467,11 @@ export function createMockSession(
     unread: false,
     harness: environment.codingAgent.harness,
     harnessLabel: environment.codingAgent.label,
+    modelLabel:
+      getMockCodingAgentModels(environment.codingAgent.harness).find(
+        (model) => model.label === input.modelLabel,
+      )?.label ??
+      getDefaultMockCodingAgentModel(environment.codingAgent.harness).label,
     createdAt: now.toISOString(),
     updatedAt: now.toISOString(),
     hardExpiresAt: expires.toISOString(),

@@ -1,10 +1,11 @@
 "use client";
 
+import Image from "next/image";
 import {
-  Archive,
   ArrowUp,
   AtSign,
   Check,
+  ChevronDown,
   Copy,
   Files,
   GitFork,
@@ -18,10 +19,12 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type UIEvent } from "react";
 
 import type { InspectorTab } from "@/components/inspector";
 import { SessionActionsMenu } from "@/components/session-actions-menu";
+import { getMockCodingAgentModels } from "@/lib/coding-agent-models";
+import { createId } from "@/lib/id";
 import { visibleTimelineWhileEditing } from "@/lib/message-timeline";
 import {
   getOperationUiCopy,
@@ -33,6 +36,7 @@ import type {
   ChatMessage,
   CodingSession,
   Environment,
+  MessageImageAttachment,
   ToolActivity,
 } from "@/lib/types";
 
@@ -48,9 +52,17 @@ interface ConversationProps {
   onToggleTerminal: () => void;
   onOpenSettings: () => void;
   onOpenInspector: (tab: InspectorTab) => void;
-  onSendMessage: (content: string) => void;
+  onSendMessage: (
+    content: string,
+    attachments: MessageImageAttachment[],
+  ) => void;
+  onSelectModel: (sessionId: string, modelLabel: string) => void;
   onDeleteUserMessage: (messageId: string) => void;
-  onEditUserMessage: (messageId: string, content: string) => void;
+  onEditUserMessage: (
+    messageId: string,
+    content: string,
+    attachments: MessageImageAttachment[],
+  ) => void;
   onForkUserMessage: (messageId: string) => void;
   onForkSession: (sessionId: string) => void;
   onRenameSession: (sessionId: string, title: string) => void;
@@ -87,6 +99,31 @@ function syncComposerHeight(textarea: HTMLTextAreaElement) {
   textarea.style.height = `${textarea.scrollHeight}px`;
 }
 
+const MAX_COMPOSER_IMAGES = 6;
+const MAX_COMPOSER_IMAGE_BYTES = 10 * 1024 * 1024;
+
+function readImageAttachment(file: File): Promise<MessageImageAttachment> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener("load", () => {
+      if (typeof reader.result !== "string") {
+        reject(new Error("Clipboard image did not produce a preview URL."));
+        return;
+      }
+      resolve({
+        id: createId("image", 10),
+        kind: "image",
+        name: file.name || "clipboard-image",
+        mimeType: file.type,
+        sizeBytes: file.size,
+        previewUrl: reader.result,
+      });
+    });
+    reader.addEventListener("error", () => reject(reader.error));
+    reader.readAsDataURL(file);
+  });
+}
+
 export function Conversation({
   language,
   sendShortcut,
@@ -100,6 +137,7 @@ export function Conversation({
   onOpenSettings,
   onOpenInspector,
   onSendMessage,
+  onSelectModel,
   onDeleteUserMessage,
   onEditUserMessage,
   onForkUserMessage,
@@ -109,11 +147,22 @@ export function Conversation({
   onTogglePinSession,
 }: ConversationProps) {
   const ui = getOperationUiCopy(language).conversation;
+  const modelOptions = getMockCodingAgentModels(
+    environment.codingAgent.harness,
+  );
+  const selectedModelLabel = modelOptions.some(
+    (model) => model.label === session.modelLabel,
+  )
+    ? session.modelLabel
+    : modelOptions[0].label;
   const [draft, setDraft] = useState("");
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [deleteMessageId, setDeleteMessageId] = useState<string | null>(null);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [pastedImages, setPastedImages] = useState<MessageImageAttachment[]>([]);
+  const [attachmentError, setAttachmentError] = useState("");
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  const scrollbarHideTimerRef = useRef<number | null>(null);
   // Do not render session.messages directly while editing. Edit is a branch rewrite, and all
   // clients must hide the stale Turn and descendants so Send cannot be mistaken for append.
   const visibleMessages = visibleTimelineWhileEditing(
@@ -125,6 +174,8 @@ export function Conversation({
     setDraft("");
     setDeleteMessageId(null);
     setEditingMessageId(null);
+    setPastedImages([]);
+    setAttachmentError("");
   }, [session.id]);
 
   useEffect(() => {
@@ -133,24 +184,37 @@ export function Conversation({
     }
   }, [draft]);
 
+  useEffect(
+    () => () => {
+      if (scrollbarHideTimerRef.current !== null) {
+        window.clearTimeout(scrollbarHideTimerRef.current);
+      }
+    },
+    [],
+  );
+
   function submitMessage() {
     const content = draft.trim();
-    if (!content) {
+    if (!content && pastedImages.length === 0) {
       return;
     }
     if (editingMessageId) {
-      onEditUserMessage(editingMessageId, content);
+      onEditUserMessage(editingMessageId, content, pastedImages);
       setEditingMessageId(null);
     } else {
-      onSendMessage(content);
+      onSendMessage(content, pastedImages);
     }
     setDraft("");
+    setPastedImages([]);
+    setAttachmentError("");
   }
 
   function beginEditing(message: ChatMessage) {
     setDeleteMessageId(null);
     setEditingMessageId(message.id);
     setDraft(message.content);
+    setPastedImages(message.attachments ?? []);
+    setAttachmentError("");
     requestAnimationFrame(() => {
       composerRef.current?.focus();
       composerRef.current?.setSelectionRange(
@@ -172,6 +236,53 @@ export function Conversation({
     } catch {
       setCopiedMessageId(null);
     }
+  }
+
+  async function addPastedImages(files: File[]) {
+    const availableSlots = MAX_COMPOSER_IMAGES - pastedImages.length;
+    if (availableSlots <= 0) {
+      setAttachmentError(ui.imageLimit(MAX_COMPOSER_IMAGES));
+      return;
+    }
+
+    const filesWithinLimit = files
+      .filter((file) => file.size <= MAX_COMPOSER_IMAGE_BYTES)
+      .slice(0, availableSlots);
+    if (filesWithinLimit.length === 0) {
+      setAttachmentError(ui.imageTooLarge);
+      return;
+    }
+
+    if (files.some((file) => file.size > MAX_COMPOSER_IMAGE_BYTES)) {
+      setAttachmentError(ui.imageTooLarge);
+    } else if (files.length > availableSlots) {
+      setAttachmentError(ui.imageLimit(MAX_COMPOSER_IMAGES));
+    } else {
+      setAttachmentError("");
+    }
+
+    try {
+      const attachments = await Promise.all(
+        filesWithinLimit.map(readImageAttachment),
+      );
+      setPastedImages((current) =>
+        [...current, ...attachments].slice(0, MAX_COMPOSER_IMAGES),
+      );
+    } catch {
+      setAttachmentError(ui.imagePasteFailed);
+    }
+  }
+
+  function handleConversationScroll(event: UIEvent<HTMLDivElement>) {
+    const scrollRegion = event.currentTarget;
+    scrollRegion.classList.add("is-scrolling");
+    if (scrollbarHideTimerRef.current !== null) {
+      window.clearTimeout(scrollbarHideTimerRef.current);
+    }
+    scrollbarHideTimerRef.current = window.setTimeout(() => {
+      scrollRegion.classList.remove("is-scrolling");
+      scrollbarHideTimerRef.current = null;
+    }, 700);
   }
 
   return (
@@ -254,36 +365,8 @@ export function Conversation({
         </div>
       </header>
 
-      <div className="conversation-scroll">
+      <div className="conversation-scroll" onScroll={handleConversationScroll}>
         <div className="message-column">
-          <div className="session-origin-card">
-            <span className="origin-icon">
-              <Archive size={15} />
-            </span>
-            <div>
-              <strong>
-                {session.origin?.kind === "session"
-                  ? ui.sessionForkFrom(session.origin.label)
-                  : session.origin?.kind === "turn"
-                    ? ui.turnForkFrom(session.origin.label)
-                    : ui.forkedFrom(session.origin?.label ?? environment.name)}
-              </strong>
-              {session.origin?.kind === "session" ? (
-                <span>{ui.sessionForkDetail}</span>
-              ) : session.origin?.kind === "turn" ? (
-                <span>{ui.turnForkDetail(session.environmentRevision)}</span>
-              ) : (
-                <span>
-                  {ui.environmentForkDetail(
-                    session.environmentRevision,
-                    environment.credentialRevision,
-                  )}
-                </span>
-              )}
-            </div>
-            <span className="origin-duration">1.2s</span>
-          </div>
-
           {visibleMessages.map((message) => (
             <article
               className={`message message-${message.role}`}
@@ -298,7 +381,27 @@ export function Conversation({
                 <div className="message-author">
                   {message.role === "user" ? ui.you : session.harnessLabel}
                 </div>
-                <p>{message.content}</p>
+                {message.attachments?.length ? (
+                  <div
+                    className={`message-image-attachments ${
+                      message.attachments.length === 1 ? "is-single" : ""
+                    }`}
+                    aria-label={ui.attachedImages}
+                  >
+                    {message.attachments.map((attachment) => (
+                      <Image
+                        key={attachment.id}
+                        src={attachment.previewUrl}
+                        alt={attachment.name}
+                        width={440}
+                        height={300}
+                        sizes="(max-width: 680px) 72vw, 320px"
+                        unoptimized
+                      />
+                    ))}
+                  </div>
+                ) : null}
+                {message.content ? <p>{message.content}</p> : null}
 
                 {message.activities ? (
                   <div className="activity-list">
@@ -475,10 +578,48 @@ export function Conversation({
                 onClick={() => {
                   setEditingMessageId(null);
                   setDraft("");
+                  setPastedImages([]);
+                  setAttachmentError("");
                 }}
               >
                 <X size={14} aria-hidden="true" />
               </button>
+            </div>
+          ) : null}
+          {pastedImages.length ? (
+            <div
+              className="composer-image-previews"
+              aria-label={ui.attachedImages}
+            >
+              {pastedImages.map((attachment) => (
+                <div className="composer-image-preview" key={attachment.id}>
+                  <Image
+                    src={attachment.previewUrl}
+                    alt={attachment.name}
+                    width={64}
+                    height={64}
+                    unoptimized
+                  />
+                  <button
+                    type="button"
+                    aria-label={ui.removeImage(attachment.name)}
+                    title={ui.removeImage(attachment.name)}
+                    onClick={() => {
+                      setPastedImages((current) =>
+                        current.filter((image) => image.id !== attachment.id),
+                      );
+                      setAttachmentError("");
+                    }}
+                  >
+                    <X size={12} aria-hidden="true" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          {attachmentError ? (
+            <div className="composer-attachment-error" role="status">
+              {attachmentError}
             </div>
           ) : null}
           <textarea
@@ -489,6 +630,20 @@ export function Conversation({
             onChange={(event) => {
               setDraft(event.target.value);
               syncComposerHeight(event.currentTarget);
+            }}
+            onPaste={(event) => {
+              const imageFiles = Array.from(event.clipboardData.items)
+                .filter(
+                  (item) =>
+                    item.kind === "file" && item.type.startsWith("image/"),
+                )
+                .map((item) => item.getAsFile())
+                .filter((file): file is File => file !== null);
+              if (imageFiles.length === 0) {
+                return;
+              }
+              event.preventDefault();
+              void addPastedImages(imageFiles);
             }}
             onKeyDown={(event) => {
               if (
@@ -536,8 +691,31 @@ export function Conversation({
                 title={ui.boundToEnvironment}
               >
                 <span className="codex-glyph" />
-                {environment.codingAgent.label}
-                <small>{ui.environment}</small>
+                <span className="composer-harness-label">
+                  {environment.codingAgent.label}
+                </span>
+                <label className="composer-model-picker">
+                  <span className="sr-only">
+                    {ui.selectModel(environment.codingAgent.label)}
+                  </span>
+                  <select
+                    name="coding-agent-model"
+                    aria-label={ui.selectModel(
+                      environment.codingAgent.label,
+                    )}
+                    value={selectedModelLabel}
+                    onChange={(event) =>
+                      onSelectModel(session.id, event.target.value)
+                    }
+                  >
+                    {modelOptions.map((model) => (
+                      <option value={model.label} key={model.id}>
+                        {model.label}
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown size={12} aria-hidden="true" />
+                </label>
               </span>
             </div>
             <div className="composer-send-area">
@@ -547,7 +725,7 @@ export function Conversation({
               <button
                 type="button"
                 className="send-button"
-                disabled={!draft.trim()}
+                disabled={!draft.trim() && pastedImages.length === 0}
                 aria-label={ui.sendMessage}
                 onClick={submitMessage}
               >

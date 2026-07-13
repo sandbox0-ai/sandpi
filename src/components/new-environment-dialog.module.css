@@ -14,7 +14,7 @@
   width: min(100%, 640px);
   max-height: calc(100dvh - 32px);
   overflow: hidden;
-  border: 1px solid #c9c7bf;
+  border: 1px solid var(--line, #deddd7);
   border-radius: 15px;
   background: var(--panel-strong, #fff);
   box-shadow: var(--shadow-lg, 0 24px 70px rgb(24 24 20 / 18%));
@@ -155,7 +155,7 @@
 .field > input {
   width: 100%;
   height: 42px;
-  border: 1px solid #d1cfc7;
+  border: 1px solid var(--line, #deddd7);
   border-radius: 8px;
   background: var(--panel-strong, #fff);
 }
@@ -172,17 +172,17 @@
 }
 
 .field > input::placeholder {
-  color: #a4a29b;
+  color: var(--ink-faint, #8a8982);
 }
 
 .field > input:hover:not(:disabled) {
-  border-color: #bcb9b0;
+  border-color: var(--ink-faint, #8a8982);
 }
 
 .field > input:focus-visible {
-  border-color: #7e91a5;
+  border-color: var(--ink-faint, #8a8982);
   outline: 0;
-  box-shadow: 0 0 0 3px rgb(65 109 157 / 11%);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ink, #171716) 10%, transparent);
 }
 
 .field > input[aria-invalid="true"] {
@@ -206,10 +206,10 @@
 
 .duplicateWarning {
   padding: 7px 9px;
-  border: 1px solid #e7d2ae;
+  border: 1px solid color-mix(in srgb, var(--amber, #a96d22) 40%, transparent);
   border-radius: 7px;
   background: var(--amber-soft, #f6ecdc);
-  color: #82551d;
+  color: var(--amber, #a96d22);
   font-size: 10px;
   font-weight: 540;
   line-height: 1.4;
@@ -221,9 +221,9 @@
   align-items: center;
   gap: 10px;
   padding: 11px 12px;
-  border: 1px solid #c9d3dc;
+  border: 1px solid var(--line, #deddd7);
   border-radius: 9px;
-  background: #f4f7f9;
+  background: var(--panel, #fbfaf7);
 }
 
 .agentRadio {
@@ -251,7 +251,7 @@
   position: absolute;
   width: 9px;
   height: 9px;
-  border: 2px solid #fff;
+  border: 2px solid var(--canvas, #f7f6f2);
   border-radius: 3px;
   transform: rotate(45deg);
 }
@@ -300,10 +300,10 @@
   align-items: center;
   gap: 4px;
   padding: 5px 7px;
-  border: 1px solid #b9d6c6;
+  border: 1px solid color-mix(in srgb, var(--green, #258658) 42%, transparent);
   border-radius: 999px;
   background: var(--green-soft, #e8f3ec);
-  color: #1e714a;
+  color: var(--green, #258658);
   font-size: 9px;
   font-weight: 680;
   white-space: nowrap;
@@ -333,7 +333,7 @@
 .submitError {
   margin: 0;
   padding: 9px 10px;
-  border: 1px solid #ecc7c2;
+  border: 1px solid color-mix(in srgb, var(--red, #b6483e) 42%, transparent);
   border-radius: 7px;
   background: var(--red-soft, #f7e8e6);
   color: var(--red, #b6483e);
@@ -351,7 +351,7 @@
   gap: 14px;
   padding: 12px 22px;
   border-top: 1px solid var(--line-soft, #ebe9e3);
-  background: #f5f4f0;
+  background: var(--panel, #fbfaf7);
 }
 
 .footerNote {
@@ -385,15 +385,15 @@
   min-width: 157px;
   border: 1px solid var(--ink, #171716);
   background: var(--ink, #171716);
-  color: #fff;
+  color: var(--canvas, #f7f6f2);
 }
 
 .primaryButton:hover:not(:disabled) {
-  background: #383733;
+  background: color-mix(in srgb, var(--ink, #171716) 86%, var(--canvas, #f7f6f2));
 }
 
 .secondaryButton {
-  border: 1px solid #cfcdc5;
+  border: 1px solid var(--line, #deddd7);
   background: var(--panel-strong, #fff);
   color: var(--ink-soft, #62615c);
 }
@@ -409,9 +409,9 @@
 }
 
 .primaryButton:disabled {
-  border-color: #ceccc5;
-  background: #d8d6cf;
-  color: #95938c;
+  border-color: var(--line, #deddd7);
+  background: var(--selected, #dfddd5);
+  color: var(--ink-faint, #8a8982);
 }
 
 .secondaryButton:disabled {
@@ -420,8 +420,7 @@
 
 .closeButton:focus-visible,
 .primaryButton:focus-visible,
-.secondaryButton:focus-visible,
-.field > input:focus-visible {
+.secondaryButton:focus-visible {
   outline: 2px solid #6e8bad;
   outline-offset: 2px;
 }
