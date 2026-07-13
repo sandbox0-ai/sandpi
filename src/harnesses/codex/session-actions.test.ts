@@ -1,16 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createMockSession, mockEnvironments } from "@/lib/mock-data";
+import {
+  createMockSession,
+  mockEnvironments,
+  mockSessions,
+} from "@/lib/mock-data";
 
 import { projectCodexConversation } from "./events";
 import { forkMockCodexSession, forkMockCodexTurn } from "./session-actions";
 
 test("forks a Codex Session with a distinct native thread", () => {
-  const source = createMockSession(mockEnvironments[0], {
-    title: "source",
-    prompt: "inspect the repo",
-  });
+  const source = structuredClone(mockSessions[0]);
   const forked = forkMockCodexSession(source, "2026-07-13T00:00:00Z");
 
   assert.notEqual(forked.id, source.id);
@@ -20,6 +21,8 @@ test("forks a Codex Session with a distinct native thread", () => {
     forked.harnessState.events[0].notification.method,
     "thread/started",
   );
+  assert.equal(forked.audit.events.length, 0);
+  assert.ok(source.audit.events.length > 0);
 });
 
 test("forks a Codex Turn from its native userMessage item", () => {
@@ -44,6 +47,7 @@ test("forks a Codex Turn from its native userMessage item", () => {
     projectCodexConversation(forked.harnessState.events).map((message) => message.content),
     ["inspect the repo", expectQueuedResponse()],
   );
+  assert.equal(forked.audit.events.length, 0);
 });
 
 function expectQueuedResponse() {

@@ -26,13 +26,9 @@ import {
   InteractiveMetricChart,
   type MetricChartSeries,
 } from "@/components/metric-chart";
-import {
-  formatAuditTime,
-  getOperationUiCopy,
-  type OperationLanguage,
-} from "@/lib/operation-ui";
+import { SessionAuditPanel } from "@/components/session-audit-panel";
+import { getOperationUiCopy, type OperationLanguage } from "@/lib/operation-ui";
 import type {
-  AuditEvent,
   CodingSession,
   RuntimeMetricSeries,
   WorkspaceFile,
@@ -213,34 +209,6 @@ function formatMetricTime(
       new Date(at),
     );
   }
-}
-
-function AuditRow({
-  event,
-  language,
-  timeZone,
-}: {
-  event: AuditEvent;
-  language: OperationLanguage;
-  timeZone: string;
-}) {
-  return (
-    <div className="audit-row">
-      <span className={`audit-marker outcome-${event.outcome}`} />
-      <div className="audit-copy">
-        <div>
-          <strong>{event.action}</strong>
-          <span className={`source-tag source-${event.source}`}>
-            {event.source}
-          </span>
-        </div>
-        <p>{event.detail}</p>
-        <time dateTime={event.timestamp}>
-          {formatAuditTime(event.timestamp, language, timeZone)}
-        </time>
-      </div>
-    </div>
-  );
 }
 
 function ShareDialog({
@@ -474,48 +442,12 @@ export function Inspector({
       ) : null}
 
       {activeTab === "audit" ? (
-        <div className="inspector-panel audit-panel">
-          <div className="panel-intro">
-            <div>
-              <span className="panel-eyebrow">{ui.sandboxActivity}</span>
-              <h2>{ui.auditEvents}</h2>
-            </div>
-            <button type="button" className="filter-button">
-              {ui.allSources} <ChevronDown size={13} />
-            </button>
-          </div>
-          <div className="audit-summary">
-            <div>
-              <strong>{session.auditEvents.length}</strong>
-              <span>{ui.recentEvents}</span>
-            </div>
-            <div>
-              <strong>
-                {
-                  session.auditEvents.filter(
-                    (event) => event.outcome === "blocked",
-                  ).length
-                }
-              </strong>
-              <span>{ui.blocked}</span>
-            </div>
-            <div>
-              <strong>2</strong>
-              <span>{ui.sources}</span>
-            </div>
-          </div>
-          <div className="audit-list">
-            {session.auditEvents.map((event) => (
-              <AuditRow
-                event={event}
-                key={event.id}
-                language={language}
-                timeZone={timeZone}
-              />
-            ))}
-          </div>
-          <p className="data-boundary-note">{ui.auditBoundary}</p>
-        </div>
+        <SessionAuditPanel
+          audit={session.audit}
+          language={language}
+          sessionId={session.id}
+          timeZone={timeZone}
+        />
       ) : null}
 
       {activeTab === "metrics" ? (

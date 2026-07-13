@@ -24,6 +24,7 @@ The mock UI does not require credentials. A Sandpi deployment selects its Sandbo
 - `/workspace` is an arbitrary directory, not an implicit Git repository. It may contain zero, one or multiple repositories, which are discovered as nested workspace context rather than stored as Session-level branch state.
 - Starting a new Session opens an empty conversation immediately; the first instruction triggers the Environment fork and Supervisor Session creation.
 - The native coding-agent harness runs as a Sandbox0 Supervisor Session. Durable events allow the browser to disconnect and resume from a cursor.
+- Session Audit is a JSON-safe projection of Sandbox0's canonical signed per-sandbox observability event feed. It preserves operation correlation, actor, resource, request, producer, integrity and source-specific attributes; Supervisor and native harness events remain separate replay streams.
 - The native coding-agent harness and its official authentication are bound to an Environment. Sessions cannot switch harnesses. Codex is the first implementation; Claude Code, OpenCode and Pi are future Environment types.
 - Sandpi standardizes the runtime plane, not the interaction plane. Conversation rendering, native items/tool calls, approvals, composer behavior, slash commands and model controls belong to each harness integration and are not normalized across agents.
 - An Environment stores a reference to its harness authentication state, not provider secrets inside its rootfs or workspace baseline. Session and Turn snapshots must never copy harness credentials.
@@ -39,6 +40,7 @@ The mock provisioning contract is implemented in `src/lib/environment-blueprint.
 ## Harness integration boundary
 
 - Shared code owns Environment and Session metadata, Sandbox lifecycle, Supervisor transport, durable sequence cursors, files, terminal, audit and metrics.
+- Audit is grouped for presentation by Sandbox0 `operationId`, while each signed `attempt`, `result` or `effect` event retains its own identity and integrity state. Unknown event types, actions and attributes always retain a generic raw-data view.
 - `CodingSession.harnessState` is opaque to shared code. A thin dispatcher selects a complete harness-owned new-Session and conversation experience.
 - Codex stores native app-server JSON-RPC notifications (`thread/*`, `turn/*`, `item/*`) and projects them only inside `src/harnesses/codex`.
 - Production Codex protocol types must be generated from the exact pinned binary with `codex app-server generate-ts`; handwritten mock types are not a second protocol source of truth.
@@ -54,6 +56,7 @@ The mock provisioning contract is implemented in `src/lib/environment-blueprint.
 - Every provider account is authenticated through its native harness. Sandpi must not pool accounts, resell a consumer coding plan or present provider usage as Sandpi usage.
 - Sandbox0 metering may supply infrastructure observations, but Sandpi's billing periods, Membership entitlements and admission decisions belong to the Sandpi backend.
 - Self-hosted Sandpi uses the operator-selected Sandbox0 deployment. Sandbox0 and Sandpi remain separate products with separate identity and commercial boundaries.
+- Sandbox0's canonical audit endpoint requires its `sandbox_audit` feature and `sandboxaudit:read` permission. Sandpi must distinguish an unlicensed/forbidden response from an available ledger with no events.
 
 ## Identity and deployment boundary
 

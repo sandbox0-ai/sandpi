@@ -118,3 +118,38 @@ test("models network throughput with the sdk-js metric contract", () => {
   assert.ok(metrics.networkReceive.segments.length > 1);
   assert.ok(metrics.networkReceive.segments.every((segment) => segment.points.length > 0));
 });
+
+test("models Session Audit as the JSON-safe sdk-js signed event feed", () => {
+  const session = mockSessions[0];
+  assert.ok(session);
+  assert.equal(session.audit.events.length, 6);
+  assert.equal(session.audit.nextCursor, "mock-history-cursor");
+  assert.ok(
+    session.audit.events.every(
+      (event) =>
+        event.schemaVersion === 2 &&
+        event.sandboxId === session.sandboxId &&
+        event.integrity.signatureStatus === "verified" &&
+        typeof event.occurredAt === "string" &&
+        typeof event.ingestedAt === "string",
+    ),
+  );
+  assert.equal(
+    session.audit.events.some((event) => String(event.source) === "supervisor"),
+    false,
+  );
+
+  const resumeEvents = session.audit.events.filter(
+    (event) => event.action === "sandbox.resume",
+  );
+  assert.equal(new Set(resumeEvents.map((event) => event.operationId)).size, 1);
+  assert.deepEqual(
+    resumeEvents.map((event) => event.phase),
+    ["attempt", "result", "effect"],
+  );
+  assert.equal(
+    session.audit.events.find((event) => event.action === "network.deny")
+      ?.attributes?.reason,
+    "not_in_policy",
+  );
+});

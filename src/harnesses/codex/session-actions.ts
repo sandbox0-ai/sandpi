@@ -101,11 +101,6 @@ function derivedCodexSession(
 ): CodexSession {
   const idSuffix = randomToken(10);
   const createdAtDate = new Date(createdAt);
-  const action = kind === "session" ? "session.forked" : "turn.forked";
-  const detail =
-    kind === "session"
-      ? `Prototype Codex Session fork from ${source.id}: rootfs + Workspace Volume + thread/fork`
-      : `Prototype Codex Turn fork before native item ${sourceNativeItemId}: Workspace Volume only`;
 
   return {
     ...source,
@@ -130,18 +125,10 @@ function derivedCodexSession(
     },
     harnessState,
     files: structuredClone(source.files),
-    auditEvents: [
-      {
-        id: `audit-${idSuffix}`,
-        source: "supervisor",
-        category: "lifecycle",
-        action,
-        detail,
-        outcome: "success",
-        timestamp: createdAt,
-      },
-      ...source.auditEvents,
-    ],
+    // A fork creates another sandbox-scoped ledger. The real Sandbox0 fork/lifecycle events
+    // arrive through observability; Sandpi must neither copy source facts nor forge Supervisor
+    // notifications as canonical signed audit records.
+    audit: { events: [] },
     metrics: structuredClone(source.metrics),
   };
 }

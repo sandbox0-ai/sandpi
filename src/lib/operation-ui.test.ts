@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  formatAuditDateTime,
   formatAuditTime,
   getAuditTimeFormatOptions,
   shouldSubmitComposer,
@@ -62,5 +63,9 @@ test("audit time formatting respects locale and configured time zone", () => {
   assert.equal(
     formatAuditTime(timestamp, "zh-CN", "Asia/Shanghai"),
     "08:00:00",
+  );
+  assert.match(
+    formatAuditDateTime(timestamp, "en", "UTC"),
+    /Jul 12, 00:00:00/,
   );
 });

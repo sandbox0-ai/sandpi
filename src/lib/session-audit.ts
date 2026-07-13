@@ -1,0 +1,202 @@
+import type { SessionAuditEvent } from "@/lib/types";
+
+export interface SessionAuditOperation {
+  operationId: string;
+  events: SessionAuditEvent[];
+  primaryEvent: SessionAuditEvent;
+  outcome: SessionAuditEvent["outcome"];
+  integrityIssueCount: number;
+}
+
+export type SessionAuditView =
+  | "all"
+  | "attention"
+  | "network"
+  | "process"
+  | "sandbox";
+
+const outcomeSeverity: Record<SessionAuditEvent["outcome"], number> = {
+  completed: 0,
+  succeeded: 0,
+  accepted: 1,
+  unknown: 2,
+  denied: 3,
+  failed: 3,
+  error: 3,
+};
+
+export function isNegativeAuditOutcome(
+  outcome: SessionAuditEvent["outcome"],
+) {
+  return outcome === "denied" || outcome === "failed" || outcome === "error";
+}
+
+export function hasAuditIntegrityIssue(event: SessionAuditEvent) {
+  return (
+    event.integrity.signatureStatus !== "verified" ||
+    event.integrity.eventIdConflict === true
+  );
+}
+
+/**
+ * operationId correlates attempt/result/effect facts, but every signed event remains intact.
+ * The UI can therefore make one operation expandable without merging away event identity,
+ * phase, producer or integrity status.
+ */
+export function groupSessionAuditOperations(
+  events: SessionAuditEvent[],
+): SessionAuditOperation[] {
+  const grouped = new Map<string, SessionAuditEvent[]>();
+  for (const event of events) {
+    const operationEvents = grouped.get(event.operationId) ?? [];
+    operationEvents.push(event);
+    grouped.set(event.operationId, operationEvents);
+  }
+
+  return [...grouped.entries()]
+    .map(([operationId, operationEvents]) => {
+      const sortedEvents = [...operationEvents].sort(
+        (left, right) =>
+          Date.parse(left.occurredAt) - Date.parse(right.occurredAt),
+      );
+      const primaryEvent = sortedEvents.at(-1) ?? sortedEvents[0];
+      if (!primaryEvent) {
+        throw new Error(`Audit operation ${operationId} has no events.`);
+      }
+      const negativeOutcome = sortedEvents.reduce<
+        SessionAuditEvent["outcome"] | undefined
+      >(
+        (current, event) =>
+          isNegativeAuditOutcome(event.outcome) &&
+          (!current || outcomeSeverity[event.outcome] > outcomeSeverity[current])
+            ? event.outcome
+            : current,
+        undefined,
+      );
+      return {
+        operationId,
+        events: sortedEvents,
+        primaryEvent,
+        // Accepted is an intermediate result. Once a later effect exists, the
+        // activity should read as completed unless any signed event failed.
+        outcome: negativeOutcome ?? primaryEvent.outcome,
+        integrityIssueCount: sortedEvents.filter(hasAuditIntegrityIssue).length,
+      };
+    })
+    .sort(
+      (left, right) =>
+        Date.parse(right.primaryEvent.occurredAt) -
+        Date.parse(left.primaryEvent.occurredAt),
+    );
+}
+
+export function auditOperationNeedsAttention(
+  operation: SessionAuditOperation,
+) {
+  return (
+    isNegativeAuditOutcome(operation.outcome) ||
+    operation.integrityIssueCount > 0
+  );
+}
+
+/** Product-level views deliberately hide the backend's source/type matrix. */
+export function filterSessionAuditOperations(
+  operations: SessionAuditOperation[],
+  view: SessionAuditView,
+) {
+  if (view === "all") {
+    return operations;
+  }
+  if (view === "attention") {
+    return operations.filter(auditOperationNeedsAttention);
+  }
+  if (view === "network") {
+    return operations.filter((operation) =>
+      operation.events.some((event) => event.eventType === "network_audit"),
+    );
+  }
+  if (view === "process") {
+    return operations.filter((operation) =>
+      operation.events.some((event) => event.eventType === "process"),
+    );
+  }
+  return operations.filter((operation) =>
+    operation.events.some(
+      (event) =>
+        event.eventType === "lifecycle" || event.resource.type === "sandbox",
+    ),
+  );
+}
+
+export function summarizeSessionAudit(events: SessionAuditEvent[]) {
+  const operations = groupSessionAuditOperations(events);
+  return {
+    events: events.length,
+    operations: operations.length,
+    attention: operations.filter(auditOperationNeedsAttention).length,
+    verified: events.filter(
+      (event) =>
+        event.integrity.signatureStatus === "verified" &&
+        event.integrity.eventIdConflict !== true,
+    ).length,
+  };
+}
+
+function auditAttributes(event: SessionAuditEvent): Record<string, unknown> {
+  if (
+    !event.attributes ||
+    typeof event.attributes !== "object" ||
+    Array.isArray(event.attributes)
+  ) {
+    return {};
+  }
+  return event.attributes as Record<string, unknown>;
+}
+
+function stringAttribute(
+  attributes: Record<string, unknown>,
+  key: string,
+) {
+  const value = attributes[key];
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function numberAttribute(
+  attributes: Record<string, unknown>,
+  key: string,
+) {
+  const value = attributes[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+export interface NetworkAuditSynopsis {
+  endpoint: string;
+  protocol?: string;
+  reason?: string;
+  durationMs?: number;
+  ingressBytes?: number;
+  egressBytes?: number;
+}
+
+/** View-only projection; callers still retain and render the complete signed attributes. */
+export function networkAuditSynopsis(
+  event: SessionAuditEvent,
+): NetworkAuditSynopsis | undefined {
+  if (event.eventType !== "network_audit") {
+    return undefined;
+  }
+  const attributes = auditAttributes(event);
+  const host = stringAttribute(attributes, "host");
+  const address = host ?? stringAttribute(attributes, "dest_ip") ?? event.resource.id;
+  const port = numberAttribute(attributes, "dest_port");
+  return {
+    endpoint: port ? `${address}:${port}` : address,
+    protocol:
+      stringAttribute(attributes, "protocol") ??
+      stringAttribute(attributes, "transport"),
+    reason: stringAttribute(attributes, "reason"),
+    durationMs: numberAttribute(attributes, "duration_ms"),
+    ingressBytes: numberAttribute(attributes, "ingress_bytes"),
+    egressBytes: numberAttribute(attributes, "egress_bytes"),
+  };
+}

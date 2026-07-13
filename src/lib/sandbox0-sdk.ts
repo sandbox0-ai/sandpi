@@ -40,8 +40,8 @@ export const sandbox0SdkCapabilities = [
   },
   {
     id: "observability",
-    label: "Audit, logs and runtime metrics",
-    sdk: "sandbox.listObservabilityEvents / getMetrics / getMetricsCatalog",
+    label: "Signed audit, logs and runtime metrics",
+    sdk: "sandbox.listObservabilityEvents / watchObservabilityEvents / getMetrics",
     status: "available",
   },
 ] as const;

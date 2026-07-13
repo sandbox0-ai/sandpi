@@ -215,15 +215,29 @@ export interface WorkspaceFile {
   children?: WorkspaceFile[];
 }
 
-export interface AuditEvent {
-  id: string;
-  source: "sandbox0" | "supervisor";
-  category: "lifecycle" | "network" | "session";
-  action: string;
-  detail: string;
-  outcome: "allowed" | "blocked" | "success";
-  timestamp: string;
-}
+type SdkSandboxAuditEvent = SandboxObservabilityEvents["events"][number];
+
+/**
+ * JSON-safe transport projection of sdk-js' canonical signed Sandbox0 event.
+ * sdk-js converts timestamps to Date instances; Sandpi converts only those two
+ * fields to ISO strings at its server/client boundary and preserves every other
+ * canonical field, including unknown attributes, without normalization.
+ *
+ * Supervisor and native harness events never belong in this feed. They have
+ * separate replay contracts and must not be presented as signed Sandbox0 audit.
+ */
+export type SessionAuditEvent = Omit<
+  SdkSandboxAuditEvent,
+  "occurredAt" | "ingestedAt"
+> & {
+  occurredAt: string;
+  ingestedAt: string;
+};
+
+/** Pagination metadata is part of the SDK response and must survive API transport. */
+export type SessionAuditFeed = Omit<SandboxObservabilityEvents, "events"> & {
+  events: SessionAuditEvent[];
+};
 
 export interface MetricPoint {
   at: string;
@@ -302,7 +316,7 @@ export interface CodingSession<
   environmentRevision: number;
   origin?: SessionOrigin;
   files: WorkspaceFile[];
-  auditEvents: AuditEvent[];
+  audit: SessionAuditFeed;
   metrics: SessionMetrics;
 }
 
@@ -320,3 +334,4 @@ export interface SandpiBootstrap {
   selectedEnvironmentId: string;
   selectedSessionId: string;
 }
+import type { SandboxObservabilityEvents } from "sandbox0";
