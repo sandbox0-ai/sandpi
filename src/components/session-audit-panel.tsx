@@ -18,6 +18,7 @@ import {
   getOperationUiCopy,
   type OperationLanguage,
 } from "@/lib/operation-ui";
+import { copyTextToClipboard } from "@/lib/clipboard";
 import {
   auditOperationNeedsAttention,
   filterSessionAuditOperations,
@@ -126,7 +127,7 @@ function AuditTechnicalDetails({
 
   async function copyEvent() {
     try {
-      await navigator.clipboard.writeText(JSON.stringify(event, null, 2));
+      await copyTextToClipboard(JSON.stringify(event, null, 2));
     } catch {
       // Local previews can run without clipboard permission.
     }

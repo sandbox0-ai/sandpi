@@ -16,7 +16,7 @@ import {
   CLIENT_PREFERENCES_STORAGE_KEY,
   loadClientPreferences,
 } from "@/lib/client-preferences";
-import { forkSessionForHarness } from "@/harnesses/registry";
+import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
 import { visibleSessionsForEnvironment } from "@/lib/session-list";
 import { environmentsForTeam, sessionsForTeam } from "@/lib/team";
 import type {
@@ -27,6 +27,24 @@ import type {
 
 interface SandpiAppProps {
   initialData: SandpiBootstrap;
+}
+
+function replaceWorkspaceUrl(
+  teamId: string,
+  environmentId: string,
+  sessionId?: string,
+) {
+  const url = new URL(window.location.href);
+  url.searchParams.set("team", teamId);
+  url.searchParams.set("environment", environmentId);
+  if (sessionId) {
+    url.searchParams.set("session", sessionId);
+    url.searchParams.delete("new");
+  } else {
+    url.searchParams.delete("session");
+    url.searchParams.set("new", "1");
+  }
+  window.history.replaceState(window.history.state, "", url);
 }
 
 export function SandpiApp({ initialData }: SandpiAppProps) {
@@ -51,6 +69,21 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("files");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+
+  const hydrateSession = useCallback(async (sessionId: string) => {
+    try {
+      const response = await apiFetch<ApiEnvelope<CodingSession>>(
+        `/api/v1/sessions/${encodeURIComponent(sessionId)}`,
+      );
+      setSessions((current) =>
+        current.map((session) =>
+          session.id === response.data.id ? response.data : session,
+        ),
+      );
+    } catch (error) {
+      console.error("Unable to load Session history", error);
+    }
+  }, []);
 
   useEffect(() => {
     const synchronizePreferences = () => {
@@ -134,6 +167,41 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
     [selectedEnvironmentId, selectedSessionId, teamSessions],
   );
 
+  useEffect(() => {
+    if (!environments.some((environment) => environment.status === "updating")) {
+      return;
+    }
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      void apiFetch<ApiEnvelope<Environment[]>>("/api/v1/environments", {
+        signal: controller.signal,
+      })
+        .then((response) => setEnvironments(response.data))
+        .catch((error) => {
+          if (!controller.signal.aborted) {
+            console.error("Unable to refresh Environment provisioning", error);
+          }
+        });
+    }, 1_500);
+    return () => {
+      controller.abort();
+      window.clearTimeout(timer);
+    };
+  }, [environments]);
+
+  useEffect(() => {
+    if (!selectedSession?.unread) return;
+    setSessions((current) =>
+      current.map((session) =>
+        session.id === selectedSession.id ? { ...session, unread: false } : session,
+      ),
+    );
+    void apiFetch(`/api/v1/sessions/${encodeURIComponent(selectedSession.id)}/metadata`, {
+      method: "PUT",
+      body: JSON.stringify({ unread: false }),
+    }).catch((error) => console.error("Unable to mark Session as read", error));
+  }, [selectedSession?.id, selectedSession?.unread]);
+
   const settingsEnvironment = useMemo(
     () =>
       teamEnvironments.find(
@@ -157,15 +225,16 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
       setSelectedTeamId(nextTeam.id);
       setSelectedEnvironmentId(nextEnvironment?.id ?? "");
       setSelectedSessionId(nextSession?.id ?? "");
+      if (nextSession) void hydrateSession(nextSession.id);
       setSettingsEnvironmentId(null);
       setInspectorOpen(false);
       setTerminalOpen(false);
       setSidebarOpen(false);
-      const url = new URL(window.location.href);
-      url.searchParams.set("team", nextTeam.id);
-      window.history.replaceState(window.history.state, "", url);
+      if (nextEnvironment) {
+        replaceWorkspaceUrl(nextTeam.id, nextEnvironment.id, nextSession?.id);
+      }
     },
-    [environments, initialData.teams, selectedTeamId, sessions],
+    [environments, hydrateSession, initialData.teams, selectedTeamId, sessions],
   );
 
   const handleSelectEnvironment = useCallback(
@@ -183,6 +252,8 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
       )[0];
       if (firstSession) {
         setSelectedSessionId(firstSession.id);
+        replaceWorkspaceUrl(selectedTeamId, environmentId, firstSession.id);
+        void hydrateSession(firstSession.id);
         setSessions((current) =>
           current.map((session) =>
             session.id === firstSession.id && session.unread
@@ -192,10 +263,11 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
         );
       } else {
         setSelectedSessionId("");
+        replaceWorkspaceUrl(selectedTeamId, environmentId);
       }
       setSidebarOpen(false);
     },
-    [sessions, teamEnvironments],
+    [hydrateSession, selectedTeamId, sessions, teamEnvironments],
   );
 
   const handleToggleNavigation = useCallback(() => {
@@ -217,6 +289,8 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
       if (session && environment?.teamId === selectedTeamId) {
         setSelectedSessionId(sessionId);
         setSelectedEnvironmentId(session.environmentId);
+        replaceWorkspaceUrl(selectedTeamId, session.environmentId, sessionId);
+        void hydrateSession(sessionId);
         setSessions((current) =>
           current.map((item) =>
             item.id === sessionId && item.unread
@@ -227,7 +301,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
       }
       setSidebarOpen(false);
     },
-    [environments, selectedTeamId, sessions],
+    [environments, hydrateSession, selectedTeamId, sessions],
   );
 
   const handleEnvironmentChange = useCallback(
@@ -241,57 +315,82 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
     [],
   );
 
-  const handleSessionCreated = useCallback((session: CodingSession) => {
-    setSessions((current) => [session, ...current]);
-    setSelectedEnvironmentId(session.environmentId);
-    setSelectedSessionId(session.id);
-  }, []);
+  const handleSessionCreated = useCallback(
+    (session: CodingSession) => {
+      setSessions((current) => [
+        session,
+        ...current.filter((candidate) => candidate.id !== session.id),
+      ]);
+      setSelectedEnvironmentId(session.environmentId);
+      setSelectedSessionId(session.id);
+      replaceWorkspaceUrl(selectedTeamId, session.environmentId, session.id);
+      setInspectorOpen(false);
+      setTerminalOpen(false);
+    },
+    [selectedTeamId],
+  );
 
-  const handleRenameSession = useCallback(
-    (sessionId: string, title: string) => {
+  const persistSessionMetadata = useCallback(
+    async (
+      sessionId: string,
+      metadata: {
+        title?: string;
+        pinned?: boolean;
+        archived?: boolean;
+        unread?: boolean;
+      },
+    ) => {
+      const response = await apiFetch<ApiEnvelope<CodingSession>>(
+        `/api/v1/sessions/${encodeURIComponent(sessionId)}/metadata`,
+        {
+          method: "PUT",
+          body: JSON.stringify(metadata),
+        },
+      );
       setSessions((current) =>
         current.map((session) =>
-          session.id === sessionId
-            ? { ...session, title, updatedAt: new Date().toISOString() }
-            : session,
+          session.id === response.data.id ? response.data : session,
         ),
       );
+      return response.data;
     },
     [],
   );
 
-  const handleTogglePinSession = useCallback((sessionId: string) => {
-    setSessions((current) =>
-      current.map((session) =>
-        session.id === sessionId
-          ? { ...session, pinned: !session.pinned }
-          : session,
-      ),
-    );
-  }, []);
+  const handleRenameSession = useCallback(
+    (sessionId: string, title: string) => {
+      void persistSessionMetadata(sessionId, { title }).catch((error) => {
+        console.error("Unable to rename Session", error);
+      });
+    },
+    [persistSessionMetadata],
+  );
 
-  const handleForkSession = useCallback(
+  const handleTogglePinSession = useCallback(
     (sessionId: string) => {
-      const source = sessions.find(
-        (session) => session.id === sessionId && !session.archived,
-      );
-      if (!source) {
+      const session = sessions.find((candidate) => candidate.id === sessionId);
+      if (!session) {
         return;
       }
-
-      const createdAt = new Date().toISOString();
-      // Future Session fork: atomically branch the source Sandbox rootfs and its current
-      // Workspace Volume. Unlike a Turn fork, this preserves Session-scoped rootfs changes.
-      // Rootfs/Volume lifecycle is shared, but the matching native thread/session fork is
-      // dispatched to the bound harness instead of cloning a normalized conversation state.
-      const forkedSession = forkSessionForHarness(source, createdAt);
-
-      setSessions((current) => [forkedSession, ...current]);
-      setSelectedEnvironmentId(forkedSession.environmentId);
-      setSelectedSessionId(forkedSession.id);
+      void persistSessionMetadata(sessionId, {
+        pinned: !session.pinned,
+      }).catch((error) => {
+        console.error("Unable to update pinned Session", error);
+      });
     },
-    [sessions],
+    [persistSessionMetadata, sessions],
   );
+
+  const handleForkSession = useCallback((sessionId: string) => {
+    void apiFetch<ApiEnvelope<CodingSession>>(
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/fork`,
+      { method: "POST", body: JSON.stringify({}) },
+    )
+      .then((response) => {
+        handleSessionCreated(response.data);
+      })
+      .catch((error) => console.error("Unable to fork Session", error));
+  }, [handleSessionCreated]);
 
   const handleArchiveSession = useCallback(
     (sessionId: string) => {
@@ -302,34 +401,39 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
         return;
       }
 
-      setSessions((current) =>
-        current.map((session) =>
-          session.id === sessionId ? { ...session, archived: true } : session,
-        ),
-      );
-
-      if (selectedSessionId === sessionId) {
-        const nextSession = visibleSessionsForEnvironment(
-          sessions,
-          archivedSession.environmentId,
-          sessionId,
-        )[0];
-        setSelectedSessionId(nextSession?.id ?? "");
-      }
+      void persistSessionMetadata(sessionId, { archived: true })
+        .then(() => {
+          if (selectedSessionId === sessionId) {
+            const nextSession = visibleSessionsForEnvironment(
+              sessions,
+              archivedSession.environmentId,
+              sessionId,
+            )[0];
+            setSelectedSessionId(nextSession?.id ?? "");
+            replaceWorkspaceUrl(
+              selectedTeamId,
+              archivedSession.environmentId,
+              nextSession?.id,
+            );
+          }
+        })
+        .catch((error) => {
+          console.error("Unable to archive Session", error);
+        });
     },
-    [selectedSessionId, sessions],
+    [persistSessionMetadata, selectedSessionId, selectedTeamId, sessions],
   );
 
-  const handleRestoreSession = useCallback((sessionId: string) => {
-    const restoredAt = new Date().toISOString();
-    setSessions((current) =>
-      current.map((session) =>
-        session.id === sessionId && session.archived
-          ? { ...session, archived: false, updatedAt: restoredAt }
-          : session,
-      ),
-    );
-  }, []);
+  const handleRestoreSession = useCallback(
+    (sessionId: string) => {
+      void persistSessionMetadata(sessionId, { archived: false }).catch(
+        (error) => {
+          console.error("Unable to restore Session", error);
+        },
+      );
+    },
+    [persistSessionMetadata],
+  );
 
   const handleEnvironmentCreated = useCallback((environment: Environment) => {
     if (environment.teamId !== selectedTeamId) {
@@ -338,6 +442,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
     setEnvironments((current) => [...current, environment]);
     setSelectedEnvironmentId(environment.id);
     setSelectedSessionId("");
+    replaceWorkspaceUrl(selectedTeamId, environment.id);
     setNewEnvironmentOpen(false);
   }, [selectedTeamId]);
 
@@ -386,6 +491,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
         onNewSession={(environmentId) => {
           setSelectedEnvironmentId(environmentId);
           setSelectedSessionId("");
+          replaceWorkspaceUrl(selectedTeam.id, environmentId);
           setSidebarOpen(false);
         }}
         onEnvironmentSettings={(environmentId) => {
@@ -431,7 +537,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
             setInspectorOpen(true);
           }}
           onSessionChange={handleSessionChange}
-          onCreateSession={handleSessionCreated}
+          onDerivedSessionCreated={handleSessionCreated}
           onForkSession={handleForkSession}
           onRenameSession={handleRenameSession}
           onArchiveSession={handleArchiveSession}
@@ -442,6 +548,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
           language={preferences.general.language}
           sendShortcut={preferences.general.sendShortcut}
           environment={selectedEnvironment}
+          onEnvironmentChange={handleEnvironmentChange}
           onCreated={handleSessionCreated}
           onOpenSettings={() =>
             setSettingsEnvironmentId(selectedEnvironment.id)

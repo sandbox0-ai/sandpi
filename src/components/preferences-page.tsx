@@ -33,6 +33,7 @@ import {
   loadClientPreferences,
   saveClientPreferences,
 } from "@/lib/client-preferences";
+import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
 import type { SandpiPreferences, SandpiUser, Team } from "@/lib/types";
 
 import styles from "./preferences-page.module.css";
@@ -182,7 +183,7 @@ export function PreferencesPage({
     markChanged();
   }
 
-  function savePreferences() {
+  async function savePreferences() {
     if (!hasChanges || saving) {
       return;
     }
@@ -190,15 +191,23 @@ export function PreferencesPage({
     setSaving(true);
     setSaveState(undefined);
     try {
-      saveClientPreferences(draft);
-      baselineRef.current = draft;
-      setBaseline(draft);
+      const response = await apiFetch<ApiEnvelope<SandpiPreferences>>(
+        "/api/v1/preferences",
+        {
+          method: "PUT",
+          body: JSON.stringify(draft),
+        },
+      );
+      saveClientPreferences(response.data);
+      baselineRef.current = response.data;
+      setBaseline(response.data);
+      setDraft(response.data);
       setSaveState({
         tone: "success",
         message:
-          draft.general.language === "zh-CN"
-            ? "已保存在此设备上。"
-            : "Saved on this device.",
+          response.data.general.language === "zh-CN"
+            ? "偏好设置已保存。"
+            : "Preferences saved.",
       });
     } catch (error) {
       setSaveState({
@@ -535,8 +544,8 @@ export function PreferencesPage({
               />
               <Callout icon={<CircleAlert size={17} aria-hidden="true" />}>
                 {text(
-                  "This preview uses mock data. Advanced controls are intentionally read-only until their storage and privacy contracts are defined.",
-                  "当前预览使用 mock 数据。在明确存储和隐私契约之前，高级控制保持只读。",
+                  "Advanced controls are intentionally read-only until their storage and privacy contracts are defined.",
+                  "在明确存储和隐私契约之前，高级控制保持只读。",
                 )}
               </Callout>
             </PreferenceSection>
@@ -579,7 +588,7 @@ export function PreferencesPage({
               type="button"
               className={styles.primaryButton}
               disabled={!hasChanges || saving}
-              onClick={savePreferences}
+              onClick={() => void savePreferences()}
             >
               {saving ? (
                 <LoaderCircle

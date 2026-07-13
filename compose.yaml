@@ -1,0 +1,52 @@
+name: sandpi
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: sandpi
+      POSTGRES_USER: sandpi
+      POSTGRES_PASSWORD: sandpi
+    ports:
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - sandpi-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sandpi -d sandpi"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  sandpi:
+    build:
+      context: .
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://sandpi:sandpi@postgres:5432/sandpi
+      SANDPI_HOST: 0.0.0.0
+      SANDPI_PORT: 3000
+      SANDPI_PUBLIC_URL: ${SANDPI_PUBLIC_URL:-http://localhost:3000}
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    init: true
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - >-
+          fetch('http://127.0.0.1:3000/health/ready').then((response) => {
+            if (!response.ok) process.exit(1)
+          }).catch(() => process.exit(1))
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+volumes:
+  sandpi-postgres:

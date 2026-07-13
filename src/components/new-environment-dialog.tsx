@@ -17,6 +17,7 @@ import {
   useState,
 } from "react";
 
+import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
 import type { Environment } from "@/lib/types";
 
 import styles from "./new-environment-dialog.module.css";
@@ -27,11 +28,6 @@ interface NewEnvironmentDialogProps {
   environments: Environment[];
   onCreated: (environment: Environment) => void;
   onClose: () => void;
-}
-
-interface CreateEnvironmentResponse {
-  data?: Environment;
-  error?: { message?: string } | string;
 }
 
 function normalizedName(value: string) {
@@ -148,29 +144,18 @@ export function NewEnvironmentDialog({
     window.requestAnimationFrame(() => dialogRef.current?.focus());
 
     try {
-      const response = await fetch("/api/environments", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          teamId,
-          name: name.trim(),
-        }),
-      });
+      const response = await apiFetch<ApiEnvelope<Environment>>(
+        "/api/v1/environments",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            teamId,
+            name: name.trim(),
+          }),
+        },
+      );
 
-      let payload: CreateEnvironmentResponse = {};
-      try {
-        payload = (await response.json()) as CreateEnvironmentResponse;
-      } catch {
-        // The fallback below also covers an empty or non-JSON server response.
-      }
-
-      if (!response.ok || !payload.data) {
-        const serverMessage =
-          typeof payload.error === "string" ? payload.error : payload.error?.message;
-        throw new Error(serverMessage || "Could not create the Environment. Try again.");
-      }
-
-      onCreated(payload.data);
+      onCreated(response.data);
     } catch (cause) {
       setSubmitError(
         cause instanceof Error ? cause.message : "Could not create the Environment. Try again.",

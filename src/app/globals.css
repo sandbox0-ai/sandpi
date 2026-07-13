@@ -663,6 +663,10 @@ pre,
   background: var(--blue);
 }
 
+.live-indicator.status-failed {
+  background: var(--red);
+}
+
 .session-title {
   min-width: 0;
   flex: 1;
@@ -1384,6 +1388,14 @@ pre,
 .message-actions button:hover {
   background: var(--hover);
   color: var(--ink);
+}
+
+.message-actions button:disabled,
+.message-actions button:disabled:hover {
+  background: transparent;
+  color: var(--ink-faint);
+  cursor: not-allowed;
+  opacity: 0.38;
 }
 
 .message-actions-user > button:last-child:hover {
@@ -3181,6 +3193,11 @@ pre,
   background: var(--hover);
 }
 
+.secondary-action-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .text-action-button {
   padding: 0;
   border: 0;
@@ -3431,7 +3448,8 @@ pre,
 }
 
 .connected-badge,
-.coming-soon-badge {
+.coming-soon-badge,
+.status-badge {
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
@@ -3450,6 +3468,71 @@ pre,
 .coming-soon-badge {
   background: var(--sidebar);
   color: var(--ink-faint);
+}
+
+.status-badge {
+  border: 1px solid var(--line);
+  background: var(--sidebar);
+  color: var(--ink-soft);
+}
+
+.device-auth-card {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 14px;
+  border: 1px solid var(--blue);
+  border-radius: 9px;
+  background: var(--blue-soft);
+}
+
+.device-auth-card > div:first-child {
+  min-width: 0;
+}
+
+.device-auth-card span {
+  display: block;
+  color: var(--ink-soft);
+  font-size: 8px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.device-auth-card strong {
+  display: block;
+  margin-top: 5px;
+  color: var(--ink);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 20px;
+  letter-spacing: 0.12em;
+}
+
+.device-auth-card p {
+  max-width: 420px;
+  margin: 7px 0 0;
+  color: var(--ink-soft);
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.device-auth-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.settings-inline-error {
+  margin: 0;
+  padding: 9px 11px;
+  border: 1px solid color-mix(in srgb, var(--red) 50%, var(--line));
+  border-radius: 7px;
+  background: var(--red-soft);
+  color: var(--red);
+  font-size: 9px;
+  line-height: 1.45;
 }
 
 .credential-actions {
@@ -4002,6 +4085,15 @@ pre,
   .credential-actions {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .device-auth-card {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .device-auth-actions {
+    flex-wrap: wrap;
   }
 
   .settings-footer > span {

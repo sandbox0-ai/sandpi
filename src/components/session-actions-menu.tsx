@@ -11,6 +11,8 @@ interface SessionActionsMenuProps {
   session: CodingSession;
   triggerClassName: string;
   triggerIconSize?: number;
+  /** The server forks rootfs, Workspace Volume and the native thread as one product operation. */
+  sessionForkEnabled?: boolean;
   onForkSession: (sessionId: string) => void;
   onRenameSession: (sessionId: string, title: string) => void;
   onArchiveSession: (sessionId: string) => void;
@@ -31,6 +33,7 @@ export function SessionActionsMenu({
   session,
   triggerClassName,
   triggerIconSize = 15,
+  sessionForkEnabled = false,
   onForkSession,
   onRenameSession,
   onArchiveSession,
@@ -116,7 +119,7 @@ export function SessionActionsMenu({
       }
 
       menuRef.current
-        ?.querySelector<HTMLButtonElement>("[role='menuitem']")
+        ?.querySelector<HTMLButtonElement>("button:not([disabled])[role='menuitem']")
         ?.focus();
     });
 
@@ -174,7 +177,9 @@ export function SessionActionsMenu({
     }
 
     const menuItems = Array.from(
-      event.currentTarget.querySelectorAll<HTMLButtonElement>("[role='menuitem']"),
+      event.currentTarget.querySelectorAll<HTMLButtonElement>(
+        "button:not([disabled])[role='menuitem']",
+      ),
     );
     const activeIndex = menuItems.indexOf(document.activeElement as HTMLButtonElement);
     let nextIndex: number | null = null;
@@ -261,6 +266,12 @@ export function SessionActionsMenu({
               <button
                 type="button"
                 role="menuitem"
+                disabled={!sessionForkEnabled}
+                title={
+                  sessionForkEnabled
+                    ? undefined
+                    : "Wait for the current Turn to finish before forking."
+                }
                 onClick={() => runAndClose(onForkSession)}
               >
                 <GitFork size={14} aria-hidden="true" />

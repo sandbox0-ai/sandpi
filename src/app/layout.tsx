@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
 
-import { getClientPreferencesBootstrapScript } from "@/lib/client-preferences";
-import { mockPreferences } from "@/lib/mock-data";
+import {
+  DEFAULT_CLIENT_PREFERENCES,
+  getClientPreferencesBootstrapScript,
+} from "@/lib/client-preferences";
 
 import "./globals.css";
 
@@ -11,14 +13,16 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  const preferencesScript = getClientPreferencesBootstrapScript(mockPreferences);
+  const preferencesScript = getClientPreferencesBootstrapScript(
+    DEFAULT_CLIENT_PREFERENCES,
+  );
 
   return (
     <html
-      lang={mockPreferences.general.language}
-      data-language={mockPreferences.general.language}
-      data-theme={mockPreferences.appearance.theme}
-      data-density={mockPreferences.appearance.density}
+      lang={DEFAULT_CLIENT_PREFERENCES.general.language}
+      data-language={DEFAULT_CLIENT_PREFERENCES.general.language}
+      data-theme={DEFAULT_CLIENT_PREFERENCES.appearance.theme}
+      data-density={DEFAULT_CLIENT_PREFERENCES.appearance.density}
       suppressHydrationWarning
     >
       <head>

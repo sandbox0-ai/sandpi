@@ -1,0 +1,54 @@
+.shell {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  color: var(--ink, #17212b);
+  background: var(--canvas, #f7f7f5);
+}
+
+.card {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  max-width: 440px;
+  text-align: center;
+}
+
+.card h1,
+.card p {
+  margin: 0;
+}
+
+.card p {
+  color: var(--ink-soft, #66717d);
+}
+
+.card button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 0 14px;
+  border: 1px solid var(--line, #d8dde3);
+  border-radius: 9px;
+  color: inherit;
+  background: var(--panel-strong, #fff);
+  cursor: pointer;
+}
+
+.spinner {
+  animation: spin 900ms linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation: none;
+  }
+}

@@ -19,6 +19,7 @@ import {
   SidebarBackAction,
 } from "@/components/app-frame";
 import { StaticSidebarAccount } from "@/components/sidebar-primitives";
+import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
 import {
   membershipPlanCounts,
   planForAssignment,
@@ -98,7 +99,6 @@ export function TeamSettingsPage({
   environmentCount,
 }: TeamSettingsPageProps) {
   const [activeTab, setActiveTab] = useState<TeamTab>("overview");
-  const [inviteNotice, setInviteNotice] = useState(false);
   const [teamMemberships, setTeamMemberships] = useState(memberships);
   const [planNotice, setPlanNotice] = useState("");
   const [updatingMembershipId, setUpdatingMembershipId] = useState<
@@ -133,24 +133,16 @@ export function TeamSettingsPage({
     setUpdatingMembershipId(membership.id);
     setPlanNotice("");
     try {
-      const response = await fetch(
-        `/api/teams/${encodeURIComponent(team.id)}/members/${encodeURIComponent(
+      const response = await apiFetch<ApiEnvelope<TeamMembership>>(
+        `/api/v1/teams/${encodeURIComponent(team.id)}/members/${encodeURIComponent(
           membership.id,
         )}/plan`,
         {
           method: "PUT",
-          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ planId }),
         },
       );
-      const payload = (await response.json()) as {
-        data?: TeamMembership;
-        error?: { message?: string };
-      };
-      if (!response.ok || !payload.data) {
-        throw new Error(payload.error?.message || "Unable to assign the Plan.");
-      }
-      const updatedMembership = payload.data;
+      const updatedMembership = response.data;
       setTeamMemberships((current) =>
         current.map((candidate) =>
           candidate.id === updatedMembership.id ? updatedMembership : candidate,
@@ -158,7 +150,7 @@ export function TeamSettingsPage({
       );
       const plan = plans.find((candidate) => candidate.id === planId);
       setPlanNotice(
-        `${membership.user.name} now uses the ${plan?.name ?? planId} Plan in ${team.name}. This mock change is not persisted.`,
+        `${membership.user.name} now uses the ${plan?.name ?? planId} Plan in ${team.name}.`,
       );
     } catch (cause) {
       setPlanNotice(
@@ -274,19 +266,14 @@ export function TeamSettingsPage({
               <button
                 type="button"
                 className={styles.primaryAction}
-                onClick={() => setInviteNotice(true)}
+                disabled
+                title="Team invitations require the future membership invitation API."
               >
                 <UserPlus size={15} aria-hidden="true" />
                 Invite member
               </button>
             }
           >
-            {inviteNotice ? (
-              <div className={styles.inlineNotice} role="status">
-                <Check size={15} aria-hidden="true" />
-                Invitation delivery is mocked in this frontend preview.
-              </div>
-            ) : null}
             {planNotice ? (
               <div className={styles.inlineNotice} role="status">
                 <Check size={15} aria-hidden="true" />

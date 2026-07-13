@@ -484,6 +484,7 @@ export function Sidebar({
                           language={language}
                           session={session}
                           triggerClassName="session-more-button"
+                          sessionForkEnabled={session.status === "waiting"}
                           onForkSession={onForkSession}
                           onRenameSession={onRenameSession}
                           onArchiveSession={onArchiveSession}

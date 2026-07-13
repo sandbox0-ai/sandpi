@@ -24,15 +24,17 @@ import { useEffect, useRef, useState, type UIEvent } from "react";
 import type { InspectorTab } from "@/components/inspector";
 import { SessionActionsMenu } from "@/components/session-actions-menu";
 import {
-  getMockCodexModel,
-  getMockCodexModels,
+  codexModelOptionsFromNativeResult,
+  type CodexModelOption,
 } from "@/harnesses/codex/models";
 import {
-  appendMockCodexTurn,
-  deleteMockCodexTurn,
-  editMockCodexTurn,
-  forkMockCodexTurn,
-} from "@/harnesses/codex/session-actions";
+  clipboardCodexImageFiles,
+  encodeCodexComposerImage,
+  MAX_CODEX_COMPOSER_IMAGES,
+  readCodexComposerImage,
+  selectCodexImageFiles,
+  type CodexImageSelectionIssue,
+} from "@/harnesses/codex/composer-images";
 import { visibleCodexConversationWhileEditing } from "@/harnesses/codex/timeline";
 import type {
   CodexComposerImage,
@@ -42,7 +44,12 @@ import type {
   CodexMessageView,
   CodexToolActivityView,
 } from "@/harnesses/codex/events";
-import { createId } from "@/lib/id";
+import {
+  apiFetch,
+  apiUrl,
+  type ApiEnvelope,
+} from "@/lib/api-client";
+import { copyTextToClipboard } from "@/lib/clipboard";
 import {
   shouldSubmitComposer,
   type OperationLanguage,
@@ -64,7 +71,7 @@ interface ConversationProps {
   onOpenSettings: () => void;
   onOpenInspector: (tab: InspectorTab) => void;
   onSessionChange: (session: CodexSession) => void;
-  onCreateSession: (session: CodexSession) => void;
+  onDerivedSessionCreated: (session: CodexSession) => void;
   onForkSession: (sessionId: string) => void;
   onRenameSession: (sessionId: string, title: string) => void;
   onArchiveSession: (sessionId: string) => void;
@@ -78,50 +85,26 @@ function activityIcon(status: CodexToolActivityView["status"]) {
   return <span className="activity-spinner" />;
 }
 
-async function copyText(content: string) {
-  if (navigator.clipboard && window.isSecureContext) {
-    await navigator.clipboard.writeText(content);
-    return;
-  }
-
-  const fallback = document.createElement("textarea");
-  fallback.value = content;
-  fallback.setAttribute("readonly", "");
-  fallback.style.position = "fixed";
-  fallback.style.opacity = "0";
-  document.body.appendChild(fallback);
-  fallback.select();
-  document.execCommand("copy");
-  fallback.remove();
-}
-
 function syncComposerHeight(textarea: HTMLTextAreaElement) {
   textarea.style.height = "auto";
   textarea.style.height = `${textarea.scrollHeight}px`;
 }
 
-const MAX_COMPOSER_IMAGES = 6;
-const MAX_COMPOSER_IMAGE_BYTES = 10 * 1024 * 1024;
-
-function readImageAttachment(file: File): Promise<CodexComposerImage> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.addEventListener("load", () => {
-      if (typeof reader.result !== "string") {
-        reject(new Error("Clipboard image did not produce a preview URL."));
-        return;
-      }
-      resolve({
-        id: createId("image", 10),
-        name: file.name || "clipboard-image",
-        mimeType: file.type,
-        sizeBytes: file.size,
-        previewUrl: reader.result,
-      });
-    });
-    reader.addEventListener("error", () => reject(reader.error));
-    reader.readAsDataURL(file);
-  });
+function completedTurnUserItemId(
+  events: CodexSession["harnessState"]["events"],
+  turnId: string,
+) {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const notification = events[index]?.notification;
+    if (
+      notification?.method === "item/completed" &&
+      notification.params.turnId === turnId &&
+      notification.params.item.type === "userMessage"
+    ) {
+      return notification.params.item.id;
+    }
+  }
+  return undefined;
 }
 
 export function CodexConversation({
@@ -137,23 +120,32 @@ export function CodexConversation({
   onOpenSettings,
   onOpenInspector,
   onSessionChange,
-  onCreateSession,
+  onDerivedSessionCreated,
   onForkSession,
   onRenameSession,
   onArchiveSession,
   onTogglePinSession,
 }: ConversationProps) {
   const ui = getCodexUiCopy(language).conversation;
-  const modelOptions = getMockCodexModels();
-  const selectedModel = getMockCodexModel(session.harnessState.modelId);
+  const [modelOptions, setModelOptions] = useState<CodexModelOption[]>([]);
+  const selectedModel = modelOptions.find(
+    (model) => model.id === session.harnessState.modelId,
+  ) ?? {
+    id: session.harnessState.modelId || "default",
+    displayName: session.harnessState.modelId || "Default",
+  };
   const [draft, setDraft] = useState("");
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [deleteMessageId, setDeleteMessageId] = useState<string | null>(null);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [pastedImages, setPastedImages] = useState<CodexComposerImage[]>([]);
   const [attachmentError, setAttachmentError] = useState("");
+  const [sending, setSending] = useState(false);
+  const [forkingMessageId, setForkingMessageId] = useState<string | null>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
   const scrollbarHideTimerRef = useRef<number | null>(null);
+  const sessionRef = useRef(session);
   // This operates on Codex-native Turn/item boundaries. Other clients must implement the same
   // editing UX in their own harness reducer instead of consuming a shared message timeline.
   const visibleMessages = visibleCodexConversationWhileEditing(
@@ -162,12 +154,129 @@ export function CodexConversation({
   );
 
   useEffect(() => {
+    sessionRef.current = session;
+  }, [session]);
+
+  useEffect(() => {
     setDraft("");
     setDeleteMessageId(null);
     setEditingMessageId(null);
     setPastedImages([]);
     setAttachmentError("");
+    setSending(false);
+    setForkingMessageId(null);
   }, [session.id]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void apiFetch<ApiEnvelope<unknown>>(
+      `/api/v1/sessions/${encodeURIComponent(session.id)}/models`,
+      { signal: controller.signal },
+    )
+      .then((response) => {
+        const models = codexModelOptionsFromNativeResult(response.data);
+        setModelOptions(models);
+      })
+      .catch((error) => {
+        if (!controller.signal.aborted) {
+          console.error("Unable to load Codex models", error);
+        }
+      });
+    return () => controller.abort();
+  }, [session.id]);
+
+  useEffect(() => {
+    const latestSequence = sessionRef.current.harnessState.events.at(-1)?.sequence ?? 0;
+    const search = new URLSearchParams({
+      after: String(latestSequence),
+      revision: String(sessionRef.current.harnessState.historyRevision ?? 0),
+    });
+    const source = new EventSource(
+      apiUrl(
+        `/api/v1/sessions/${encodeURIComponent(session.id)}/events?${search.toString()}`,
+      ),
+      { withCredentials: true },
+    );
+
+    const handleHarnessEvent = (event: MessageEvent<string>) => {
+      try {
+        const envelope = JSON.parse(event.data) as CodexSession["harnessState"]["events"][number];
+        const current = sessionRef.current;
+        if (
+          envelope.harness !== "codex" ||
+          current.harnessState.events.some(
+            (candidate) => candidate.sequence === envelope.sequence,
+          )
+        ) {
+          return;
+        }
+        const events = [...current.harnessState.events, envelope];
+        const completedTurnId =
+          envelope.notification.method === "turn/completed"
+            ? envelope.notification.params.turn.id
+            : undefined;
+        const recoverableItemId = completedTurnId
+          ? completedTurnUserItemId(events, completedTurnId)
+          : undefined;
+        const next: CodexSession = {
+          ...current,
+          updatedAt: envelope.receivedAt,
+          status:
+            envelope.notification.method === "turn/completed"
+              ? "waiting"
+              : envelope.notification.method === "turn/started"
+                ? "running"
+                : current.status,
+          unread:
+            envelope.notification.method === "turn/completed"
+              ? document.visibilityState !== "visible"
+              : current.unread,
+          harnessState: {
+            ...current.harnessState,
+            events,
+            recoverableUserMessageItemIds: recoverableItemId
+              ? [
+                  ...(current.harnessState.recoverableUserMessageItemIds ?? []),
+                  recoverableItemId,
+                ].filter((itemId, index, all) => all.indexOf(itemId) === index)
+              : current.harnessState.recoverableUserMessageItemIds,
+          },
+        };
+        sessionRef.current = next;
+        onSessionChange(next);
+        if (
+          envelope.notification.method === "turn/completed" &&
+          document.visibilityState === "visible"
+        ) {
+          void apiFetch(
+            `/api/v1/sessions/${encodeURIComponent(session.id)}/metadata`,
+            {
+              method: "PUT",
+              body: JSON.stringify({ unread: false }),
+            },
+          ).catch((error) =>
+            console.error("Unable to mark completed Codex Turn as read", error),
+          );
+        }
+      } catch (error) {
+        console.error("Unable to decode Codex event", error);
+      }
+    };
+
+    source.addEventListener("harness", handleHarnessEvent as EventListener);
+    source.addEventListener("reset", ((event: MessageEvent<string>) => {
+      try {
+        const replacement = JSON.parse(event.data) as CodexSession;
+        sessionRef.current = replacement;
+        setDeleteMessageId(null);
+        setEditingMessageId(null);
+        onSessionChange(replacement);
+      } catch (error) {
+        console.error("Unable to replace superseded Codex history", error);
+      }
+    }) as EventListener);
+    return () => source.close();
+  }, [onSessionChange, session.id]);
 
   useEffect(() => {
     if (composerRef.current) {
@@ -184,30 +293,116 @@ export function CodexConversation({
     [],
   );
 
-  function submitMessage() {
+  async function submitMessage() {
     const content = draft.trim();
     if (!content && pastedImages.length === 0) {
       return;
     }
-    const now = new Date().toISOString();
+    if (sending) {
+      return;
+    }
     if (editingMessageId) {
-      const next = editMockCodexTurn(
-        session,
-        editingMessageId,
-        content,
-        pastedImages,
-        now,
-      );
-      if (next) {
-        onSessionChange(next);
+      setSending(true);
+      setAttachmentError("");
+      try {
+        const response = await apiFetch<
+          ApiEnvelope<{ requestId: string; session: CodexSession }>
+        >(
+          `/api/v1/sessions/${encodeURIComponent(session.id)}/turns/${encodeURIComponent(editingMessageId)}`,
+          {
+            method: "PUT",
+            body: JSON.stringify({
+              text: content,
+              images: pastedImages.map(encodeCodexComposerImage),
+            }),
+          },
+        );
+        sessionRef.current = response.data.session;
+        onSessionChange(response.data.session);
+        setEditingMessageId(null);
+      } catch (error) {
+        setAttachmentError(
+          error instanceof Error ? error.message : "Could not edit the Codex Turn.",
+        );
+        setSending(false);
+        return;
       }
-      setEditingMessageId(null);
     } else {
-      onSessionChange(appendMockCodexTurn(session, content, pastedImages, now));
+      setSending(true);
+      setAttachmentError("");
+      try {
+        await apiFetch<ApiEnvelope<{ requestId: string }>>(
+          `/api/v1/sessions/${encodeURIComponent(session.id)}/turns`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              text: content,
+              images: pastedImages.map(encodeCodexComposerImage),
+            }),
+          },
+        );
+        const next = {
+          ...sessionRef.current,
+          status: "running" as const,
+          unread: false,
+        };
+        sessionRef.current = next;
+        onSessionChange(next);
+      } catch (error) {
+        setAttachmentError(
+          error instanceof Error ? error.message : "Could not start the Codex Turn.",
+        );
+        setSending(false);
+        return;
+      }
     }
     setDraft("");
     setPastedImages([]);
     setAttachmentError("");
+    setSending(false);
+  }
+
+  async function deleteTurn(message: CodexMessageView) {
+    if (sending) return;
+    setSending(true);
+    setDeleteMessageId(null);
+    setAttachmentError("");
+    try {
+      const response = await apiFetch<ApiEnvelope<CodexSession>>(
+        `/api/v1/sessions/${encodeURIComponent(session.id)}/turns/${encodeURIComponent(message.id)}`,
+        { method: "DELETE" },
+      );
+      sessionRef.current = response.data;
+      onSessionChange(response.data);
+    } catch (error) {
+      setAttachmentError(
+        error instanceof Error ? error.message : "Could not delete the Codex Turn.",
+      );
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function forkTurn(message: CodexMessageView) {
+    if (sending) return;
+    setSending(true);
+    setForkingMessageId(message.id);
+    setDeleteMessageId(null);
+    setAttachmentError("");
+    try {
+      const response = await apiFetch<ApiEnvelope<CodexSession>>(
+        `/api/v1/sessions/${encodeURIComponent(session.id)}/turns/${encodeURIComponent(message.id)}/fork`,
+        { method: "POST", body: JSON.stringify({}) },
+      );
+      onDerivedSessionCreated(response.data);
+    } catch (error) {
+      setAttachmentError(
+        error instanceof Error ? error.message : ui.forkTurnFailed,
+      );
+    } finally {
+      setForkingMessageId(null);
+      setSending(false);
+    }
   }
 
   function beginEditing(message: CodexMessageView) {
@@ -227,7 +422,7 @@ export function CodexConversation({
 
   async function copyMessage(message: CodexMessageView) {
     try {
-      await copyText(message.content);
+      await copyTextToClipboard(message.content);
       setCopiedMessageId(message.id);
       window.setTimeout(() => {
         setCopiedMessageId((current) =>
@@ -240,34 +435,16 @@ export function CodexConversation({
   }
 
   async function addPastedImages(files: File[]) {
-    const availableSlots = MAX_COMPOSER_IMAGES - pastedImages.length;
-    if (availableSlots <= 0) {
-      setAttachmentError(ui.imageLimit(MAX_COMPOSER_IMAGES));
-      return;
-    }
-
-    const filesWithinLimit = files
-      .filter((file) => file.size <= MAX_COMPOSER_IMAGE_BYTES)
-      .slice(0, availableSlots);
-    if (filesWithinLimit.length === 0) {
-      setAttachmentError(ui.imageTooLarge);
-      return;
-    }
-
-    if (files.some((file) => file.size > MAX_COMPOSER_IMAGE_BYTES)) {
-      setAttachmentError(ui.imageTooLarge);
-    } else if (files.length > availableSlots) {
-      setAttachmentError(ui.imageLimit(MAX_COMPOSER_IMAGES));
-    } else {
-      setAttachmentError("");
-    }
+    const selection = selectCodexImageFiles(files, pastedImages);
+    setAttachmentError(imageSelectionError(selection.issue));
+    if (selection.files.length === 0) return;
 
     try {
       const attachments = await Promise.all(
-        filesWithinLimit.map(readImageAttachment),
+        selection.files.map(readCodexComposerImage),
       );
       setPastedImages((current) =>
-        [...current, ...attachments].slice(0, MAX_COMPOSER_IMAGES),
+        [...current, ...attachments].slice(0, MAX_CODEX_COMPOSER_IMAGES),
       );
     } catch {
       setAttachmentError(ui.imagePasteFailed);
@@ -358,6 +535,7 @@ export function CodexConversation({
             session={session}
             triggerClassName="icon-button"
             triggerIconSize={19}
+            sessionForkEnabled={session.status === "waiting"}
             onForkSession={onForkSession}
             onRenameSession={onRenameSession}
             onArchiveSession={onArchiveSession}
@@ -495,17 +673,7 @@ export function CodexConversation({
                         <button
                           type="button"
                           className="message-confirm-button"
-                          onClick={() => {
-                            const next = deleteMockCodexTurn(
-                              session,
-                              message.id,
-                              new Date().toISOString(),
-                            );
-                            if (next) {
-                              onSessionChange(next);
-                            }
-                            setDeleteMessageId(null);
-                          }}
+                          onClick={() => void deleteTurn(message)}
                         >
                           {ui.delete}
                         </button>
@@ -524,6 +692,13 @@ export function CodexConversation({
                           type="button"
                           aria-label={ui.editMessage}
                           title={ui.editFromHere}
+                          disabled={
+                            sending ||
+                            session.status !== "waiting" ||
+                            !session.harnessState.recoverableUserMessageItemIds?.includes(
+                              message.id,
+                            )
+                          }
                           onClick={() => beginEditing(message)}
                         >
                           <Pencil size={14} aria-hidden="true" />
@@ -532,18 +707,21 @@ export function CodexConversation({
                           type="button"
                           aria-label={ui.forkTurnMessage}
                           title={ui.forkTurnHere}
-                          onClick={() => {
-                            const forked = forkMockCodexTurn(
-                              session,
+                          aria-busy={forkingMessageId === message.id}
+                          disabled={
+                            sending ||
+                            session.status !== "waiting" ||
+                            !session.harnessState.recoverableUserMessageItemIds?.includes(
                               message.id,
-                              new Date().toISOString(),
-                            );
-                            if (forked) {
-                              onCreateSession(forked);
-                            }
-                          }}
+                            )
+                          }
+                          onClick={() => void forkTurn(message)}
                         >
-                          <GitFork size={14} aria-hidden="true" />
+                          {forkingMessageId === message.id ? (
+                            <span className="activity-spinner" aria-hidden="true" />
+                          ) : (
+                            <GitFork size={14} aria-hidden="true" />
+                          )}
                         </button>
                         <button
                           type="button"
@@ -561,6 +739,13 @@ export function CodexConversation({
                           type="button"
                           aria-label={ui.deleteMessage}
                           title={ui.deleteFromHere}
+                          disabled={
+                            sending ||
+                            session.status !== "waiting" ||
+                            !session.harnessState.recoverableUserMessageItemIds?.includes(
+                              message.id,
+                            )
+                          }
                           onClick={() => setDeleteMessageId(message.id)}
                         >
                           <Trash2 size={14} aria-hidden="true" />
@@ -653,13 +838,7 @@ export function CodexConversation({
               syncComposerHeight(event.currentTarget);
             }}
             onPaste={(event) => {
-              const imageFiles = Array.from(event.clipboardData.items)
-                .filter(
-                  (item) =>
-                    item.kind === "file" && item.type.startsWith("image/"),
-                )
-                .map((item) => item.getAsFile())
-                .filter((file): file is File => file !== null);
+              const imageFiles = clipboardCodexImageFiles(event.clipboardData);
               if (imageFiles.length === 0) {
                 return;
               }
@@ -680,7 +859,7 @@ export function CodexConversation({
                 )
               ) {
                 event.preventDefault();
-                submitMessage();
+                void submitMessage();
               }
             }}
             aria-label={ui.messageAgent(environment.codingAgent.label)}
@@ -697,9 +876,23 @@ export function CodexConversation({
                 type="button"
                 className="composer-icon-button"
                 aria-label={ui.attachFile}
+                onClick={() => imageInputRef.current?.click()}
               >
                 <Paperclip size={17} />
               </button>
+              <input
+                ref={imageInputRef}
+                className="sr-only"
+                type="file"
+                accept="image/png,image/jpeg,image/gif,image/webp"
+                multiple
+                tabIndex={-1}
+                onChange={(event) => {
+                  const files = Array.from(event.currentTarget.files ?? []);
+                  event.currentTarget.value = "";
+                  if (files.length > 0) void addPastedImages(files);
+                }}
+              />
               <button
                 type="button"
                 className="composer-icon-button"
@@ -725,17 +918,13 @@ export function CodexConversation({
                       environment.codingAgent.label,
                     )}
                     value={selectedModel.id}
-                    onChange={(event) =>
-                      onSessionChange({
-                        ...session,
-                        harnessState: {
-                          ...session.harnessState,
-                          modelId: event.target.value,
-                        },
-                      })
-                    }
+                    disabled
+                    title="The model is fixed when this Codex Session starts."
                   >
-                    {modelOptions.map((model) => (
+                    {(modelOptions.length > 0
+                      ? modelOptions
+                      : [selectedModel]
+                    ).map((model) => (
                       <option value={model.id} key={model.id}>
                         {model.displayName}
                       </option>
@@ -752,9 +941,13 @@ export function CodexConversation({
               <button
                 type="button"
                 className="send-button"
-                disabled={!draft.trim() && pastedImages.length === 0}
+                disabled={
+                  sending ||
+                  session.status !== "waiting" ||
+                  (!draft.trim() && pastedImages.length === 0)
+                }
                 aria-label={ui.sendMessage}
-                onClick={submitMessage}
+                onClick={() => void submitMessage()}
               >
                 <ArrowUp size={17} strokeWidth={2.5} />
               </button>
@@ -769,4 +962,12 @@ export function CodexConversation({
       </div>
     </section>
   );
+}
+
+function imageSelectionError(issue?: CodexImageSelectionIssue) {
+  if (!issue) return "";
+  if (issue === "too-many") return `Attach up to ${MAX_CODEX_COMPOSER_IMAGES} images.`;
+  if (issue === "unsupported") return "Use PNG, JPEG, GIF, or WebP images.";
+  if (issue === "total-too-large") return "The combined image size is too large.";
+  return "Each image must be 10 MB or smaller.";
 }

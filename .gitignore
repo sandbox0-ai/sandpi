@@ -3,8 +3,10 @@ node_modules/
 out/
 dist/
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
 npm-debug.log*
 *.tsbuildinfo
 .DS_Store
+playwright-report/
+test-results/

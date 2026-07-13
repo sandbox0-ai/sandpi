@@ -65,6 +65,14 @@
   background: var(--green);
 }
 
+.readyDot[data-status="updating"] {
+  background: var(--amber, #b7791f);
+}
+
+.readyDot[data-status="error"] {
+  background: var(--red);
+}
+
 .desktopExpandButton,
 .mobileMenuButton,
 .settingsButton {
@@ -185,6 +193,50 @@
 .composer:focus-within {
   border-color: var(--ink-faint);
   box-shadow: 0 8px 30px rgb(30 30 24 / 10%);
+}
+
+.imagePreviews {
+  display: flex;
+  gap: 7px;
+  overflow-x: auto;
+  padding: 2px 4px 9px;
+  scrollbar-width: none;
+}
+
+.imagePreviews::-webkit-scrollbar {
+  display: none;
+}
+
+.imagePreview {
+  position: relative;
+  width: 60px;
+  height: 60px;
+  flex: 0 0 auto;
+}
+
+.imagePreview > img {
+  width: 60px;
+  height: 60px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  object-fit: cover;
+}
+
+.imagePreview > button {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--panel-strong);
+  color: var(--ink-soft);
+  cursor: pointer;
 }
 
 .composer textarea {
@@ -366,6 +418,17 @@
   margin: 8px 4px 0;
   color: var(--red);
   font-size: 10px;
+}
+
+.error button {
+  margin-left: 8px;
+  padding: 2px 7px;
+  border: 1px solid currentColor;
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
 }
 
 .starters {

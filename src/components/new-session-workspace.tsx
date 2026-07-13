@@ -9,6 +9,7 @@ interface NewSessionWorkspaceProps {
   language: OperationLanguage;
   sendShortcut: SendShortcut;
   environment: Environment;
+  onEnvironmentChange: (environment: Environment) => void;
   onCreated: (session: CodingSession) => void;
   onOpenSettings: () => void;
   onToggleSidebar: () => void;

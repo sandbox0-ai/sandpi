@@ -120,6 +120,7 @@ export function SessionSearchDialog({
             name="session-search"
             inputMode="search"
             role="searchbox"
+            aria-label="Search sessions or environments"
             aria-controls={resultsId}
             aria-activedescendant={
               results[activeIndex] ? `${resultsId}-${results[activeIndex].session.id}` : undefined

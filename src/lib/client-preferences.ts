@@ -2,6 +2,21 @@ import type { SandpiPreferences } from "./types";
 
 export const CLIENT_PREFERENCES_STORAGE_KEY = "sandpi.preferences.v1";
 export const CLIENT_PREFERENCES_CHANGED_EVENT = "sandpi:preferences-changed";
+export const DEFAULT_CLIENT_PREFERENCES: SandpiPreferences = {
+  general: {
+    language: "en",
+    timeZone: "auto",
+    sendShortcut: "enter",
+  },
+  appearance: {
+    theme: "system",
+    density: "comfortable",
+  },
+  notifications: {
+    sessionCompleted: true,
+    needsAttention: true,
+  },
+};
 
 const languageValues = ["en", "zh-CN"] as const;
 const sendShortcutValues = ["enter", "mod-enter"] as const;
@@ -37,7 +52,7 @@ const themeVariables = {
     "--panel-strong": "#292927",
     "--ink": "#f0efe9",
     "--ink-soft": "#b6b3aa",
-    "--ink-faint": "#88867f",
+    "--ink-faint": "#a7a49c",
     "--line": "#3b3a36",
     "--line-soft": "#302f2c",
     "--hover": "#31302d",

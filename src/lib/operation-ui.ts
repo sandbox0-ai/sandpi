@@ -123,6 +123,7 @@ const copy = {
       workspaceFiles: "Workspace files",
       shareFile: (name: string) => `Share ${name}`,
       openNewView: "Open in Sandpi Cloud IDE (coming later)",
+      binaryFilePreview: "Binary files cannot be previewed here.",
       volumeLive: (volumeId: string) => `Volume live · ${volumeId}`,
       auditEvents: "Sandbox activity",
       activitySummary: (count: number, attention: number) =>
@@ -266,6 +267,7 @@ const copy = {
       workspaceFiles: "Workspace 文件",
       shareFile: (name: string) => `分享 ${name}`,
       openNewView: "在 Sandpi Cloud IDE 中打开（后续支持）",
+      binaryFilePreview: "暂不支持在这里预览二进制文件。",
       volumeLive: (volumeId: string) => `Volume 在线 · ${volumeId}`,
       auditEvents: "Sandbox 活动",
       activitySummary: (count: number, attention: number) =>

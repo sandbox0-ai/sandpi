@@ -99,7 +99,11 @@ export interface CodexHarnessState {
   modelId: string;
   harnessVersion: string;
   protocolVersion: "v2";
+  /** Monotonic server branch revision used to reset other connected clients. */
+  historyRevision?: number;
   events: CodexEventEnvelope[];
+  /** User-message item IDs backed by a ready Workspace Volume checkpoint. */
+  recoverableUserMessageItemIds?: string[];
 }
 
 export type CodexSession = CodingSession<"codex", CodexHarnessState>;
@@ -109,7 +113,7 @@ export interface CodexComposerImage {
   name: string;
   mimeType: string;
   sizeBytes: number;
-  /** Mock data URL; production sends the app-server `image` input URL or `localImage` path. */
+  /** Data URL preview; the server validates it before sending Codex's native `image` input. */
   previewUrl: string;
 }
 

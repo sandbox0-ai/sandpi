@@ -14,7 +14,9 @@ const copy = {
             ? "Waiting"
             : status === "paused"
               ? "Paused"
-              : "Completed",
+              : status === "failed"
+                ? "Failed"
+                : "Completed",
       environmentRevision: (revision: number) => `Environment r${revision}`,
       terminal: "Terminal",
       closeInspector: "Close inspector",
@@ -33,6 +35,7 @@ const copy = {
       editFromHere: "Edit from here",
       forkTurnMessage: "Fork Codex turn from message",
       forkTurnHere: "Fork Codex turn from here",
+      forkTurnFailed: "Could not fork this Codex turn.",
       copyMessage: "Copy message",
       deleteMessage: "Delete message",
       editing: "Editing from this message",
@@ -61,6 +64,10 @@ const copy = {
       openNavigation: "Open navigation",
       title: "New session",
       readyToFork: (revision: number) => `Ready to fork Environment r${revision}`,
+      preparingEnvironment: "Preparing Environment Workspace…",
+      environmentFailed: "Environment provisioning failed",
+      retryEnvironment: "Retry",
+      retryingEnvironment: "Retrying…",
       environmentSettings: (name: string) => `${name} settings`,
       question: (agent: string) => `What should ${agent} work on?`,
       introduction: (environment: string) =>
@@ -97,7 +104,9 @@ const copy = {
             ? "等待中"
             : status === "paused"
               ? "已暂停"
-              : "已完成",
+              : status === "failed"
+                ? "失败"
+                : "已完成",
       environmentRevision: (revision: number) => `环境 r${revision}`,
       terminal: "终端",
       closeInspector: "关闭检查器",
@@ -116,6 +125,7 @@ const copy = {
       editFromHere: "从这里开始编辑",
       forkTurnMessage: "从消息派生 Codex Turn",
       forkTurnHere: "从这里派生 Codex Turn",
+      forkTurnFailed: "无法派生这个 Codex Turn。",
       copyMessage: "复制消息",
       deleteMessage: "删除消息",
       editing: "正在从这条消息编辑",
@@ -144,6 +154,10 @@ const copy = {
       openNavigation: "打开导航",
       title: "新建会话",
       readyToFork: (revision: number) => `已准备从环境 r${revision} 派生`,
+      preparingEnvironment: "正在准备环境工作区…",
+      environmentFailed: "环境创建失败",
+      retryEnvironment: "重试",
+      retryingEnvironment: "正在重试…",
       environmentSettings: (name: string) => `${name} 设置`,
       question: (agent: string) => `希望 ${agent} 做什么？`,
       introduction: (environment: string) =>

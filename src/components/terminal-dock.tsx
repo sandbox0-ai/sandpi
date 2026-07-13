@@ -9,6 +9,7 @@ import {
   useState,
 } from "react";
 
+import { apiWebSocketUrl } from "@/lib/api-client";
 import type { CodingSession } from "@/lib/types";
 
 import styles from "./terminal-dock.module.css";
@@ -32,187 +33,145 @@ function initialLines(session: CodingSession): TerminalLine[] {
     {
       id: 0,
       kind: "system",
-      content: `Attached to ${session.sandboxId} via supervisor ${session.supervisorSessionId}.`,
-    },
-    {
-      id: 1,
-      kind: "output",
-      content: 'Sandpi mock shell · type "help" for available commands.',
+      content: `Connecting to ${session.sandboxId} through the durable Sandpi terminal stream…`,
     },
   ];
 }
 
-function stripMatchingQuotes(value: string) {
-  if (
-    value.length >= 2 &&
-    ((value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'")))
-  ) {
-    return value.slice(1, -1);
-  }
-
-  return value;
+function decodeBase64(data: string) {
+  const raw = window.atob(data);
+  return Uint8Array.from(raw, (character) => character.charCodeAt(0));
 }
 
-function mockOutput(command: string, session: CodingSession): Omit<TerminalLine, "id">[] {
-  const normalized = command.trim().replace(/\s+/g, " ");
-  const [executable = ""] = normalized.split(" ");
-
-  if (normalized === "help") {
-    return [
-      {
-        kind: "output",
-        content: [
-          "Available mock commands:",
-          "  pwd, ls, whoami, hostname, date, env",
-          "  git status (the workspace root may not be a repository)",
-          "  node --version, npm test, cat README.md",
-          "  echo <text>, clear, help",
-        ].join("\n"),
-      },
-    ];
-  }
-
-  if (normalized === "pwd") {
-    return [{ kind: "output", content: session.workspaceRoot }];
-  }
-
-  if (normalized === "ls" || normalized === "ls -la") {
-    return [
-      {
-        kind: "output",
-        content:
-          normalized === "ls"
-            ? "README.md  app  package.json  tests"
-            : [
-                "drwxr-xr-x  1 sandpi sandpi  128 Jul 12 09:17 .",
-                "drwxr-xr-x  1 root   root     48 Jul 12 09:17 ..",
-                "-rw-r--r--  1 sandpi sandpi 6.8K Jul  9 14:02 README.md",
-                "drwxr-xr-x  1 sandpi sandpi   96 Jul 12 09:22 app",
-                "-rw-r--r--  1 sandpi sandpi 1.1K Jul 10 18:41 package.json",
-                "drwxr-xr-x  1 sandpi sandpi   64 Jul 12 09:22 tests",
-              ].join("\n"),
-      },
-    ];
-  }
-
-  if (normalized === "whoami") {
-    return [{ kind: "output", content: "sandpi" }];
-  }
-
-  if (normalized === "hostname") {
-    return [{ kind: "output", content: session.sandboxId }];
-  }
-
-  if (normalized === "date") {
-    return [{ kind: "output", content: new Date().toString() }];
-  }
-
-  if (normalized === "env") {
-    return [
-      {
-        kind: "output",
-        content: [
-          "HOME=/home/sandpi",
-          `PWD=${session.workspaceRoot}`,
-          "SHELL=/bin/bash",
-          `SANDPI_SESSION_ID=${session.id}`,
-          `SANDBOX_ID=${session.sandboxId}`,
-        ].join("\n"),
-      },
-    ];
-  }
-
-  if (normalized === "git status" || normalized === "git branch --show-current") {
-    return [
-      {
-        kind: "error",
-        content: `fatal: not a git repository (or any parent up to mount point ${session.workspaceRoot})`,
-      },
-    ];
-  }
-
-  if (normalized === "node --version" || normalized === "node -v") {
-    return [{ kind: "output", content: "v24.4.0" }];
-  }
-
-  if (normalized === "npm test") {
-    return [
-      {
-        kind: "output",
-        content: [
-          "> console@0.1.0 test",
-          "> vitest run",
-          "",
-          " ✓ tests/auth-callback.test.ts (4 tests) 31ms",
-          "",
-          " Test Files  1 passed (1)",
-          "      Tests  4 passed (4)",
-        ].join("\n"),
-      },
-    ];
-  }
-
-  if (normalized === "cat README.md") {
-    return [
-      {
-        kind: "output",
-        content: "# Console\n\nInternal control plane for remote agent sessions.",
-      },
-    ];
-  }
-
-  if (
-    normalized === "cd" ||
-    normalized === `cd ${session.workspaceRoot}` ||
-    normalized === "cd ~"
-  ) {
-    return [];
-  }
-
-  if (normalized.startsWith("cd ")) {
-    return [
-      {
-        kind: "error",
-        content: `bash: cd: ${normalized.slice(3)}: No such file or directory`,
-      },
-    ];
-  }
-
-  if (normalized === "echo") {
-    return [{ kind: "output", content: "" }];
-  }
-
-  if (normalized.startsWith("echo ")) {
-    return [
-      {
-        kind: "output",
-        content: stripMatchingQuotes(command.trim().slice(5)),
-      },
-    ];
-  }
-
-  return [{ kind: "error", content: `bash: ${executable}: command not found` }];
-}
+type TerminalConnectionState = "connecting" | "connected" | "disconnected" | "error";
 
 function TerminalDockSession({ session, onClose, onExpand }: TerminalDockProps) {
   const [draft, setDraft] = useState("");
   const [lines, setLines] = useState<TerminalLine[]>(() => initialLines(session));
+  const [connectionState, setConnectionState] =
+    useState<TerminalConnectionState>("connecting");
   const inputId = useId();
   const outputRef = useRef<HTMLDivElement>(null);
-  const nextLineId = useRef(2);
+  const nextLineId = useRef(1);
+  const socketRef = useRef<WebSocket | null>(null);
+  const lastSequenceRef = useRef(0);
+  const decoderRef = useRef(new TextDecoder());
 
-  const sandboxState = session.status === "completed" ? "offline" : "ready";
-  const supervisorState =
-    session.status === "completed"
-      ? "ended"
-      : session.status === "paused"
-        ? "paused"
-        : session.status === "waiting"
-          ? "waiting"
-          : "connected";
-  const sandboxAvailable = sandboxState === "ready";
-  const supervisorConnected = supervisorState === "connected";
+  const sandboxState = connectionState === "connected" ? "ready" : "connecting";
+  const supervisorState = connectionState;
+  const sandboxAvailable = connectionState === "connected";
+  const supervisorConnected = connectionState === "connected";
+
+  useEffect(() => {
+    let disposed = false;
+    let reconnectTimer: number | undefined;
+    let reconnectAttempt = 0;
+
+    const appendLine = (kind: TerminalLineKind, content: string) => {
+      if (!content) {
+        return;
+      }
+      setLines((current) => [
+        ...current,
+        { id: nextLineId.current++, kind, content },
+      ]);
+    };
+
+    const connect = () => {
+      if (disposed) {
+        return;
+      }
+      setConnectionState("connecting");
+      const search = new URLSearchParams({
+        after: String(lastSequenceRef.current),
+      });
+      const socket = new WebSocket(
+        apiWebSocketUrl(
+          `/api/v1/sessions/${encodeURIComponent(session.id)}/terminal?${search.toString()}`,
+        ),
+      );
+      socketRef.current = socket;
+
+      socket.addEventListener("open", () => {
+        reconnectAttempt = 0;
+        setConnectionState("connected");
+      });
+      socket.addEventListener("message", (message) => {
+        try {
+          const payload = JSON.parse(String(message.data)) as {
+            type: "ack" | "error" | "event" | "ready";
+            error?: string;
+            sessionId?: string;
+            event?: {
+              seq: number;
+              stream?: string;
+              dataBase64?: string;
+              type: string;
+            };
+          };
+          if (payload.type === "ready") {
+            appendLine(
+              "system",
+              `Connected to ${session.sandboxId}${payload.sessionId ? ` · terminal ${payload.sessionId}` : ""}.`,
+            );
+            return;
+          }
+          if (payload.type === "error") {
+            setConnectionState("error");
+            appendLine("error", payload.error ?? "Terminal request failed.");
+            return;
+          }
+          if (payload.type !== "event" || !payload.event) {
+            return;
+          }
+          if (payload.event.seq <= lastSequenceRef.current) {
+            return;
+          }
+          lastSequenceRef.current = payload.event.seq;
+          if (payload.event.dataBase64) {
+            const content = decoderRef.current.decode(
+              decodeBase64(payload.event.dataBase64),
+              { stream: true },
+            );
+            appendLine(
+              payload.event.stream === "stderr" ? "error" : "output",
+              content,
+            );
+          } else if (payload.event.type === "exit") {
+            appendLine("system", "Terminal process exited.");
+          }
+        } catch (error) {
+          setConnectionState("error");
+          appendLine(
+            "error",
+            error instanceof Error ? error.message : "Invalid terminal event.",
+          );
+        }
+      });
+      socket.addEventListener("close", () => {
+        if (disposed) {
+          return;
+        }
+        setConnectionState("disconnected");
+        const delay = Math.min(1_000 * 2 ** reconnectAttempt, 10_000);
+        reconnectAttempt += 1;
+        reconnectTimer = window.setTimeout(connect, delay);
+      });
+      socket.addEventListener("error", () => {
+        setConnectionState("error");
+      });
+    };
+
+    connect();
+    return () => {
+      disposed = true;
+      if (reconnectTimer !== undefined) {
+        window.clearTimeout(reconnectTimer);
+      }
+      socketRef.current?.close();
+      socketRef.current = null;
+    };
+  }, [session.id, session.sandboxId]);
 
   useEffect(() => {
     const output = outputRef.current;
@@ -236,19 +195,25 @@ function TerminalDockSession({ session, onClose, onExpand }: TerminalDockProps) 
       return;
     }
 
-    const additions: TerminalLine[] = [
-      {
-        id: nextLineId.current++,
-        kind: "command",
-        content: command,
-      },
-      ...mockOutput(command, session).map((line) => ({
-        ...line,
-        id: nextLineId.current++,
-      })),
-    ];
-
-    setLines((current) => [...current, ...additions]);
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      setLines((current) => [
+        ...current,
+        {
+          id: nextLineId.current++,
+          kind: "error",
+          content: "Terminal is reconnecting. Try again in a moment.",
+        },
+      ]);
+      return;
+    }
+    socket.send(
+      JSON.stringify({
+        type: "input",
+        requestId: `terminal-input-${Date.now()}`,
+        data: `${command}\n`,
+      }),
+    );
   }
 
   return (
@@ -280,7 +245,8 @@ function TerminalDockSession({ session, onClose, onExpand }: TerminalDockProps) 
               className={`${styles.statusDot} ${
                 supervisorConnected
                   ? styles.statusReady
-                  : supervisorState === "ended"
+                  : supervisorState === "error" ||
+                      supervisorState === "disconnected"
                     ? styles.statusOffline
                     : styles.statusWaiting
               }`}
@@ -354,7 +320,7 @@ function TerminalDockSession({ session, onClose, onExpand }: TerminalDockProps) 
             onChange={(event) => setDraft(event.target.value)}
           />
           <span id={`${inputId}-hint`} className={styles.visuallyHidden}>
-            Press Enter to run a mock shell command.
+            Press Enter to send the command to the Session terminal.
           </span>
         </form>
       </div>

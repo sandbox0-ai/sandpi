@@ -1,34 +1,75 @@
 {
   "name": "sandpi",
   "version": "0.1.0",
-  "private": true,
+  "private": false,
+  "license": "Apache-2.0",
   "description": "A remote, multi-harness coding agent workspace powered by Sandbox0.",
+  "type": "module",
+  "main": "./dist/server/index.js",
+  "bin": {
+    "sandpi-import-codex-auth": "./dist/server/cli/import-codex-auth.js"
+  },
+  "files": [
+    "dist/",
+    "out/",
+    "db/migrations/",
+    "LICENSE",
+    "README.md"
+  ],
+  "exports": {
+    "./server": {
+      "types": "./dist/server/index.d.ts",
+      "import": "./dist/server/index.js"
+    }
+  },
   "engines": {
     "node": ">=24 <25",
     "npm": ">=11 <12"
   },
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
+    "dev": "concurrently -k -n server,web -c cyan,magenta \"npm:dev:server\" \"npm:dev:web\"",
+    "dev:server": "SANDPI_HOST=172.16.100.2 SANDPI_PORT=3001 SANDPI_PUBLIC_URL=http://172.16.100.2:3000 tsx watch src/server/index.ts",
+    "dev:web": "next dev --hostname 172.16.100.2 --port 3000",
+    "build": "npm run build:web && npm run build:server",
+    "build:web": "next build",
+    "build:server": "tsup src/server/index.ts src/server/cli/import-codex-auth.ts --tsconfig tsconfig.server.json --format esm --platform node --target node24 --out-dir dist/server --clean --sourcemap --dts --external sandbox0 --external pg --external openid-client",
+    "start": "node dist/server/index.js",
+    "db:migrate": "tsx src/server/db/migrate.ts",
+    "codex:import-auth": "tsx src/server/cli/import-codex-auth.ts",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test 'src/**/*.test.ts'"
+    "test": "node --import tsx --test 'src/**/*.test.ts'",
+    "test:e2e": "playwright test",
+    "prepack": "npm run build"
   },
   "dependencies": {
+    "@fastify/cookie": "^11.1.1",
+    "@fastify/cors": "^11.3.0",
+    "@fastify/static": "^10.1.0",
+    "@fastify/websocket": "^11.3.0",
+    "fastify": "^5.10.0",
     "lucide-react": "^0.468.0",
     "next": "^15.1.3",
+    "openid-client": "^6.8.4",
+    "pg": "^8.22.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "sandbox0": "file:../sdk-js"
+    "sandbox0": "^0.7.10",
+    "ws": "^8.21.0",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.3.6",
+    "@playwright/test": "^1.61.1",
     "@types/node": "^22.10.2",
+    "@types/pg": "^8.20.0",
     "@types/react": "^19.0.2",
     "@types/react-dom": "^19.0.2",
+    "@types/ws": "^8.18.1",
+    "concurrently": "^10.0.3",
     "eslint": "^9.17.0",
     "eslint-config-next": "^15.1.3",
+    "tsup": "^8.5.1",
     "tsx": "^4.20.3",
     "typescript": "^5.7.2"
   },

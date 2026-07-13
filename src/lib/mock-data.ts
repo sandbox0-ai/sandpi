@@ -991,6 +991,9 @@ export function getMockBootstrap(requestedTeamId?: string): SandpiBootstrap {
     viewer: mockViewer,
     teams,
     viewerMemberships,
+    teamMemberships: mockTeamMemberships.filter((membership) =>
+      viewerTeamIds.has(membership.teamId),
+    ),
     plans: mockSandpiPlans,
     deployment: mockDeployment,
     environments: mockEnvironments,

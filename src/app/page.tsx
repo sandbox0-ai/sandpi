@@ -1,11 +1,5 @@
-import { SandpiApp } from "@/components/sandpi-app";
-import { getMockBootstrap } from "@/lib/mock-data";
+import { SandpiAppLoader } from "@/components/bootstrap-loader";
 
-interface HomePageProps {
-  searchParams: Promise<{ team?: string }>;
-}
-
-export default async function HomePage({ searchParams }: HomePageProps) {
-  const { team } = await searchParams;
-  return <SandpiApp initialData={getMockBootstrap(team)} />;
+export default function HomePage() {
+  return <SandpiAppLoader />;
 }

@@ -27,6 +27,8 @@ import {
   useState,
 } from "react";
 
+import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
+import { copyTextToClipboard } from "@/lib/clipboard";
 import type { CodingSession, Environment } from "@/lib/types";
 
 type SettingsTab =
@@ -45,6 +47,29 @@ interface EnvironmentSettingsProps {
   onRestoreSession: (sessionId: string) => void;
   onClose: () => void;
 }
+
+interface CodexDeviceAuthFlow {
+  id: string;
+  environmentId: string;
+  status:
+    | "provisioning"
+    | "starting"
+    | "awaiting_user"
+    | "completed"
+    | "failed"
+    | "cancelled"
+    | "expired";
+  verificationUrl?: string;
+  userCode?: string;
+  error?: string;
+  expiresAt: string;
+}
+
+const ACTIVE_CODEX_AUTH_STATUSES = new Set<CodexDeviceAuthFlow["status"]>([
+  "provisioning",
+  "starting",
+  "awaiting_user",
+]);
 
 const tabs: Array<{
   id: SettingsTab;
@@ -105,7 +130,14 @@ export function EnvironmentSettings({
   const [activeTab, setActiveTab] = useState<SettingsTab>("general");
   const [draft, setDraft] = useState(environment);
   const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
   const [newDomain, setNewDomain] = useState("");
+  const [codexAuthFlow, setCodexAuthFlow] =
+    useState<CodexDeviceAuthFlow | null>(null);
+  const [codexAuthBusy, setCodexAuthBusy] = useState(false);
+  const [codexAuthError, setCodexAuthError] = useState("");
+  const [copiedDeviceCode, setCopiedDeviceCode] = useState(false);
   const drawerRef = useRef<HTMLElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
 
@@ -129,6 +161,125 @@ export function EnvironmentSettings({
       previouslyFocused?.focus();
     };
   }, [onClose]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void apiFetch<ApiEnvelope<CodexDeviceAuthFlow | null>>(
+      `/api/v1/environments/${encodeURIComponent(environment.id)}/harnesses/codex/device-login`,
+      { signal: controller.signal },
+    )
+      .then((response) => {
+        if (!response.data) return;
+        setCodexAuthFlow(response.data);
+        setCodexAuthBusy(ACTIVE_CODEX_AUTH_STATUSES.has(response.data.status));
+      })
+      .catch((error) => {
+        if (!controller.signal.aborted) {
+          setCodexAuthError(
+            error instanceof Error
+              ? error.message
+              : "Could not recover the Codex login state.",
+          );
+        }
+      });
+    return () => controller.abort();
+  }, [environment.id]);
+
+  useEffect(() => {
+    const flow = codexAuthFlow;
+    if (!flow || !ACTIVE_CODEX_AUTH_STATUSES.has(flow.status)) {
+      return;
+    }
+
+    let cancelled = false;
+    let timer: number | undefined;
+    const poll = async () => {
+      try {
+        const response = await apiFetch<ApiEnvelope<CodexDeviceAuthFlow>>(
+          `/api/v1/environments/${encodeURIComponent(environment.id)}/harnesses/codex/device-login/${encodeURIComponent(flow.id)}`,
+        );
+        if (cancelled) return;
+        setCodexAuthFlow(response.data);
+        if (response.data.status === "completed") {
+          const environments = await apiFetch<ApiEnvelope<Environment[]>>(
+            "/api/v1/environments",
+          );
+          if (cancelled) return;
+          const refreshed = environments.data.find(
+            (candidate) => candidate.id === environment.id,
+          );
+          if (refreshed) {
+            setDraft(refreshed);
+            onChange(refreshed);
+          }
+          setCodexAuthBusy(false);
+          return;
+        }
+        if (!ACTIVE_CODEX_AUTH_STATUSES.has(response.data.status)) {
+          setCodexAuthBusy(false);
+          setCodexAuthError(
+            response.data.error ?? "Codex authentication did not complete.",
+          );
+          return;
+        }
+        timer = window.setTimeout(poll, 1_500);
+      } catch (error) {
+        if (cancelled) return;
+        setCodexAuthBusy(false);
+        setCodexAuthError(
+          error instanceof Error
+            ? error.message
+            : "Could not refresh Codex authentication.",
+        );
+      }
+    };
+
+    timer = window.setTimeout(poll, 1_000);
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [codexAuthFlow, environment.id, onChange]);
+
+  async function startCodexDeviceLogin() {
+    if (codexAuthBusy) return;
+    setCodexAuthBusy(true);
+    setCodexAuthError("");
+    setCopiedDeviceCode(false);
+    try {
+      const response = await apiFetch<ApiEnvelope<CodexDeviceAuthFlow>>(
+        `/api/v1/environments/${encodeURIComponent(environment.id)}/harnesses/codex/device-login`,
+        { method: "POST" },
+      );
+      setCodexAuthFlow(response.data);
+    } catch (error) {
+      setCodexAuthBusy(false);
+      setCodexAuthError(
+        error instanceof Error
+          ? error.message
+          : "Could not start Codex authentication.",
+      );
+    }
+  }
+
+  async function cancelCodexDeviceLogin() {
+    const flow = codexAuthFlow;
+    if (!flow || !ACTIVE_CODEX_AUTH_STATUSES.has(flow.status)) return;
+    try {
+      const response = await apiFetch<ApiEnvelope<CodexDeviceAuthFlow>>(
+        `/api/v1/environments/${encodeURIComponent(environment.id)}/harnesses/codex/device-login/${encodeURIComponent(flow.id)}`,
+        { method: "DELETE" },
+      );
+      setCodexAuthFlow(response.data);
+      setCodexAuthBusy(false);
+    } catch (error) {
+      setCodexAuthError(
+        error instanceof Error
+          ? error.message
+          : "Could not cancel Codex authentication.",
+      );
+    }
+  }
 
   function keepFocusInside(event: ReactKeyboardEvent<HTMLElement>) {
     if (event.key !== "Tab") {
@@ -154,10 +305,38 @@ export function EnvironmentSettings({
     }
   }
 
-  function saveAndClose() {
-    onChange(draft);
-    setSaved(true);
-    window.setTimeout(onClose, 250);
+  async function saveAndClose() {
+    if (saving) {
+      return;
+    }
+
+    setSaving(true);
+    setSaveError("");
+    try {
+      const response = await apiFetch<ApiEnvelope<Environment>>(
+        `/api/v1/environments/${encodeURIComponent(environment.id)}`,
+        {
+          method: "PUT",
+          body: JSON.stringify({
+            name: draft.name.trim(),
+            description: draft.description,
+            color: draft.color,
+            networkPolicy: draft.networkPolicy,
+          }),
+        },
+      );
+      onChange(response.data);
+      setDraft(response.data);
+      setSaved(true);
+      window.setTimeout(onClose, 250);
+    } catch (error) {
+      setSaveError(
+        error instanceof Error
+          ? error.message
+          : "Environment changes could not be saved.",
+      );
+      setSaving(false);
+    }
   }
 
   function addDomain() {
@@ -451,28 +630,113 @@ export function EnvironmentSettings({
                     <div>
                       <strong>{draft.codingAgent.label}</strong>
                       <p>
-                        {draft.codingAgent.account} · verified{" "}
-                        {draft.codingAgent.lastVerified}
+                        {draft.codingAgent.status === "connected"
+                          ? `${draft.codingAgent.account ?? "ChatGPT"} · verified ${draft.codingAgent.lastVerified ?? "recently"}`
+                          : "Use the official ChatGPT device-code flow. One Environment credential is shared by all of its Sessions."}
                       </p>
                     </div>
-                    <span className="connected-badge">
-                      <Check size={12} /> Connected
+                    <span
+                      className={
+                        draft.codingAgent.status === "connected"
+                          ? "connected-badge"
+                          : "status-badge"
+                      }
+                    >
+                      {draft.codingAgent.status === "connected" ? (
+                        <>
+                          <Check size={12} /> Connected
+                        </>
+                      ) : (
+                        "Not connected"
+                      )}
                     </span>
                   </div>
                 </div>
+
+                {codexAuthFlow?.verificationUrl &&
+                ACTIVE_CODEX_AUTH_STATUSES.has(codexAuthFlow.status) ? (
+                  <div className="device-auth-card" role="status">
+                    <div>
+                      <span>ChatGPT device code</span>
+                      <strong>{codexAuthFlow.userCode}</strong>
+                      <p>
+                        Open the official sign-in page, enter this one-time code,
+                        then return here. Sandpi keeps polling even if this drawer closes.
+                      </p>
+                    </div>
+                    <div className="device-auth-actions">
+                      <a
+                        className="secondary-action-button"
+                        href={codexAuthFlow.verificationUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        Open ChatGPT <ExternalLink size={13} />
+                      </a>
+                      <button
+                        type="button"
+                        className="text-action-button"
+                        onClick={() => {
+                          if (!codexAuthFlow.userCode) return;
+                          void copyTextToClipboard(codexAuthFlow.userCode)
+                            .then(() => {
+                              setCopiedDeviceCode(true);
+                              window.setTimeout(
+                                () => setCopiedDeviceCode(false),
+                                1_500,
+                              );
+                            })
+                            .catch(() => {
+                              setCodexAuthError(
+                                "The browser could not copy the device code.",
+                              );
+                            });
+                        }}
+                      >
+                        <Copy size={13} />
+                        {copiedDeviceCode ? "Copied" : "Copy code"}
+                      </button>
+                      <button
+                        type="button"
+                        className="text-action-button"
+                        onClick={() => void cancelCodexDeviceLogin()}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+
+                {codexAuthError ? (
+                  <p className="settings-inline-error" role="alert">
+                    {codexAuthError}
+                  </p>
+                ) : null}
                 <div className="credential-actions">
-                  <button type="button" className="secondary-action-button">
-                    <RefreshCw size={15} /> Re-authenticate{" "}
-                    {draft.codingAgent.label}
-                  </button>
-                  <button type="button" className="text-action-button">
-                    Open official auth details <ExternalLink size={13} />
+                  <button
+                    type="button"
+                    className="secondary-action-button"
+                    disabled={
+                      codexAuthBusy ||
+                      Boolean(
+                        codexAuthFlow &&
+                          ACTIVE_CODEX_AUTH_STATUSES.has(codexAuthFlow.status),
+                      )
+                    }
+                    onClick={() => void startCodexDeviceLogin()}
+                  >
+                    <RefreshCw size={15} />
+                    {codexAuthBusy
+                      ? "Starting official sign-in…"
+                      : draft.codingAgent.status === "connected"
+                        ? `Re-authenticate ${draft.codingAgent.label}`
+                        : `Connect ${draft.codingAgent.label}`}
                   </button>
                 </div>
                 <p className="settings-footnote">
-                  Refresh-token concurrency and account revocation must be
-                  validated against the native Codex auth flow before enabling
-                  real multi-session credential materialization.
+                  The encrypted credential is deployment data, not part of a
+                  Sandbox rootfs or Workspace Volume. Session and Turn forks never
+                  copy it.
                 </p>
               </SettingsSection>
             ) : null}
@@ -723,7 +987,9 @@ export function EnvironmentSettings({
 
         <footer className="settings-footer">
           <span aria-live="polite">
-            {saved ? (
+            {saveError ? (
+              <>{saveError}</>
+            ) : saved ? (
               <>
                 <Check size={14} /> Saved
               </>
@@ -735,6 +1001,7 @@ export function EnvironmentSettings({
             <button
               type="button"
               className="button-secondary"
+              disabled={saving}
               onClick={onClose}
             >
               Cancel
@@ -742,9 +1009,10 @@ export function EnvironmentSettings({
             <button
               type="button"
               className="button-primary"
-              onClick={saveAndClose}
+              disabled={saving || !draft.name.trim()}
+              onClick={() => void saveAndClose()}
             >
-              Save changes
+              {saving ? "Saving…" : "Save changes"}
             </button>
           </div>
         </footer>

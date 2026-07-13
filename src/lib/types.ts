@@ -5,7 +5,12 @@
  */
 export type HarnessId = "codex" | "claude-code" | "opencode" | "pi";
 
-export type SessionStatus = "running" | "waiting" | "paused" | "completed";
+export type SessionStatus =
+  | "running"
+  | "waiting"
+  | "paused"
+  | "completed"
+  | "failed";
 
 export type TeamRole = "owner" | "admin" | "member";
 
@@ -107,14 +112,14 @@ export interface Team {
 export interface SandpiDeploymentSummary {
   mode: "cloud" | "self-hosted";
   identity: {
-    protocol: "oidc";
-    provider: "sandpi-auth0" | "deployment-oidc";
+    protocol: "builtin" | "oidc";
+    provider: "builtin-admin" | "sandpi-auth0" | "deployment-oidc";
     label: string;
     managedBy: "sandpi" | "deployment";
   };
   runtime: {
     provider: "sandbox0";
-    status: "configured" | "mock";
+    status: "configured" | "mock" | "unconfigured";
     configurationScope: "deployment";
   };
 }
@@ -171,11 +176,17 @@ export interface Environment {
   name: string;
   description: string;
   color: string;
-  status: "ready" | "updating";
+  /**
+   * `updating` means the Environment Workspace Volume is still being
+   * provisioned. `error` is recoverable and is kept distinct so clients do not
+   * display an endless ready spinner after Sandbox0 rejects provisioning.
+   */
+  status: "ready" | "updating" | "error";
   revision: number;
   templateId: string;
   rootfsSnapshotId: string;
   workspaceVolumeId: string;
+  provisioningError?: string;
   /**
    * Opaque revision of Environment-scoped harness authentication in the secret plane.
    * Credential material must stay outside rootfs and Workspace Volume snapshots so a Session
@@ -282,10 +293,12 @@ export interface SessionOrigin {
 }
 
 /**
- * Persistence boundary for the future backend:
+ * Durable history boundary implemented by the Sandpi server:
  * - Session fork branches Sandbox rootfs plus the current Workspace Volume.
  * - Each completed Turn owns a Workspace Volume snapshot; Turn fork/edit/rollback never
  *   branch or restore the Session rootfs.
+ * - Inherited Turns in a fork are display history. The fork baseline is the first mutable
+ *   checkpoint owned by the child Session.
  */
 export interface CodingSession<
   THarness extends HarnessId = HarnessId,
@@ -325,6 +338,8 @@ export interface SandpiBootstrap {
   teams: Team[];
   /** Exactly one entry per Team available to the viewer. */
   viewerMemberships: TeamMembership[];
+  /** Team-visible Memberships used by Team administration surfaces. */
+  teamMemberships: TeamMembership[];
   plans: SandpiPlan[];
   deployment: SandpiDeploymentSummary;
   environments: Environment[];

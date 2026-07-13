@@ -19,7 +19,7 @@ interface ConversationProps {
   onOpenSettings: () => void;
   onOpenInspector: (tab: InspectorTab) => void;
   onSessionChange: (session: CodingSession) => void;
-  onCreateSession: (session: CodingSession) => void;
+  onDerivedSessionCreated: (session: CodingSession) => void;
   onForkSession: (sessionId: string) => void;
   onRenameSession: (sessionId: string, title: string) => void;
   onArchiveSession: (sessionId: string) => void;
@@ -37,7 +37,6 @@ export function Conversation(props: ConversationProps) {
         {...props}
         session={props.session}
         onSessionChange={(session: CodexSession) => props.onSessionChange(session)}
-        onCreateSession={(session: CodexSession) => props.onCreateSession(session)}
       />
     );
   }

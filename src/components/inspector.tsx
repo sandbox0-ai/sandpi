@@ -6,7 +6,6 @@ import {
   ArrowUpFromLine,
   ChevronDown,
   ChevronRight,
-  Copy,
   ExternalLink,
   File,
   FileCode2,
@@ -20,17 +19,20 @@ import {
   ShieldCheck,
   X,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import {
   InteractiveMetricChart,
   type MetricChartSeries,
 } from "@/components/metric-chart";
 import { SessionAuditPanel } from "@/components/session-audit-panel";
+import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
 import { getOperationUiCopy, type OperationLanguage } from "@/lib/operation-ui";
 import type {
   CodingSession,
   RuntimeMetricSeries,
+  SessionAuditFeed,
+  SessionMetrics,
   WorkspaceFile,
 } from "@/lib/types";
 
@@ -211,101 +213,17 @@ function formatMetricTime(
   }
 }
 
-function ShareDialog({
-  file,
-  language,
-  onClose,
-}: {
-  file: WorkspaceFile;
-  language: OperationLanguage;
-  onClose: () => void;
-}) {
-  const ui = getOperationUiCopy(language).inspector;
-  const [permission, setPermission] = useState("viewer");
-  const [expiry, setExpiry] = useState("7-days");
-  const [copied, setCopied] = useState(false);
-  const link = `https://sandpi.dev/share/mock-${file.id}`;
-
-  async function copyLink() {
-    try {
-      await navigator.clipboard.writeText(link);
-    } catch {
-      // The preview may run without clipboard permission.
-    }
-    setCopied(true);
-  }
-
-  return (
-    <div
-      className="modal-layer modal-layer-local"
-      role="presentation"
-      onMouseDown={onClose}
-    >
-      <section
-        className="share-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="share-dialog-title"
-        onMouseDown={(event) => event.stopPropagation()}
-      >
-        <header>
-          <div>
-            <span className="dialog-kicker">{ui.volumeFile}</span>
-            <h2 id="share-dialog-title">{ui.share(file.name)}</h2>
-          </div>
-          <button
-            type="button"
-            className="icon-button"
-            aria-label={ui.closeDialog}
-            onClick={onClose}
-          >
-            <X size={18} />
-          </button>
-        </header>
-        <p className="share-path">{file.path}</p>
-        <div className="share-form-grid">
-          <label>
-            {ui.permission}
-            <select
-              name="share-permission"
-              value={permission}
-              onChange={(event) => setPermission(event.target.value)}
-            >
-              <option value="viewer">{ui.canView}</option>
-              <option value="download">{ui.canDownload}</option>
-            </select>
-          </label>
-          <label>
-            {ui.linkExpires}
-            <select
-              name="share-expiry"
-              value={expiry}
-              onChange={(event) => setExpiry(event.target.value)}
-            >
-              <option value="24-hours">{ui.hours24}</option>
-              <option value="7-days">{ui.days7}</option>
-              <option value="30-days">{ui.days30}</option>
-            </select>
-          </label>
-        </div>
-        <label className="share-link-label">
-          {ui.privateLink}
-          <span className="share-link-row">
-            <input name="share-link" readOnly value={link} />
-            <button type="button" onClick={copyLink}>
-              {copied ? <CheckIcon /> : <Copy size={15} />}
-              {copied ? ui.copied : ui.copy}
-            </button>
-          </span>
-        </label>
-        <p className="share-security-note">{ui.shareBoundary}</p>
-      </section>
-    </div>
-  );
+function decodeBase64Text(content: string) {
+  const raw = window.atob(content);
+  const bytes = Uint8Array.from(raw, (character) => character.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
 }
 
-function CheckIcon() {
-  return <span className="mini-check">✓</span>;
+interface FilePreviewResponse {
+  path: string;
+  encoding: "base64";
+  content: string;
+  kind: "binary" | "text";
 }
 
 export function Inspector({
@@ -317,19 +235,26 @@ export function Inspector({
   onClose,
 }: InspectorProps) {
   const ui = getOperationUiCopy(language).inspector;
-  const allFiles = useMemo(() => flattenFiles(session.files), [session.files]);
+  const [files, setFiles] = useState(session.files);
+  const [audit, setAudit] = useState(session.audit);
+  const [metrics, setMetrics] = useState(session.metrics);
+  const [fileContents, setFileContents] = useState<
+    Record<string, { kind: "binary" | "text"; text: string }>
+  >({});
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState("");
+  const allFiles = useMemo(() => flattenFiles(files), [files]);
   const initialFile =
     allFiles.find((file) => file.id === "auth-callback") ??
     allFiles.find((file) => file.kind === "file") ??
     allFiles[0];
   const [selectedFileId, setSelectedFileId] = useState(initialFile?.id ?? "");
-  const [shareOpen, setShareOpen] = useState(false);
   const selectedFile =
     allFiles.find((file) => file.id === selectedFileId) ?? initialFile;
-  const cpuNow = lastMetricValue(session.metrics.cpuUtilization);
-  const memoryNow = lastMetricValue(session.metrics.memoryWorkingSet);
-  const networkReceiveNow = lastMetricValue(session.metrics.networkReceive);
-  const networkTransmitNow = lastMetricValue(session.metrics.networkTransmit);
+  const cpuNow = lastMetricValue(metrics.cpuUtilization);
+  const memoryNow = lastMetricValue(metrics.memoryWorkingSet);
+  const networkReceiveNow = lastMetricValue(metrics.networkReceive);
+  const networkTransmitNow = lastMetricValue(metrics.networkTransmit);
   const chartCopy = {
     instructions: ui.metricChartInstructions,
     legendLabel: ui.metricSeries,
@@ -337,6 +262,101 @@ export function Inspector({
       visible ? ui.hideMetricSeries(label) : ui.showMetricSeries(label),
     formatTime: (at: string) => formatMetricTime(at, language, timeZone),
   };
+
+  useEffect(() => {
+    setFiles(session.files);
+    setAudit(session.audit);
+    setMetrics(session.metrics);
+    setFileContents({});
+    setSelectedFileId("");
+    setLoadError("");
+  }, [session.id, session.audit, session.files, session.metrics]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setLoading(true);
+    setLoadError("");
+
+    const path = `/api/v1/sessions/${encodeURIComponent(session.id)}`;
+    const request =
+      activeTab === "files"
+        ? apiFetch<ApiEnvelope<WorkspaceFile[]>>(
+            `${path}/files?path=${encodeURIComponent("/workspace")}`,
+            { signal: controller.signal },
+          ).then((response) => setFiles(response.data))
+        : activeTab === "audit"
+          ? apiFetch<ApiEnvelope<SessionAuditFeed>>(`${path}/audit`, {
+              signal: controller.signal,
+            }).then((response) => setAudit(response.data))
+          : apiFetch<ApiEnvelope<SessionMetrics>>(`${path}/metrics`, {
+              signal: controller.signal,
+            }).then((response) => setMetrics(response.data));
+
+    void request
+      .catch((error) => {
+        if (!controller.signal.aborted) {
+          setLoadError(
+            error instanceof Error
+              ? error.message
+              : "This Inspector view could not be loaded.",
+          );
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setLoading(false);
+        }
+      });
+
+    return () => controller.abort();
+  }, [activeTab, session.id]);
+
+  useEffect(() => {
+    if (selectedFileId || !initialFile) {
+      return;
+    }
+    setSelectedFileId(initialFile.id);
+  }, [initialFile, selectedFileId]);
+
+  useEffect(() => {
+    if (
+      activeTab !== "files" ||
+      !selectedFile ||
+      selectedFile.kind !== "file" ||
+      selectedFile.content !== undefined ||
+      fileContents[selectedFile.path] !== undefined
+    ) {
+      return;
+    }
+    const controller = new AbortController();
+    const query = new URLSearchParams({ path: selectedFile.path });
+    void apiFetch<
+      ApiEnvelope<FilePreviewResponse>
+    >(
+      `/api/v1/sessions/${encodeURIComponent(session.id)}/file?${query.toString()}`,
+      { signal: controller.signal },
+    )
+      .then((response) => {
+        setFileContents((current) => ({
+          ...current,
+          [response.data.path]: {
+            kind: response.data.kind,
+            text:
+              response.data.kind === "text"
+                ? decodeBase64Text(response.data.content)
+                : "",
+          },
+        }));
+      })
+      .catch((error) => {
+        if (!controller.signal.aborted) {
+          setLoadError(
+            error instanceof Error ? error.message : "The file could not be loaded.",
+          );
+        }
+      });
+    return () => controller.abort();
+  }, [activeTab, fileContents, selectedFile, session.id]);
 
   return (
     <aside className="inspector" aria-label={ui.label}>
@@ -374,12 +394,19 @@ export function Inspector({
         </button>
       </header>
 
+      {loading || loadError ? (
+        <div className="inspector-status-bar" role={loadError ? "alert" : "status"}>
+          <span className="status-led" />
+          {loadError || "Loading live Session data…"}
+        </div>
+      ) : null}
+
       {activeTab === "files" ? (
         <div className="inspector-panel files-panel">
           <div className="file-workbench">
             <div className="file-tree" aria-label={ui.workspaceFiles}>
               <FileTree
-                files={session.files}
+                files={files}
                 selectedFileId={selectedFile?.id ?? ""}
                 onSelect={(file) => setSelectedFileId(file.id)}
               />
@@ -395,7 +422,8 @@ export function Inspector({
                     <button
                       type="button"
                       aria-label={ui.shareFile(selectedFile.name)}
-                      onClick={() => setShareOpen(true)}
+                      title="File sharing requires the future scoped-grant API."
+                      disabled
                     >
                       <Share2 size={14} />
                     </button>
@@ -421,7 +449,11 @@ export function Inspector({
                 </div>
                 <pre className="code-preview">
                   <code>
-                    {(selectedFile.content ?? "")
+                    {(fileContents[selectedFile.path]?.kind === "binary"
+                      ? ui.binaryFilePreview
+                      : fileContents[selectedFile.path]?.text ??
+                        selectedFile.content ??
+                        "")
                       .split("\n")
                       .map((line, index) => (
                         <span className="code-line" key={`${line}-${index}`}>
@@ -443,7 +475,7 @@ export function Inspector({
 
       {activeTab === "audit" ? (
         <SessionAuditPanel
-          audit={session.audit}
+          audit={audit}
           language={language}
           sessionId={session.id}
           timeZone={timeZone}
@@ -473,7 +505,7 @@ export function Inspector({
                 {
                   id: "cpu",
                   label: "CPU",
-                  segments: session.metrics.cpuUtilization.segments,
+                  segments: metrics.cpuUtilization.segments,
                   tone: "green",
                 },
               ] satisfies MetricChartSeries[]}
@@ -486,14 +518,14 @@ export function Inspector({
               <span>
                 {ui.average(
                   Math.round(
-                    averageMetricValue(session.metrics.cpuUtilization) * 100,
+                    averageMetricValue(metrics.cpuUtilization) * 100,
                   ),
                 )}
               </span>
               <span>
                 {ui.peak(
                   Math.round(
-                    peakMetricValue(session.metrics.cpuUtilization) * 100,
+                    peakMetricValue(metrics.cpuUtilization) * 100,
                   ),
                 )}
               </span>
@@ -511,11 +543,11 @@ export function Inspector({
                 {
                   id: "memory",
                   label: ui.memory,
-                  segments: session.metrics.memoryWorkingSet.segments,
+                  segments: metrics.memoryWorkingSet.segments,
                   tone: "green",
                 },
               ] satisfies MetricChartSeries[]}
-              max={session.metrics.memoryLimitBytes}
+              max={metrics.memoryLimitBytes}
               title={`${ui.memory} · ${ui.metricChart}`}
               formatValue={(value) => formatMemory(value, language)}
               {...chartCopy}
@@ -524,13 +556,13 @@ export function Inspector({
               <span>
                 {ui.percentOfLimit(
                   Math.round(
-                    (memoryNow / session.metrics.memoryLimitBytes) * 100,
+                    (memoryNow / metrics.memoryLimitBytes) * 100,
                   ),
                 )}
               </span>
               <span>
                 {ui.memoryLimit(
-                  session.metrics.memoryLimitBytes / 1024 / 1024 / 1024,
+                  metrics.memoryLimitBytes / 1024 / 1024 / 1024,
                 )}
               </span>
             </footer>
@@ -552,13 +584,13 @@ export function Inspector({
                 {
                   id: "network-receive",
                   label: ui.received,
-                  segments: session.metrics.networkReceive.segments,
+                  segments: metrics.networkReceive.segments,
                   tone: "blue",
                 },
                 {
                   id: "network-transmit",
                   label: ui.sent,
-                  segments: session.metrics.networkTransmit.segments,
+                  segments: metrics.networkTransmit.segments,
                   tone: "amber",
                 },
               ] satisfies MetricChartSeries[]}
@@ -586,22 +618,11 @@ export function Inspector({
               <span>{ui.supervisorSession}</span>
               <code>{session.supervisorSessionId}</code>
             </div>
-            <div>
-              <span>{ui.runtimeGeneration}</span>
-              <strong>3</strong>
-            </div>
           </section>
           <p className="data-boundary-note">{ui.metricsBoundary}</p>
         </div>
       ) : null}
 
-      {shareOpen && selectedFile ? (
-        <ShareDialog
-          file={selectedFile}
-          language={language}
-          onClose={() => setShareOpen(false)}
-        />
-      ) : null}
     </aside>
   );
 }

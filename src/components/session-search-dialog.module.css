@@ -170,6 +170,10 @@
   background: var(--blue);
 }
 
+.resultLeading > i[data-status="failed"] {
+  background: var(--red);
+}
+
 .resultLeading > svg {
   position: absolute;
   top: -4px;
