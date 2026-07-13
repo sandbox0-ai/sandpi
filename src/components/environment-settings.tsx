@@ -39,6 +39,7 @@ type SettingsTab =
 
 interface EnvironmentSettingsProps {
   environment: Environment;
+  teamName: string;
   archivedSessions: CodingSession[];
   onChange: (environment: Environment) => void;
   onRestoreSession: (sessionId: string) => void;
@@ -95,6 +96,7 @@ function formatArchivedSessionTime(timestamp: string) {
 
 export function EnvironmentSettings({
   environment,
+  teamName,
   archivedSessions,
   onChange,
   onRestoreSession,
@@ -309,6 +311,7 @@ export function EnvironmentSettings({
                   />
                 </label>
                 <div className="settings-card definition-card">
+                  <DefinitionRow label="Team" value={teamName} />
                   <DefinitionRow
                     label="Current revision"
                     value={`r${draft.revision}`}

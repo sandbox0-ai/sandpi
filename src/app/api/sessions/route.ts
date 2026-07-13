@@ -1,7 +1,13 @@
 import { NextResponse } from "next/server";
 
 import { buildSessionForkPlan } from "@/lib/environment-blueprint";
-import { createMockSession, mockEnvironments, mockSessions } from "@/lib/mock-data";
+import {
+  createMockSession,
+  mockEnvironments,
+  mockSessions,
+  mockTeams,
+} from "@/lib/mock-data";
+import { canStartTeamExecution } from "@/lib/team";
 
 interface CreateSessionRequest {
   environmentId?: string;
@@ -15,10 +21,9 @@ export async function GET() {
 }
 
 /**
- * The MVP is a free public beta, so Session creation has no Sandpi subscription, price or
- * allowance gate. A future managed-runtime entitlement may protect Sandbox0 resources here,
- * but model access and model usage must continue to come directly from the user's native
- * coding-agent account rather than a Sandpi plan.
+ * Production checks the Team's Sandpi subscription and weekly execution allowance before
+ * provisioning the first Turn. The allowance covers Sandpi-managed runtime only; model access
+ * and model usage continue to come from the user's native coding-agent account.
  */
 export async function POST(request: Request) {
   const body = (await request.json()) as CreateSessionRequest;
@@ -28,6 +33,25 @@ export async function POST(request: Request) {
     return NextResponse.json(
       { error: { code: "environment_not_found", message: "Environment not found." } },
       { status: 404 },
+    );
+  }
+
+  const team = mockTeams.find((item) => item.id === environment.teamId);
+  if (!team) {
+    return NextResponse.json(
+      { error: { code: "team_not_found", message: "Environment Team not found." } },
+      { status: 409 },
+    );
+  }
+  if (!canStartTeamExecution(team.subscription)) {
+    return NextResponse.json(
+      {
+        error: {
+          code: "team_quota_exhausted",
+          message: "The Team cannot start more execution in this quota window.",
+        },
+      },
+      { status: 429 },
     );
   }
 
@@ -58,6 +82,12 @@ export async function POST(request: Request) {
         codingAgent: environment.codingAgent.harness,
         codingAgentMutable: false,
         nativeProtocol: "codex-app-server-v2",
+        teamId: team.id,
+        quota: {
+          status: "admitted",
+          kind: "weekly_execution_minutes",
+          resetsAt: team.subscription.quotas.weeklyExecution.resetsAt,
+        },
         provisioningPlan: plan,
       },
     },

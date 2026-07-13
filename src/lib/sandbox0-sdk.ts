@@ -94,9 +94,13 @@ export function getSandbox0IntegrationSummary() {
         ? "configured"
         : "mock",
     sdkPackage: "sandbox0",
+    configurationScope: "deployment",
+    tenantAuthority: "sandpi",
+    credentialsExposedToClient: false,
     metricNames: {
-      cpu: SandboxRuntimeMetricName.SandboxCpuUsage,
+      cpu: SandboxRuntimeMetricName.SandboxCpuUtilization,
       memory: SandboxRuntimeMetricName.SandboxMemoryWorkingSet,
+      networkIo: SandboxRuntimeMetricName.SandboxNetworkIo,
     },
     capabilities: sandbox0SdkCapabilities,
   };

@@ -1,21 +1,17 @@
 "use client";
 
 import {
-  ArrowLeft,
   Bell,
   Check,
   CircleAlert,
   Clock3,
   Database,
-  Info,
   LoaderCircle,
-  LockKeyhole,
   Palette,
   Settings2,
   ShieldCheck,
   SlidersHorizontal,
 } from "lucide-react";
-import Link from "next/link";
 import {
   type ComponentType,
   type ReactNode,
@@ -26,12 +22,18 @@ import {
 } from "react";
 
 import {
+  AppFrame,
+  AppSidebar,
+  SidebarBackAction,
+} from "@/components/app-frame";
+import { StaticSidebarAccount } from "@/components/sidebar-primitives";
+import {
   applyClientPreferences,
   buildAppearancePreviewPreferences,
   loadClientPreferences,
   saveClientPreferences,
 } from "@/lib/client-preferences";
-import type { SandpiPreferences } from "@/lib/types";
+import type { SandpiPreferences, SandpiUser, Team } from "@/lib/types";
 
 import styles from "./preferences-page.module.css";
 
@@ -44,6 +46,8 @@ type PreferenceTab =
 
 interface PreferencesPageProps {
   initialPreferences: SandpiPreferences;
+  viewer: SandpiUser;
+  team: Team;
 }
 
 const tabs: Array<{
@@ -58,7 +62,11 @@ const tabs: Array<{
   { id: "advanced", label: "Advanced", icon: SlidersHorizontal },
 ];
 
-export function PreferencesPage({ initialPreferences }: PreferencesPageProps) {
+export function PreferencesPage({
+  initialPreferences,
+  viewer,
+  team,
+}: PreferencesPageProps) {
   const [activeTab, setActiveTab] = useState<PreferenceTab>("general");
   const [baseline, setBaseline] = useState(initialPreferences);
   const [draft, setDraft] = useState(initialPreferences);
@@ -213,63 +221,71 @@ export function PreferencesPage({ initialPreferences }: PreferencesPageProps) {
   }
 
   return (
-    <div className={styles.page}>
+    <AppFrame className={styles.page}>
       <a className={styles.skipLink} href="#preferences-content">
         {text("Skip to preferences", "跳到偏好设置")}
       </a>
 
-      <div className={styles.shell}>
-        <aside className={styles.sidebar}>
-          <Link className={styles.sidebarBackLink} href="/">
-            <ArrowLeft size={15} aria-hidden="true" />
-            {text("Back to workspace", "返回工作区")}
-          </Link>
-          <div className={styles.sidebarHeading}>
-            <span>{text("Settings", "设置")}</span>
-            <h1>{text("Preferences", "偏好设置")}</h1>
-            <p>
-              {text(
-                "Personal choices for how Sandpi looks and behaves.",
-                "设置 Sandpi 的外观和交互方式。",
-              )}
-            </p>
-          </div>
-          <nav className={styles.navigation} aria-label="Preference sections">
-            {tabs.map((tab) => {
-              const Icon = tab.icon;
-              return (
-                <button
-                  type="button"
-                  key={tab.id}
-                  className={activeTab === tab.id ? styles.active : undefined}
-                  aria-current={activeTab === tab.id ? "page" : undefined}
-                  onClick={() => setActiveTab(tab.id)}
-                >
-                  <Icon size={16} aria-hidden />
-                  <span>
-                    {text(
-                      tab.label,
-                      {
-                        General: "通用",
-                        Appearance: "外观",
-                        Notifications: "通知",
-                        Security: "安全",
-                        Advanced: "高级",
-                      }[tab.label] ?? tab.label,
-                    )}
-                  </span>
-                </button>
-              );
-            })}
-          </nav>
-          <p className={styles.sidebarNote}>
+      <AppSidebar
+        className={styles.sidebar}
+        bodyClassName={styles.sidebarBody}
+        footerClassName={styles.sidebarFooter}
+        label={text("Preferences navigation", "偏好设置导航")}
+        headerAction={
+          <SidebarBackAction
+            href={`/?team=${encodeURIComponent(team.id)}`}
+            label={text("Back to workspace", "返回工作区")}
+          />
+        }
+        footer={<StaticSidebarAccount viewer={viewer} context={team.name} />}
+      >
+        <div className={styles.sidebarHeading}>
+          <span>{text("Settings", "设置")}</span>
+          <h1>{text("Preferences", "偏好设置")}</h1>
+          <p>
             {text(
-              "Environment and coding agent settings live with each Environment.",
-              "Environment 和 coding agent 设置由各 Environment 独立管理。",
+              "Personal choices for how Sandpi looks and behaves.",
+              "设置 Sandpi 的外观和交互方式。",
             )}
           </p>
-        </aside>
+        </div>
+        <nav className={styles.navigation} aria-label="Preference sections">
+          {tabs.map((tab) => {
+            const Icon = tab.icon;
+            return (
+              <button
+                type="button"
+                key={tab.id}
+                className={activeTab === tab.id ? styles.active : undefined}
+                aria-current={activeTab === tab.id ? "page" : undefined}
+                onClick={() => setActiveTab(tab.id)}
+              >
+                <Icon size={16} aria-hidden />
+                <span>
+                  {text(
+                    tab.label,
+                    {
+                      General: "通用",
+                      Appearance: "外观",
+                      Notifications: "通知",
+                      Security: "安全",
+                      Advanced: "高级",
+                    }[tab.label] ?? tab.label,
+                  )}
+                </span>
+              </button>
+            );
+          })}
+        </nav>
+        <p className={styles.sidebarNote}>
+          {text(
+            "Environment and coding agent settings live with each Environment.",
+            "Environment 和 coding agent 设置由各 Environment 独立管理。",
+          )}
+        </p>
+      </AppSidebar>
 
+      <div className={styles.workspace}>
         <main className={styles.content} id="preferences-content">
           {activeTab === "general" ? (
             <PreferenceSection
@@ -468,25 +484,13 @@ export function PreferencesPage({ initialPreferences }: PreferencesPageProps) {
 
           {activeTab === "security" ? (
             <PreferenceSection
-              eyebrow={text("Deployment managed", "部署管理")}
+              eyebrow={text("Account security", "账户安全")}
               title={text("Security", "安全")}
               description={text(
-                "Security policy belongs to the Sandpi deployment, not to an individual browser.",
-                "安全策略属于 Sandpi 部署配置，不由单个浏览器管理。",
+                "Review and revoke your Sandpi account sessions independently from coding-agent credentials.",
+                "查看和撤销 Sandpi 账户会话；它与 coding agent 凭证相互独立。",
               )}
             >
-              <CapabilityCard
-                icon={<LockKeyhole size={18} aria-hidden="true" />}
-                title={text(
-                  "Authentication and runtime credentials",
-                  "认证与运行时凭证",
-                )}
-                badge={text("Deployment managed", "部署管理")}
-                description={text(
-                  "Identity providers, runtime endpoints and credentials are configured by the Sandpi operator. End users cannot override them from Preferences.",
-                  "身份提供方、运行时端点和凭证由 Sandpi 运维方配置，用户不能在偏好设置中覆盖。",
-                )}
-              />
               <CapabilityCard
                 icon={<ShieldCheck size={18} aria-hidden="true" />}
                 title={text(
@@ -499,12 +503,6 @@ export function PreferencesPage({ initialPreferences }: PreferencesPageProps) {
                   "集中查看已登录设备并撤销浏览器会话。",
                 )}
               />
-              <Callout icon={<Info size={17} aria-hidden="true" />}>
-                {text(
-                  "Environment network policy, sharing permissions and audit data remain scoped to the relevant Environment or Session.",
-                  "网络策略、分享权限和审计数据仍由对应的 Environment 或 Session 管理。",
-                )}
-              </Callout>
             </PreferenceSection>
           ) : null}
 
@@ -544,60 +542,62 @@ export function PreferencesPage({ initialPreferences }: PreferencesPageProps) {
             </PreferenceSection>
           ) : null}
         </main>
-      </div>
 
-      <footer className={styles.saveBar}>
-        <div className={styles.saveStatus} aria-live="polite">
-          {saveState ? (
-            <span
-              className={
-                saveState.tone === "error" ? styles.error : styles.success
-              }
-            >
-              {saveState.tone === "success" ? (
-                <Check size={14} aria-hidden="true" />
-              ) : (
-                <CircleAlert size={14} aria-hidden="true" />
-              )}
-              {saveState.message}
-            </span>
-          ) : hasChanges ? (
-            <span>{text("You have unsaved changes.", "有尚未保存的更改。")}</span>
-          ) : (
-            <span>{text("Preferences are up to date.", "偏好设置已是最新。")}</span>
-          )}
-        </div>
-        <div className={styles.saveActions}>
-          <button
-            type="button"
-            className={styles.secondaryButton}
-            disabled={!hasChanges || saving}
-            onClick={discardChanges}
-          >
-            {text("Discard", "放弃更改")}
-          </button>
-          <button
-            type="button"
-            className={styles.primaryButton}
-            disabled={!hasChanges || saving}
-            onClick={savePreferences}
-          >
-            {saving ? (
-              <LoaderCircle
-                className={styles.spinner}
-                size={15}
-                aria-hidden="true"
-              />
+        <footer className={styles.saveBar}>
+          <div className={styles.saveStatus} aria-live="polite">
+            {saveState ? (
+              <span
+                className={
+                  saveState.tone === "error" ? styles.error : styles.success
+                }
+              >
+                {saveState.tone === "success" ? (
+                  <Check size={14} aria-hidden="true" />
+                ) : (
+                  <CircleAlert size={14} aria-hidden="true" />
+                )}
+                {saveState.message}
+              </span>
+            ) : hasChanges ? (
+              <span>{text("You have unsaved changes.", "有尚未保存的更改。")}</span>
             ) : (
-              <Check size={15} aria-hidden="true" />
+              <span>
+                {text("Preferences are up to date.", "偏好设置已是最新。")}
+              </span>
             )}
-            {saving
-              ? text("Saving…", "保存中…")
-              : text("Save changes", "保存更改")}
-          </button>
-        </div>
-      </footer>
-    </div>
+          </div>
+          <div className={styles.saveActions}>
+            <button
+              type="button"
+              className={styles.secondaryButton}
+              disabled={!hasChanges || saving}
+              onClick={discardChanges}
+            >
+              {text("Discard", "放弃更改")}
+            </button>
+            <button
+              type="button"
+              className={styles.primaryButton}
+              disabled={!hasChanges || saving}
+              onClick={savePreferences}
+            >
+              {saving ? (
+                <LoaderCircle
+                  className={styles.spinner}
+                  size={15}
+                  aria-hidden="true"
+                />
+              ) : (
+                <Check size={15} aria-hidden="true" />
+              )}
+              {saving
+                ? text("Saving…", "保存中…")
+                : text("Save changes", "保存更改")}
+            </button>
+          </div>
+        </footer>
+      </div>
+    </AppFrame>
   );
 }
 

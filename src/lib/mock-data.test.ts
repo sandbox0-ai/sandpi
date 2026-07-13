@@ -4,12 +4,17 @@ import test from "node:test";
 import {
   createMockEnvironment,
   createMockSession,
+  getMockBootstrap,
+  mockEnvironments,
   mockPreferences,
+  mockSessions,
+  mockTeams,
 } from "./mock-data";
 import { getDefaultMockCodexModel } from "../harnesses/codex/models";
 
 test("binds the coding agent to an Environment and every derived Session", () => {
   const environment = createMockEnvironment({
+    teamId: "team-sandpi-labs",
     name: "Agent binding test",
   });
   const session = createMockSession(environment, {
@@ -18,6 +23,7 @@ test("binds the coding agent to an Environment and every derived Session", () =>
   });
 
   assert.equal(environment.codingAgent.harness, "codex");
+  assert.equal(environment.teamId, "team-sandpi-labs");
   assert.equal(session.harness, environment.codingAgent.harness);
   assert.equal(session.harnessLabel, environment.codingAgent.label);
   assert.equal(session.environmentRevision, environment.revision);
@@ -36,7 +42,10 @@ test("binds the coding agent to an Environment and every derived Session", () =>
 });
 
 test("uses only a model exposed by the Environment harness mock", () => {
-  const environment = createMockEnvironment({ name: "Model selection test" });
+  const environment = createMockEnvironment({
+    teamId: "team-sandpi-labs",
+    name: "Model selection test",
+  });
   const selected = createMockSession(environment, {
     title: "Selected model",
     prompt: "Use the selected model.",
@@ -50,4 +59,47 @@ test("uses only a model exposed by the Environment harness mock", () => {
 
   assert.equal(selected.harnessState.modelId, "gpt-5.1-codex-max");
   assert.equal(fallback.harnessState.modelId, getDefaultMockCodexModel().id);
+});
+
+test("bootstraps one selected Team without exposing deployment credentials", () => {
+  const bootstrap = getMockBootstrap("team-side-projects");
+  const selectedEnvironment = bootstrap.environments.find(
+    (environment) => environment.id === bootstrap.selectedEnvironmentId,
+  );
+
+  assert.equal(bootstrap.selectedTeamId, "team-side-projects");
+  assert.equal(selectedEnvironment?.teamId, bootstrap.selectedTeamId);
+  assert.equal(bootstrap.deployment.identity.provider, "sandpi-auth0");
+  assert.equal(bootstrap.deployment.runtime.configurationScope, "deployment");
+  assert.equal("apiHost" in bootstrap.deployment.runtime, false);
+  assert.equal("apiKey" in bootstrap.deployment.runtime, false);
+  assert.equal(mockTeams[0]?.subscription.billingCadence, "monthly");
+  assert.equal(
+    mockTeams[0]?.subscription.quotas.weeklyExecution.window,
+    "weekly",
+  );
+});
+
+test("keeps every mock Session on its Environment revision", () => {
+  for (const session of mockSessions) {
+    const environment = mockEnvironments.find(
+      (candidate) => candidate.id === session.environmentId,
+    );
+
+    assert.ok(environment);
+    assert.equal(session.environmentRevision, environment.revision);
+  }
+});
+
+test("models network throughput with the sdk-js metric contract", () => {
+  const metrics = mockSessions[0]?.metrics;
+
+  assert.ok(metrics);
+  assert.equal(metrics.networkReceive.metric, "sandbox.network.io");
+  assert.equal(metrics.networkReceive.statistic, "rate");
+  assert.equal(metrics.networkReceive.unit, "bytes_per_second");
+  assert.equal(metrics.networkReceive.dimensions?.direction, "receive");
+  assert.equal(metrics.networkTransmit.dimensions?.direction, "transmit");
+  assert.ok(metrics.networkReceive.segments.length > 1);
+  assert.ok(metrics.networkReceive.segments.every((segment) => segment.points.length > 0));
 });

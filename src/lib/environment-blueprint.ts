@@ -8,6 +8,7 @@ export interface SessionForkPlanInput {
   environment: Pick<
     Environment,
     | "id"
+    | "teamId"
     | "revision"
     | "templateId"
     | "rootfsSnapshotId"
@@ -27,6 +28,7 @@ export interface SessionForkStep {
 }
 
 export interface SessionForkPlan {
+  teamId: string;
   environmentId: string;
   environmentRevision: number;
   credentialRevision: number;
@@ -45,6 +47,9 @@ export function buildSessionForkPlan(input: SessionForkPlanInput): SessionForkPl
   const { environment, sessionName } = input;
 
   return {
+    // Sandpi owns this tenant mapping. The deployment-scoped Sandbox0 API key does not
+    // identify an end-user Team, and Sandbox0 credentials are never sent to the client.
+    teamId: environment.teamId,
     environmentId: environment.id,
     environmentRevision: environment.revision,
     credentialRevision: environment.credentialRevision,

@@ -9,17 +9,31 @@ import { createId, randomToken } from "@/lib/id";
 import type {
   AuditEvent,
   Environment,
-  MetricPoint,
+  RuntimeMetricSeries,
+  SandpiDeploymentSummary,
   SandpiBootstrap,
   SandpiPreferences,
+  SandpiUser,
+  Team,
+  TeamMember,
   WorkspaceFile,
 } from "@/lib/types";
 
-function metricSeries(values: number[]): MetricPoint[] {
-  return values.map((value, index) => ({
-    at: `2026-07-12T09:${String(index * 5).padStart(2, "0")}:00+08:00`,
+function metricSeries(
+  values: number[],
+  descriptor: Omit<RuntimeMetricSeries, "segments">,
+): RuntimeMetricSeries {
+  const start = Date.parse("2026-07-12T08:30:00+08:00");
+  const points = values.map((value, index) => ({
+    at: new Date(start + index * 5 * 60 * 1_000).toISOString(),
     value,
   }));
+
+  return {
+    ...descriptor,
+    // The split exercises the same no-join contract as sdk-js after a runtime restart.
+    segments: [{ points: points.slice(0, 7) }, { points: points.slice(7) }],
+  };
 }
 
 const workspaceFiles: WorkspaceFile[] = [
@@ -203,9 +217,182 @@ const auditEvents: AuditEvent[] = [
   },
 ];
 
+export const mockViewer: SandpiUser = {
+  id: "user-yan",
+  name: "Yan Assistant",
+  email: "yan@sandpi.dev",
+  avatarInitials: "YA",
+};
+
+export const mockDeployment: SandpiDeploymentSummary = {
+  mode: "cloud",
+  identity: {
+    protocol: "oidc",
+    provider: "sandpi-auth0",
+    label: "Sandpi Account",
+    managedBy: "sandpi",
+  },
+  runtime: {
+    provider: "sandbox0",
+    status: "mock",
+    configurationScope: "deployment",
+  },
+};
+
+export const mockTeams: Team[] = [
+  {
+    id: "team-sandpi-labs",
+    name: "Sandpi Labs",
+    slug: "sandpi-labs",
+    color: "#315c4b",
+    currentUserRole: "owner",
+    memberCount: 5,
+    subscription: {
+      id: "sub-sandpi-labs",
+      planId: "team",
+      planName: "Sandpi Team",
+      status: "active",
+      billingCadence: "monthly",
+      currentPeriodStartsAt: "2026-07-01T00:00:00Z",
+      currentPeriodEndsAt: "2026-08-01T00:00:00Z",
+      seats: { used: 5, included: 8 },
+      quotas: {
+        weeklyExecution: {
+          used: 3_240,
+          limit: 7_200,
+          unit: "minute",
+          window: "weekly",
+          resetsAt: "2026-07-20T00:00:00Z",
+        },
+        concurrentSessions: {
+          used: 3,
+          limit: 12,
+          unit: "session",
+        },
+        snapshotStorage: {
+          used: 18.6,
+          limit: 80,
+          unit: "gibibyte",
+        },
+      },
+    },
+    createdAt: "2026-05-18T08:30:00Z",
+  },
+  {
+    id: "team-side-projects",
+    name: "Side Projects",
+    slug: "side-projects",
+    color: "#6b5478",
+    currentUserRole: "owner",
+    memberCount: 1,
+    subscription: {
+      id: "sub-side-projects",
+      planId: "individual",
+      planName: "Sandpi Individual",
+      status: "active",
+      billingCadence: "monthly",
+      currentPeriodStartsAt: "2026-07-08T00:00:00Z",
+      currentPeriodEndsAt: "2026-08-08T00:00:00Z",
+      seats: { used: 1, included: 1 },
+      quotas: {
+        weeklyExecution: {
+          used: 410,
+          limit: 1_800,
+          unit: "minute",
+          window: "weekly",
+          resetsAt: "2026-07-15T00:00:00Z",
+        },
+        concurrentSessions: {
+          used: 1,
+          limit: 3,
+          unit: "session",
+        },
+        snapshotStorage: {
+          used: 4.2,
+          limit: 20,
+          unit: "gibibyte",
+        },
+      },
+    },
+    createdAt: "2026-06-03T12:15:00Z",
+  },
+];
+
+export const mockTeamMembers: TeamMember[] = [
+  {
+    id: "member-yan-labs",
+    teamId: "team-sandpi-labs",
+    user: mockViewer,
+    role: "owner",
+    status: "active",
+    joinedAt: "2026-05-18T08:30:00Z",
+  },
+  {
+    id: "member-mira-labs",
+    teamId: "team-sandpi-labs",
+    user: {
+      id: "user-mira",
+      name: "Mira Chen",
+      email: "mira@sandpi.dev",
+      avatarInitials: "MC",
+    },
+    role: "admin",
+    status: "active",
+    joinedAt: "2026-05-20T10:00:00Z",
+  },
+  {
+    id: "member-leo-labs",
+    teamId: "team-sandpi-labs",
+    user: {
+      id: "user-leo",
+      name: "Leo Wang",
+      email: "leo@sandpi.dev",
+      avatarInitials: "LW",
+    },
+    role: "member",
+    status: "active",
+    joinedAt: "2026-06-02T09:20:00Z",
+  },
+  {
+    id: "member-ada-labs",
+    teamId: "team-sandpi-labs",
+    user: {
+      id: "user-ada",
+      name: "Ada Lin",
+      email: "ada@sandpi.dev",
+      avatarInitials: "AL",
+    },
+    role: "member",
+    status: "active",
+    joinedAt: "2026-06-12T14:10:00Z",
+  },
+  {
+    id: "member-noah-labs",
+    teamId: "team-sandpi-labs",
+    user: {
+      id: "user-noah",
+      name: "Noah Patel",
+      email: "noah@sandpi.dev",
+      avatarInitials: "NP",
+    },
+    role: "member",
+    status: "invited",
+    joinedAt: "2026-07-12T06:40:00Z",
+  },
+  {
+    id: "member-yan-side-projects",
+    teamId: "team-side-projects",
+    user: mockViewer,
+    role: "owner",
+    status: "active",
+    joinedAt: "2026-06-03T12:15:00Z",
+  },
+];
+
 export const mockEnvironments: Environment[] = [
   {
     id: "env-default",
+    teamId: "team-sandpi-labs",
     name: "Development",
     description: "The fast path for everyday coding sessions.",
     color: "#151515",
@@ -252,6 +439,7 @@ export const mockEnvironments: Environment[] = [
   },
   {
     id: "env-release",
+    teamId: "team-sandpi-labs",
     name: "Release lab",
     description: "Pinned release tooling and stricter outbound access.",
     color: "#8c5b28",
@@ -282,6 +470,32 @@ export const mockEnvironments: Environment[] = [
         status: "disabled",
       },
     ],
+  },
+  {
+    id: "env-side-projects",
+    teamId: "team-side-projects",
+    name: "Experiments",
+    description: "Small prototypes and weekend projects.",
+    color: "#6b5478",
+    status: "ready",
+    revision: 3,
+    templateId: "coding-agent",
+    rootfsSnapshotId: "rootfs-snap-experiments-r3",
+    workspaceVolumeId: "vol-experiments-seed",
+    credentialRevision: 2,
+    codingAgent: {
+      harness: "codex",
+      label: "Codex",
+      status: "connected",
+      account: "yan@example.com",
+      lastVerified: "2 hours ago",
+    },
+    networkPolicy: {
+      mode: "restricted",
+      allowedDomains: ["github.com", "api.github.com", "chatgpt.com"],
+      logDeniedRequests: true,
+    },
+    functions: [],
   },
 ];
 
@@ -359,11 +573,47 @@ const primarySession: CodexSession = {
   files: workspaceFiles,
   auditEvents,
   metrics: {
-    cpuPercent: metricSeries([4, 8, 7, 12, 19, 38, 27, 21, 32, 18, 16, 14]),
-    memoryMiB: metricSeries([382, 388, 401, 418, 446, 472, 486, 492, 516, 508, 512, 508]),
-    currentCpuPercent: 14,
-    currentMemoryMiB: 508,
-    memoryLimitMiB: 2048,
+    cpuUtilization: metricSeries(
+      [0.04, 0.08, 0.07, 0.12, 0.19, 0.38, 0.27, 0.21, 0.32, 0.18, 0.16, 0.14],
+      {
+        metric: "sandbox.cpu.utilization",
+        unit: "ratio",
+        statistic: "average",
+      },
+    ),
+    memoryWorkingSet: metricSeries(
+      [382, 388, 401, 418, 446, 472, 486, 492, 516, 508, 512, 508].map(
+        (value) => value * 1024 * 1024,
+      ),
+      {
+        metric: "sandbox.memory.working_set",
+        unit: "bytes",
+        statistic: "average",
+      },
+    ),
+    memoryLimitBytes: 2048 * 1024 * 1024,
+    networkReceive: metricSeries(
+      [96, 144, 208, 352, 680, 1210, 940, 520, 860, 1320, 780, 612].map(
+        (value) => value * 1024,
+      ),
+      {
+        metric: "sandbox.network.io",
+        unit: "bytes_per_second",
+        statistic: "rate",
+        dimensions: { direction: "receive" },
+      },
+    ),
+    networkTransmit: metricSeries(
+      [42, 58, 92, 134, 310, 540, 410, 248, 390, 620, 356, 284].map(
+        (value) => value * 1024,
+      ),
+      {
+        metric: "sandbox.network.io",
+        unit: "bytes_per_second",
+        statistic: "rate",
+        dimensions: { direction: "transmit" },
+      },
+    ),
   },
 };
 
@@ -375,6 +625,14 @@ function compactSession(
   updatedAt: string,
   unread: boolean,
 ): CodexSession {
+  const environment = mockEnvironments.find(
+    (candidate) => candidate.id === environmentId,
+  );
+
+  if (!environment) {
+    throw new Error(`Environment ${environmentId} is not available.`);
+  }
+
   return {
     ...primarySession,
     id,
@@ -386,6 +644,7 @@ function compactSession(
     sandboxId: `sbx_${id.slice(-6)}`,
     supervisorSessionId: `ses_${id.slice(-6)}`,
     workspaceVolumeId: `vol_${id.slice(-6)}`,
+    environmentRevision: environment.revision,
     harnessState: createMockCodexHarnessState(
       `thr_${id.slice(-12)}`,
       getDefaultMockCodexModel().id,
@@ -424,15 +683,36 @@ export const mockSessions: CodexSession[] = [
     "2026-07-11T15:34:00+08:00",
     true,
   ),
+  compactSession(
+    "session-harmony-shell",
+    "env-side-projects",
+    "Prototype HarmonyOS shell",
+    "waiting",
+    "2026-07-12T07:26:00+08:00",
+    false,
+  ),
 ];
 
-export function getMockBootstrap(): SandpiBootstrap {
+export function getMockBootstrap(requestedTeamId?: string): SandpiBootstrap {
+  const selectedTeam =
+    mockTeams.find((team) => team.id === requestedTeamId) ?? mockTeams[0];
+  const selectedEnvironment =
+    mockEnvironments.find((environment) => environment.teamId === selectedTeam.id) ??
+    mockEnvironments[0];
+  const selectedSession = mockSessions.find(
+    (session) => session.environmentId === selectedEnvironment.id && !session.archived,
+  );
+
   return structuredClone({
+    viewer: mockViewer,
+    teams: mockTeams,
+    deployment: mockDeployment,
     environments: mockEnvironments,
     sessions: mockSessions,
     preferences: mockPreferences,
-    selectedEnvironmentId: "env-default",
-    selectedSessionId: "session-auth-race",
+    selectedTeamId: selectedTeam.id,
+    selectedEnvironmentId: selectedEnvironment.id,
+    selectedSessionId: selectedSession?.id ?? "",
   });
 }
 
@@ -478,12 +758,19 @@ export function createMockSession(
   };
 }
 
-export function createMockEnvironment(input: { name: string }): Environment {
+export function createMockEnvironment(input: {
+  teamId: string;
+  name: string;
+}): Environment {
   const idSuffix = randomToken(8);
+  if (!mockTeams.some((team) => team.id === input.teamId)) {
+    throw new Error(`Team ${input.teamId} is not available.`);
+  }
 
   return {
     ...structuredClone(mockEnvironments[0]),
     id: `env-${idSuffix}`,
+    teamId: input.teamId,
     name: input.name,
     description: "A versioned coding environment ready for isolated sessions.",
     color: "#405f78",

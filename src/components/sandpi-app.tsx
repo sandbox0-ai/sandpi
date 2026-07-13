@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Conversation } from "@/components/conversation";
+import { AppFrame } from "@/components/app-frame";
 import { EnvironmentSettings } from "@/components/environment-settings";
 import { Inspector, type InspectorTab } from "@/components/inspector";
 import { NewEnvironmentDialog } from "@/components/new-environment-dialog";
@@ -17,6 +18,7 @@ import {
 } from "@/lib/client-preferences";
 import { forkSessionForHarness } from "@/harnesses/registry";
 import { visibleSessionsForEnvironment } from "@/lib/session-list";
+import { environmentsForTeam, sessionsForTeam } from "@/lib/team";
 import type {
   CodingSession,
   Environment,
@@ -31,6 +33,9 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
   const [environments, setEnvironments] = useState(initialData.environments);
   const [sessions, setSessions] = useState(initialData.sessions);
   const [preferences, setPreferences] = useState(initialData.preferences);
+  const [selectedTeamId, setSelectedTeamId] = useState(
+    initialData.selectedTeamId,
+  );
   const [selectedEnvironmentId, setSelectedEnvironmentId] = useState(
     initialData.selectedEnvironmentId,
   );
@@ -94,34 +99,83 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
     };
   }, []);
 
+  const selectedTeam = useMemo(
+    () =>
+      initialData.teams.find((team) => team.id === selectedTeamId) ??
+      initialData.teams[0],
+    [initialData.teams, selectedTeamId],
+  );
+
+  const teamEnvironments = useMemo(
+    () => environmentsForTeam(environments, selectedTeamId),
+    [environments, selectedTeamId],
+  );
+
+  const teamSessions = useMemo(
+    () => sessionsForTeam(sessions, environments, selectedTeamId),
+    [environments, selectedTeamId, sessions],
+  );
+
   const selectedEnvironment = useMemo(
     () =>
-      environments.find(
+      teamEnvironments.find(
         (environment) => environment.id === selectedEnvironmentId,
-      ) ?? environments[0],
-    [environments, selectedEnvironmentId],
+      ) ?? teamEnvironments[0],
+    [selectedEnvironmentId, teamEnvironments],
   );
 
   const selectedSession = useMemo(
     () =>
-      sessions.find(
+      teamSessions.find(
         (session) =>
           session.id === selectedSessionId &&
           session.environmentId === selectedEnvironmentId,
       ),
-    [selectedEnvironmentId, sessions, selectedSessionId],
+    [selectedEnvironmentId, selectedSessionId, teamSessions],
   );
 
   const settingsEnvironment = useMemo(
     () =>
-      environments.find(
+      teamEnvironments.find(
         (environment) => environment.id === settingsEnvironmentId,
       ) ?? null,
-    [environments, settingsEnvironmentId],
+    [settingsEnvironmentId, teamEnvironments],
+  );
+
+  const handleSelectTeam = useCallback(
+    (teamId: string) => {
+      const nextTeam = initialData.teams.find((team) => team.id === teamId);
+      if (!nextTeam || nextTeam.id === selectedTeamId) {
+        return;
+      }
+      const nextEnvironments = environmentsForTeam(environments, nextTeam.id);
+      const nextEnvironment = nextEnvironments[0];
+      const nextSession = nextEnvironment
+        ? visibleSessionsForEnvironment(sessions, nextEnvironment.id)[0]
+        : undefined;
+
+      setSelectedTeamId(nextTeam.id);
+      setSelectedEnvironmentId(nextEnvironment?.id ?? "");
+      setSelectedSessionId(nextSession?.id ?? "");
+      setSettingsEnvironmentId(null);
+      setInspectorOpen(false);
+      setTerminalOpen(false);
+      setSidebarOpen(false);
+      const url = new URL(window.location.href);
+      url.searchParams.set("team", nextTeam.id);
+      window.history.replaceState(window.history.state, "", url);
+    },
+    [environments, initialData.teams, selectedTeamId, sessions],
   );
 
   const handleSelectEnvironment = useCallback(
     (environmentId: string) => {
+      const environment = teamEnvironments.find(
+        (item) => item.id === environmentId,
+      );
+      if (!environment) {
+        return;
+      }
       setSelectedEnvironmentId(environmentId);
       const firstSession = visibleSessionsForEnvironment(
         sessions,
@@ -141,7 +195,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
       }
       setSidebarOpen(false);
     },
-    [sessions],
+    [sessions, teamEnvironments],
   );
 
   const handleToggleNavigation = useCallback(() => {
@@ -157,7 +211,10 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
       const session = sessions.find(
         (item) => item.id === sessionId && !item.archived,
       );
-      if (session) {
+      const environment = session
+        ? environments.find((item) => item.id === session.environmentId)
+        : undefined;
+      if (session && environment?.teamId === selectedTeamId) {
         setSelectedSessionId(sessionId);
         setSelectedEnvironmentId(session.environmentId);
         setSessions((current) =>
@@ -170,7 +227,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
       }
       setSidebarOpen(false);
     },
-    [sessions],
+    [environments, selectedTeamId, sessions],
   );
 
   const handleEnvironmentChange = useCallback(
@@ -275,11 +332,14 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
   }, []);
 
   const handleEnvironmentCreated = useCallback((environment: Environment) => {
+    if (environment.teamId !== selectedTeamId) {
+      return;
+    }
     setEnvironments((current) => [...current, environment]);
     setSelectedEnvironmentId(environment.id);
     setSelectedSessionId("");
     setNewEnvironmentOpen(false);
-  }, []);
+  }, [selectedTeamId]);
 
   const handleSessionChange = useCallback((nextSession: CodingSession) => {
     setSessions((current) =>
@@ -289,15 +349,16 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
     );
   }, []);
 
-  if (!selectedEnvironment) {
-    return <div className="empty-app">No Environment is available.</div>;
+  if (!selectedTeam || !selectedEnvironment) {
+    return <div className="empty-app">No Team Environment is available.</div>;
   }
 
   const showInspector = inspectorOpen && Boolean(selectedSession);
   const showTerminal = terminalOpen && Boolean(selectedSession);
 
   return (
-    <main
+    <AppFrame
+      as="main"
       className={`app-shell ${showInspector ? "inspector-is-open" : ""} ${
         showTerminal ? "terminal-is-open" : ""
       } ${sidebarOpen ? "sidebar-is-open" : ""} ${
@@ -309,12 +370,16 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
       </a>
       <Sidebar
         language={preferences.general.language}
-        environments={environments}
-        sessions={sessions}
+        viewer={initialData.viewer}
+        teams={initialData.teams}
+        selectedTeamId={selectedTeam.id}
+        environments={teamEnvironments}
+        sessions={teamSessions}
         selectedEnvironmentId={selectedEnvironment.id}
         selectedSessionId={selectedSession?.id ?? ""}
         onSelectEnvironment={handleSelectEnvironment}
         onSelectSession={handleSelectSession}
+        onSelectTeam={handleSelectTeam}
         onNewEnvironment={() => setNewEnvironmentOpen(true)}
         onNewSession={(environmentId) => {
           setSelectedEnvironmentId(environmentId);
@@ -404,7 +469,8 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
       {settingsEnvironment ? (
         <EnvironmentSettings
           environment={settingsEnvironment}
-          archivedSessions={sessions
+          teamName={selectedTeam.name}
+          archivedSessions={teamSessions
             .filter(
               (session) =>
                 session.environmentId === settingsEnvironment.id &&
@@ -422,11 +488,13 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
 
       {newEnvironmentOpen ? (
         <NewEnvironmentDialog
-          environments={environments}
+          teamId={selectedTeam.id}
+          teamName={selectedTeam.name}
+          environments={teamEnvironments}
           onCreated={handleEnvironmentCreated}
           onClose={() => setNewEnvironmentOpen(false)}
         />
       ) : null}
-    </main>
+    </AppFrame>
   );
 }

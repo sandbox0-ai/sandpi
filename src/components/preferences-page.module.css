@@ -1,9 +1,6 @@
 .page {
   display: grid;
-  min-height: 100dvh;
-  grid-template-rows: minmax(0, 1fr) 64px;
-  background: var(--canvas, #f7f6f2);
-  color: var(--ink, #171716);
+  grid-template-columns: var(--sidebar-width, 252px) minmax(0, 1fr);
 }
 
 .skipLink {
@@ -23,38 +20,15 @@
   transform: translateY(0);
 }
 
-.sidebarBackLink {
-  display: inline-flex;
-  width: fit-content;
-  min-height: 34px;
-  align-items: center;
-  gap: 7px;
-  padding: 0 9px;
-  border-radius: 7px;
-  color: var(--ink-soft, #62615c);
-  font-size: 11px;
-  font-weight: 600;
-  text-decoration: none;
-}
-
-.sidebarBackLink:hover {
-  background: var(--hover, #e8e6df);
-  color: var(--ink, #171716);
-}
-
-.shell {
+.workspace {
   display: grid;
+  min-width: 0;
   min-height: 0;
-  grid-template-columns: 244px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) 64px;
 }
 
-.sidebar {
-  display: flex;
-  min-height: 0;
-  flex-direction: column;
+.sidebarBody {
   padding: 18px 18px 24px 20px;
-  border-right: 1px solid var(--line, #deddd7);
-  background: var(--sidebar, #efeee9);
 }
 
 .sidebarHeading {
@@ -433,7 +407,7 @@
 .saveBar {
   z-index: 10;
   display: grid;
-  grid-template-columns: 244px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) auto;
   border-top: 1px solid var(--line, #deddd7);
   background: var(--panel, #fbfaf7);
   backdrop-filter: blur(12px);
@@ -443,7 +417,6 @@
   display: flex;
   align-items: center;
   padding: 0 28px;
-  border-right: 1px solid var(--line, #deddd7);
   color: var(--ink-faint, #8a8982);
   font-size: 10px;
 }
@@ -530,7 +503,7 @@
   animation: spin 850ms linear infinite;
 }
 
-:global(html[data-density="compact"]) .sidebar {
+:global(html[data-density="compact"]) .sidebarBody {
   padding-top: 12px;
   padding-bottom: 16px;
 }
@@ -579,21 +552,25 @@
 
 @media (max-width: 720px) {
   .page {
-    min-height: 100dvh;
-    grid-template-rows: auto minmax(0, 1fr) 66px;
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
   }
 
-  .shell {
-    display: contents;
+  .workspace {
+    grid-row: 2;
+    grid-template-rows: minmax(0, 1fr) 66px;
   }
 
   .sidebar {
-    display: block;
     grid-row: 1;
-    padding: 11px 16px 10px;
-    overflow: hidden;
+    height: auto;
     border-right: 0;
     border-bottom: 1px solid var(--line, #deddd7);
+  }
+
+  .sidebarBody {
+    padding: 0 16px 10px;
+    overflow: hidden;
   }
 
   .sidebarHeading p,
@@ -608,6 +585,10 @@
 
   .sidebarHeading {
     margin-top: 9px;
+  }
+
+  .sidebarFooter {
+    display: none;
   }
 
   .navigation {
@@ -628,10 +609,6 @@
     min-height: 35px;
     flex: 0 0 auto;
     padding: 0 10px;
-  }
-
-  .content {
-    grid-row: 2;
   }
 
   .section {
@@ -656,7 +633,6 @@
   }
 
   .saveBar {
-    grid-row: 3;
     grid-template-columns: minmax(0, 1fr) auto;
   }
 

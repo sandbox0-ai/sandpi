@@ -11,6 +11,7 @@ test("builds an isolated session from one Environment revision", () => {
   const plan = buildSessionForkPlan({
     environment: {
       id: "env-default",
+      teamId: "team-sandpi-labs",
       revision: 12,
       templateId: "coding-agent",
       rootfsSnapshotId: "snap-rootfs-12",
@@ -32,6 +33,7 @@ test("builds an isolated session from one Environment revision", () => {
   });
 
   assert.equal(plan.hardTtlSeconds, 30 * 24 * 60 * 60);
+  assert.equal(plan.teamId, "team-sandpi-labs");
   assert.equal(plan.credentialRevision, 4);
   assert.equal(plan.workspaceRoot, SESSION_WORKSPACE_ROOT);
   assert.deepEqual(

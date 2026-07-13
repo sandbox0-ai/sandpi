@@ -22,6 +22,8 @@ import type { Environment } from "@/lib/types";
 import styles from "./new-environment-dialog.module.css";
 
 interface NewEnvironmentDialogProps {
+  teamId: string;
+  teamName: string;
   environments: Environment[];
   onCreated: (environment: Environment) => void;
   onClose: () => void;
@@ -37,6 +39,8 @@ function normalizedName(value: string) {
 }
 
 export function NewEnvironmentDialog({
+  teamId,
+  teamName,
   environments,
   onCreated,
   onClose,
@@ -148,6 +152,7 @@ export function NewEnvironmentDialog({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          teamId,
           name: name.trim(),
         }),
       });
@@ -201,7 +206,8 @@ export function NewEnvironmentDialog({
               <span className={styles.kicker}>Create a reusable workspace</span>
               <h1 id={titleId}>New Environment</h1>
               <p id={descriptionId}>
-                Name the workspace and choose the coding agent every new Session will use.
+                Create a reusable workspace for {teamName}. Every new Session inherits its
+                coding agent and Team ownership.
               </p>
             </div>
             <button

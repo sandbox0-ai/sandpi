@@ -4,7 +4,7 @@ Sandpi is a remote, multi-harness coding agent application built on Sandbox0. Th
 
 This first slice is a Next.js full-stack interaction prototype. The UI and API routes use mock data, while the backend already imports the local [`sdk-js`](../sdk-js) package behind a server-only integration boundary.
 
-The MVP is a free public beta. It has no Sandpi subscription, pricing or product-usage quota. Sandpi does not include, resell or pay for model usage now or in future plans: users connect their own provider account through the native coding-agent harness, and provider billing and limits remain between that user and the provider.
+Sandpi is an independent product with its own users, Teams, subscriptions and quotas. Sandpi does not include, resell or pay for model usage: users connect their own provider account through the native coding-agent harness, and provider billing and limits remain between that user and the provider.
 
 ## Local development
 
@@ -17,6 +17,7 @@ The mock UI does not require credentials. A Sandpi deployment selects its Sandbo
 
 ## Product model
 
+- A **Team** is the only Sandpi tenant and resource-ownership boundary. A one-person account is represented by a one-member Team rather than a separate personal ownership model.
 - An **Environment** groups Sessions and binds a coding-agent harness, official agent authentication, Sandbox template and network policy.
 - A **Session** gets an isolated Sandbox and a private fork of the Environment workspace Volume.
 - `/workspace` is an arbitrary directory, not an implicit Git repository. It may contain zero, one or multiple repositories, which are discovered as nested workspace context rather than stored as Session-level branch state.
@@ -30,6 +31,7 @@ The mock UI does not require credentials. A Sandpi deployment selects its Sandbo
 - Sessions can be searched across titles, Environments and coding agents from the Sidebar or with `Cmd/Ctrl+K`.
 - A Web Terminal connects to the same Sandbox Supervisor boundary and spans the conversation plus inspector width.
 - Personal Preferences live at `/preferences` as a standalone page.
+- Team membership, subscription and quota state live at `/team` in the mock frontend.
 
 The mock provisioning contract is implemented in `src/lib/environment-blueprint.ts` and exposed by `POST /api/sessions`.
 
@@ -43,17 +45,27 @@ The mock provisioning contract is implemented in `src/lib/environment-blueprint.
 
 ## Commercial boundary
 
-- Self-hosted Sandpi is free and uses the operator-selected Sandbox0 deployment.
-- The MVP Cloud public beta is free and deliberately has no subscription, price catalog or allowance ledger.
-- A future paid Sandpi Cloud plan may charge for Sandpi-managed runtime, storage, networking and product services only. It must not bundle coding-agent model usage.
+- Sandpi owns its subscription and quota ledger independently from Sandbox0. The current frontend uses mock plan and usage data; billing is not connected yet.
+- Sandpi subscriptions are billed monthly. The Team's shared active-execution allowance resets weekly and does not roll over; concurrency and snapshot storage are separate quota dimensions.
+- Sandpi plans may charge for Sandpi-managed runtime, storage, networking and product services only. They must not bundle coding-agent model usage.
 - Every provider account is authenticated through its native harness. Sandpi must not pool accounts, resell a consumer coding plan or present provider usage as Sandpi usage.
-- Sandbox0 remains the infrastructure usage-truth layer. Any future Sandpi Cloud service entitlement belongs in the cloud backend rather than the open-source Sandbox0 metering ledger.
+- Sandbox0 metering may supply infrastructure observations, but Sandpi's subscription periods, entitlements and admission decisions belong to the Sandpi backend.
+- Self-hosted Sandpi uses the operator-selected Sandbox0 deployment. Sandbox0 and Sandpi remain separate products with separate identity and commercial boundaries.
+
+## Identity and deployment boundary
+
+- Sandpi Cloud uses a Sandpi-owned Auth0 tenant. It does not reuse Sandbox0 Cloud accounts, Auth0 applications, users or Teams.
+- A private Sandpi deployment replaces the Cloud identity provider through Sandpi's OIDC contract. The required identity claims are `sub`, `email` and `email_verified`; `name`, `picture` and `groups` are optional inputs for profile and group-to-role mapping.
+- OIDC identifies a Sandpi user. It never authenticates the deployment to Sandbox0 and never carries a Sandbox0 API key.
+- `SANDBOX0_API_HOST` and `SANDBOX0_API_KEY` select one Sandbox0 deployment for the whole Sandpi backend. They are fixed at deployment time and are never configurable by a user or Team.
+- Because a deployment API key does not identify a Sandpi Team, the Sandpi database is authoritative for Team ownership of every Environment, Sandbox, Volume and Session. The backend authorizes that ownership before making SDK calls.
 
 ## Mock API
 
 - `GET /api/bootstrap`
 - `GET|POST /api/environments`
 - `GET|POST /api/sessions`
+- `GET /api/teams`
 - `GET /api/sessions/{sessionId}/events`
 - `GET /api/sessions/{sessionId}/terminal`
 - `GET /api/integrations/sandbox0/capabilities`
@@ -64,8 +76,9 @@ The mock provisioning contract is implemented in `src/lib/environment-blueprint.
 Preferences are split by ownership instead of putting every setting into one user record:
 
 - Personal: language, time zone, send shortcut, appearance and notifications.
+- Team: members, roles, subscription, weekly execution allowance and resource quotas.
 - Environment: coding agent, network policy, functions and sharing.
-- Deployment administrator: Sandpi public URL, SSO, database, Sandbox0 API Host/API Key, secret delivery and observability.
+- Deployment administrator: Sandpi public URL, Cloud Auth0 or private OIDC, database, Sandbox0 API Host/API Key, secret delivery and observability.
 
 Self-hosted Sandpi should inject Sandbox0 credentials through its deployment secret mechanism. Sandpi does not expose endpoint or credential overrides to end users, so all Sessions in one deployment use the operator-selected Sandbox0 control plane.
 

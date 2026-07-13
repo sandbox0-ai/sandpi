@@ -1,8 +1,13 @@
 import { NextResponse } from "next/server";
 
-import { createMockEnvironment, mockEnvironments } from "@/lib/mock-data";
+import {
+  createMockEnvironment,
+  mockEnvironments,
+  mockTeams,
+} from "@/lib/mock-data";
 
 interface CreateEnvironmentRequest {
+  teamId?: string;
   name?: string;
 }
 
@@ -13,6 +18,14 @@ export async function GET() {
 export async function POST(request: Request) {
   const body = (await request.json()) as CreateEnvironmentRequest;
   const name = body.name?.trim();
+  const team = mockTeams.find((item) => item.id === body.teamId);
+
+  if (!team) {
+    return NextResponse.json(
+      { error: { code: "team_not_found", message: "Team not found." } },
+      { status: 404 },
+    );
+  }
 
   if (!name) {
     return NextResponse.json(
@@ -22,6 +35,7 @@ export async function POST(request: Request) {
   }
 
   const environment = createMockEnvironment({
+    teamId: team.id,
     name,
   });
 

@@ -7,6 +7,93 @@ export type HarnessId = "codex" | "claude-code" | "opencode" | "pi";
 
 export type SessionStatus = "running" | "waiting" | "paused" | "completed";
 
+export type TeamRole = "owner" | "admin" | "member";
+
+export interface SandpiUser {
+  id: string;
+  name: string;
+  email: string;
+  avatarInitials: string;
+}
+
+export interface TeamMember {
+  id: string;
+  teamId: string;
+  user: SandpiUser;
+  role: TeamRole;
+  status: "active" | "invited";
+  joinedAt: string;
+}
+
+export interface MeteredQuota {
+  used: number;
+  limit: number;
+  unit: "minute" | "session" | "gibibyte";
+}
+
+export interface WeeklyExecutionQuota extends MeteredQuota {
+  unit: "minute";
+  window: "weekly";
+  resetsAt: string;
+}
+
+export interface TeamSubscription {
+  id: string;
+  planId: string;
+  planName: string;
+  status: "trialing" | "active" | "past-due" | "canceled";
+  billingCadence: "monthly";
+  currentPeriodStartsAt: string;
+  currentPeriodEndsAt: string;
+  seats: {
+    used: number;
+    included: number;
+  };
+  quotas: {
+    /**
+     * Shared Team pool for Sandpi-managed active execution time. It never represents
+     * coding-agent model tokens, requests or provider-plan usage.
+     */
+    weeklyExecution: WeeklyExecutionQuota;
+    concurrentSessions: MeteredQuota & { unit: "session" };
+    snapshotStorage: MeteredQuota & { unit: "gibibyte" };
+  };
+}
+
+/**
+ * Team is Sandpi's only tenant boundary. A single-person account is represented by a
+ * one-member Team instead of a second personal-resource ownership model.
+ */
+export interface Team {
+  id: string;
+  name: string;
+  slug: string;
+  color: string;
+  currentUserRole: TeamRole;
+  memberCount: number;
+  subscription: TeamSubscription;
+  createdAt: string;
+}
+
+/**
+ * Public deployment metadata only. Auth provider credentials and Sandbox0 API Host/API Key
+ * are server-side deployment configuration and must never be serialized into bootstrap data.
+ */
+export interface SandpiDeploymentSummary {
+  mode: "cloud" | "self-hosted";
+  identity: {
+    protocol: "oidc";
+    provider: "sandpi-auth0" | "deployment-oidc";
+    label: string;
+    managedBy: "sandpi" | "deployment";
+  };
+  runtime: {
+    provider: "sandbox0";
+    status: "configured" | "mock";
+    configurationScope: "deployment";
+  };
+}
+
 export interface NativeHarnessNotification {
   method: string;
   params: unknown;
@@ -54,6 +141,8 @@ export interface EnvironmentFunction {
 
 export interface Environment {
   id: string;
+  /** Immutable Sandpi tenant ownership; never inferred from the Sandbox0 API key. */
+  teamId: string;
   name: string;
   description: string;
   color: string;
@@ -116,12 +205,33 @@ export interface MetricPoint {
   value: number;
 }
 
+export interface MetricSegment {
+  points: MetricPoint[];
+}
+
+/**
+ * JSON-safe projection of an sdk-js runtime metric series. Keep `segments` intact: Sandbox0
+ * starts a new segment after a runtime restart or collector reset, and clients must never draw
+ * a line across that boundary.
+ */
+export interface RuntimeMetricSeries {
+  metric:
+    | "sandbox.cpu.utilization"
+    | "sandbox.memory.working_set"
+    | "sandbox.network.io";
+  unit: "ratio" | "bytes" | "bytes_per_second";
+  statistic: "average" | "rate";
+  dimensions?: Record<string, string>;
+  segments: MetricSegment[];
+}
+
 export interface SessionMetrics {
-  cpuPercent: MetricPoint[];
-  memoryMiB: MetricPoint[];
-  currentCpuPercent: number;
-  currentMemoryMiB: number;
-  memoryLimitMiB: number;
+  cpuUtilization: RuntimeMetricSeries;
+  memoryWorkingSet: RuntimeMetricSeries;
+  memoryLimitBytes: number;
+  /** `sandbox.network.io` queried as a rate and split by its `direction` dimension. */
+  networkReceive: RuntimeMetricSeries;
+  networkTransmit: RuntimeMetricSeries;
 }
 
 export interface SessionOrigin {
@@ -172,9 +282,13 @@ export interface CodingSession<
 }
 
 export interface SandpiBootstrap {
+  viewer: SandpiUser;
+  teams: Team[];
+  deployment: SandpiDeploymentSummary;
   environments: Environment[];
   sessions: CodingSession[];
   preferences: SandpiPreferences;
+  selectedTeamId: string;
   selectedEnvironmentId: string;
   selectedSessionId: string;
 }

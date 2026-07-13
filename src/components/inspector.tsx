@@ -2,6 +2,8 @@
 
 import {
   Activity,
+  ArrowDownToLine,
+  ArrowUpFromLine,
   ChevronDown,
   ChevronRight,
   Copy,
@@ -13,12 +15,17 @@ import {
   Folder,
   FolderOpen,
   Gauge,
+  Network,
   Share2,
   ShieldCheck,
   X,
 } from "lucide-react";
 import { useMemo, useState } from "react";
 
+import {
+  InteractiveMetricChart,
+  type MetricChartSeries,
+} from "@/components/metric-chart";
 import {
   formatAuditTime,
   getOperationUiCopy,
@@ -27,7 +34,7 @@ import {
 import type {
   AuditEvent,
   CodingSession,
-  MetricPoint,
+  RuntimeMetricSeries,
   WorkspaceFile,
 } from "@/lib/types";
 
@@ -135,39 +142,77 @@ function FileTree({
   );
 }
 
-function Sparkline({
-  points,
-  max,
-  title,
-}: {
-  points: MetricPoint[];
-  max?: number;
-  title: string;
-}) {
-  const width = 286;
-  const height = 76;
-  const values = points.map((point) => point.value);
-  const upper = max ?? Math.max(...values, 1);
-  const path = points
-    .map((point, index) => {
-      const x = (index / Math.max(points.length - 1, 1)) * width;
-      const y = height - (point.value / upper) * (height - 10) - 5;
-      return `${index === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`;
-    })
-    .join(" ");
-  const area = `${path} L${width},${height} L0,${height} Z`;
-
-  return (
-    <svg className="sparkline" viewBox={`0 0 ${width} ${height}`} role="img">
-      <title>{title}</title>
-      <path
-        className="sparkline-grid"
-        d={`M0,20 H${width} M0,40 H${width} M0,60 H${width}`}
-      />
-      <path className="sparkline-area" d={area} />
-      <path className="sparkline-line" d={path} />
-    </svg>
+function metricValues(series: RuntimeMetricSeries) {
+  return series.segments.flatMap((segment) =>
+    segment.points.map((point) => point.value),
   );
+}
+
+function lastMetricValue(series: RuntimeMetricSeries) {
+  return series.segments.at(-1)?.points.at(-1)?.value ?? 0;
+}
+
+function averageMetricValue(series: RuntimeMetricSeries) {
+  const values = metricValues(series);
+  return values.reduce((total, value) => total + value, 0) / Math.max(values.length, 1);
+}
+
+function peakMetricValue(series: RuntimeMetricSeries) {
+  return Math.max(...metricValues(series), 0);
+}
+
+function metricLocale(language: OperationLanguage) {
+  return language === "zh-CN" ? "zh-CN" : "en-US";
+}
+
+function formatPercent(value: number, language: OperationLanguage) {
+  return new Intl.NumberFormat(metricLocale(language), {
+    style: "percent",
+    maximumFractionDigits: value < 0.1 ? 1 : 0,
+  }).format(value);
+}
+
+function formatMemory(value: number, language: OperationLanguage) {
+  return `${new Intl.NumberFormat(metricLocale(language), {
+    maximumFractionDigits: 0,
+  }).format(value / 1024 / 1024)} MiB`;
+}
+
+function formatBytesPerSecond(value: number, language: OperationLanguage) {
+  const units = ["B/s", "KiB/s", "MiB/s", "GiB/s"];
+  let amount = Math.max(value, 0);
+  let unitIndex = 0;
+  while (amount >= 1024 && unitIndex < units.length - 1) {
+    amount /= 1024;
+    unitIndex += 1;
+  }
+  return `${new Intl.NumberFormat(metricLocale(language), {
+    maximumFractionDigits: amount < 10 && unitIndex > 0 ? 1 : 0,
+  }).format(amount)} ${units[unitIndex]}`;
+}
+
+function formatMetricTime(
+  at: string,
+  language: OperationLanguage,
+  timeZone: string,
+) {
+  const options: Intl.DateTimeFormatOptions = {
+    hour: "2-digit",
+    minute: "2-digit",
+  };
+  if (timeZone !== "auto") {
+    options.timeZone = timeZone;
+  }
+  try {
+    return new Intl.DateTimeFormat(metricLocale(language), options).format(
+      new Date(at),
+    );
+  } catch {
+    delete options.timeZone;
+    return new Intl.DateTimeFormat(metricLocale(language), options).format(
+      new Date(at),
+    );
+  }
 }
 
 function AuditRow({
@@ -313,6 +358,17 @@ export function Inspector({
   const [shareOpen, setShareOpen] = useState(false);
   const selectedFile =
     allFiles.find((file) => file.id === selectedFileId) ?? initialFile;
+  const cpuNow = lastMetricValue(session.metrics.cpuUtilization);
+  const memoryNow = lastMetricValue(session.metrics.memoryWorkingSet);
+  const networkReceiveNow = lastMetricValue(session.metrics.networkReceive);
+  const networkTransmitNow = lastMetricValue(session.metrics.networkTransmit);
+  const chartCopy = {
+    instructions: ui.metricChartInstructions,
+    legendLabel: ui.metricSeries,
+    toggleSeriesLabel: (label: string, visible: boolean) =>
+      visible ? ui.hideMetricSeries(label) : ui.showMetricSeries(label),
+    formatTime: (at: string) => formatMetricTime(at, language, timeZone),
+  };
 
   return (
     <aside className="inspector" aria-label={ui.label}>
@@ -478,16 +534,37 @@ export function Inspector({
               <span>
                 <Gauge size={15} /> CPU
               </span>
-              <strong>{session.metrics.currentCpuPercent}%</strong>
+              <strong>{formatPercent(cpuNow, language)}</strong>
             </header>
-            <Sparkline
-              points={session.metrics.cpuPercent}
-              max={100}
-              title={ui.metricChart}
+            <InteractiveMetricChart
+              series={[
+                {
+                  id: "cpu",
+                  label: "CPU",
+                  segments: session.metrics.cpuUtilization.segments,
+                  tone: "green",
+                },
+              ] satisfies MetricChartSeries[]}
+              max={1}
+              title={`CPU · ${ui.metricChart}`}
+              formatValue={(value) => formatPercent(value, language)}
+              {...chartCopy}
             />
             <footer>
-              <span>{ui.average(18)}</span>
-              <span>{ui.peak(38)}</span>
+              <span>
+                {ui.average(
+                  Math.round(
+                    averageMetricValue(session.metrics.cpuUtilization) * 100,
+                  ),
+                )}
+              </span>
+              <span>
+                {ui.peak(
+                  Math.round(
+                    peakMetricValue(session.metrics.cpuUtilization) * 100,
+                  ),
+                )}
+              </span>
             </footer>
           </section>
           <section className="metric-card">
@@ -495,25 +572,76 @@ export function Inspector({
               <span>
                 <Activity size={15} /> {ui.memory}
               </span>
-              <strong>{session.metrics.currentMemoryMiB} MiB</strong>
+              <strong>{formatMemory(memoryNow, language)}</strong>
             </header>
-            <Sparkline
-              points={session.metrics.memoryMiB}
-              max={session.metrics.memoryLimitMiB}
-              title={ui.metricChart}
+            <InteractiveMetricChart
+              series={[
+                {
+                  id: "memory",
+                  label: ui.memory,
+                  segments: session.metrics.memoryWorkingSet.segments,
+                  tone: "green",
+                },
+              ] satisfies MetricChartSeries[]}
+              max={session.metrics.memoryLimitBytes}
+              title={`${ui.memory} · ${ui.metricChart}`}
+              formatValue={(value) => formatMemory(value, language)}
+              {...chartCopy}
             />
             <footer>
               <span>
                 {ui.percentOfLimit(
                   Math.round(
-                    (session.metrics.currentMemoryMiB /
-                      session.metrics.memoryLimitMiB) *
-                      100,
+                    (memoryNow / session.metrics.memoryLimitBytes) * 100,
                   ),
                 )}
               </span>
               <span>
-                {ui.memoryLimit(session.metrics.memoryLimitMiB / 1024)}
+                {ui.memoryLimit(
+                  session.metrics.memoryLimitBytes / 1024 / 1024 / 1024,
+                )}
+              </span>
+            </footer>
+          </section>
+          <section className="metric-card">
+            <header>
+              <span>
+                <Network size={15} /> {ui.networkTraffic}
+              </span>
+              <strong>
+                {formatBytesPerSecond(
+                  networkReceiveNow + networkTransmitNow,
+                  language,
+                )}
+              </strong>
+            </header>
+            <InteractiveMetricChart
+              series={[
+                {
+                  id: "network-receive",
+                  label: ui.received,
+                  segments: session.metrics.networkReceive.segments,
+                  tone: "blue",
+                },
+                {
+                  id: "network-transmit",
+                  label: ui.sent,
+                  segments: session.metrics.networkTransmit.segments,
+                  tone: "amber",
+                },
+              ] satisfies MetricChartSeries[]}
+              title={`${ui.networkTraffic} · ${ui.metricChart}`}
+              formatValue={(value) => formatBytesPerSecond(value, language)}
+              {...chartCopy}
+            />
+            <footer className="metric-network-summary">
+              <span>
+                <ArrowDownToLine size={11} /> {ui.received}{" "}
+                {formatBytesPerSecond(networkReceiveNow, language)}
+              </span>
+              <span>
+                <ArrowUpFromLine size={11} /> {ui.sent}{" "}
+                {formatBytesPerSecond(networkTransmitNow, language)}
               </span>
             </footer>
           </section>

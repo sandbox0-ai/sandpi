@@ -3,30 +3,47 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
+  Check,
   CircleHelp,
+  CreditCard,
   PanelLeftClose,
   Pin,
   Plus,
   Search,
   Settings,
   Settings2,
+  UsersRound,
   X,
 } from "lucide-react";
 
 import { SessionActionsMenu } from "@/components/session-actions-menu";
 import { SessionSearchDialog } from "@/components/session-search-dialog";
+import {
+  SidebarAccountSummary,
+} from "@/components/sidebar-primitives";
+import { AppSidebar } from "@/components/app-frame";
 import { getOperationUiCopy, type OperationLanguage } from "@/lib/operation-ui";
-import type { CodingSession, Environment } from "@/lib/types";
+import { quotaPercent } from "@/lib/team";
+import type {
+  CodingSession,
+  Environment,
+  SandpiUser,
+  Team,
+} from "@/lib/types";
 import { visibleSessionsForEnvironment } from "@/lib/session-list";
 
 interface SidebarProps {
   language: OperationLanguage;
+  viewer: SandpiUser;
+  teams: Team[];
+  selectedTeamId: string;
   environments: Environment[];
   sessions: CodingSession[];
   selectedEnvironmentId: string;
   selectedSessionId: string;
   onSelectEnvironment: (environmentId: string) => void;
   onSelectSession: (sessionId: string) => void;
+  onSelectTeam: (teamId: string) => void;
   onNewEnvironment: () => void;
   onNewSession: (environmentId: string) => void;
   onEnvironmentSettings: (environmentId: string) => void;
@@ -63,12 +80,16 @@ function UnreadActivityDot({
 
 export function Sidebar({
   language,
+  viewer,
+  teams,
+  selectedTeamId,
   environments,
   sessions,
   selectedEnvironmentId,
   selectedSessionId,
   onSelectEnvironment,
   onSelectSession,
+  onSelectTeam,
   onNewEnvironment,
   onNewSession,
   onEnvironmentSettings,
@@ -80,6 +101,8 @@ export function Sidebar({
   onCloseMobile,
 }: SidebarProps) {
   const ui = getOperationUiCopy(language).sidebar;
+  const selectedTeam =
+    teams.find((team) => team.id === selectedTeamId) ?? teams[0];
   const unreadLabel = language === "zh-CN" ? "未读" : "Unread";
   const [sessionSearchOpen, setSessionSearchOpen] = useState(false);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
@@ -142,7 +165,9 @@ export function Sidebar({
     event: React.KeyboardEvent<HTMLDivElement>,
   ) {
     const menuItems = Array.from(
-      event.currentTarget.querySelectorAll<HTMLElement>("[role='menuitem']"),
+      event.currentTarget.querySelectorAll<HTMLElement>(
+        "[role='menuitem'], [role='menuitemradio']",
+      ),
     );
     const activeIndex = menuItems.indexOf(document.activeElement as HTMLElement);
     let nextIndex: number | null = null;
@@ -163,36 +188,171 @@ export function Sidebar({
     }
   }
 
-  return (
+  const accountFooter = (
     <>
-      <aside className="sidebar" aria-label={ui.navigation}>
-        <div className="sidebar-brand-row">
-          <div className="brand-lockup" aria-label="Sandpi">
-            <span className="brand-mark" aria-hidden="true">
-              <span />
-              <span />
-            </span>
-            <span>sandpi</span>
+      <button
+        ref={accountTriggerRef}
+        type="button"
+        className={`account-menu-trigger ${accountMenuOpen ? "is-open" : ""}`}
+        aria-label={ui.accountMenu}
+        aria-haspopup="menu"
+        aria-expanded={accountMenuOpen}
+        onClick={() => setAccountMenuOpen((open) => !open)}
+        onKeyDown={(event) => {
+          if (
+            !accountMenuOpen &&
+            (event.key === "ArrowUp" || event.key === "ArrowDown")
+          ) {
+            event.preventDefault();
+            setAccountMenuOpen(true);
+          }
+        }}
+      >
+        <SidebarAccountSummary
+          viewer={viewer}
+          context={selectedTeam?.name ?? ui.noTeam}
+        />
+      </button>
+      {accountMenuOpen ? (
+        <div
+          ref={accountMenuRef}
+          className="sidebar-account-menu"
+          role="menu"
+          aria-label={ui.accountActions}
+          onKeyDown={handleAccountMenuKeyDown}
+        >
+          <div className="account-menu-section-label">{ui.switchTeam}</div>
+          <div className="account-team-list" role="group" aria-label={ui.teams}>
+            {teams.map((team) => {
+              const selected = team.id === selectedTeamId;
+              return (
+                <button
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={selected}
+                  key={team.id}
+                  onClick={() => {
+                    onSelectTeam(team.id);
+                    setAccountMenuOpen(false);
+                  }}
+                >
+                  <span
+                    className="account-team-avatar"
+                    style={{ backgroundColor: team.color }}
+                    aria-hidden="true"
+                  >
+                    {team.name.slice(0, 1)}
+                  </span>
+                  <span className="account-team-copy">
+                    <strong>{team.name}</strong>
+                    <small>{ui.members(team.memberCount)}</small>
+                  </span>
+                  {selected ? <Check size={14} aria-label={ui.currentTeam} /> : null}
+                </button>
+              );
+            })}
           </div>
-          <button
-            className="icon-button sidebar-collapse-button"
-            type="button"
-            aria-label={ui.collapse}
-            title={ui.collapse}
-            onClick={onCollapse}
+          {selectedTeam ? (
+            <div className="account-quota-summary">
+              <div>
+                <span>
+                  <CreditCard size={13} aria-hidden="true" />
+                  {selectedTeam.subscription.planName}
+                </span>
+                <strong>
+                  {quotaPercent(
+                    selectedTeam.subscription.quotas.weeklyExecution.used,
+                    selectedTeam.subscription.quotas.weeklyExecution.limit,
+                  )}
+                  %
+                </strong>
+              </div>
+              <span className="account-quota-track" aria-hidden="true">
+                <i
+                  style={{
+                    width: `${quotaPercent(
+                      selectedTeam.subscription.quotas.weeklyExecution.used,
+                      selectedTeam.subscription.quotas.weeklyExecution.limit,
+                    )}%`,
+                  }}
+                />
+              </span>
+              <small>
+                {ui.weeklyExecution(
+                  Math.round(
+                    selectedTeam.subscription.quotas.weeklyExecution.used / 60,
+                  ),
+                  Math.round(
+                    selectedTeam.subscription.quotas.weeklyExecution.limit / 60,
+                  ),
+                )}
+              </small>
+            </div>
+          ) : null}
+          <div className="account-menu-separator" role="separator" />
+          {selectedTeam ? (
+            <Link
+              href={`/team?team=${encodeURIComponent(selectedTeam.id)}`}
+              role="menuitem"
+              onClick={() => setAccountMenuOpen(false)}
+            >
+              <UsersRound size={15} aria-hidden="true" />
+              {ui.teamSettings}
+            </Link>
+          ) : null}
+          <Link
+            href={
+              selectedTeam
+                ? `/preferences?team=${encodeURIComponent(selectedTeam.id)}`
+                : "/preferences"
+            }
+            role="menuitem"
+            onClick={() => setAccountMenuOpen(false)}
           >
-            <PanelLeftClose size={17} aria-hidden="true" />
-          </button>
+            <Settings size={15} aria-hidden="true" />
+            {ui.preferences}
+          </Link>
           <button
-            className="icon-button sidebar-close-button"
             type="button"
-            aria-label={ui.close}
-            onClick={onCloseMobile}
+            role="menuitem"
+            onClick={() => setAccountMenuOpen(false)}
           >
-            <X size={18} />
+            <CircleHelp size={15} aria-hidden="true" />
+            {ui.help}
           </button>
         </div>
+      ) : null}
+    </>
+  );
 
+  return (
+    <>
+      <AppSidebar
+        className="sidebar"
+        label={ui.navigation}
+        footer={accountFooter}
+        headerAction={
+          <>
+            <button
+              className="icon-button sidebar-collapse-button"
+              type="button"
+              aria-label={ui.collapse}
+              title={ui.collapse}
+              onClick={onCollapse}
+            >
+              <PanelLeftClose size={17} aria-hidden="true" />
+            </button>
+            <button
+              className="icon-button sidebar-close-button"
+              type="button"
+              aria-label={ui.close}
+              onClick={onCloseMobile}
+            >
+              <X size={18} />
+            </button>
+          </>
+        }
+      >
         <button
           className="new-session-button"
           type="button"
@@ -314,60 +474,7 @@ export function Sidebar({
             })}
           </div>
         </div>
-
-        <div className="sidebar-footer">
-          <button
-            ref={accountTriggerRef}
-            type="button"
-            className={`account-menu-trigger ${accountMenuOpen ? "is-open" : ""}`}
-            aria-label={ui.accountMenu}
-            aria-haspopup="menu"
-            aria-expanded={accountMenuOpen}
-            onClick={() => setAccountMenuOpen((open) => !open)}
-            onKeyDown={(event) => {
-              if (
-                !accountMenuOpen &&
-                (event.key === "ArrowUp" || event.key === "ArrowDown")
-              ) {
-                event.preventDefault();
-                setAccountMenuOpen(true);
-              }
-            }}
-          >
-            <span className="account-avatar">YA</span>
-            <span className="account-copy">
-              <strong>Yan Assistant</strong>
-              <small>{ui.personalTeam}</small>
-            </span>
-          </button>
-          {accountMenuOpen ? (
-            <div
-              ref={accountMenuRef}
-              className="sidebar-account-menu"
-              role="menu"
-              aria-label={ui.accountActions}
-              onKeyDown={handleAccountMenuKeyDown}
-            >
-              <Link
-                href="/preferences"
-                role="menuitem"
-                onClick={() => setAccountMenuOpen(false)}
-              >
-                <Settings size={15} aria-hidden="true" />
-                {ui.preferences}
-              </Link>
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => setAccountMenuOpen(false)}
-              >
-                <CircleHelp size={15} aria-hidden="true" />
-                {ui.help}
-              </button>
-            </div>
-          ) : null}
-        </div>
-      </aside>
+      </AppSidebar>
       {sessionSearchOpen ? (
         <SessionSearchDialog
           environments={environments}
