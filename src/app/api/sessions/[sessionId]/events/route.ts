@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { nativeEventsForSession } from "@/harnesses/registry";
 import { mockSessions } from "@/lib/mock-data";
 
 export async function GET(
@@ -16,11 +17,17 @@ export async function GET(
     );
   }
 
+  const events = nativeEventsForSession(session);
   return NextResponse.json({
-    data: session.auditEvents,
+    data: events,
     meta: {
       mode: "mock",
-      recovery: { cursor: session.auditEvents[0]?.id, transport: "sse" },
+      harness: session.harness,
+      nativeProtocol: session.harnessState.protocol,
+      recovery: {
+        cursor: events.at(-1)?.sequence ?? 0,
+        transport: "sse",
+      },
     },
   });
 }

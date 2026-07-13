@@ -432,8 +432,8 @@ export function EnvironmentSettings({
                       Credential revision {draft.credentialRevision}
                     </strong>
                     <p>
-                      Stored with the Environment baseline and materialized only
-                      into isolated session Sandboxes.
+                      Referenced by the Environment; secret material stays outside
+                      baseline snapshots and is injected only when a Session starts.
                     </p>
                   </div>
                 </div>

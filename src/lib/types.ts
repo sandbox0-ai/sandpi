@@ -1,6 +1,33 @@
+/**
+ * Codex is the only MVP implementation. The other identifiers reserve the Environment-level
+ * integration boundary; they must not appear as a per-Session switch before their native
+ * harness adapters are implemented.
+ */
 export type HarnessId = "codex" | "claude-code" | "opencode" | "pi";
 
 export type SessionStatus = "running" | "waiting" | "paused" | "completed";
+
+export interface NativeHarnessNotification {
+  method: string;
+  params: unknown;
+}
+
+/**
+ * Sandpi's durable transport envelope preserves ordering and replay metadata only. The native
+ * notification stays opaque to the shared runtime and is interpreted exclusively by the UI
+ * module for `harness`. Do not add normalized message, tool-call or approval fields here.
+ */
+export interface HarnessEventEnvelope<
+  THarness extends HarnessId = HarnessId,
+  TNotification extends NativeHarnessNotification = NativeHarnessNotification,
+> {
+  harness: THarness;
+  harnessVersion: string;
+  protocolVersion: string;
+  sequence: number;
+  receivedAt: string;
+  notification: TNotification;
+}
 
 export interface HarnessAccount {
   harness: HarnessId;
@@ -35,6 +62,11 @@ export interface Environment {
   templateId: string;
   rootfsSnapshotId: string;
   workspaceVolumeId: string;
+  /**
+   * Opaque revision of Environment-scoped harness authentication in the secret plane.
+   * Credential material must stay outside rootfs and Workspace Volume snapshots so a Session
+   * or Turn fork cannot copy provider credentials or restore a rotated refresh token.
+   */
   credentialRevision: number;
   codingAgent: HarnessAccount;
   networkPolicy: NetworkPolicy;
@@ -54,42 +86,6 @@ export interface SandpiPreferences {
   notifications: {
     sessionCompleted: boolean;
     needsAttention: boolean;
-  };
-}
-
-export interface ToolActivity {
-  id: string;
-  label: string;
-  detail: string;
-  status: "completed" | "running" | "failed";
-  duration?: string;
-}
-
-export interface MessageImageAttachment {
-  id: string;
-  kind: "image";
-  name: string;
-  mimeType: string;
-  sizeBytes: number;
-  /**
-   * Mock-only data URL. Production clients upload into Session-scoped storage and send the
-   * resulting reference through the native harness attachment contract.
-   */
-  previewUrl: string;
-}
-
-export interface ChatMessage {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  createdAt: string;
-  attachments?: MessageImageAttachment[];
-  activities?: ToolActivity[];
-  diff?: {
-    file: string;
-    additions: number;
-    deletions: number;
-    lines: string[];
   };
 }
 
@@ -132,7 +128,8 @@ export interface SessionOrigin {
   kind: "environment" | "session" | "turn";
   label: string;
   sourceSessionId?: string;
-  sourceMessageId?: string;
+  /** Harness-native item at the Turn branch boundary, when the harness exposes one. */
+  sourceNativeItemId?: string;
 }
 
 /**
@@ -141,7 +138,10 @@ export interface SessionOrigin {
  * - Each completed Turn owns a Workspace Volume snapshot; Turn fork/edit/rollback never
  *   branch or restore the Session rootfs.
  */
-export interface CodingSession {
+export interface CodingSession<
+  THarness extends HarnessId = HarnessId,
+  THarnessState = unknown,
+> {
   id: string;
   environmentId: string;
   title: string;
@@ -150,10 +150,13 @@ export interface CodingSession {
   unread: boolean;
   pinned: boolean;
   archived: boolean;
-  harness: HarnessId;
+  harness: THarness;
   harnessLabel: string;
-  /** Available values are discovered from the native coding-agent harness. */
-  modelLabel: string;
+  /**
+   * Native conversation state. Shared Sandpi code may store, clone and transport it, but must
+   * never inspect it or convert it into a universal message/tool schema.
+   */
+  harnessState: THarnessState;
   createdAt: string;
   updatedAt: string;
   hardExpiresAt: string;
@@ -163,7 +166,6 @@ export interface CodingSession {
   workspaceVolumeId: string;
   environmentRevision: number;
   origin?: SessionOrigin;
-  messages: ChatMessage[];
   files: WorkspaceFile[];
   auditEvents: AuditEvent[];
   metrics: SessionMetrics;

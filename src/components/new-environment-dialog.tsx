@@ -276,7 +276,7 @@ export function NewEnvironmentDialog({
                   <span />
                 </span>
                 <span className={styles.agentCopy}>
-                  <span className={styles.agentEyebrow}>Only option available today</span>
+                  <span className={styles.agentEyebrow}>First supported harness</span>
                   <strong>Codex</strong>
                   <small>Native coding harness</small>
                 </span>
@@ -289,7 +289,8 @@ export function NewEnvironmentDialog({
                 <LockKeyhole size={15} aria-hidden="true" />
                 <span>
                   The coding agent is bound when this Environment is created. Every Session
-                  inherits Codex and cannot switch to another coding agent later.
+                  inherits Codex and cannot switch to another coding agent later. Future harnesses
+                  will be selected by creating a separate Environment.
                 </span>
               </p>
             </fieldset>

@@ -1,12 +1,13 @@
 import { SESSION_WORKSPACE_ROOT } from "@/lib/environment-blueprint";
+import { createMockCodexHarnessState } from "@/harnesses/codex/events";
 import {
-  getDefaultMockCodingAgentModel,
-  getMockCodingAgentModels,
-} from "@/lib/coding-agent-models";
+  getDefaultMockCodexModel,
+  getMockCodexModel,
+} from "@/harnesses/codex/models";
+import type { CodexSession } from "@/harnesses/codex/types";
 import { createId, randomToken } from "@/lib/id";
 import type {
   AuditEvent,
-  CodingSession,
   Environment,
   MetricPoint,
   SandpiBootstrap,
@@ -300,7 +301,7 @@ export const mockPreferences: SandpiPreferences = {
   },
 };
 
-const primarySession: CodingSession = {
+const primarySession: CodexSession = {
   id: "session-auth-race",
   environmentId: "env-default",
   title: "Fix auth callback race",
@@ -310,7 +311,43 @@ const primarySession: CodingSession = {
   archived: false,
   harness: "codex",
   harnessLabel: "Codex",
-  modelLabel: "GPT-5.2 Codex",
+  harnessState: createMockCodexHarnessState(
+    "thr_mock_auth_race",
+    getDefaultMockCodexModel().id,
+    {
+      content:
+        "There is an intermittent double-login after the OAuth callback. Find the race, fix it, and add a regression test.",
+      assistantText:
+        "I traced the callback through the attempt store and found a read-then-delete race. Two requests can validate the same code before either one deletes it. I changed consumption to an atomic operation and covered the concurrent path.",
+      createdAt: "2026-07-12T09:18:01+08:00",
+      commands: [
+        {
+          command: "rg -n \"authAttempts|completeAuth\" app tests",
+          output: "8 matching files",
+          durationMs: 34_000,
+        },
+        {
+          command: "npm test -- auth-callback.test.ts",
+          output: "12 passed",
+          durationMs: 7_000,
+        },
+      ],
+      changes: [
+        {
+          path: "app/api/auth-callback.ts",
+          kind: { type: "update", move_path: null },
+          diff: [
+            "- const attempt = await authAttempts.find(code);",
+            "- await authAttempts.delete(code);",
+            "+ const attempt = await authAttempts.consume(code);",
+            "+ if (!attempt) {",
+            "+   throw new AuthError(\"invalid_or_expired_code\");",
+            "+ }",
+          ].join("\n"),
+        },
+      ],
+    },
+  ),
   createdAt: "2026-07-12T09:17:41+08:00",
   updatedAt: "2026-07-12T09:25:03+08:00",
   hardExpiresAt: "2026-08-11T09:17:41+08:00",
@@ -319,58 +356,6 @@ const primarySession: CodingSession = {
   workspaceRoot: SESSION_WORKSPACE_ROOT,
   workspaceVolumeId: "vol_session_7f2a91",
   environmentRevision: 12,
-  messages: [
-    {
-      id: "message-1",
-      role: "user",
-      content:
-        "There is an intermittent double-login after the OAuth callback. Find the race, fix it, and add a regression test.",
-      createdAt: "2026-07-12T09:18:01+08:00",
-    },
-    {
-      id: "message-2",
-      role: "assistant",
-      content:
-        "I traced the callback through the attempt store and found a read-then-delete race. Two requests can validate the same code before either one deletes it. I changed consumption to an atomic operation and covered the concurrent path.",
-      createdAt: "2026-07-12T09:24:48+08:00",
-      activities: [
-        {
-          id: "activity-1",
-          label: "Inspected auth flow",
-          detail: "8 files · callback, store and session paths",
-          status: "completed",
-          duration: "34s",
-        },
-        {
-          id: "activity-2",
-          label: "Applied fix",
-          detail: "Atomic code consumption inside one transaction",
-          status: "completed",
-          duration: "18s",
-        },
-        {
-          id: "activity-3",
-          label: "Ran focused tests",
-          detail: "12 passed · auth-callback.test.ts",
-          status: "completed",
-          duration: "7s",
-        },
-      ],
-      diff: {
-        file: "app/api/auth-callback.ts",
-        additions: 8,
-        deletions: 5,
-        lines: [
-          "- const attempt = await authAttempts.find(code);",
-          "- await authAttempts.delete(code);",
-          "+ const attempt = await authAttempts.consume(code);",
-          "+ if (!attempt) {",
-          "+   throw new AuthError(\"invalid_or_expired_code\");",
-          "+ }",
-        ],
-      },
-    },
-  ],
   files: workspaceFiles,
   auditEvents,
   metrics: {
@@ -386,10 +371,10 @@ function compactSession(
   id: string,
   environmentId: string,
   title: string,
-  status: CodingSession["status"],
+  status: CodexSession["status"],
   updatedAt: string,
   unread: boolean,
-): CodingSession {
+): CodexSession {
   return {
     ...primarySession,
     id,
@@ -401,18 +386,19 @@ function compactSession(
     sandboxId: `sbx_${id.slice(-6)}`,
     supervisorSessionId: `ses_${id.slice(-6)}`,
     workspaceVolumeId: `vol_${id.slice(-6)}`,
-    messages: [
+    harnessState: createMockCodexHarnessState(
+      `thr_${id.slice(-12)}`,
+      getDefaultMockCodexModel().id,
       {
-        id: `${id}-message`,
-        role: "user",
         content: title,
+        assistantText: "This mock Codex turn is ready to resume from its durable event cursor.",
         createdAt: updatedAt,
       },
-    ],
+    ),
   };
 }
 
-export const mockSessions: CodingSession[] = [
+export const mockSessions: CodexSession[] = [
   primarySession,
   compactSession(
     "session-stream-events",
@@ -452,11 +438,16 @@ export function getMockBootstrap(): SandpiBootstrap {
 
 export function createMockSession(
   environment: Environment,
-  input: { title: string; prompt: string; modelLabel?: string },
-): CodingSession {
+  input: { title: string; prompt: string; modelId?: string },
+): CodexSession {
+  if (environment.codingAgent.harness !== "codex") {
+    throw new Error(`The ${environment.codingAgent.harness} harness is not implemented.`);
+  }
   const id = createId("session", 8);
   const now = new Date();
   const expires = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+  const threadId = `thr_${randomToken(10)}`;
+  const model = getMockCodexModel(input.modelId ?? "");
 
   return {
     ...structuredClone(primarySession),
@@ -465,13 +456,13 @@ export function createMockSession(
     title: input.title,
     status: "running",
     unread: false,
-    harness: environment.codingAgent.harness,
+    harness: "codex",
     harnessLabel: environment.codingAgent.label,
-    modelLabel:
-      getMockCodingAgentModels(environment.codingAgent.harness).find(
-        (model) => model.label === input.modelLabel,
-      )?.label ??
-      getDefaultMockCodingAgentModel(environment.codingAgent.harness).label,
+    harnessState: createMockCodexHarnessState(threadId, model.id, {
+      content: input.prompt,
+      assistantText: `The Environment fork is ready. I’m connected to the new ${environment.codingAgent.label} thread and will start by inspecting the workspace.`,
+      createdAt: now.toISOString(),
+    }),
     createdAt: now.toISOString(),
     updatedAt: now.toISOString(),
     hardExpiresAt: expires.toISOString(),
@@ -484,30 +475,6 @@ export function createMockSession(
       kind: "environment",
       label: environment.name,
     },
-    messages: [
-      {
-        id: createId("message", 8),
-        role: "user",
-        content: input.prompt,
-        createdAt: now.toISOString(),
-      },
-      {
-        id: createId("message", 8),
-        role: "assistant",
-        content:
-          "The Environment fork is ready. I’m connected to the new Codex session and will start by inspecting the workspace.",
-        createdAt: now.toISOString(),
-        activities: [
-          {
-            id: "fork-environment",
-            label: `Forked ${environment.name} · r${environment.revision}`,
-            detail: "Rootfs snapshot, private /workspace volume and network policy",
-            status: "completed",
-            duration: "1.2s",
-          },
-        ],
-      },
-    ],
   };
 }
 

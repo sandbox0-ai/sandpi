@@ -35,6 +35,12 @@ export interface SessionForkPlan {
   steps: SessionForkStep[];
 }
 
+/**
+ * Builds the infrastructure portion of a new Session from one immutable Environment revision.
+ * `credentialRevision` is only a secret-plane reference: the backend will resolve and inject
+ * native Codex authentication at Session start, outside this rootfs/Volume fork plan. Never add
+ * provider credential material to a snapshot input or `/workspace`.
+ */
 export function buildSessionForkPlan(input: SessionForkPlanInput): SessionForkPlan {
   const { environment, sessionName } = input;
 

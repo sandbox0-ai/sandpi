@@ -7,13 +7,19 @@ interface CreateSessionRequest {
   environmentId?: string;
   title?: string;
   prompt?: string;
-  modelLabel?: string;
+  modelId?: string;
 }
 
 export async function GET() {
   return NextResponse.json({ data: structuredClone(mockSessions) });
 }
 
+/**
+ * The MVP is a free public beta, so Session creation has no Sandpi subscription, price or
+ * allowance gate. A future managed-runtime entitlement may protect Sandbox0 resources here,
+ * but model access and model usage must continue to come directly from the user's native
+ * coding-agent account rather than a Sandpi plan.
+ */
 export async function POST(request: Request) {
   const body = (await request.json()) as CreateSessionRequest;
   const environment = mockEnvironments.find((item) => item.id === body.environmentId);
@@ -37,7 +43,7 @@ export async function POST(request: Request) {
   const session = createMockSession(environment, {
     title,
     prompt,
-    modelLabel: body.modelLabel,
+    modelId: body.modelId,
   });
   const plan = buildSessionForkPlan({
     environment,
@@ -51,6 +57,7 @@ export async function POST(request: Request) {
         mode: "mock",
         codingAgent: environment.codingAgent.harness,
         codingAgentMutable: false,
+        nativeProtocol: "codex-app-server-v2",
         provisioningPlan: plan,
       },
     },

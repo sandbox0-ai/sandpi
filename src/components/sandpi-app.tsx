@@ -15,107 +15,16 @@ import {
   CLIENT_PREFERENCES_STORAGE_KEY,
   loadClientPreferences,
 } from "@/lib/client-preferences";
-import { createId, randomToken } from "@/lib/id";
-import {
-  replaceTimelineFromUserMessage,
-  truncateTimelineFromUserMessage,
-} from "@/lib/message-timeline";
+import { forkSessionForHarness } from "@/harnesses/registry";
 import { visibleSessionsForEnvironment } from "@/lib/session-list";
 import type {
-  ChatMessage,
   CodingSession,
   Environment,
-  MessageImageAttachment,
   SandpiBootstrap,
 } from "@/lib/types";
 
 interface SandpiAppProps {
   initialData: SandpiBootstrap;
-}
-
-/**
- * Production turns remain `finalizing` until their Workspace Volume snapshot is durable.
- * This helper only creates the optimistic message pair used by the frontend prototype.
- */
-function createMockTurn(
-  content: string,
-  codingAgentLabel: string,
-  createdAt: string,
-  attachments: MessageImageAttachment[] = [],
-): ChatMessage[] {
-  return [
-    {
-      id: createId("message"),
-      role: "user",
-      content,
-      createdAt,
-      attachments: attachments.length ? attachments : undefined,
-    },
-    {
-      id: createId("message"),
-      role: "assistant",
-      content: `I’ve queued that instruction for the running ${codingAgentLabel} session. This prototype mirrors the durable event flow; the next backend slice will replace this mock response with Supervisor events.`,
-      createdAt,
-      activities: [
-        {
-          id: createId("activity"),
-          label: "Instruction accepted",
-          detail: "Durable cursor advanced · client may disconnect safely",
-          status: "completed",
-        },
-      ],
-    },
-  ];
-}
-
-function createMockForkedSession(
-  source: CodingSession,
-  messages: ChatMessage[],
-  auditAction: "session.forked" | "turn.forked",
-  auditDetail: string,
-  createdAt: string,
-  sourceMessageId?: string,
-): CodingSession {
-  const idSuffix = randomToken(10);
-  const createdAtDate = new Date(createdAt);
-
-  return {
-    ...source,
-    id: `session-${idSuffix}`,
-    title: `Fork of ${source.title}`,
-    pinned: false,
-    archived: false,
-    unread: false,
-    createdAt,
-    updatedAt: createdAt,
-    hardExpiresAt: new Date(
-      createdAtDate.getTime() + 30 * 24 * 60 * 60 * 1000,
-    ).toISOString(),
-    sandboxId: `sbx_${idSuffix}`,
-    supervisorSessionId: `ses_${idSuffix}`,
-    workspaceVolumeId: `vol_${idSuffix}`,
-    origin: {
-      kind: auditAction === "session.forked" ? "session" : "turn",
-      label: source.title,
-      sourceSessionId: source.id,
-      sourceMessageId,
-    },
-    messages,
-    files: structuredClone(source.files),
-    auditEvents: [
-      {
-        id: `audit-${idSuffix}`,
-        source: "supervisor",
-        category: "lifecycle",
-        action: auditAction,
-        detail: auditDetail,
-        outcome: "success",
-        timestamp: createdAt,
-      },
-      ...source.auditEvents,
-    ],
-    metrics: structuredClone(source.metrics),
-  };
 }
 
 export function SandpiApp({ initialData }: SandpiAppProps) {
@@ -316,13 +225,9 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
       const createdAt = new Date().toISOString();
       // Future Session fork: atomically branch the source Sandbox rootfs and its current
       // Workspace Volume. Unlike a Turn fork, this preserves Session-scoped rootfs changes.
-      const forkedSession = createMockForkedSession(
-        source,
-        structuredClone(source.messages),
-        "session.forked",
-        `Prototype Session fork from ${source.id}: rootfs + Workspace Volume`,
-        createdAt,
-      );
+      // Rootfs/Volume lifecycle is shared, but the matching native thread/session fork is
+      // dispatched to the bound harness instead of cloning a normalized conversation state.
+      const forkedSession = forkSessionForHarness(source, createdAt);
 
       setSessions((current) => [forkedSession, ...current]);
       setSelectedEnvironmentId(forkedSession.environmentId);
@@ -376,140 +281,13 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
     setNewEnvironmentOpen(false);
   }, []);
 
-  const handleSendMessage = useCallback(
-    (content: string, attachments: MessageImageAttachment[]) => {
-      const now = new Date().toISOString();
-      const turn = createMockTurn(
-        content,
-        selectedEnvironment?.codingAgent.label ?? "coding agent",
-        now,
-        attachments,
-      );
-
-      setSessions((current) =>
-        current.map((session) =>
-          session.id === selectedSessionId
-            ? {
-                ...session,
-                updatedAt: now,
-                messages: [...session.messages, ...turn],
-              }
-            : session,
-        ),
-      );
-    },
-    [selectedEnvironment?.codingAgent.label, selectedSessionId],
-  );
-
-  const handleSelectSessionModel = useCallback(
-    (sessionId: string, modelLabel: string) => {
-      setSessions((current) =>
-        current.map((session) =>
-          session.id === sessionId ? { ...session, modelLabel } : session,
-        ),
-      );
-    },
-    [],
-  );
-
-  const handleDeleteUserMessage = useCallback(
-    (messageId: string) => {
-      const now = new Date().toISOString();
-      // Timeline-only mock. Production restores the Workspace Volume snapshot immediately
-      // before this Turn; the Session rootfs deliberately remains unchanged.
-      setSessions((current) =>
-        current.map((session) => {
-          if (session.id !== selectedSessionId) {
-            return session;
-          }
-          const messages = truncateTimelineFromUserMessage(
-            session.messages,
-            messageId,
-          );
-          return messages ? { ...session, messages, updatedAt: now } : session;
-        }),
-      );
-    },
-    [selectedSessionId],
-  );
-
-  const handleEditUserMessage = useCallback(
-    (
-      messageId: string,
-      content: string,
-      attachments: MessageImageAttachment[],
-    ) => {
-      const now = new Date().toISOString();
-      const replacement = createMockTurn(
-        content,
-        selectedEnvironment?.codingAgent.label ?? "coding agent",
-        now,
-        attachments,
-      );
-      // Editing shares the Turn rollback boundary with delete, then submits a replacement
-      // instruction and persists a new Workspace Volume snapshot before completing the Turn.
-      setSessions((current) =>
-        current.map((session) => {
-          if (session.id !== selectedSessionId) {
-            return session;
-          }
-          const messages = replaceTimelineFromUserMessage(
-            session.messages,
-            messageId,
-            replacement,
-          );
-          return messages ? { ...session, messages, updatedAt: now } : session;
-        }),
-      );
-    },
-    [selectedEnvironment?.codingAgent.label, selectedSessionId],
-  );
-
-  const handleForkUserMessage = useCallback(
-    (messageId: string) => {
-      if (!selectedSession || !selectedEnvironment) {
-        return;
-      }
-      const sourceMessage = selectedSession.messages.find(
-        (message) => message.id === messageId && message.role === "user",
-      );
-      if (!sourceMessage) {
-        return;
-      }
-
-      const createdAt = new Date().toISOString();
-      const messages = replaceTimelineFromUserMessage(
-        selectedSession.messages,
-        messageId,
-        createMockTurn(
-          sourceMessage.content,
-          selectedEnvironment.codingAgent.label,
-          createdAt,
-          sourceMessage.attachments,
-        ),
-      );
-      if (!messages) {
-        return;
-      }
-
-      // This user-message action forks the checkpoint immediately before the selected Turn,
-      // then replays its instruction. Production claims the new Sandbox from the pinned
-      // Environment revision and never copies the source Session rootfs.
-      const forkedSession = createMockForkedSession(
-        selectedSession,
-        messages,
-        "turn.forked",
-        `Prototype Turn fork before message ${messageId}: Workspace Volume only`,
-        createdAt,
-        messageId,
-      );
-
-      setSessions((current) => [forkedSession, ...current]);
-      setSelectedEnvironmentId(forkedSession.environmentId);
-      setSelectedSessionId(forkedSession.id);
-    },
-    [selectedEnvironment, selectedSession],
-  );
+  const handleSessionChange = useCallback((nextSession: CodingSession) => {
+    setSessions((current) =>
+      current.map((session) =>
+        session.id === nextSession.id ? nextSession : session,
+      ),
+    );
+  }, []);
 
   if (!selectedEnvironment) {
     return <div className="empty-app">No Environment is available.</div>;
@@ -585,11 +363,8 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
             setInspectorTab(tab);
             setInspectorOpen(true);
           }}
-          onSendMessage={handleSendMessage}
-          onSelectModel={handleSelectSessionModel}
-          onDeleteUserMessage={handleDeleteUserMessage}
-          onEditUserMessage={handleEditUserMessage}
-          onForkUserMessage={handleForkUserMessage}
+          onSessionChange={handleSessionChange}
+          onCreateSession={handleSessionCreated}
           onForkSession={handleForkSession}
           onRenameSession={handleRenameSession}
           onArchiveSession={handleArchiveSession}

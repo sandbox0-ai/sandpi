@@ -4,6 +4,8 @@ Sandpi is a remote, multi-harness coding agent application built on Sandbox0. Th
 
 This first slice is a Next.js full-stack interaction prototype. The UI and API routes use mock data, while the backend already imports the local [`sdk-js`](../sdk-js) package behind a server-only integration boundary.
 
+The MVP is a free public beta. It has no Sandpi subscription, pricing or product-usage quota. Sandpi does not include, resell or pay for model usage now or in future plans: users connect their own provider account through the native coding-agent harness, and provider billing and limits remain between that user and the provider.
+
 ## Local development
 
 ```bash
@@ -21,6 +23,8 @@ The mock UI does not require credentials. A Sandpi deployment selects its Sandbo
 - Starting a new Session opens an empty conversation immediately; the first instruction triggers the Environment fork and Supervisor Session creation.
 - The native coding-agent harness runs as a Sandbox0 Supervisor Session. Durable events allow the browser to disconnect and resume from a cursor.
 - The native coding-agent harness and its official authentication are bound to an Environment. Sessions cannot switch harnesses. Codex is the first implementation; Claude Code, OpenCode and Pi are future Environment types.
+- Sandpi standardizes the runtime plane, not the interaction plane. Conversation rendering, native items/tool calls, approvals, composer behavior, slash commands and model controls belong to each harness integration and are not normalized across agents.
+- An Environment stores a reference to its harness authentication state, not provider secrets inside its rootfs or workspace baseline. Session and Turn snapshots must never copy harness credentials.
 - Session Sandboxes have a fixed 30-day hard TTL.
 - Sessions can be renamed, archived or pinned to the top of their own Environment group.
 - Sessions can be searched across titles, Environments and coding agents from the Sidebar or with `Cmd/Ctrl+K`.
@@ -28,6 +32,22 @@ The mock UI does not require credentials. A Sandpi deployment selects its Sandbo
 - Personal Preferences live at `/preferences` as a standalone page.
 
 The mock provisioning contract is implemented in `src/lib/environment-blueprint.ts` and exposed by `POST /api/sessions`.
+
+## Harness integration boundary
+
+- Shared code owns Environment and Session metadata, Sandbox lifecycle, Supervisor transport, durable sequence cursors, files, terminal, audit and metrics.
+- `CodingSession.harnessState` is opaque to shared code. A thin dispatcher selects a complete harness-owned new-Session and conversation experience.
+- Codex stores native app-server JSON-RPC notifications (`thread/*`, `turn/*`, `item/*`) and projects them only inside `src/harnesses/codex`.
+- Production Codex protocol types must be generated from the exact pinned binary with `codex app-server generate-ts`; handwritten mock types are not a second protocol source of truth.
+- Codex models come from native `model/list`. Slash commands, approvals and item renderers stay in the Codex module. A future harness implements its own equivalents rather than extending a shared catalog.
+
+## Commercial boundary
+
+- Self-hosted Sandpi is free and uses the operator-selected Sandbox0 deployment.
+- The MVP Cloud public beta is free and deliberately has no subscription, price catalog or allowance ledger.
+- A future paid Sandpi Cloud plan may charge for Sandpi-managed runtime, storage, networking and product services only. It must not bundle coding-agent model usage.
+- Every provider account is authenticated through its native harness. Sandpi must not pool accounts, resell a consumer coding plan or present provider usage as Sandpi usage.
+- Sandbox0 remains the infrastructure usage-truth layer. Any future Sandpi Cloud service entitlement belongs in the cloud backend rather than the open-source Sandbox0 metering ledger.
 
 ## Mock API
 
