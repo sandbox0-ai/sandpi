@@ -20,7 +20,7 @@ server. The current implementation includes PostgreSQL persistence,
 deployment-level identity configuration, Environment and Session APIs,
 Sandbox0 runtime wiring, Codex app-server event transport, native model
 discovery, image input, Session and Turn forks, snapshot-backed Turn edit and
-delete, files, terminal, signed audit and runtime metrics.
+delete, a live Web IDE, terminal, signed audit and runtime metrics.
 
 Webhooks, cron jobs, mobile clients, explicit Environment sharing and additional
 native harness integrations remain future work. Sandpi's `/api/v1` contract is
@@ -59,7 +59,18 @@ Web today; iOS / Android / HarmonyOS later
   transport, files, terminal, audit and metrics. Each harness owns its native
   message/tool rendering, approvals, slash commands and model list. Sandpi does
   not normalize different coding agents into a lowest-common-denominator chat
-  protocol.
+  protocol. The Codex adapter reads `model/list` from the authenticated native
+  app-server and passes the selected model back through `turn/start`; Sandpi
+  does not publish or maintain a separate Codex model catalog.
+- **Time contract:** public API timestamps use Unix seconds, with fractional
+  seconds when the source has millisecond precision. Clients render all times
+  through the user's global time-zone preference; its default `auto` value uses
+  the current client/browser time zone.
+- **Live workspace contract:** the embedded file view and dedicated `/ide/`
+  workbench consume the same Sandpi API. Sandpi proxies Sandbox0's recursive
+  `/workspace` file stream, parses Git porcelain v2 server-side, and projects
+  zero-context staged and working-tree diffs onto current line numbers. The
+  browser never receives the deployment API key or a direct Sandbox0 endpoint.
 - **Environment grouping:** an Environment fixes the harness, official harness
   authentication, Sandbox template, network policy and workspace baseline.
   Sessions cannot switch harnesses dynamically.
@@ -361,8 +372,10 @@ Sandbox0 implementation details.
 - Supervisor output is the durable native transport. PostgreSQL stores replay
   identity, cursors and immutable native records; the browser may disconnect at
   any time without stopping Codex.
-- The Web terminal is resumable through a Supervisor Session. File reads are
-  confined to `/workspace`, regular files, and a 5 MiB preview limit.
+- The Web terminal is resumable through a Supervisor Session. Web IDE file
+  reads are confined to `/workspace`, regular files, and a 5 MiB limit. Its
+  source-control view includes staged, unstaged, untracked, renamed, deleted and
+  conflicted files; Workspace and Git metadata events refresh it without polling.
 - The OSS server currently expects one active server replica. PostgreSQL and
   Supervisor replay make process restart recoverable, but multi-replica worker
   leadership is not yet part of the supported deployment contract.

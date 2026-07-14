@@ -29,6 +29,7 @@ import {
   type SessionAuditOperation,
   type SessionAuditView,
 } from "@/lib/session-audit";
+import { unixTimestampToIso } from "@/lib/time";
 import type { SessionAuditEvent, SessionAuditFeed } from "@/lib/types";
 
 interface SessionAuditPanelProps {
@@ -190,7 +191,7 @@ function AuditEventStep({
           {ui.outcomeLabel(event.outcome)}
         </span>
         <time
-          dateTime={event.occurredAt}
+          dateTime={unixTimestampToIso(event.occurredAt)}
           title={formatAuditDateTime(event.occurredAt, language, timeZone)}
         >
           {formatAuditTime(event.occurredAt, language, timeZone)}
@@ -257,7 +258,7 @@ function AuditActivity({
           {ui.outcomeLabel(operation.outcome)}
         </span>
         <time
-          dateTime={operation.primaryEvent.occurredAt}
+          dateTime={unixTimestampToIso(operation.primaryEvent.occurredAt)}
           title={formatAuditDateTime(
             operation.primaryEvent.occurredAt,
             language,

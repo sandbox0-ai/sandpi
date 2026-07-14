@@ -1,4 +1,5 @@
 import { createId } from "@/lib/id";
+import { toUnixTimestamp, type UnixTimestamp } from "@/lib/time";
 
 import type {
   CodexComposerImage,
@@ -31,7 +32,7 @@ export interface CodexMessageView {
   turnId: string;
   role: "user" | "assistant";
   content: string;
-  createdAt: string;
+  createdAt: UnixTimestamp;
   attachments?: CodexComposerImage[];
   activities?: CodexToolActivityView[];
   diff?: CodexDiffView;
@@ -49,20 +50,19 @@ export interface MockCodexTurnInput {
   content: string;
   images?: CodexComposerImage[];
   assistantText: string;
-  createdAt: string;
+  createdAt: UnixTimestamp;
   commands?: MockCodexCommand[];
   changes?: CodexFileUpdateChange[];
 }
 
-function asIsoTime(milliseconds: number, fallback: string) {
-  const date = new Date(milliseconds);
-  return Number.isNaN(date.getTime()) ? fallback : date.toISOString();
+function asUnixTime(milliseconds: number, fallback: UnixTimestamp) {
+  return Number.isFinite(milliseconds) ? milliseconds / 1_000 : fallback;
 }
 
 function eventTimestamp(event: CodexEventEnvelope, completedAtMs?: number) {
   return completedAtMs === undefined
     ? event.receivedAt
-    : asIsoTime(completedAtMs, event.receivedAt);
+    : asUnixTime(completedAtMs, event.receivedAt);
 }
 
 function durationLabel(durationMs: number | null) {
@@ -132,7 +132,7 @@ function diffView(change: CodexFileUpdateChange): CodexDiffView {
 function userMessageView(
   item: Extract<CodexThreadItem, { type: "userMessage" }>,
   turnId: string,
-  createdAt: string,
+  createdAt: UnixTimestamp,
 ): CodexMessageView {
   const attachments = item.content
     .filter((input): input is Extract<CodexUserInput, { type: "image" }> => input.type === "image")
@@ -226,7 +226,7 @@ function turn(id: string, status: CodexTurn["status"], items: CodexThreadItem[],
 function envelope(
   state: Pick<CodexHarnessState, "harnessVersion" | "protocolVersion">,
   sequence: number,
-  receivedAt: string,
+  receivedAt: UnixTimestamp,
   notification: CodexServerNotification,
 ): CodexEventEnvelope {
   return {
@@ -242,7 +242,7 @@ function envelope(
 function completedItemEvents(
   state: Pick<CodexHarnessState, "harnessVersion" | "protocolVersion">,
   startSequence: number,
-  receivedAt: string,
+  receivedAt: UnixTimestamp,
   threadId: string,
   turnId: string,
   item: CodexThreadItem,
@@ -267,8 +267,9 @@ export function createMockCodexTurnEvents(
   >,
   input: MockCodexTurnInput,
 ): CodexEventEnvelope[] {
-  const atMs = Date.parse(input.createdAt);
-  const completedAtMs = Number.isNaN(atMs) ? Date.now() : atMs;
+  const completedAtMs = Number.isFinite(input.createdAt)
+    ? input.createdAt * 1_000
+    : Date.now();
   const turnId = createId("turn", 10);
   const userItem: CodexThreadItem = {
     type: "userMessage",
@@ -362,7 +363,7 @@ export function createMockCodexHarnessState(
     protocolVersion: "v2",
     events: [],
   };
-  const receivedAt = initialTurn?.createdAt ?? new Date().toISOString();
+  const receivedAt = initialTurn?.createdAt ?? toUnixTimestamp(new Date());
   state.events.push(
     envelope(state, 1, receivedAt, {
       method: "thread/started",

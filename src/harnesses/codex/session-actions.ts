@@ -1,4 +1,5 @@
 import { randomToken } from "@/lib/id";
+import type { UnixTimestamp } from "@/lib/time";
 
 import {
   appendCodexTurn,
@@ -22,7 +23,7 @@ export function appendMockCodexTurn(
   session: CodexSession,
   content: string,
   images: CodexComposerImage[],
-  createdAt: string,
+  createdAt: UnixTimestamp,
 ): CodexSession {
   return {
     ...session,
@@ -39,7 +40,7 @@ export function appendMockCodexTurn(
 export function deleteMockCodexTurn(
   session: CodexSession,
   userItemId: string,
-  updatedAt: string,
+  updatedAt: UnixTimestamp,
 ): CodexSession | null {
   const events = truncateCodexEventsBeforeUserItem(
     session.harnessState.events,
@@ -55,7 +56,7 @@ export function editMockCodexTurn(
   userItemId: string,
   content: string,
   images: CodexComposerImage[],
-  updatedAt: string,
+  updatedAt: UnixTimestamp,
 ): CodexSession | null {
   const harnessState = replaceCodexTurn(session.harnessState, userItemId, {
     content,
@@ -94,14 +95,12 @@ function rebindThread(state: CodexHarnessState, threadId: string): CodexHarnessS
 
 function derivedCodexSession(
   source: CodexSession,
-  createdAt: string,
+  createdAt: UnixTimestamp,
   kind: "session" | "turn",
   harnessState: CodexHarnessState,
   sourceNativeItemId?: string,
 ): CodexSession {
   const idSuffix = randomToken(10);
-  const createdAtDate = new Date(createdAt);
-
   return {
     ...source,
     id: `session-${idSuffix}`,
@@ -111,9 +110,7 @@ function derivedCodexSession(
     unread: false,
     createdAt,
     updatedAt: createdAt,
-    hardExpiresAt: new Date(
-      createdAtDate.getTime() + 30 * 24 * 60 * 60 * 1000,
-    ).toISOString(),
+    hardExpiresAt: createdAt + 30 * 24 * 60 * 60,
     sandboxId: `sbx_${idSuffix}`,
     supervisorSessionId: `ses_${idSuffix}`,
     workspaceVolumeId: `vol_${idSuffix}`,
@@ -137,7 +134,10 @@ function derivedCodexSession(
  * Mock counterpart of a Codex-native `thread/fork` plus the Sandpi Session rootfs/Volume fork.
  * Other harnesses must define their own Session-fork semantics in their integration module.
  */
-export function forkMockCodexSession(source: CodexSession, createdAt: string) {
+export function forkMockCodexSession(
+  source: CodexSession,
+  createdAt: UnixTimestamp,
+) {
   const threadId = `thr_${randomToken(10)}`;
   return derivedCodexSession(
     source,
@@ -150,7 +150,7 @@ export function forkMockCodexSession(source: CodexSession, createdAt: string) {
 export function forkMockCodexTurn(
   source: CodexSession,
   userItemId: string,
-  createdAt: string,
+  createdAt: UnixTimestamp,
 ): CodexSession | null {
   const input = codexUserMessageInput(source.harnessState, userItemId);
   if (!input) {

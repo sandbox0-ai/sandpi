@@ -1,12 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import {
-  codexModelOptionsFromNativeResult,
-  getDefaultMockCodexModel,
-  getMockCodexModel,
-  getMockCodexModels,
-} from "./models";
+import { codexModelOptionsFromNativeResult } from "./models";
 
 test("projects the native Codex model/list result without sharing a cross-harness catalog", () => {
   assert.deepEqual(
@@ -17,6 +12,7 @@ test("projects the native Codex model/list result without sharing a cross-harnes
           model: "gpt-5.3-codex",
           displayName: "GPT-5.3 Codex",
           hidden: false,
+          isDefault: true,
         },
         {
           id: "hidden-model",
@@ -25,15 +21,12 @@ test("projects the native Codex model/list result without sharing a cross-harnes
         },
       ],
     }),
-    [{ id: "gpt-5.3-codex", displayName: "GPT-5.3 Codex" }],
+    [
+      {
+        id: "gpt-5.3-codex",
+        displayName: "GPT-5.3 Codex",
+        isDefault: true,
+      },
+    ],
   );
-});
-
-test("keeps the mock model catalog inside the Codex integration", () => {
-  assert.deepEqual(
-    getMockCodexModels().map((model) => model.displayName),
-    ["GPT-5.2 Codex", "GPT-5.1 Max", "GPT-5.1 Mini"],
-  );
-  assert.equal(getDefaultMockCodexModel().id, "gpt-5.2-codex");
-  assert.equal(getMockCodexModel("unknown").id, getDefaultMockCodexModel().id);
 });

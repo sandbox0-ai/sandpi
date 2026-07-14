@@ -1,4 +1,5 @@
 import type { SandpiPreferences } from "./types";
+import { formatUnixTimestamp, type UnixTimestamp } from "./time";
 
 export type OperationLanguage = SandpiPreferences["general"]["language"];
 export type SendShortcut = SandpiPreferences["general"]["sendShortcut"];
@@ -37,45 +38,29 @@ export function getAuditTimeFormatOptions(timeZone: string) {
 }
 
 export function formatAuditTime(
-  timestamp: string,
+  timestamp: UnixTimestamp,
   language: OperationLanguage,
   timeZone: string,
 ) {
-  const date = new Date(timestamp);
-
-  try {
-    return new Intl.DateTimeFormat(
-      language,
-      getAuditTimeFormatOptions(timeZone),
-    ).format(date);
-  } catch {
-    return new Intl.DateTimeFormat(
-      language,
-      getAuditTimeFormatOptions("auto"),
-    ).format(date);
-  }
+  return formatUnixTimestamp(
+    timestamp,
+    language,
+    timeZone,
+    getAuditTimeFormatOptions("auto"),
+  );
 }
 
 export function formatAuditDateTime(
-  timestamp: string,
+  timestamp: UnixTimestamp,
   language: OperationLanguage,
   timeZone: string,
 ) {
-  const options = {
+  const options: Intl.DateTimeFormatOptions = {
     month: "short",
     day: "numeric",
-    ...getAuditTimeFormatOptions(timeZone),
-  } satisfies Intl.DateTimeFormatOptions;
-
-  try {
-    return new Intl.DateTimeFormat(language, options).format(new Date(timestamp));
-  } catch {
-    return new Intl.DateTimeFormat(language, {
-      month: "short",
-      day: "numeric",
-      ...getAuditTimeFormatOptions("auto"),
-    }).format(new Date(timestamp));
-  }
+    ...getAuditTimeFormatOptions("auto"),
+  };
+  return formatUnixTimestamp(timestamp, language, timeZone, options);
 }
 
 const copy = {
@@ -120,6 +105,7 @@ const copy = {
       audit: "Audit",
       metrics: "Metrics",
       close: "Close inspector",
+      loadingView: (view: string) => `Loading ${view.toLowerCase()}…`,
       workspaceFiles: "Workspace files",
       shareFile: (name: string) => `Share ${name}`,
       openNewView: "Open in Sandpi Cloud IDE (coming later)",
@@ -185,8 +171,17 @@ const copy = {
       asynchronousAudit:
         "Canonical events can appear shortly after the observed sandbox activity.",
       lastHour: "Last hour",
+      last15Minutes: "Last 15 minutes",
+      last6Hours: "Last 6 hours",
+      last24Hours: "Last 24 hours",
+      last7Days: "Last 7 days",
       runtimeMetrics: "Runtime metrics",
+      metricsRange: "Metrics time range",
+      fifteenMinutes: "15 minutes",
       oneHour: "1 hour",
+      sixHours: "6 hours",
+      twentyFourHours: "24 hours",
+      sevenDays: "7 days",
       metricChart: "Metric values over the last hour",
       metricChartInstructions:
         "Hover to inspect a sample. With the chart focused, use the left and right arrow keys to move between samples.",
@@ -264,6 +259,7 @@ const copy = {
       audit: "审计",
       metrics: "指标",
       close: "关闭检查器",
+      loadingView: (view: string) => `正在加载${view}…`,
       workspaceFiles: "Workspace 文件",
       shareFile: (name: string) => `分享 ${name}`,
       openNewView: "在 Sandpi Cloud IDE 中打开（后续支持）",
@@ -327,8 +323,17 @@ const copy = {
       noMatchingAuditEvents: "没有符合筛选条件的事件",
       asynchronousAudit: "Sandbox 活动发生后，规范事件可能需要短暂时间才会出现。",
       lastHour: "最近一小时",
+      last15Minutes: "最近 15 分钟",
+      last6Hours: "最近 6 小时",
+      last24Hours: "最近 24 小时",
+      last7Days: "最近 7 天",
       runtimeMetrics: "运行时指标",
+      metricsRange: "指标时间范围",
+      fifteenMinutes: "15 分钟",
       oneHour: "1 小时",
+      sixHours: "6 小时",
+      twentyFourHours: "24 小时",
+      sevenDays: "7 天",
       metricChart: "最近一小时的指标值",
       metricChartInstructions:
         "悬浮可查看采样点；聚焦图表后，可使用左右方向键切换采样点。",

@@ -29,6 +29,12 @@ import {
 
 import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
 import { copyTextToClipboard } from "@/lib/clipboard";
+import type { OperationLanguage } from "@/lib/operation-ui";
+import {
+  formatUnixTimestamp,
+  unixTimestampToIso,
+  type UnixTimestamp,
+} from "@/lib/time";
 import type { CodingSession, Environment } from "@/lib/types";
 
 type SettingsTab =
@@ -42,6 +48,8 @@ type SettingsTab =
 interface EnvironmentSettingsProps {
   environment: Environment;
   teamName: string;
+  language: OperationLanguage;
+  timeZone: string;
   archivedSessions: CodingSession[];
   onChange: (environment: Environment) => void;
   onRestoreSession: (sessionId: string) => void;
@@ -62,7 +70,7 @@ interface CodexDeviceAuthFlow {
   verificationUrl?: string;
   userCode?: string;
   error?: string;
-  expiresAt: string;
+  expiresAt: UnixTimestamp;
 }
 
 const ACTIVE_CODEX_AUTH_STATUSES = new Set<CodexDeviceAuthFlow["status"]>([
@@ -107,21 +115,22 @@ function Toggle({
   );
 }
 
-function formatArchivedSessionTime(timestamp: string) {
-  const date = new Date(timestamp);
-  if (Number.isNaN(date.getTime())) {
-    return timestamp;
-  }
-
-  return new Intl.DateTimeFormat("en", {
+function formatArchivedSessionTime(
+  timestamp: UnixTimestamp,
+  language: OperationLanguage,
+  timeZone: string,
+) {
+  return formatUnixTimestamp(timestamp, language, timeZone, {
     dateStyle: "medium",
     timeStyle: "short",
-  }).format(date);
+  });
 }
 
 export function EnvironmentSettings({
   environment,
   teamName,
+  language,
+  timeZone,
   archivedSessions,
   onChange,
   onRestoreSession,
@@ -555,8 +564,12 @@ export function EnvironmentSettings({
                             <span aria-hidden="true">·</span>
                             <span>
                               Archived / updated{" "}
-                              <time dateTime={session.updatedAt}>
-                                {formatArchivedSessionTime(session.updatedAt)}
+                              <time dateTime={unixTimestampToIso(session.updatedAt)}>
+                                {formatArchivedSessionTime(
+                                  session.updatedAt,
+                                  language,
+                                  timeZone,
+                                )}
                               </time>
                             </span>
                           </span>
@@ -631,7 +644,15 @@ export function EnvironmentSettings({
                       <strong>{draft.codingAgent.label}</strong>
                       <p>
                         {draft.codingAgent.status === "connected"
-                          ? `${draft.codingAgent.account ?? "ChatGPT"} · verified ${draft.codingAgent.lastVerified ?? "recently"}`
+                          ? `${draft.codingAgent.account ?? "ChatGPT"} · verified ${
+                              draft.codingAgent.lastVerified
+                                ? formatArchivedSessionTime(
+                                    draft.codingAgent.lastVerified,
+                                    language,
+                                    timeZone,
+                                  )
+                                : "recently"
+                            }`
                           : "Use the official ChatGPT device-code flow. One Environment credential is shared by all of its Sessions."}
                       </p>
                     </div>
@@ -887,7 +908,14 @@ export function EnvironmentSettings({
                         <strong>{fn.name}</strong>
                         <p>{fn.description}</p>
                         {fn.lastRun ? (
-                          <small>Last run {fn.lastRun}</small>
+                          <small>
+                            Last run{" "}
+                            {formatArchivedSessionTime(
+                              fn.lastRun,
+                              language,
+                              timeZone,
+                            )}
+                          </small>
                         ) : null}
                       </div>
                       {fn.status === "coming-soon" ? (

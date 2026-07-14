@@ -20,6 +20,8 @@ import {
 } from "@/components/app-frame";
 import { StaticSidebarAccount } from "@/components/sidebar-primitives";
 import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
+import type { OperationLanguage } from "@/lib/operation-ui";
+import { formatUnixTimestamp, type UnixTimestamp } from "@/lib/time";
 import {
   membershipPlanCounts,
   planForAssignment,
@@ -43,6 +45,8 @@ interface TeamSettingsPageProps {
   memberships: TeamMembership[];
   plans: SandpiPlan[];
   environmentCount: number;
+  language: OperationLanguage;
+  timeZone: string;
 }
 
 const tabs: Array<{
@@ -60,22 +64,30 @@ function formatHours(minutes: number) {
   return Number.isInteger(hours) ? String(hours) : hours.toFixed(1);
 }
 
-function formatDate(timestamp: string) {
-  return new Intl.DateTimeFormat("en", {
+function formatDate(
+  timestamp: UnixTimestamp,
+  language: OperationLanguage,
+  timeZone: string,
+) {
+  return formatUnixTimestamp(timestamp, language, timeZone, {
     month: "short",
     day: "numeric",
     year: "numeric",
-  }).format(new Date(timestamp));
+  });
 }
 
-function formatReset(timestamp: string) {
-  return new Intl.DateTimeFormat("en", {
+function formatReset(
+  timestamp: UnixTimestamp,
+  language: OperationLanguage,
+  timeZone: string,
+) {
+  return formatUnixTimestamp(timestamp, language, timeZone, {
     weekday: "short",
     month: "short",
     day: "numeric",
     hour: "2-digit",
     minute: "2-digit",
-  }).format(new Date(timestamp));
+  });
 }
 
 function requireViewerMembership(
@@ -97,6 +109,8 @@ export function TeamSettingsPage({
   memberships,
   plans,
   environmentCount,
+  language,
+  timeZone,
 }: TeamSettingsPageProps) {
   const [activeTab, setActiveTab] = useState<TeamTab>("overview");
   const [teamMemberships, setTeamMemberships] = useState(memberships);
@@ -242,7 +256,7 @@ export function TeamSettingsPage({
                 </div>
                 <div>
                   <dt>Created</dt>
-                  <dd>{formatDate(team.createdAt)}</dd>
+                  <dd>{formatDate(team.createdAt, language, timeZone)}</dd>
                 </div>
                 <div>
                   <dt>Ownership</dt>
@@ -345,8 +359,16 @@ export function TeamSettingsPage({
                 <div>
                   <dt>Billing period</dt>
                   <dd>
-                    {formatDate(team.billingAccount.currentPeriodStartsAt)} –{" "}
-                    {formatDate(team.billingAccount.currentPeriodEndsAt)}
+                    {formatDate(
+                      team.billingAccount.currentPeriodStartsAt,
+                      language,
+                      timeZone,
+                    )} –{" "}
+                    {formatDate(
+                      team.billingAccount.currentPeriodEndsAt,
+                      language,
+                      timeZone,
+                    )}
                   </dd>
                 </div>
                 <div>
@@ -394,7 +416,8 @@ export function TeamSettingsPage({
                 <span style={{ width: `${weeklyPercent}%` }} />
               </div>
               <p className={styles.resetCopy}>
-                <Clock3 size={14} aria-hidden="true" /> Resets {formatReset(weeklyQuota.resetsAt)}
+                <Clock3 size={14} aria-hidden="true" /> Resets{" "}
+                {formatReset(weeklyQuota.resetsAt, language, timeZone)}
               </p>
             </article>
             <div className={`${styles.quotaGrid} ${styles.twoColumnGrid}`}>

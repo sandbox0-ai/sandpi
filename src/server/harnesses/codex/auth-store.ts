@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { Pool, PoolClient, QueryResultRow } from "pg";
 
 import type { CodexDecoderState } from "./jsonl";
+import { toUnixTimestamp, type UnixTimestamp } from "@/lib/time";
 import type { EncryptedValue } from "@/server/secrets";
 import {
   CODEX_SESSION_CREDENTIAL_PATH,
@@ -42,9 +43,9 @@ export interface PublicCodexDeviceAuthFlow {
   verificationUrl?: string;
   userCode?: string;
   error?: string;
-  expiresAt: string;
-  createdAt: string;
-  updatedAt: string;
+  expiresAt: UnixTimestamp;
+  createdAt: UnixTimestamp;
+  updatedAt: UnixTimestamp;
 }
 
 interface FlowRow extends QueryResultRow {
@@ -595,9 +596,9 @@ export function publicCodexDeviceAuthFlow(
     verificationUrl: flow.verificationUrl,
     userCode: flow.userCode,
     error: flow.error,
-    expiresAt: flow.expiresAt.toISOString(),
-    createdAt: flow.createdAt.toISOString(),
-    updatedAt: flow.updatedAt.toISOString(),
+    expiresAt: toUnixTimestamp(flow.expiresAt),
+    createdAt: toUnixTimestamp(flow.createdAt),
+    updatedAt: toUnixTimestamp(flow.updatedAt),
   };
 }
 
@@ -702,7 +703,7 @@ async function replaceEnvironmentCredentialSource(
             : typeof input.metadata.account === "string"
               ? input.metadata.account
               : "Codex",
-        lastVerified: new Date().toISOString(),
+        lastVerified: toUnixTimestamp(new Date()),
       }),
     ],
   );

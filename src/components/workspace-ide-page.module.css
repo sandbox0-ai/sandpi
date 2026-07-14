@@ -1,0 +1,36 @@
+.missing {
+  display: grid;
+  width: 100vw;
+  height: 100dvh;
+  place-content: center;
+  justify-items: center;
+  gap: 8px;
+  padding: 24px;
+  background: var(--canvas);
+  color: var(--ink);
+  text-align: center;
+}
+
+.missing h1,
+.missing p {
+  margin: 0;
+}
+
+.missing h1 {
+  font-size: 17px;
+}
+
+.missing p {
+  color: var(--ink-soft);
+  font-size: 12px;
+}
+
+.missing a {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 8px;
+  color: var(--blue);
+  font-size: 11px;
+  text-decoration: none;
+}

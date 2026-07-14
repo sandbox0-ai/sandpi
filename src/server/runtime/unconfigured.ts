@@ -33,6 +33,9 @@ export class UnconfiguredRuntime implements RuntimeAdapter {
   listCodexEvents = unavailable;
   listFiles = unavailable;
   readFile = unavailable;
+  getWorkspaceGitState = unavailable;
+  readWorkspaceIdeFile = unavailable;
+  watchWorkspaceFiles = unavailable;
   getAudit = unavailable;
   getMetrics = unavailable;
   openTerminal = unavailable;

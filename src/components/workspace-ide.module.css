@@ -1,0 +1,632 @@
+.ide {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--canvas);
+  color: var(--ink);
+  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.embedded {
+  width: 100%;
+  height: 100%;
+  grid-template-rows: minmax(0, 1fr) 25px;
+}
+
+.standalone {
+  width: 100vw;
+  height: 100dvh;
+  grid-template-rows: 42px minmax(0, 1fr) 25px;
+}
+
+.topbar {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 15px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--sidebar);
+  font-size: 11px;
+}
+
+.backLink,
+.brand,
+.liveBadge {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+}
+
+.backLink {
+  gap: 5px;
+  color: var(--ink-soft);
+  text-decoration: none;
+}
+
+.backLink:hover {
+  color: var(--ink);
+}
+
+.brand {
+  justify-self: center;
+  gap: 6px;
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.brand i {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--ink);
+  border-radius: 4px 4px 4px 1px;
+}
+
+.brand b {
+  color: var(--ink-faint);
+  font-weight: 400;
+}
+
+.liveBadge {
+  gap: 5px;
+  color: var(--ink-faint);
+}
+
+.liveBadge.live {
+  color: var(--green);
+}
+
+.workbench {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  grid-template-columns: minmax(190px, 28%) minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.standalone .workbench {
+  grid-template-columns: 268px minmax(0, 1fr);
+}
+
+.sidebar {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  border-right: 1px solid var(--line);
+  background: var(--sidebar);
+  scrollbar-width: thin;
+}
+
+.treeRoot {
+  padding: 6px 0 10px;
+}
+
+.treeRoot > div > .treeRow {
+  font-weight: 650;
+}
+
+.treeRow {
+  display: flex;
+  width: 100%;
+  height: 25px;
+  align-items: center;
+  gap: 4px;
+  padding-right: 7px;
+  border: 0;
+  background: transparent;
+  color: var(--ink-soft);
+  font-size: 10.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.treeRow:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+.treeRow.selected {
+  background: var(--selected);
+  color: var(--ink);
+}
+
+.treeRow.deletedFile .fileName {
+  opacity: 0.65;
+  text-decoration: line-through;
+}
+
+.disclosure {
+  display: inline-flex;
+  width: 12px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-faint);
+}
+
+.fileIcon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--ink-faint);
+}
+
+.fileName {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.statusCode,
+.descendantCount {
+  margin-left: auto;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 9px;
+  font-weight: 720;
+}
+
+.descendantCount {
+  color: var(--ink-faint);
+}
+
+.added,
+.untracked {
+  color: var(--green);
+}
+
+.modified,
+.renamed,
+.copied {
+  color: var(--amber);
+}
+
+.deleted,
+.conflicted {
+  color: var(--red);
+}
+
+.sidebarEmpty {
+  margin: 4px 12px 8px 25px;
+  color: var(--ink-faint);
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.editor {
+  display: grid;
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  grid-template-rows: 34px minmax(0, 1fr);
+  overflow: hidden;
+  background: var(--panel);
+}
+
+.tabs {
+  display: flex;
+  min-width: 0;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--line);
+  background: var(--sidebar);
+  scrollbar-width: none;
+}
+
+.tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.tabs > button {
+  display: inline-flex;
+  min-width: 112px;
+  max-width: 190px;
+  height: 34px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  padding: 0 7px 0 10px;
+  border: 0;
+  border-right: 1px solid var(--line-soft);
+  background: transparent;
+  color: var(--ink-faint);
+  font-size: 9.5px;
+  cursor: pointer;
+}
+
+.tabs > button > span:not(.closeTab) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tabs > button:hover {
+  color: var(--ink);
+}
+
+.tabs > button.activeTab {
+  position: relative;
+  background: var(--panel);
+  color: var(--ink);
+}
+
+.tabs > button.activeTab::after {
+  position: absolute;
+  right: 0;
+  bottom: -1px;
+  left: 0;
+  height: 1px;
+  background: var(--panel);
+  content: "";
+}
+
+.dirtyDot {
+  width: 5px;
+  height: 5px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--amber);
+}
+
+.closeTab {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  margin-left: auto;
+  border-radius: 4px;
+}
+
+.closeTab:hover {
+  background: var(--hover);
+}
+
+.tabActions {
+  display: inline-flex;
+  position: sticky;
+  right: 0;
+  height: 34px;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+  padding: 0 5px;
+  border-left: 1px solid var(--line-soft);
+  background: var(--sidebar);
+}
+
+.tabActions button,
+.tabActions a,
+.documentActions button {
+  display: inline-flex;
+  width: 25px;
+  height: 25px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ink-faint);
+  cursor: pointer;
+}
+
+.tabActions button:hover,
+.tabActions a:hover,
+.documentActions button:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+.documentActions button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.document {
+  display: grid;
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  grid-template-rows: 27px minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.documentHeader {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 7px 0 12px;
+  border-bottom: 1px solid var(--line-soft);
+  color: var(--ink-faint);
+  font-size: 8.5px;
+}
+
+.documentHeader > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.documentActions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 3px;
+}
+
+.gitPill {
+  padding: 2px 5px;
+  border: 1px solid currentColor;
+  border-radius: 8px;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 7.5px;
+  font-weight: 620;
+}
+
+.code {
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  overflow: auto;
+  padding: 8px 0 24px;
+  background: var(--panel);
+  color: var(--ink-soft);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 10px;
+  line-height: 1.58;
+  tab-size: 2;
+  scrollbar-width: thin;
+}
+
+.standalone .code {
+  font-size: 11.5px;
+  line-height: 1.62;
+}
+
+.lineGroup,
+.codeLine {
+  display: block;
+  min-width: max-content;
+}
+
+.codeLine {
+  position: relative;
+  min-height: 16px;
+  padding-right: 18px;
+  white-space: pre;
+}
+
+.changeGutter {
+  display: inline-block;
+  width: 3px;
+  height: 100%;
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+
+.codeLine b {
+  display: inline-block;
+  width: 43px;
+  padding-right: 10px;
+  color: var(--ink-faint);
+  font-weight: 400;
+  text-align: right;
+  user-select: none;
+}
+
+.codeLine code {
+  font: inherit;
+}
+
+.line-added {
+  background: color-mix(in srgb, var(--green-soft) 78%, transparent);
+}
+
+.line-added .changeGutter {
+  background: var(--green);
+}
+
+.line-modified {
+  background: color-mix(in srgb, var(--amber-soft) 72%, transparent);
+}
+
+.line-modified .changeGutter {
+  background: var(--amber);
+}
+
+.line-deleted {
+  background: color-mix(in srgb, var(--red-soft) 76%, transparent);
+}
+
+.line-deleted .changeGutter {
+  background: var(--red);
+}
+
+.deletedLines {
+  display: flex;
+  min-width: max-content;
+  height: 16px;
+  align-items: center;
+  gap: 7px;
+  padding-left: 43px;
+  border-top: 1px solid color-mix(in srgb, var(--red) 35%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--red) 25%, transparent);
+  background: color-mix(in srgb, var(--red-soft) 82%, transparent);
+  color: var(--red);
+  font-family: Inter, ui-sans-serif, sans-serif;
+  font-size: 8px;
+  font-style: normal;
+}
+
+.deletedLines i {
+  width: 10px;
+  height: 1px;
+  background: var(--red);
+}
+
+.loading,
+.emptyEditor {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--ink-faint);
+  font-size: 10px;
+}
+
+.loading svg,
+.documentRefreshing svg {
+  animation: spin 0.9s linear infinite;
+}
+
+.emptyEditor {
+  flex-direction: column;
+}
+
+.emptyEditor p {
+  margin: 0;
+}
+
+.error {
+  display: flex;
+  position: absolute;
+  z-index: 3;
+  right: 9px;
+  bottom: 9px;
+  max-width: min(420px, calc(100% - 18px));
+  align-items: center;
+  gap: 6px;
+  padding: 7px 9px;
+  border: 1px solid color-mix(in srgb, var(--red) 28%, var(--line));
+  border-radius: 7px;
+  background: var(--panel-strong);
+  box-shadow: 0 8px 24px rgb(20 20 16 / 12%);
+  color: var(--red);
+  font-size: 9px;
+}
+
+.documentRefreshing {
+  display: inline-flex;
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  width: 22px;
+  height: 22px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--panel-strong);
+  color: var(--ink-faint);
+}
+
+.statusbar {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 14px;
+  padding: 0 8px;
+  border-top: 1px solid var(--line);
+  background: var(--sidebar);
+  color: var(--ink-faint);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 7.5px;
+}
+
+.statusbar > span {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.statusSpacer {
+  flex: 1;
+}
+
+.connection i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--ink-faint);
+}
+
+.connection.live {
+  color: var(--green);
+}
+
+.connection.live i {
+  background: var(--green);
+}
+
+.connection.reconnecting i,
+.connection.connecting i {
+  background: var(--amber);
+}
+
+.connection.offline i {
+  background: var(--red);
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+:global(html[data-resolved-theme="dark"]) .sidebar,
+:global(html[data-resolved-theme="dark"]) .tabs,
+:global(html[data-resolved-theme="dark"]) .tabActions,
+:global(html[data-resolved-theme="dark"]) .topbar,
+:global(html[data-resolved-theme="dark"]) .statusbar {
+  background: var(--sidebar);
+}
+
+:global(html[data-resolved-theme="dark"]) .editor,
+:global(html[data-resolved-theme="dark"]) .document,
+:global(html[data-resolved-theme="dark"]) .code,
+:global(html[data-resolved-theme="dark"]) .tabs > button.activeTab {
+  background: var(--canvas);
+}
+
+:global(html[data-resolved-theme="dark"]) .tabs > button.activeTab::after {
+  background: var(--canvas);
+}
+
+@media (max-width: 760px) {
+  .standalone .workbench {
+    grid-template-columns: minmax(145px, 38vw) minmax(0, 1fr);
+  }
+
+  .topbar {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .liveBadge {
+    display: none;
+  }
+
+  .statusbar > span:nth-child(2) {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loading svg,
+  .documentRefreshing svg {
+    animation: none;
+  }
+}

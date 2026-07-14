@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { toUnixTimestamp } from "@/lib/time";
 import { createMockCodexHarnessState } from "./events";
 import {
   appendCodexTurn,
@@ -9,15 +10,17 @@ import {
   visibleCodexConversationWhileEditing,
 } from "./timeline";
 
+const timestamp = (value: string) => toUnixTimestamp(new Date(value));
+
 const initial = createMockCodexHarnessState("thread-test", "gpt-5.2-codex", {
   content: "first",
   assistantText: "first reply",
-  createdAt: "2026-07-12T00:00:00Z",
+  createdAt: timestamp("2026-07-12T00:00:00Z"),
 });
 const state = appendCodexTurn(initial, {
   content: "second",
   assistantText: "second reply",
-  createdAt: "2026-07-12T00:01:00Z",
+  createdAt: timestamp("2026-07-12T00:01:00Z"),
 });
 const secondUser = visibleCodexConversationWhileEditing(state.events, null).find(
   (message) => message.content === "second",
@@ -41,7 +44,7 @@ test("uses the native Codex Turn boundary for delete and edit", () => {
   const replacement = replaceCodexTurn(state, secondUser.id, {
     content: "edited",
     assistantText: "edited reply",
-    createdAt: "2026-07-12T00:02:00Z",
+    createdAt: timestamp("2026-07-12T00:02:00Z"),
   });
   assert.deepEqual(
     visibleCodexConversationWhileEditing(replacement?.events ?? [], null).map(

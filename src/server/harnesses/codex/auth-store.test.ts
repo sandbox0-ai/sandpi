@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { toUnixTimestamp } from "@/lib/time";
+
 import {
   publicCodexDeviceAuthFlow,
   type CodexDeviceAuthFlow,
@@ -39,9 +41,9 @@ test("device login projection never exposes runtime state or protocol messages",
     verificationUrl: "https://auth.example.test/device",
     userCode: "ABCD-EFGH",
     error: undefined,
-    expiresAt: now.toISOString(),
-    createdAt: now.toISOString(),
-    updatedAt: now.toISOString(),
+    expiresAt: toUnixTimestamp(now),
+    createdAt: toUnixTimestamp(now),
+    updatedAt: toUnixTimestamp(now),
   });
   assert.doesNotMatch(
     JSON.stringify(publicCodexDeviceAuthFlow(flow)),

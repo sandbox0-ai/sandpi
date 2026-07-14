@@ -7,6 +7,7 @@ import {
   getAuditTimeFormatOptions,
   shouldSubmitComposer,
 } from "./operation-ui";
+import { toUnixTimestamp } from "./time";
 
 const key = {
   key: "Enter",
@@ -58,7 +59,7 @@ test("audit time options omit the time zone for system mode", () => {
 });
 
 test("audit time formatting respects locale and configured time zone", () => {
-  const timestamp = "2026-07-12T00:00:00.000Z";
+  const timestamp = toUnixTimestamp(new Date("2026-07-12T00:00:00.000Z"));
   assert.equal(formatAuditTime(timestamp, "en", "UTC"), "00:00:00");
   assert.equal(
     formatAuditTime(timestamp, "zh-CN", "Asia/Shanghai"),

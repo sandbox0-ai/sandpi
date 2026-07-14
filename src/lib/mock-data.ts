@@ -1,11 +1,8 @@
 import { SESSION_WORKSPACE_ROOT } from "@/lib/environment-blueprint";
 import { createMockCodexHarnessState } from "@/harnesses/codex/events";
-import {
-  getDefaultMockCodexModel,
-  getMockCodexModel,
-} from "@/harnesses/codex/models";
 import type { CodexSession } from "@/harnesses/codex/types";
 import { createId, randomToken } from "@/lib/id";
+import { toUnixTimestamp, type UnixTimestamp } from "@/lib/time";
 import type {
   Environment,
   MembershipPlanAssignment,
@@ -22,13 +19,32 @@ import type {
   WorkspaceFile,
 } from "@/lib/types";
 
+function timestamp(value: string) {
+  return toUnixTimestamp(new Date(value));
+}
+
+// Test-fixture values only. Production model pickers always consume the bound
+// coding agent's native model-list API and never read this mock data module.
+const mockCodexModelIds = [
+  "gpt-5.2-codex",
+  "gpt-5.1-codex-max",
+  "gpt-5.1-codex-mini",
+] as const;
+const defaultMockCodexModelId = mockCodexModelIds[0];
+
+function mockCodexModelId(modelId: string) {
+  return mockCodexModelIds.some((candidate) => candidate === modelId)
+    ? modelId
+    : defaultMockCodexModelId;
+}
+
 function metricSeries(
   values: number[],
   descriptor: Omit<RuntimeMetricSeries, "segments">,
 ): RuntimeMetricSeries {
-  const start = Date.parse("2026-07-12T08:30:00+08:00");
+  const start = timestamp("2026-07-12T08:30:00+08:00");
   const points = values.map((value, index) => ({
-    at: new Date(start + index * 5 * 60 * 1_000).toISOString(),
+    at: start + index * 5 * 60,
     value,
   }));
 
@@ -65,7 +81,7 @@ const workspaceFiles: WorkspaceFile[] = [
                 kind: "file",
                 language: "TypeScript",
                 size: "3.2 KB",
-                modifiedAt: "1 min ago",
+                modifiedAt: timestamp("2026-07-12T09:24:00+08:00"),
                 content: [
                   "export async function completeAuth(code: string) {",
                   "  const attempt = await authAttempts.consume(code);",
@@ -88,7 +104,7 @@ const workspaceFiles: WorkspaceFile[] = [
                 kind: "file",
                 language: "TypeScript",
                 size: "2.1 KB",
-                modifiedAt: "8 min ago",
+                modifiedAt: timestamp("2026-07-12T09:17:00+08:00"),
                 content: [
                   "export const sessions = {",
                   "  async create(input: CreateSessionInput) {",
@@ -106,7 +122,7 @@ const workspaceFiles: WorkspaceFile[] = [
             kind: "file",
             language: "TypeScript React",
             size: "1.4 KB",
-            modifiedAt: "22 min ago",
+            modifiedAt: timestamp("2026-07-12T09:03:00+08:00"),
             content: "export default function Layout({ children }: Props) {\n  return <main>{children}</main>;\n}",
           },
         ],
@@ -124,7 +140,7 @@ const workspaceFiles: WorkspaceFile[] = [
             kind: "file",
             language: "TypeScript",
             size: "4.7 KB",
-            modifiedAt: "1 min ago",
+            modifiedAt: timestamp("2026-07-12T09:24:00+08:00"),
             content: [
               "test(\"consumes an auth code once under contention\", async () => {",
               "  const results = await Promise.allSettled([",
@@ -145,7 +161,7 @@ const workspaceFiles: WorkspaceFile[] = [
         kind: "file",
         language: "Environment",
         size: "282 B",
-        modifiedAt: "2 days ago",
+        modifiedAt: timestamp("2026-07-10T09:25:00+08:00"),
         content: "DATABASE_URL=\nAUTH_CALLBACK_URL=\n",
       },
       {
@@ -155,7 +171,7 @@ const workspaceFiles: WorkspaceFile[] = [
         kind: "file",
         language: "JSON",
         size: "1.1 KB",
-        modifiedAt: "2 days ago",
+        modifiedAt: timestamp("2026-07-10T09:25:00+08:00"),
         content: "{\n  \"name\": \"console\",\n  \"scripts\": {\n    \"test\": \"vitest run\"\n  }\n}\n",
       },
       {
@@ -165,7 +181,7 @@ const workspaceFiles: WorkspaceFile[] = [
         kind: "file",
         language: "Markdown",
         size: "6.8 KB",
-        modifiedAt: "3 days ago",
+        modifiedAt: timestamp("2026-07-09T09:25:00+08:00"),
         content: "# Console\n\nInternal control plane for remote agent sessions.\n",
       },
     ],
@@ -194,8 +210,8 @@ const audit: SessionAuditFeed = {
       sandboxId: "sbx_7f2a91",
       regionId: "ap-southeast-1",
       clusterId: "sg-runtime-a",
-      occurredAt: "2026-07-12T09:24:18+08:00",
-      ingestedAt: "2026-07-12T09:24:18.132+08:00",
+      occurredAt: timestamp("2026-07-12T09:24:18+08:00"),
+      ingestedAt: timestamp("2026-07-12T09:24:18.132+08:00"),
       source: "netd",
       eventType: "network_audit",
       phase: "effect",
@@ -232,8 +248,8 @@ const audit: SessionAuditFeed = {
       sandboxId: "sbx_7f2a91",
       regionId: "ap-southeast-1",
       clusterId: "sg-runtime-a",
-      occurredAt: "2026-07-12T09:23:51+08:00",
-      ingestedAt: "2026-07-12T09:23:51.084+08:00",
+      occurredAt: timestamp("2026-07-12T09:23:51+08:00"),
+      ingestedAt: timestamp("2026-07-12T09:23:51.084+08:00"),
       source: "procd",
       eventType: "process",
       phase: "result",
@@ -261,8 +277,8 @@ const audit: SessionAuditFeed = {
       sandboxId: "sbx_7f2a91",
       regionId: "ap-southeast-1",
       clusterId: "sg-runtime-a",
-      occurredAt: "2026-07-12T09:21:06+08:00",
-      ingestedAt: "2026-07-12T09:21:06.106+08:00",
+      occurredAt: timestamp("2026-07-12T09:21:06+08:00"),
+      ingestedAt: timestamp("2026-07-12T09:21:06.106+08:00"),
       source: "netd",
       eventType: "network_audit",
       phase: "effect",
@@ -298,8 +314,8 @@ const audit: SessionAuditFeed = {
       sandboxId: "sbx_7f2a91",
       regionId: "ap-southeast-1",
       clusterId: "sg-runtime-a",
-      occurredAt: "2026-07-12T09:17:57.800+08:00",
-      ingestedAt: "2026-07-12T09:17:57.824+08:00",
+      occurredAt: timestamp("2026-07-12T09:17:57.800+08:00"),
+      ingestedAt: timestamp("2026-07-12T09:17:57.824+08:00"),
       source: "cluster_gateway",
       eventType: "api_access",
       phase: "attempt",
@@ -336,8 +352,8 @@ const audit: SessionAuditFeed = {
       sandboxId: "sbx_7f2a91",
       regionId: "ap-southeast-1",
       clusterId: "sg-runtime-a",
-      occurredAt: "2026-07-12T09:17:58+08:00",
-      ingestedAt: "2026-07-12T09:17:58.041+08:00",
+      occurredAt: timestamp("2026-07-12T09:17:58+08:00"),
+      ingestedAt: timestamp("2026-07-12T09:17:58.041+08:00"),
       source: "cluster_gateway",
       eventType: "api_access",
       phase: "result",
@@ -376,8 +392,8 @@ const audit: SessionAuditFeed = {
       sandboxId: "sbx_7f2a91",
       regionId: "ap-southeast-1",
       clusterId: "sg-runtime-a",
-      occurredAt: "2026-07-12T09:17:58.200+08:00",
-      ingestedAt: "2026-07-12T09:17:58.286+08:00",
+      occurredAt: timestamp("2026-07-12T09:17:58.200+08:00"),
+      ingestedAt: timestamp("2026-07-12T09:17:58.286+08:00"),
       source: "manager",
       eventType: "lifecycle",
       phase: "effect",
@@ -455,9 +471,9 @@ function mockPlanAssignment(input: {
   usedMinutes: number;
   runningSessions: number;
   snapshotStorageGiB: number;
-  resetsAt: string;
-  periodStartsAt: string;
-  periodEndsAt: string;
+  resetsAt: UnixTimestamp;
+  periodStartsAt: UnixTimestamp;
+  periodEndsAt: UnixTimestamp;
   status?: MembershipPlanAssignment["status"];
 }): MembershipPlanAssignment {
   const plan = mockSandpiPlans.find((candidate) => candidate.id === input.planId);
@@ -505,10 +521,10 @@ export const mockTeams: Team[] = [
       status: "public-beta",
       billingCadence: "monthly",
       billingEmail: "billing@sandpi.dev",
-      currentPeriodStartsAt: "2026-07-01T00:00:00Z",
-      currentPeriodEndsAt: "2026-08-01T00:00:00Z",
+      currentPeriodStartsAt: timestamp("2026-07-01T00:00:00Z"),
+      currentPeriodEndsAt: timestamp("2026-08-01T00:00:00Z"),
     },
-    createdAt: "2026-05-18T08:30:00Z",
+    createdAt: timestamp("2026-05-18T08:30:00Z"),
   },
   {
     id: "team-side-projects",
@@ -521,10 +537,10 @@ export const mockTeams: Team[] = [
       status: "public-beta",
       billingCadence: "monthly",
       billingEmail: "yan@sandpi.dev",
-      currentPeriodStartsAt: "2026-07-08T00:00:00Z",
-      currentPeriodEndsAt: "2026-08-08T00:00:00Z",
+      currentPeriodStartsAt: timestamp("2026-07-08T00:00:00Z"),
+      currentPeriodEndsAt: timestamp("2026-08-08T00:00:00Z"),
     },
-    createdAt: "2026-06-03T12:15:00Z",
+    createdAt: timestamp("2026-06-03T12:15:00Z"),
   },
 ];
 
@@ -541,11 +557,11 @@ export const mockTeamMemberships: TeamMembership[] = [
       usedMinutes: 3_240,
       runningSessions: 3,
       snapshotStorageGiB: 18.6,
-      resetsAt: "2026-07-20T00:00:00Z",
-      periodStartsAt: "2026-07-01T00:00:00Z",
-      periodEndsAt: "2026-08-01T00:00:00Z",
+      resetsAt: timestamp("2026-07-20T00:00:00Z"),
+      periodStartsAt: timestamp("2026-07-01T00:00:00Z"),
+      periodEndsAt: timestamp("2026-08-01T00:00:00Z"),
     }),
-    joinedAt: "2026-05-18T08:30:00Z",
+    joinedAt: timestamp("2026-05-18T08:30:00Z"),
   },
   {
     id: "member-mira-labs",
@@ -564,11 +580,11 @@ export const mockTeamMemberships: TeamMembership[] = [
       usedMinutes: 820,
       runningSessions: 1,
       snapshotStorageGiB: 5.8,
-      resetsAt: "2026-07-20T00:00:00Z",
-      periodStartsAt: "2026-07-01T00:00:00Z",
-      periodEndsAt: "2026-08-01T00:00:00Z",
+      resetsAt: timestamp("2026-07-20T00:00:00Z"),
+      periodStartsAt: timestamp("2026-07-01T00:00:00Z"),
+      periodEndsAt: timestamp("2026-08-01T00:00:00Z"),
     }),
-    joinedAt: "2026-05-20T10:00:00Z",
+    joinedAt: timestamp("2026-05-20T10:00:00Z"),
   },
   {
     id: "member-leo-labs",
@@ -587,11 +603,11 @@ export const mockTeamMemberships: TeamMembership[] = [
       usedMinutes: 530,
       runningSessions: 0,
       snapshotStorageGiB: 3.2,
-      resetsAt: "2026-07-20T00:00:00Z",
-      periodStartsAt: "2026-07-01T00:00:00Z",
-      periodEndsAt: "2026-08-01T00:00:00Z",
+      resetsAt: timestamp("2026-07-20T00:00:00Z"),
+      periodStartsAt: timestamp("2026-07-01T00:00:00Z"),
+      periodEndsAt: timestamp("2026-08-01T00:00:00Z"),
     }),
-    joinedAt: "2026-06-02T09:20:00Z",
+    joinedAt: timestamp("2026-06-02T09:20:00Z"),
   },
   {
     id: "member-ada-labs",
@@ -610,11 +626,11 @@ export const mockTeamMemberships: TeamMembership[] = [
       usedMinutes: 160,
       runningSessions: 0,
       snapshotStorageGiB: 1.1,
-      resetsAt: "2026-07-20T00:00:00Z",
-      periodStartsAt: "2026-07-01T00:00:00Z",
-      periodEndsAt: "2026-08-01T00:00:00Z",
+      resetsAt: timestamp("2026-07-20T00:00:00Z"),
+      periodStartsAt: timestamp("2026-07-01T00:00:00Z"),
+      periodEndsAt: timestamp("2026-08-01T00:00:00Z"),
     }),
-    joinedAt: "2026-06-12T14:10:00Z",
+    joinedAt: timestamp("2026-06-12T14:10:00Z"),
   },
   {
     id: "member-noah-labs",
@@ -633,12 +649,12 @@ export const mockTeamMemberships: TeamMembership[] = [
       usedMinutes: 0,
       runningSessions: 0,
       snapshotStorageGiB: 0,
-      resetsAt: "2026-07-20T00:00:00Z",
-      periodStartsAt: "2026-07-01T00:00:00Z",
-      periodEndsAt: "2026-08-01T00:00:00Z",
+      resetsAt: timestamp("2026-07-20T00:00:00Z"),
+      periodStartsAt: timestamp("2026-07-01T00:00:00Z"),
+      periodEndsAt: timestamp("2026-08-01T00:00:00Z"),
       status: "pending",
     }),
-    joinedAt: "2026-07-12T06:40:00Z",
+    joinedAt: timestamp("2026-07-12T06:40:00Z"),
   },
   {
     id: "member-yan-side-projects",
@@ -652,11 +668,11 @@ export const mockTeamMemberships: TeamMembership[] = [
       usedMinutes: 410,
       runningSessions: 1,
       snapshotStorageGiB: 4.2,
-      resetsAt: "2026-07-15T00:00:00Z",
-      periodStartsAt: "2026-07-08T00:00:00Z",
-      periodEndsAt: "2026-08-08T00:00:00Z",
+      resetsAt: timestamp("2026-07-15T00:00:00Z"),
+      periodStartsAt: timestamp("2026-07-08T00:00:00Z"),
+      periodEndsAt: timestamp("2026-08-08T00:00:00Z"),
     }),
-    joinedAt: "2026-06-03T12:15:00Z",
+    joinedAt: timestamp("2026-06-03T12:15:00Z"),
   },
 ];
 
@@ -678,7 +694,7 @@ export const mockEnvironments: Environment[] = [
       label: "Codex",
       status: "connected",
       account: "dev@sandbox0.ai",
-      lastVerified: "12 min ago",
+      lastVerified: timestamp("2026-07-12T09:13:00+08:00"),
     },
     networkPolicy: {
       mode: "restricted",
@@ -697,7 +713,7 @@ export const mockEnvironments: Environment[] = [
         description: "Warm repository objects and dependency caches after a Git push.",
         kind: "webhook",
         status: "active",
-        lastRun: "18 min ago",
+        lastRun: timestamp("2026-07-12T09:07:00+08:00"),
       },
       {
         id: "scheduled-refresh",
@@ -725,7 +741,7 @@ export const mockEnvironments: Environment[] = [
       label: "Codex",
       status: "connected",
       account: "release@sandbox0.ai",
-      lastVerified: "Yesterday",
+      lastVerified: timestamp("2026-07-11T09:25:00+08:00"),
     },
     networkPolicy: {
       mode: "restricted",
@@ -759,7 +775,7 @@ export const mockEnvironments: Environment[] = [
       label: "Codex",
       status: "connected",
       account: "yan@example.com",
-      lastVerified: "2 hours ago",
+      lastVerified: timestamp("2026-07-12T07:25:00+08:00"),
     },
     networkPolicy: {
       mode: "restricted",
@@ -773,7 +789,7 @@ export const mockEnvironments: Environment[] = [
 export const mockPreferences: SandpiPreferences = {
   general: {
     language: "en",
-    timeZone: "Asia/Shanghai",
+    timeZone: "auto",
     sendShortcut: "enter",
   },
   appearance: {
@@ -798,13 +814,13 @@ const primarySession: CodexSession = {
   harnessLabel: "Codex",
   harnessState: createMockCodexHarnessState(
     "thr_mock_auth_race",
-    getDefaultMockCodexModel().id,
+    defaultMockCodexModelId,
     {
       content:
         "There is an intermittent double-login after the OAuth callback. Find the race, fix it, and add a regression test.",
       assistantText:
         "I traced the callback through the attempt store and found a read-then-delete race. Two requests can validate the same code before either one deletes it. I changed consumption to an atomic operation and covered the concurrent path.",
-      createdAt: "2026-07-12T09:18:01+08:00",
+      createdAt: timestamp("2026-07-12T09:18:01+08:00"),
       commands: [
         {
           command: "rg -n \"authAttempts|completeAuth\" app tests",
@@ -833,9 +849,9 @@ const primarySession: CodexSession = {
       ],
     },
   ),
-  createdAt: "2026-07-12T09:17:41+08:00",
-  updatedAt: "2026-07-12T09:25:03+08:00",
-  hardExpiresAt: "2026-08-11T09:17:41+08:00",
+  createdAt: timestamp("2026-07-12T09:17:41+08:00"),
+  updatedAt: timestamp("2026-07-12T09:25:03+08:00"),
+  hardExpiresAt: timestamp("2026-08-11T09:17:41+08:00"),
   sandboxId: "sbx_7f2a91",
   supervisorSessionId: "ses_cdx_01J2",
   workspaceRoot: SESSION_WORKSPACE_ROOT,
@@ -893,7 +909,7 @@ function compactSession(
   environmentId: string,
   title: string,
   status: CodexSession["status"],
-  updatedAt: string,
+  updatedAt: UnixTimestamp,
   unread: boolean,
 ): CodexSession {
   const environment = mockEnvironments.find(
@@ -919,7 +935,7 @@ function compactSession(
     environmentRevision: environment.revision,
     harnessState: createMockCodexHarnessState(
       `thr_${id.slice(-12)}`,
-      getDefaultMockCodexModel().id,
+      defaultMockCodexModelId,
       {
         content: title,
         assistantText: "This mock Codex turn is ready to resume from its durable event cursor.",
@@ -936,7 +952,7 @@ export const mockSessions: CodexSession[] = [
     "env-default",
     "Make event stream resumable",
     "waiting",
-    "2026-07-12T08:42:00+08:00",
+    timestamp("2026-07-12T08:42:00+08:00"),
     true,
   ),
   compactSession(
@@ -944,7 +960,7 @@ export const mockSessions: CodexSession[] = [
     "env-default",
     "Polish environment settings",
     "paused",
-    "2026-07-11T18:12:00+08:00",
+    timestamp("2026-07-11T18:12:00+08:00"),
     false,
   ),
   compactSession(
@@ -952,7 +968,7 @@ export const mockSessions: CodexSession[] = [
     "env-release",
     "Prepare sdk-js release",
     "completed",
-    "2026-07-11T15:34:00+08:00",
+    timestamp("2026-07-11T15:34:00+08:00"),
     true,
   ),
   compactSession(
@@ -960,7 +976,7 @@ export const mockSessions: CodexSession[] = [
     "env-side-projects",
     "Prototype HarmonyOS shell",
     "waiting",
-    "2026-07-12T07:26:00+08:00",
+    timestamp("2026-07-12T07:26:00+08:00"),
     false,
   ),
 ];
@@ -1013,10 +1029,10 @@ export function createMockSession(
     throw new Error(`The ${environment.codingAgent.harness} harness is not implemented.`);
   }
   const id = createId("session", 8);
-  const now = new Date();
-  const expires = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+  const now = toUnixTimestamp(new Date());
+  const expires = now + 30 * 24 * 60 * 60;
   const threadId = `thr_${randomToken(10)}`;
-  const model = getMockCodexModel(input.modelId ?? "");
+  const modelId = mockCodexModelId(input.modelId ?? "");
 
   return {
     ...structuredClone(primarySession),
@@ -1027,14 +1043,14 @@ export function createMockSession(
     unread: false,
     harness: "codex",
     harnessLabel: environment.codingAgent.label,
-    harnessState: createMockCodexHarnessState(threadId, model.id, {
+    harnessState: createMockCodexHarnessState(threadId, modelId, {
       content: input.prompt,
       assistantText: `The Environment fork is ready. I’m connected to the new ${environment.codingAgent.label} thread and will start by inspecting the workspace.`,
-      createdAt: now.toISOString(),
+      createdAt: now,
     }),
-    createdAt: now.toISOString(),
-    updatedAt: now.toISOString(),
-    hardExpiresAt: expires.toISOString(),
+    createdAt: now,
+    updatedAt: now,
+    hardExpiresAt: expires,
     sandboxId: `sbx_${randomToken(6)}`,
     supervisorSessionId: `ses_${randomToken(8)}`,
     workspaceRoot: SESSION_WORKSPACE_ROOT,
@@ -1073,7 +1089,7 @@ export function createMockEnvironment(input: {
       label: "Codex",
       status: "connected",
       account: "dev@sandbox0.ai",
-      lastVerified: "Just now",
+      lastVerified: toUnixTimestamp(new Date()),
     },
     functions: [],
   };

@@ -380,9 +380,14 @@ export class CodexService {
     sessionId: string;
     text: string;
     images: EncodedCodexInputImage[];
+    modelId?: string;
   }) {
     const turnInput = nativeCodexTurnInput(input.text, input.images);
-    await this.store.beginSessionTurn(input.userId, input.sessionId);
+    await this.store.beginSessionTurn(
+      input.userId,
+      input.sessionId,
+      input.modelId,
+    );
     const requestId = `turn-start:${randomUUID()}`;
     try {
       // Reserve the Session before touching its Sandbox. A Turn edit/delete/fork
@@ -406,6 +411,7 @@ export class CodexService {
             threadId: runtime.threadId,
             clientUserMessageId: `user-message:${randomUUID()}`,
             input: turnInput,
+            ...(input.modelId ? { model: input.modelId } : {}),
           },
         },
         `turn-input:${randomUUID()}`,
@@ -424,12 +430,14 @@ export class CodexService {
     userMessageItemId: string;
     text: string;
     images: EncodedCodexInputImage[];
+    modelId?: string;
   }) {
     const result = await this.mutateTurn(
       input.userId,
       input.sessionId,
       input.userMessageItemId,
       nativeCodexTurnInput(input.text, input.images),
+      input.modelId,
     );
     return {
       requestId: result.requestId,
@@ -654,6 +662,7 @@ export class CodexService {
     sessionId: string,
     userMessageItemId: string,
     replacementInput?: ReturnType<typeof nativeCodexTurnInput>,
+    replacementModelId?: string,
   ) {
     const context = await this.store.prepareTurnMutation(
       userId,
@@ -709,6 +718,7 @@ export class CodexService {
               threadId,
               clientUserMessageId: `user-message:${randomUUID()}`,
               input: replacementInput,
+              ...(replacementModelId ? { model: replacementModelId } : {}),
             },
           },
           `turn-input:${randomUUID()}`,
@@ -735,6 +745,7 @@ export class CodexService {
         sessionId,
         context,
         replacementInput ? "running" : "waiting",
+        replacementModelId,
       );
       finalized = true;
       const restoredRuntime = await this.store.decoderState(sessionId);
@@ -823,11 +834,17 @@ export class CodexService {
     sessionId: string,
     context: Awaited<ReturnType<SandpiStore["prepareTurnMutation"]>>,
     status: "running" | "waiting",
+    modelId?: string,
   ) {
     let lastError: unknown;
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
-        return await this.store.finalizeTurnMutation(sessionId, context, status);
+        return await this.store.finalizeTurnMutation(
+          sessionId,
+          context,
+          status,
+          modelId,
+        );
       } catch (error) {
         lastError = error;
         await delay(100 * 2 ** attempt);

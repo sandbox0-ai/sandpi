@@ -630,6 +630,8 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
         <EnvironmentSettings
           environment={settingsEnvironment}
           teamName={selectedTeam.name}
+          language={preferences.general.language}
+          timeZone={preferences.general.timeZone}
           archivedSessions={teamSessions
             .filter(
               (session) =>
@@ -638,7 +640,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
             )
             .sort(
               (left, right) =>
-                Date.parse(right.updatedAt) - Date.parse(left.updatedAt),
+                right.updatedAt - left.updatedAt,
             )}
           onChange={handleEnvironmentChange}
           onRestoreSession={handleRestoreSession}

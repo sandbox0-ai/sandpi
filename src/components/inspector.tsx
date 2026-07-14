@@ -5,35 +5,34 @@ import {
   ArrowDownToLine,
   ArrowUpFromLine,
   ChevronDown,
-  ChevronRight,
-  ExternalLink,
-  File,
   FileCode2,
-  FileJson,
-  FileText,
-  Folder,
-  FolderOpen,
   Gauge,
   Network,
-  Share2,
   ShieldCheck,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 import {
   InteractiveMetricChart,
   type MetricChartSeries,
 } from "@/components/metric-chart";
 import { SessionAuditPanel } from "@/components/session-audit-panel";
+import { WorkspaceIde } from "@/components/workspace-ide";
 import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
 import { getOperationUiCopy, type OperationLanguage } from "@/lib/operation-ui";
+import {
+  DEFAULT_SESSION_METRIC_RANGE_SECONDS,
+  isSessionMetricRangeSeconds,
+  type SessionMetricRangeSeconds,
+} from "@/lib/session-metrics";
+import { formatUnixTimestamp } from "@/lib/time";
 import type {
   CodingSession,
   RuntimeMetricSeries,
   SessionAuditFeed,
   SessionMetrics,
-  WorkspaceFile,
+  WorkspaceIdeSnapshot,
 } from "@/lib/types";
 
 export type InspectorTab = "files" | "audit" | "metrics";
@@ -47,96 +46,161 @@ interface InspectorProps {
   onClose: () => void;
 }
 
-function flattenFiles(files: WorkspaceFile[]): WorkspaceFile[] {
-  return files.flatMap((file) => [
-    file,
-    ...(file.children ? flattenFiles(file.children) : []),
-  ]);
+function SkeletonShape({ className = "" }: { className?: string }) {
+  return <span className={`inspector-skeleton-shape ${className}`} />;
 }
 
-function FileIcon({ file }: { file: WorkspaceFile }) {
-  if (file.kind === "folder") {
-    return <Folder size={14} />;
-  }
-  if (file.name.endsWith(".json")) {
-    return <FileJson size={14} />;
-  }
-  if (file.name.endsWith(".md")) {
-    return <FileText size={14} />;
-  }
-  if (file.name.endsWith(".ts") || file.name.endsWith(".tsx")) {
-    return <FileCode2 size={14} />;
-  }
-  return <File size={14} />;
-}
-
-function FileTree({
-  files,
-  selectedFileId,
-  depth = 0,
-  onSelect,
+function InspectorSkeleton({
+  activeTab,
+  label,
 }: {
-  files: WorkspaceFile[];
-  selectedFileId: string;
-  depth?: number;
-  onSelect: (file: WorkspaceFile) => void;
+  activeTab: InspectorTab;
+  label: string;
 }) {
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  if (activeTab === "files") {
+    return (
+      <div
+        className="inspector-panel files-panel inspector-skeleton inspector-skeleton-files"
+        role="status"
+        aria-busy="true"
+        aria-live="polite"
+      >
+        <span className="sr-only">{label}</span>
+        <div className="file-workbench" aria-hidden="true">
+          <div className="file-tree inspector-skeleton-file-tree">
+            {Array.from({ length: 9 }, (_, index) => (
+              <div
+                className={`file-tree-row inspector-skeleton-file-row ${
+                  [1, 2, 4, 5, 6, 8].includes(index) ? "is-nested" : ""
+                }`}
+                key={index}
+              >
+                <SkeletonShape className="is-glyph" />
+                <SkeletonShape />
+              </div>
+            ))}
+          </div>
+          <div className="file-preview">
+            <div className="file-preview-header inspector-skeleton-file-header">
+              <SkeletonShape className="is-title" />
+              <span className="file-preview-actions">
+                <SkeletonShape className="is-icon-button" />
+                <SkeletonShape className="is-icon-button" />
+              </span>
+            </div>
+            <div className="file-metadata inspector-skeleton-file-meta">
+              <SkeletonShape />
+              <SkeletonShape />
+              <SkeletonShape />
+            </div>
+            <div className="code-preview inspector-skeleton-code">
+              {Array.from({ length: 12 }, (_, index) => (
+                <span className="code-line" key={index}>
+                  <b>
+                    <SkeletonShape />
+                  </b>
+                  <i>
+                    <SkeletonShape />
+                  </i>
+                </span>
+              ))}
+            </div>
+          </div>
+        </div>
+        <div
+          className="inspector-status-bar inspector-skeleton-status"
+          aria-hidden="true"
+        >
+          <SkeletonShape className="is-dot" />
+          <SkeletonShape />
+        </div>
+      </div>
+    );
+  }
+
+  if (activeTab === "audit") {
+    return (
+      <div
+        className="inspector-panel audit-panel inspector-skeleton inspector-skeleton-audit"
+        role="status"
+        aria-busy="true"
+        aria-live="polite"
+      >
+        <span className="sr-only">{label}</span>
+        <div aria-hidden="true">
+          <div className="audit-toolbar inspector-skeleton-toolbar">
+            <div>
+              <SkeletonShape className="is-title" />
+              <SkeletonShape className="is-subtitle" />
+            </div>
+            <SkeletonShape className="is-filter" />
+          </div>
+          <div className="audit-verification inspector-skeleton-verification">
+            <SkeletonShape className="is-dot" />
+            <SkeletonShape />
+          </div>
+          <div className="audit-timeline">
+            {Array.from({ length: 5 }, (_, index) => (
+              <div className="inspector-skeleton-audit-row" key={index}>
+                <SkeletonShape className="is-glyph" />
+                <span>
+                  <SkeletonShape className="is-title" />
+                  <SkeletonShape className="is-subtitle" />
+                </span>
+                <SkeletonShape />
+                <SkeletonShape />
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <>
-      {files.map((file) => {
-        const isCollapsed = collapsed[file.id] ?? false;
-        const isFolder = file.kind === "folder";
-        return (
-          <div key={file.id}>
-            <button
-              type="button"
-              className={`file-tree-row ${file.id === selectedFileId ? "is-selected" : ""}`}
-              style={{ paddingLeft: `${10 + depth * 14}px` }}
-              onClick={() => {
-                if (isFolder) {
-                  setCollapsed((current) => ({
-                    ...current,
-                    [file.id]: !isCollapsed,
-                  }));
-                } else {
-                  onSelect(file);
-                }
-              }}
-            >
-              <span className="tree-disclosure">
-                {isFolder ? (
-                  isCollapsed ? (
-                    <ChevronRight size={12} />
-                  ) : (
-                    <ChevronDown size={12} />
-                  )
-                ) : null}
-              </span>
-              {isFolder ? (
-                isCollapsed ? (
-                  <Folder size={14} />
-                ) : (
-                  <FolderOpen size={14} />
-                )
-              ) : (
-                <FileIcon file={file} />
-              )}
-              <span>{file.name}</span>
-            </button>
-            {isFolder && !isCollapsed && file.children ? (
-              <FileTree
-                files={file.children}
-                selectedFileId={selectedFileId}
-                depth={depth + 1}
-                onSelect={onSelect}
-              />
-            ) : null}
+    <div
+      className="inspector-panel metrics-panel inspector-skeleton inspector-skeleton-metrics"
+      role="status"
+      aria-busy="true"
+      aria-live="polite"
+    >
+      <span className="sr-only">{label}</span>
+      <div aria-hidden="true">
+        <div className="panel-intro inspector-skeleton-toolbar">
+          <div>
+            <SkeletonShape className="is-eyebrow" />
+            <SkeletonShape className="is-title" />
           </div>
-        );
-      })}
-    </>
+          <SkeletonShape className="is-filter" />
+        </div>
+        {Array.from({ length: 3 }, (_, index) => (
+          <section
+            className="metric-card inspector-skeleton-metric-card"
+            key={index}
+          >
+            <header>
+              <SkeletonShape />
+              <SkeletonShape />
+            </header>
+            <SkeletonShape className="is-chart" />
+            <footer>
+              <SkeletonShape />
+              <SkeletonShape />
+            </footer>
+          </section>
+        ))}
+        <div className="runtime-facts inspector-skeleton-facts">
+          <div>
+            <SkeletonShape />
+            <SkeletonShape />
+          </div>
+          <div>
+            <SkeletonShape />
+            <SkeletonShape />
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -190,7 +254,7 @@ function formatBytesPerSecond(value: number, language: OperationLanguage) {
 }
 
 function formatMetricTime(
-  at: string,
+  at: number,
   language: OperationLanguage,
   timeZone: string,
 ) {
@@ -198,32 +262,7 @@ function formatMetricTime(
     hour: "2-digit",
     minute: "2-digit",
   };
-  if (timeZone !== "auto") {
-    options.timeZone = timeZone;
-  }
-  try {
-    return new Intl.DateTimeFormat(metricLocale(language), options).format(
-      new Date(at),
-    );
-  } catch {
-    delete options.timeZone;
-    return new Intl.DateTimeFormat(metricLocale(language), options).format(
-      new Date(at),
-    );
-  }
-}
-
-function decodeBase64Text(content: string) {
-  const raw = window.atob(content);
-  const bytes = Uint8Array.from(raw, (character) => character.charCodeAt(0));
-  return new TextDecoder().decode(bytes);
-}
-
-interface FilePreviewResponse {
-  path: string;
-  encoding: "base64";
-  content: string;
-  kind: "binary" | "text";
+  return formatUnixTimestamp(at, metricLocale(language), timeZone, options);
 }
 
 export function Inspector({
@@ -235,22 +274,49 @@ export function Inspector({
   onClose,
 }: InspectorProps) {
   const ui = getOperationUiCopy(language).inspector;
-  const [files, setFiles] = useState(session.files);
+  const [metricsRangeSeconds, setMetricsRangeSeconds] =
+    useState<SessionMetricRangeSeconds>(DEFAULT_SESSION_METRIC_RANGE_SECONDS);
+  const metricRangeOptions = [
+    {
+      seconds: 15 * 60,
+      label: ui.fifteenMinutes,
+      windowLabel: ui.last15Minutes,
+    },
+    { seconds: 60 * 60, label: ui.oneHour, windowLabel: ui.lastHour },
+    { seconds: 6 * 60 * 60, label: ui.sixHours, windowLabel: ui.last6Hours },
+    {
+      seconds: 24 * 60 * 60,
+      label: ui.twentyFourHours,
+      windowLabel: ui.last24Hours,
+    },
+    {
+      seconds: 7 * 24 * 60 * 60,
+      label: ui.sevenDays,
+      windowLabel: ui.last7Days,
+    },
+  ] satisfies Array<{
+    seconds: SessionMetricRangeSeconds;
+    label: string;
+    windowLabel: string;
+  }>;
+  const selectedMetricRange =
+    metricRangeOptions.find(
+      (option) => option.seconds === metricsRangeSeconds,
+    ) ?? metricRangeOptions[1];
+  const requestKey = `${session.id}:${activeTab}:${
+    activeTab === "metrics" ? metricsRangeSeconds : "default"
+  }`;
+  const [ideSnapshot, setIdeSnapshot] = useState<WorkspaceIdeSnapshot>();
   const [audit, setAudit] = useState(session.audit);
   const [metrics, setMetrics] = useState(session.metrics);
-  const [fileContents, setFileContents] = useState<
-    Record<string, { kind: "binary" | "text"; text: string }>
-  >({});
-  const [loading, setLoading] = useState(false);
-  const [loadError, setLoadError] = useState("");
-  const allFiles = useMemo(() => flattenFiles(files), [files]);
-  const initialFile =
-    allFiles.find((file) => file.id === "auth-callback") ??
-    allFiles.find((file) => file.kind === "file") ??
-    allFiles[0];
-  const [selectedFileId, setSelectedFileId] = useState(initialFile?.id ?? "");
-  const selectedFile =
-    allFiles.find((file) => file.id === selectedFileId) ?? initialFile;
+  const [resolvedRequestKey, setResolvedRequestKey] = useState("");
+  const [loadError, setLoadError] = useState<{
+    requestKey: string;
+    message: string;
+  } | null>(null);
+  const currentLoadError =
+    loadError?.requestKey === requestKey ? loadError.message : "";
+  const loading = resolvedRequestKey !== requestKey && !currentLoadError;
   const cpuNow = lastMetricValue(metrics.cpuUtilization);
   const memoryNow = lastMetricValue(metrics.memoryWorkingSet);
   const networkReceiveNow = lastMetricValue(metrics.networkReceive);
@@ -260,103 +326,56 @@ export function Inspector({
     legendLabel: ui.metricSeries,
     toggleSeriesLabel: (label: string, visible: boolean) =>
       visible ? ui.hideMetricSeries(label) : ui.showMetricSeries(label),
-    formatTime: (at: string) => formatMetricTime(at, language, timeZone),
+    formatTime: (at: number) => formatMetricTime(at, language, timeZone),
   };
 
   useEffect(() => {
-    setFiles(session.files);
+    setIdeSnapshot(undefined);
     setAudit(session.audit);
     setMetrics(session.metrics);
-    setFileContents({});
-    setSelectedFileId("");
-    setLoadError("");
+    setLoadError(null);
   }, [session.id, session.audit, session.files, session.metrics]);
 
   useEffect(() => {
     const controller = new AbortController();
-    setLoading(true);
-    setLoadError("");
+    setLoadError(null);
 
     const path = `/api/v1/sessions/${encodeURIComponent(session.id)}`;
     const request =
       activeTab === "files"
-        ? apiFetch<ApiEnvelope<WorkspaceFile[]>>(
-            `${path}/files?path=${encodeURIComponent("/workspace")}`,
+        ? apiFetch<ApiEnvelope<WorkspaceIdeSnapshot>>(
+            `${path}/ide`,
             { signal: controller.signal },
-          ).then((response) => setFiles(response.data))
+          ).then((response) => setIdeSnapshot(response.data))
         : activeTab === "audit"
           ? apiFetch<ApiEnvelope<SessionAuditFeed>>(`${path}/audit`, {
               signal: controller.signal,
             }).then((response) => setAudit(response.data))
-          : apiFetch<ApiEnvelope<SessionMetrics>>(`${path}/metrics`, {
-              signal: controller.signal,
-            }).then((response) => setMetrics(response.data));
+          : apiFetch<ApiEnvelope<SessionMetrics>>(
+              `${path}/metrics?rangeSeconds=${metricsRangeSeconds}`,
+              { signal: controller.signal },
+            ).then((response) => setMetrics(response.data));
 
     void request
       .catch((error) => {
         if (!controller.signal.aborted) {
-          setLoadError(
-            error instanceof Error
-              ? error.message
-              : "This Inspector view could not be loaded.",
-          );
+          setLoadError({
+            requestKey,
+            message:
+              error instanceof Error
+                ? error.message
+                : "This Inspector view could not be loaded.",
+          });
         }
       })
       .finally(() => {
         if (!controller.signal.aborted) {
-          setLoading(false);
+          setResolvedRequestKey(requestKey);
         }
       });
 
     return () => controller.abort();
-  }, [activeTab, session.id]);
-
-  useEffect(() => {
-    if (selectedFileId || !initialFile) {
-      return;
-    }
-    setSelectedFileId(initialFile.id);
-  }, [initialFile, selectedFileId]);
-
-  useEffect(() => {
-    if (
-      activeTab !== "files" ||
-      !selectedFile ||
-      selectedFile.kind !== "file" ||
-      selectedFile.content !== undefined ||
-      fileContents[selectedFile.path] !== undefined
-    ) {
-      return;
-    }
-    const controller = new AbortController();
-    const query = new URLSearchParams({ path: selectedFile.path });
-    void apiFetch<
-      ApiEnvelope<FilePreviewResponse>
-    >(
-      `/api/v1/sessions/${encodeURIComponent(session.id)}/file?${query.toString()}`,
-      { signal: controller.signal },
-    )
-      .then((response) => {
-        setFileContents((current) => ({
-          ...current,
-          [response.data.path]: {
-            kind: response.data.kind,
-            text:
-              response.data.kind === "text"
-                ? decodeBase64Text(response.data.content)
-                : "",
-          },
-        }));
-      })
-      .catch((error) => {
-        if (!controller.signal.aborted) {
-          setLoadError(
-            error instanceof Error ? error.message : "The file could not be loaded.",
-          );
-        }
-      });
-    return () => controller.abort();
-  }, [activeTab, fileContents, selectedFile, session.id]);
+  }, [activeTab, metricsRangeSeconds, requestKey, session.id]);
 
   return (
     <aside className="inspector" aria-label={ui.label}>
@@ -394,86 +413,33 @@ export function Inspector({
         </button>
       </header>
 
-      {loading || loadError ? (
-        <div className="inspector-status-bar" role={loadError ? "alert" : "status"}>
+      {currentLoadError ? (
+        <div className="inspector-status-bar" role="alert">
           <span className="status-led" />
-          {loadError || "Loading live Session data…"}
+          {currentLoadError}
         </div>
       ) : null}
 
-      {activeTab === "files" ? (
-        <div className="inspector-panel files-panel">
-          <div className="file-workbench">
-            <div className="file-tree" aria-label={ui.workspaceFiles}>
-              <FileTree
-                files={files}
-                selectedFileId={selectedFile?.id ?? ""}
-                onSelect={(file) => setSelectedFileId(file.id)}
-              />
-            </div>
-            {selectedFile ? (
-              <div className="file-preview">
-                <div className="file-preview-header">
-                  <span>
-                    <FileIcon file={selectedFile} />
-                    <strong>{selectedFile.name}</strong>
-                  </span>
-                  <span className="file-preview-actions">
-                    <button
-                      type="button"
-                      aria-label={ui.shareFile(selectedFile.name)}
-                      title="File sharing requires the future scoped-grant API."
-                      disabled
-                    >
-                      <Share2 size={14} />
-                    </button>
-                    {/*
-                     * Cross-client contract: opening a Volume file in a new tab must launch the
-                     * dedicated Sandpi Cloud IDE, never expose a raw Volume or Sandbox URL.
-                     * Keep this action disabled until the Cloud IDE session/route contract exists.
-                     */}
-                    <button
-                      type="button"
-                      aria-label={ui.openNewView}
-                      title={ui.openNewView}
-                      disabled
-                    >
-                      <ExternalLink size={14} />
-                    </button>
-                  </span>
-                </div>
-                <div className="file-metadata">
-                  <span>{selectedFile.language}</span>
-                  <span>{selectedFile.size}</span>
-                  <span>{selectedFile.modifiedAt}</span>
-                </div>
-                <pre className="code-preview">
-                  <code>
-                    {(fileContents[selectedFile.path]?.kind === "binary"
-                      ? ui.binaryFilePreview
-                      : fileContents[selectedFile.path]?.text ??
-                        selectedFile.content ??
-                        "")
-                      .split("\n")
-                      .map((line, index) => (
-                        <span className="code-line" key={`${line}-${index}`}>
-                          <b>{index + 1}</b>
-                          <i>{line || " "}</i>
-                        </span>
-                      ))}
-                  </code>
-                </pre>
-              </div>
-            ) : null}
-          </div>
-          <div className="inspector-status-bar">
-            <span className="status-led" />
-            {ui.volumeLive(session.workspaceVolumeId)}
-          </div>
+      {loading ? (
+        <InspectorSkeleton
+          activeTab={activeTab}
+          label={ui.loadingView(
+            { files: ui.files, audit: ui.audit, metrics: ui.metrics }[activeTab],
+          )}
+        />
+      ) : activeTab === "files" ? (
+        <div className="inspector-panel files-panel ide-panel">
+          <WorkspaceIde
+            language={language}
+            timeZone={timeZone}
+            session={session}
+            variant="embedded"
+            initialSnapshot={ideSnapshot}
+          />
         </div>
       ) : null}
 
-      {activeTab === "audit" ? (
+      {!loading && activeTab === "audit" ? (
         <SessionAuditPanel
           audit={audit}
           language={language}
@@ -482,16 +448,35 @@ export function Inspector({
         />
       ) : null}
 
-      {activeTab === "metrics" ? (
+      {!loading && activeTab === "metrics" ? (
         <div className="inspector-panel metrics-panel">
           <div className="panel-intro">
             <div>
-              <span className="panel-eyebrow">{ui.lastHour}</span>
+              <span className="panel-eyebrow">
+                {selectedMetricRange.windowLabel}
+              </span>
               <h2>{ui.runtimeMetrics}</h2>
             </div>
-            <button type="button" className="filter-button">
-              {ui.oneHour} <ChevronDown size={13} />
-            </button>
+            <label className="filter-button metrics-range-filter">
+              <span className="sr-only">{ui.metricsRange}</span>
+              <select
+                aria-label={ui.metricsRange}
+                value={metricsRangeSeconds}
+                onChange={(event) => {
+                  const value = Number(event.target.value);
+                  if (isSessionMetricRangeSeconds(value)) {
+                    setMetricsRangeSeconds(value);
+                  }
+                }}
+              >
+                {metricRangeOptions.map((option) => (
+                  <option value={option.seconds} key={option.seconds}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown size={13} aria-hidden="true" />
+            </label>
           </div>
           <section className="metric-card">
             <header>

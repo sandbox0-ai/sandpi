@@ -26,7 +26,7 @@ interface InteractiveMetricChartProps {
   instructions: string;
   legendLabel: string;
   toggleSeriesLabel: (label: string, visible: boolean) => string;
-  formatTime: (at: string) => string;
+  formatTime: (at: number) => string;
   formatValue: (value: number) => string;
 }
 
@@ -36,7 +36,7 @@ const PLOT_TOP = 7;
 const PLOT_BOTTOM = 7;
 
 function pointTime(point: MetricPoint): number {
-  return Date.parse(point.at);
+  return point.at;
 }
 
 function findNearestIndex(times: number[], target: number): number {
@@ -111,9 +111,8 @@ export function InteractiveMetricChart({
   );
   const upper = max ?? largestValue * 1.12;
 
-  function xFor(at: string | number) {
-    const time = typeof at === "string" ? Date.parse(at) : at;
-    return ((time - start) / duration) * WIDTH;
+  function xFor(at: number) {
+    return ((at - start) / duration) * WIDTH;
   }
 
   function yFor(value: number) {
@@ -206,7 +205,7 @@ export function InteractiveMetricChart({
   const activeDescription =
     activeTime === undefined
       ? ""
-      : `${formatTime(new Date(activeTime).toISOString())}. ${activeValues
+      : `${formatTime(activeTime)}. ${activeValues
           .filter((item) => item.point)
           .map(
             (item) =>
@@ -292,7 +291,7 @@ export function InteractiveMetricChart({
             style={{ left: `${tooltipLeft}%` }}
             aria-hidden="true"
           >
-            <time>{formatTime(new Date(activeTime).toISOString())}</time>
+            <time>{formatTime(activeTime)}</time>
             {activeValues.map((item) =>
               item.point ? (
                 <span key={item.series.id}>

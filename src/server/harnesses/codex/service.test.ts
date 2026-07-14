@@ -218,6 +218,62 @@ test("reserves a Session before materializing credentials for a new Turn", async
   ]);
 });
 
+test("passes the selected native Codex model to turn/start", async () => {
+  const writes: Array<Record<string, unknown>> = [];
+  let reservedModelId: string | undefined;
+  const selectedModelId = "native-codex-model";
+  const selectedRuntime = { ...runtimeRecord, modelId: selectedModelId };
+  const store = {
+    async beginSessionTurn(
+      _userId: string,
+      _sessionId: string,
+      modelId?: string,
+    ) {
+      reservedModelId = modelId;
+    },
+    async getRuntime() {
+      return selectedRuntime;
+    },
+    async decoderState() {
+      return selectedRuntime;
+    },
+    async retryableTurnCheckpoints() {
+      return [];
+    },
+  } as unknown as SandpiStore;
+  const runtime = {
+    async installCodexSessionCredential() {},
+    async writeCodexMessage(
+      _runtime: StoredRuntime,
+      message: Record<string, unknown>,
+    ) {
+      writes.push(message);
+    },
+    async listCodexEvents() {
+      return { events: [], cursor: { earliest: 0, latest: 0 } };
+    },
+  } as unknown as RuntimeAdapter;
+  const service = new CodexService(store, runtime, logger, credentials);
+
+  try {
+    await service.startTurn({
+      userId: "user-test",
+      sessionId: runtimeRecord.id,
+      text: "Use the selected model",
+      images: [],
+      modelId: selectedModelId,
+    });
+    assert.equal(reservedModelId, selectedModelId);
+    const turnStart = writes.find((message) => message.method === "turn/start");
+    assert.equal(
+      (turnStart?.params as { model?: string } | undefined)?.model,
+      selectedModelId,
+    );
+  } finally {
+    await service.close();
+  }
+});
+
 test("removes an uncommitted Workspace snapshot when checkpoint persistence fails", async () => {
   const operations: string[] = [];
   let failedWithClearedRuntime = false;
@@ -487,7 +543,13 @@ test("compensates a failed Turn edit by restoring the original Workspace head", 
       if (requestId.startsWith("turn-interrupt:")) return { result: {} };
       return undefined;
     },
-    async finalizeTurnMutation() {
+    async finalizeTurnMutation(
+      _sessionId: string,
+      _context: unknown,
+      _status: string,
+      modelId?: string,
+    ) {
+      assert.equal(modelId, "native-edit-model");
       finalizeAttempts += 1;
       throw new Error("database finalize failed");
     },
@@ -536,6 +598,7 @@ test("compensates a failed Turn edit by restoring the original Workspace head", 
         userMessageItemId: "item-edit",
         text: "replacement",
         images: [],
+        modelId: "native-edit-model",
       }),
       /database finalize failed/,
     );
@@ -547,6 +610,11 @@ test("compensates a failed Turn edit by restoring the original Workspace head", 
     assert.equal(released, 1);
     assert.equal(aborted, 0);
     assert.ok(writes.some((message) => message.method === "turn/interrupt"));
+    const replacement = writes.find((message) => message.method === "turn/start");
+    assert.equal(
+      (replacement?.params as { model?: string } | undefined)?.model,
+      "native-edit-model",
+    );
   } finally {
     await service.close();
   }

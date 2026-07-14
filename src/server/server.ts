@@ -19,6 +19,11 @@ import type {
   SandpiDeploymentSummary,
   SandpiPreferences,
 } from "@/lib/types";
+import {
+  DEFAULT_SESSION_METRIC_RANGE_SECONDS,
+  isSessionMetricRangeSeconds,
+} from "@/lib/session-metrics";
+import { toUnixTimestamp } from "@/lib/time";
 import { OidcIdentityService } from "@/server/auth/oidc";
 import type { Principal } from "@/server/auth/principal";
 import { loadConfig, type SandpiConfig } from "@/server/config";
@@ -158,6 +163,7 @@ export async function createSandpiServer(
       reply.redirect("/preferences/", 308),
     );
     app.get("/team", async (_request, reply) => reply.redirect("/team/", 308));
+    app.get("/ide", async (_request, reply) => reply.redirect("/ide/", 308));
     await app.register(fastifyStatic, {
       root: config.webDir,
       prefix: "/",
@@ -446,6 +452,7 @@ function registerApiRoutes(
         .object({
           text: z.string().trim().max(100_000).default(""),
           images: codexInputImagesSchema,
+          modelId: z.string().trim().min(1).max(200).optional(),
         })
         .refine((value) => value.text.length > 0 || value.images.length > 0, {
           message: "A Turn requires text or at least one image.",
@@ -456,6 +463,7 @@ function registerApiRoutes(
         sessionId: request.params.sessionId,
         text: body.text,
         images: body.images,
+        modelId: body.modelId,
       });
       return reply.status(202).send({ data: result });
     },
@@ -511,6 +519,7 @@ function registerApiRoutes(
         .object({
           text: z.string().trim().max(100_000).default(""),
           images: codexInputImagesSchema,
+          modelId: z.string().trim().min(1).max(200).optional(),
         })
         .refine((value) => value.text.length > 0 || value.images.length > 0, {
           message: "An edited Turn requires text or at least one image.",
@@ -522,6 +531,7 @@ function registerApiRoutes(
         userMessageItemId: request.params.userMessageItemId,
         text: body.text,
         images: body.images,
+        modelId: body.modelId,
       });
       return reply.status(202).send({ data: result });
     },
@@ -589,6 +599,81 @@ function registerApiRoutes(
     },
   );
   app.get<{ Params: { sessionId: string } }>(
+    "/api/v1/sessions/:sessionId/ide",
+    async (request) => {
+      const runtime = await services.store.getRuntime(
+        request.principal.userId,
+        request.params.sessionId,
+      );
+      const [files, git] = await Promise.all([
+        services.runtime.listFiles(runtime, "/workspace"),
+        services.runtime.getWorkspaceGitState(runtime),
+      ]);
+      return {
+        data: { files, git, refreshedAt: toUnixTimestamp(new Date()) },
+      };
+    },
+  );
+  app.get<{ Params: { sessionId: string } }>(
+    "/api/v1/sessions/:sessionId/ide/file",
+    async (request) => {
+      const filePath = queryString(request, "path");
+      if (!filePath) {
+        throw new HttpError(400, "path_required", "File path is required.");
+      }
+      const runtime = await services.store.getRuntime(
+        request.principal.userId,
+        request.params.sessionId,
+      );
+      return {
+        data: await services.runtime.readWorkspaceIdeFile(runtime, filePath),
+      };
+    },
+  );
+  app.get<{ Params: { sessionId: string } }>(
+    "/api/v1/sessions/:sessionId/ide/events",
+    { websocket: true },
+    async (socket, request) => {
+      let watcher:
+        | Awaited<ReturnType<RuntimeAdapter["watchWorkspaceFiles"]>>
+        | undefined;
+      try {
+        const runtime = await services.store.getRuntime(
+          request.principal.userId,
+          request.params.sessionId,
+        );
+        watcher = await services.runtime.watchWorkspaceFiles(runtime);
+        socket.send(
+          JSON.stringify({ type: "ready", at: toUnixTimestamp(new Date()) }),
+        );
+        socket.on("close", () => watcher?.close());
+        for await (const message of watcher.messages) {
+          if (socket.readyState !== socket.OPEN) break;
+          socket.send(
+            JSON.stringify({
+              type: "change",
+              ...message,
+              at: toUnixTimestamp(new Date()),
+            }),
+          );
+        }
+      } catch (error) {
+        if (socket.readyState === socket.OPEN) {
+          socket.send(
+            JSON.stringify({
+              type: "error",
+              error: normalizeError(error).message,
+              at: toUnixTimestamp(new Date()),
+            }),
+          );
+          socket.close(1011, "Workspace watch failed");
+        }
+      } finally {
+        watcher?.close();
+      }
+    },
+  );
+  app.get<{ Params: { sessionId: string } }>(
     "/api/v1/sessions/:sessionId/audit",
     async (request) => {
       const runtime = await services.store.getRuntime(
@@ -601,11 +686,24 @@ function registerApiRoutes(
   app.get<{ Params: { sessionId: string } }>(
     "/api/v1/sessions/:sessionId/metrics",
     async (request) => {
+      const requestedRange = Number(
+        queryString(request, "rangeSeconds") ??
+          DEFAULT_SESSION_METRIC_RANGE_SECONDS,
+      );
+      if (!isSessionMetricRangeSeconds(requestedRange)) {
+        throw new HttpError(
+          400,
+          "invalid_metrics_range",
+          "The requested Session metrics range is not supported.",
+        );
+      }
       const runtime = await services.store.getRuntime(
         request.principal.userId,
         request.params.sessionId,
       );
-      return { data: await services.runtime.getMetrics(runtime) };
+      return {
+        data: await services.runtime.getMetrics(runtime, requestedRange),
+      };
     },
   );
   app.get<{ Params: { sessionId: string } }>(

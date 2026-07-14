@@ -16,6 +16,7 @@ import type {
   Team,
   TeamMembership,
 } from "@/lib/types";
+import { parseUnixTimestamp, toUnixTimestamp } from "@/lib/time";
 import { HttpError, notFound } from "@/server/http-error";
 import type {
   CodexDecoderState,
@@ -181,7 +182,12 @@ interface MembershipRow extends QueryResultRow {
   plan_status: MembershipPlanAssignment["status"];
   plan_period_starts_at: Date;
   plan_period_ends_at: Date;
-  plan_quotas: MembershipPlanAssignment["quotas"];
+  plan_quotas: Omit<MembershipPlanAssignment["quotas"], "weeklyExecution"> & {
+    weeklyExecution: Omit<
+      MembershipPlanAssignment["quotas"]["weeklyExecution"],
+      "resetsAt"
+    > & { resetsAt: string | number };
+  };
   joined_at: Date;
 }
 
@@ -1029,20 +1035,34 @@ export class SandpiStore {
     );
   }
 
-  async beginSessionTurn(userId: string, sessionId: string) {
+  async beginSessionTurn(
+    userId: string,
+    sessionId: string,
+    modelId?: string,
+  ) {
     const result = await this.pool.query(
-      `UPDATE sessions s
-       SET status = 'running', unread = FALSE
-       FROM team_memberships m
-       WHERE s.id = $2
-         AND s.created_by_user_id = $1
-         AND m.team_id = s.team_id
-         AND m.user_id = $1
-         AND m.status = 'active'
-         AND s.status = 'waiting'
-         AND s.hard_expires_at > NOW()
-       RETURNING s.id`,
-      [userId, sessionId],
+      `WITH writable AS (
+         UPDATE sessions s
+         SET status = 'running', unread = FALSE
+         FROM team_memberships m
+         WHERE s.id = $2
+           AND s.created_by_user_id = $1
+           AND m.team_id = s.team_id
+           AND m.user_id = $1
+           AND m.status = 'active'
+           AND s.status = 'waiting'
+           AND s.hard_expires_at > NOW()
+         RETURNING s.id
+       ), runtime_updated AS (
+         UPDATE session_runtime r
+         SET model_id = COALESCE($3::TEXT, r.model_id),
+             version = r.version + 1, updated_at = NOW()
+         FROM writable w
+         WHERE r.session_id = w.id
+         RETURNING r.session_id
+       )
+       SELECT id FROM writable`,
+      [userId, sessionId, modelId ?? null],
     );
     if (result.rowCount) return;
     const session = await this.getSession(userId, sessionId);
@@ -1139,7 +1159,7 @@ export class SandpiStore {
           harnessVersion: row.harness_version,
           protocolVersion: row.protocol_version,
           sequence: Number(row.sequence),
-          receivedAt: row.received_at.toISOString(),
+          receivedAt: toUnixTimestamp(row.received_at),
           notification: row.notification,
         }) as CodexEventEnvelope,
     );
@@ -1670,6 +1690,7 @@ export class SandpiStore {
     sessionId: string,
     context: TurnMutationContext,
     status: "running" | "waiting" = "waiting",
+    modelId?: string,
   ) {
     const client = await this.pool.connect();
     try {
@@ -1695,9 +1716,11 @@ export class SandpiStore {
       await client.query(
         `UPDATE session_runtime
          SET desired_state = 'running', observed_state = 'running',
-             history_revision = history_revision + 1
+             history_revision = history_revision + 1,
+             model_id = COALESCE($2::TEXT, model_id),
+             version = version + 1, updated_at = NOW()
          WHERE session_id = $1`,
-        [sessionId],
+        [sessionId, modelId ?? null],
       );
       await client.query("COMMIT");
       return invalidated.rows.map((row) => row.workspace_snapshot_id);
@@ -1901,7 +1924,7 @@ export class SandpiStore {
         harnessVersion: row.harness_version,
         protocolVersion: row.protocol_version,
         sequence: Number(row.sequence),
-        receivedAt: row.received_at.toISOString(),
+        receivedAt: toUnixTimestamp(row.received_at),
         notification: row.notification,
       } as CodexEventEnvelope);
       grouped.set(row.session_id, events);
@@ -1961,10 +1984,10 @@ function teamFromRow(row: TeamRow): Team {
       status: row.billing_status,
       billingCadence: row.billing_cadence,
       billingEmail: row.billing_email,
-      currentPeriodStartsAt: row.billing_period_starts_at.toISOString(),
-      currentPeriodEndsAt: row.billing_period_ends_at.toISOString(),
+      currentPeriodStartsAt: toUnixTimestamp(row.billing_period_starts_at),
+      currentPeriodEndsAt: toUnixTimestamp(row.billing_period_ends_at),
     },
-    createdAt: row.created_at.toISOString(),
+    createdAt: toUnixTimestamp(row.created_at),
   };
 }
 
@@ -1984,11 +2007,18 @@ function membershipFromRow(row: MembershipRow): TeamMembership {
       id: row.plan_assignment_id,
       planId: row.plan_id,
       status: row.plan_status,
-      currentPeriodStartsAt: row.plan_period_starts_at.toISOString(),
-      currentPeriodEndsAt: row.plan_period_ends_at.toISOString(),
-      quotas: row.plan_quotas,
+      currentPeriodStartsAt: toUnixTimestamp(row.plan_period_starts_at),
+      currentPeriodEndsAt: toUnixTimestamp(row.plan_period_ends_at),
+      quotas: {
+        ...row.plan_quotas,
+        weeklyExecution: {
+          ...row.plan_quotas.weeklyExecution,
+          resetsAt:
+            parseUnixTimestamp(row.plan_quotas.weeklyExecution.resetsAt) ?? 0,
+        },
+      },
     } satisfies MembershipPlanAssignment,
-    joinedAt: row.joined_at.toISOString(),
+    joinedAt: toUnixTimestamp(row.joined_at),
   };
 }
 
@@ -2017,10 +2047,7 @@ function environmentFromRow(row: EnvironmentRow): EnvironmentRecord {
       status:
         metadata.status === "connected" ? "connected" : "not-connected",
       account: typeof metadata.account === "string" ? metadata.account : undefined,
-      lastVerified:
-        typeof metadata.lastVerified === "string"
-          ? metadata.lastVerified
-          : undefined,
+      lastVerified: parseUnixTimestamp(metadata.lastVerified),
     },
     networkPolicy: row.network_policy,
     functions: row.functions,
@@ -2064,9 +2091,9 @@ function sessionFromRow(
     harness: "codex",
     harnessLabel: "Codex",
     harnessState,
-    createdAt: row.created_at.toISOString(),
-    updatedAt: row.updated_at.toISOString(),
-    hardExpiresAt: row.hard_expires_at.toISOString(),
+    createdAt: toUnixTimestamp(row.created_at),
+    updatedAt: toUnixTimestamp(row.updated_at),
+    hardExpiresAt: toUnixTimestamp(row.hard_expires_at),
     sandboxId: row.sandbox_id ?? "",
     supervisorSessionId: row.supervisor_session_id ?? "",
     workspaceRoot: row.workspace_root,

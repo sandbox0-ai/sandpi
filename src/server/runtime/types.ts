@@ -4,7 +4,11 @@ import type {
   SessionAuditFeed,
   SessionMetrics,
   WorkspaceFile,
+  WorkspaceGitState,
+  WorkspaceIdeFile,
 } from "@/lib/types";
+import type { SessionMetricRangeSeconds } from "@/lib/session-metrics";
+import type { UnixTimestamp } from "@/lib/time";
 
 export interface ProvisionedEnvironment {
   workspaceVolumeId: string;
@@ -143,8 +147,19 @@ export interface RuntimeAdapter {
   ): Promise<{ events: unknown[]; cursor: { earliest: number; latest: number } }>;
   listFiles(runtime: RuntimeSessionRecord, path: string): Promise<WorkspaceFile[]>;
   readFile(runtime: RuntimeSessionRecord, path: string): Promise<Uint8Array>;
+  getWorkspaceGitState(runtime: RuntimeSessionRecord): Promise<WorkspaceGitState>;
+  readWorkspaceIdeFile(
+    runtime: RuntimeSessionRecord,
+    path: string,
+  ): Promise<WorkspaceIdeFile>;
+  watchWorkspaceFiles(
+    runtime: RuntimeSessionRecord,
+  ): Promise<RuntimeWorkspaceWatchHandle>;
   getAudit(runtime: RuntimeSessionRecord): Promise<SessionAuditFeed>;
-  getMetrics(runtime: RuntimeSessionRecord): Promise<SessionMetrics>;
+  getMetrics(
+    runtime: RuntimeSessionRecord,
+    rangeSeconds: SessionMetricRangeSeconds,
+  ): Promise<SessionMetrics>;
   openTerminal(
     runtime: RuntimeSessionRecord,
     after?: number,
@@ -161,7 +176,7 @@ export interface RuntimeTerminalMessage {
     stream?: string;
     dataBase64?: string;
     type: string;
-    occurredAt: string;
+    occurredAt: UnixTimestamp;
   };
 }
 
@@ -177,6 +192,16 @@ export interface RuntimeTerminalHandle {
     cols?: number;
     signal?: string;
   }): void;
+  close(): void;
+}
+
+export interface RuntimeWorkspaceWatchMessage {
+  event: string;
+  path: string;
+}
+
+export interface RuntimeWorkspaceWatchHandle {
+  messages: AsyncIterable<RuntimeWorkspaceWatchMessage>;
   close(): void;
 }
 

@@ -12,7 +12,6 @@ import {
   mockTeamMemberships,
   mockTeams,
 } from "./mock-data";
-import { getDefaultMockCodexModel } from "../harnesses/codex/models";
 
 test("binds the coding agent to an Environment and every derived Session", () => {
   const environment = createMockEnvironment({
@@ -60,7 +59,7 @@ test("uses only a model exposed by the Environment harness mock", () => {
   });
 
   assert.equal(selected.harnessState.modelId, "gpt-5.1-codex-max");
-  assert.equal(fallback.harnessState.modelId, getDefaultMockCodexModel().id);
+  assert.equal(fallback.harnessState.modelId, "gpt-5.2-codex");
 });
 
 test("bootstraps one selected Team without exposing deployment credentials", () => {
@@ -130,8 +129,8 @@ test("models Session Audit as the JSON-safe sdk-js signed event feed", () => {
         event.schemaVersion === 2 &&
         event.sandboxId === session.sandboxId &&
         event.integrity.signatureStatus === "verified" &&
-        typeof event.occurredAt === "string" &&
-        typeof event.ingestedAt === "string",
+        typeof event.occurredAt === "number" &&
+        typeof event.ingestedAt === "number",
     ),
   );
   assert.equal(

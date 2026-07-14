@@ -35,6 +35,7 @@ test("migration history contains every durable Sandpi boundary", async () => {
       "0008_turn_checkpoint_branches",
       "0009_retryable_turn_checkpoints",
       "0010_session_history_revision",
+      "0011_default_browser_timezone",
     ],
   );
 

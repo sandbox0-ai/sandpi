@@ -63,6 +63,6 @@ export function searchSessions(
           return relevanceDifference;
         }
       }
-      return Date.parse(right.session.updatedAt) - Date.parse(left.session.updatedAt);
+      return right.session.updatedAt - left.session.updatedAt;
     });
 }

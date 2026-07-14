@@ -1,3 +1,5 @@
+import type { UnixTimestamp } from "./time";
+
 /**
  * Codex is the only MVP implementation. The other identifiers reserve the Environment-level
  * integration boundary; they must not appear as a per-Session switch before their native
@@ -32,7 +34,7 @@ export interface MeteredQuota {
 export interface WeeklyExecutionQuota extends MeteredQuota {
   unit: "minute";
   window: "weekly";
-  resetsAt: string;
+  resetsAt: UnixTimestamp;
 }
 
 export interface SandpiPlan {
@@ -57,8 +59,8 @@ export interface MembershipPlanAssignment {
   id: string;
   planId: SandpiPlanId;
   status: "active" | "pending" | "suspended";
-  currentPeriodStartsAt: string;
-  currentPeriodEndsAt: string;
+  currentPeriodStartsAt: UnixTimestamp;
+  currentPeriodEndsAt: UnixTimestamp;
   quotas: {
     weeklyExecution: WeeklyExecutionQuota;
     concurrentSessions: MeteredQuota & { unit: "session" };
@@ -73,7 +75,7 @@ export interface TeamMembership {
   role: TeamRole;
   status: "active" | "invited";
   planAssignment: MembershipPlanAssignment;
-  joinedAt: string;
+  joinedAt: UnixTimestamp;
 }
 
 /**
@@ -86,8 +88,8 @@ export interface TeamBillingAccount {
   status: "public-beta" | "active" | "past-due" | "deployment-managed";
   billingCadence: "monthly";
   billingEmail: string;
-  currentPeriodStartsAt: string;
-  currentPeriodEndsAt: string;
+  currentPeriodStartsAt: UnixTimestamp;
+  currentPeriodEndsAt: UnixTimestamp;
 }
 
 /**
@@ -102,7 +104,7 @@ export interface Team {
   /** Server-derived list summary, never the membership source of truth. */
   memberCount: number;
   billingAccount: TeamBillingAccount;
-  createdAt: string;
+  createdAt: UnixTimestamp;
 }
 
 /**
@@ -142,7 +144,7 @@ export interface HarnessEventEnvelope<
   harnessVersion: string;
   protocolVersion: string;
   sequence: number;
-  receivedAt: string;
+  receivedAt: UnixTimestamp;
   notification: TNotification;
 }
 
@@ -151,7 +153,7 @@ export interface HarnessAccount {
   label: string;
   status: "connected" | "not-connected" | "coming-soon";
   account?: string;
-  lastVerified?: string;
+  lastVerified?: UnixTimestamp;
 }
 
 export interface NetworkPolicy {
@@ -166,7 +168,7 @@ export interface EnvironmentFunction {
   description: string;
   kind: "webhook" | "manual" | "cron";
   status: "active" | "disabled" | "coming-soon";
-  lastRun?: string;
+  lastRun?: UnixTimestamp;
 }
 
 export interface Environment {
@@ -221,17 +223,90 @@ export interface WorkspaceFile {
   kind: "file" | "folder";
   language?: string;
   size?: string;
-  modifiedAt?: string;
+  modifiedAt?: UnixTimestamp;
   content?: string;
   children?: WorkspaceFile[];
 }
+
+export type WorkspaceGitChangeKind =
+  | "added"
+  | "modified"
+  | "deleted"
+  | "renamed"
+  | "copied"
+  | "untracked"
+  | "conflicted";
+
+export interface WorkspaceGitFileChange {
+  path: string;
+  relativePath: string;
+  originalPath?: string;
+  kind: WorkspaceGitChangeKind;
+  indexStatus: string;
+  worktreeStatus: string;
+  staged: boolean;
+  unstaged: boolean;
+}
+
+export interface WorkspaceGitState {
+  isRepository: boolean;
+  root?: string;
+  branch?: string;
+  head?: string;
+  upstream?: string;
+  ahead: number;
+  behind: number;
+  files: WorkspaceGitFileChange[];
+}
+
+/**
+ * Cross-client Web IDE contract. Web, iOS, Android and HarmonyOS clients consume
+ * this snapshot and treat WorkspaceIdeEvent as an invalidation signal; clients
+ * must not connect to a Sandbox0 file endpoint or infer Git state themselves.
+ */
+export interface WorkspaceIdeSnapshot {
+  files: WorkspaceFile[];
+  git: WorkspaceGitState;
+  refreshedAt: UnixTimestamp;
+}
+
+export interface WorkspaceLineChange {
+  line: number;
+  kind: "added" | "modified" | "deleted";
+  staged: boolean;
+  unstaged: boolean;
+  deletedLines?: number;
+  placement?: "before" | "after";
+}
+
+export interface WorkspaceIdeFile {
+  path: string;
+  name: string;
+  encoding: "base64";
+  content: string;
+  kind: "binary" | "text";
+  size?: string;
+  modifiedAt?: UnixTimestamp;
+  git?: WorkspaceGitFileChange;
+  lineChanges: WorkspaceLineChange[];
+}
+
+export type WorkspaceIdeEvent =
+  | { type: "ready"; at: UnixTimestamp }
+  | {
+      type: "change";
+      event: string;
+      path: string;
+      at: UnixTimestamp;
+    }
+  | { type: "error"; error: string; at: UnixTimestamp };
 
 type SdkSandboxAuditEvent = SandboxObservabilityEvents["events"][number];
 
 /**
  * JSON-safe transport projection of sdk-js' canonical signed Sandbox0 event.
  * sdk-js converts timestamps to Date instances; Sandpi converts only those two
- * fields to ISO strings at its server/client boundary and preserves every other
+ * fields to Unix seconds at its server/client boundary and preserves every other
  * canonical field, including unknown attributes, without normalization.
  *
  * Supervisor and native harness events never belong in this feed. They have
@@ -241,8 +316,8 @@ export type SessionAuditEvent = Omit<
   SdkSandboxAuditEvent,
   "occurredAt" | "ingestedAt"
 > & {
-  occurredAt: string;
-  ingestedAt: string;
+  occurredAt: UnixTimestamp;
+  ingestedAt: UnixTimestamp;
 };
 
 /** Pagination metadata is part of the SDK response and must survive API transport. */
@@ -251,7 +326,7 @@ export type SessionAuditFeed = Omit<SandboxObservabilityEvents, "events"> & {
 };
 
 export interface MetricPoint {
-  at: string;
+  at: UnixTimestamp;
   value: number;
 }
 
@@ -319,9 +394,9 @@ export interface CodingSession<
    * never inspect it or convert it into a universal message/tool schema.
    */
   harnessState: THarnessState;
-  createdAt: string;
-  updatedAt: string;
-  hardExpiresAt: string;
+  createdAt: UnixTimestamp;
+  updatedAt: UnixTimestamp;
+  hardExpiresAt: UnixTimestamp;
   sandboxId: string;
   supervisorSessionId: string;
   workspaceRoot: string;

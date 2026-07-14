@@ -1,6 +1,7 @@
 import { isCodexSession } from "@/harnesses/codex/types";
 import { forkMockCodexSession } from "@/harnesses/codex/session-actions";
 import type { CodingSession, HarnessEventEnvelope } from "@/lib/types";
+import type { UnixTimestamp } from "@/lib/time";
 
 /**
  * Shared harness dispatch is deliberately limited to opaque transport operations. Rendering,
@@ -16,7 +17,7 @@ export function nativeEventsForSession(session: CodingSession): HarnessEventEnve
 /** Dispatches Session fork because native conversation branching is harness-specific. */
 export function forkSessionForHarness(
   session: CodingSession,
-  createdAt: string,
+  createdAt: UnixTimestamp,
 ): CodingSession {
   if (isCodexSession(session)) {
     return forkMockCodexSession(session, createdAt);

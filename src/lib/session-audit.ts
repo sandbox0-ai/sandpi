@@ -57,7 +57,7 @@ export function groupSessionAuditOperations(
     .map(([operationId, operationEvents]) => {
       const sortedEvents = [...operationEvents].sort(
         (left, right) =>
-          Date.parse(left.occurredAt) - Date.parse(right.occurredAt),
+          left.occurredAt - right.occurredAt,
       );
       const primaryEvent = sortedEvents.at(-1) ?? sortedEvents[0];
       if (!primaryEvent) {
@@ -85,8 +85,7 @@ export function groupSessionAuditOperations(
     })
     .sort(
       (left, right) =>
-        Date.parse(right.primaryEvent.occurredAt) -
-        Date.parse(left.primaryEvent.occurredAt),
+        right.primaryEvent.occurredAt - left.primaryEvent.occurredAt,
     );
 }
 

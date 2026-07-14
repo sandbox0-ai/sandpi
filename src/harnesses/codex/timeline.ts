@@ -1,4 +1,5 @@
 import { createMockCodexTurnEvents, projectCodexConversation } from "./events";
+import type { UnixTimestamp } from "@/lib/time";
 import type {
   CodexComposerImage,
   CodexEventEnvelope,
@@ -65,7 +66,7 @@ export function replaceCodexTurn(
     content: string;
     images?: CodexComposerImage[];
     assistantText: string;
-    createdAt: string;
+    createdAt: UnixTimestamp;
   },
 ): CodexHarnessState | null {
   const prefix = truncateCodexEventsBeforeUserItem(state.events, itemId);
@@ -82,7 +83,7 @@ export function appendCodexTurn(
     content: string;
     images?: CodexComposerImage[];
     assistantText: string;
-    createdAt: string;
+    createdAt: UnixTimestamp;
   },
 ): CodexHarnessState {
   return {

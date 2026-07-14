@@ -6,6 +6,7 @@ import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { PreferencesPage } from "@/components/preferences-page";
 import { SandpiApp } from "@/components/sandpi-app";
 import { TeamSettingsPage } from "@/components/team-settings-page";
+import { WorkspaceIdePage } from "@/components/workspace-ide-page";
 import {
   ApiError,
   type ApiEnvelope,
@@ -202,9 +203,19 @@ export function TeamSettingsPageLoader() {
             memberships={memberships}
             plans={bootstrap.plans}
             environmentCount={environmentCount}
+            language={bootstrap.preferences.general.language}
+            timeZone={bootstrap.preferences.general.timeZone}
           />
         );
       }}
+    </BootstrapBoundary>
+  );
+}
+
+export function WorkspaceIdePageLoader() {
+  return (
+    <BootstrapBoundary>
+      {(bootstrap) => <WorkspaceIdePage initialData={bootstrap} />}
     </BootstrapBoundary>
   );
 }

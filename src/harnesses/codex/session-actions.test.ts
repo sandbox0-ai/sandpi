@@ -9,10 +9,13 @@ import {
 
 import { projectCodexConversation } from "./events";
 import { forkMockCodexSession, forkMockCodexTurn } from "./session-actions";
+import { toUnixTimestamp } from "@/lib/time";
+
+const forkedAt = toUnixTimestamp(new Date("2026-07-13T00:00:00Z"));
 
 test("forks a Codex Session with a distinct native thread", () => {
   const source = structuredClone(mockSessions[0]);
-  const forked = forkMockCodexSession(source, "2026-07-13T00:00:00Z");
+  const forked = forkMockCodexSession(source, forkedAt);
 
   assert.notEqual(forked.id, source.id);
   assert.notEqual(forked.harnessState.threadId, source.harnessState.threadId);
@@ -38,7 +41,7 @@ test("forks a Codex Turn from its native userMessage item", () => {
   const forked = forkMockCodexTurn(
     source,
     userItem.id,
-    "2026-07-13T00:00:00Z",
+    forkedAt,
   );
   assert.ok(forked);
   assert.equal(forked.origin?.kind, "turn");

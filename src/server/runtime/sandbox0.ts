@@ -1,3 +1,4 @@
+import { isUtf8 } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 
@@ -15,7 +16,12 @@ import type {
   SessionAuditFeed,
   SessionMetrics,
   WorkspaceFile,
+  WorkspaceGitState,
+  WorkspaceIdeFile,
+  WorkspaceLineChange,
 } from "@/lib/types";
+import type { SessionMetricRangeSeconds } from "@/lib/session-metrics";
+import { toUnixTimestamp } from "@/lib/time";
 import { HttpError } from "@/server/http-error";
 import { toSandbox0NetworkPolicy } from "./network-policy";
 import {
@@ -29,7 +35,14 @@ import {
   type RuntimeProvisionSessionInput,
   type RuntimeSessionRecord,
   type RuntimeTerminalHandle,
+  type RuntimeWorkspaceWatchHandle,
 } from "./types";
+import {
+  lineChangesFromDiff,
+  mergeLineChanges,
+  parseGitStatus,
+  wholeFileLineChanges,
+} from "./git-workspace";
 
 const SESSION_HARD_TTL_SECONDS = 30 * 24 * 60 * 60;
 const EVENT_RETENTION_BYTES = 256 * 1024 * 1024;
@@ -40,10 +53,11 @@ const DEVICE_CODEX_HOME = "/dev/shm/sandpi-codex-device";
 const DEVICE_CODEX_AUTH_FILE = `${DEVICE_CODEX_HOME}/auth.json`;
 const CODEX_AUTH_MAX_BYTES = 4 * 1024 * 1024;
 const AUTH_SANDBOX_HARD_TTL_SECONDS = 30 * 60;
-const MAX_FILE_TREE_DEPTH = 4;
-const MAX_FILE_TREE_ENTRIES = 500;
+const MAX_FILE_TREE_DEPTH = 12;
+const MAX_FILE_TREE_ENTRIES = 5_000;
 const MAX_FILE_PREVIEW_BYTES = 5 * 1024 * 1024;
 const MAX_CODEX_ROLLOUT_IMPORT_BYTES = 256 * 1024 * 1024;
+const HIDDEN_IDE_DIRECTORIES = new Set([".git", ".next", "node_modules"]);
 
 type SdkRuntimeMetricSeries = SandboxMetrics["series"][number];
 
@@ -636,17 +650,24 @@ export class Sandbox0Runtime implements RuntimeAdapter {
       }
       const entries = await sandbox.listFiles(directory);
       const files: WorkspaceFile[] = [];
-      for (const entry of entries) {
+      const sorted = [...entries].sort((left, right) => {
+        const leftFolder = left.type === "dir";
+        const rightFolder = right.type === "dir";
+        if (leftFolder !== rightFolder) return leftFolder ? -1 : 1;
+        return (left.name ?? "").localeCompare(right.name ?? "");
+      });
+      for (const entry of sorted) {
         if (count++ >= MAX_FILE_TREE_ENTRIES) break;
         const entryPath = entry.path ?? path.posix.join(directory, entry.name ?? "unknown");
         const folder = entry.type === "dir";
+        if (folder && HIDDEN_IDE_DIRECTORIES.has(entry.name ?? "")) continue;
         files.push({
           id: Buffer.from(entryPath).toString("base64url"),
           name: entry.name ?? path.posix.basename(entryPath),
           path: entryPath,
           kind: folder ? "folder" : "file",
           size: entry.size === undefined ? undefined : formatFileSize(entry.size),
-          modifiedAt: entry.modTime?.toISOString(),
+          modifiedAt: entry.modTime ? toUnixTimestamp(entry.modTime) : undefined,
           children: folder ? await visit(entryPath, depth + 1) : undefined,
         });
       }
@@ -692,6 +713,225 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     return content;
   }
 
+  async getWorkspaceGitState(
+    runtime: RuntimeSessionRecord,
+  ): Promise<WorkspaceGitState> {
+    const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
+    const rootResult = await sandbox.cmd("git", {
+      command: ["git", "-C", "/workspace", "rev-parse", "--show-toplevel"],
+      cwd: "/workspace",
+      envVars: { GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C" },
+      ttlSec: 15,
+    });
+    if (rootResult.exitCode !== undefined && rootResult.exitCode !== 0) {
+      return {
+        isRepository: false,
+        ahead: 0,
+        behind: 0,
+        files: [],
+      };
+    }
+    const root = safeWorkspacePath(rootResult.stdout.trim());
+    const status = await this.runGit(runtime, root, [
+      "status",
+      "--porcelain=v2",
+      "--branch",
+      "-z",
+      "--untracked-files=all",
+    ]);
+    return parseGitStatus(status, root);
+  }
+
+  async readWorkspaceIdeFile(
+    runtime: RuntimeSessionRecord,
+    requestedPath: string,
+  ): Promise<WorkspaceIdeFile> {
+    const filePath = safeWorkspacePath(requestedPath);
+    const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
+    const git = await this.getWorkspaceGitState(runtime);
+    const change = git.files.find((candidate) => candidate.path === filePath);
+    let content: Uint8Array;
+    let size: number | undefined;
+    let modifiedAt: Date | undefined;
+
+    try {
+      const file = await sandbox.statFile(filePath);
+      if (file.type !== "file") {
+        throw new HttpError(
+          400,
+          "file_preview_not_regular",
+          "Only regular files can be opened in the Web IDE.",
+        );
+      }
+      if ((file.size ?? 0) > MAX_FILE_PREVIEW_BYTES) {
+        throw new HttpError(
+          413,
+          "file_preview_too_large",
+          "Files larger than 5 MiB cannot be opened in the Web IDE.",
+        );
+      }
+      content = await sandbox.readFile(filePath);
+      size = file.size;
+      modifiedAt = file.modTime;
+    } catch (error) {
+      if (
+        !change ||
+        change.kind !== "deleted" ||
+        !git.root ||
+        !isMissingResource(error)
+      ) {
+        throw error;
+      }
+      const relativePath = path.posix.relative(git.root, filePath);
+      const revision = change.staged ? `HEAD:${relativePath}` : `:${relativePath}`;
+      content = Buffer.from(
+        await this.runGit(runtime, git.root, ["show", revision]),
+      );
+      size = content.byteLength;
+    }
+
+    if (content.byteLength > MAX_FILE_PREVIEW_BYTES) {
+      throw new HttpError(
+        413,
+        "file_preview_too_large",
+        "Files larger than 5 MiB cannot be opened in the Web IDE.",
+      );
+    }
+    const text = isUtf8(content)
+      ? Buffer.from(content).toString("utf8")
+      : undefined;
+    const lineCount =
+      text === undefined
+        ? 0
+        : Math.max(
+            1,
+            text.split("\n").length - (text.endsWith("\n") ? 1 : 0),
+          );
+    let lineChanges: WorkspaceLineChange[] = [];
+
+    if (text !== undefined && change && git.root) {
+      if (change.kind === "untracked") {
+        lineChanges = wholeFileLineChanges(lineCount, "added", "unstaged");
+      } else if (change.kind === "deleted") {
+        const groups: WorkspaceLineChange[][] = [];
+        if (change.staged) {
+          groups.push(wholeFileLineChanges(lineCount, "deleted", "staged"));
+        }
+        if (change.unstaged) {
+          groups.push(wholeFileLineChanges(lineCount, "deleted", "unstaged"));
+        }
+        lineChanges = mergeLineChanges(...groups);
+      } else if (change.kind === "conflicted") {
+        lineChanges = wholeFileLineChanges(
+          lineCount,
+          "modified",
+          "unstaged",
+        ).map((line) => ({ ...line, staged: change.staged }));
+      } else {
+        const relativePath = path.posix.relative(git.root, filePath);
+        const [stagedDiff, unstagedDiff] = await Promise.all([
+          change.staged
+            ? this.runGit(runtime, git.root, [
+                "diff",
+                "--cached",
+                "--no-color",
+                "--no-ext-diff",
+                "--unified=0",
+                "--",
+                relativePath,
+              ])
+            : "",
+          change.unstaged
+            ? this.runGit(runtime, git.root, [
+                "diff",
+                "--no-color",
+                "--no-ext-diff",
+                "--unified=0",
+                "--",
+                relativePath,
+              ])
+            : "",
+        ]);
+        lineChanges = mergeLineChanges(
+          lineChangesFromDiff(stagedDiff, "staged"),
+          lineChangesFromDiff(unstagedDiff, "unstaged"),
+        );
+      }
+    }
+
+    return {
+      path: filePath,
+      name: path.posix.basename(filePath),
+      encoding: "base64",
+      content: Buffer.from(content).toString("base64"),
+      kind: text === undefined ? "binary" : "text",
+      size: size === undefined ? undefined : formatFileSize(size),
+      modifiedAt: modifiedAt ? toUnixTimestamp(modifiedAt) : undefined,
+      git: change,
+      lineChanges,
+    };
+  }
+
+  async watchWorkspaceFiles(
+    runtime: RuntimeSessionRecord,
+  ): Promise<RuntimeWorkspaceWatchHandle> {
+    const watcher = await this.client.sandboxes
+      .sandbox(runtime.sandboxId)
+      .watchFiles("/workspace", true);
+    return {
+      messages: {
+        async *[Symbol.asyncIterator]() {
+          for await (const message of watcher.events()) {
+            if (
+              message.type !== "event" ||
+              !message.event ||
+              !message.path
+            ) {
+              continue;
+            }
+            const eventPath = safeWorkspacePath(message.path);
+            if (
+              eventPath === "/workspace/.git" ||
+              eventPath.includes("/.git/")
+            ) {
+              // Git mutates its metadata without necessarily touching a Workspace file
+              // (for example `git add` and `git commit`). Emit one opaque sentinel so
+              // clients refresh source control state without exposing `.git` contents.
+              yield { event: `git:${message.event}`, path: "/workspace" };
+              continue;
+            }
+            yield { event: message.event, path: eventPath };
+          }
+        },
+      },
+      close: () => watcher.close(),
+    };
+  }
+
+  private async runGit(
+    runtime: RuntimeSessionRecord,
+    root: string,
+    args: string[],
+  ) {
+    const result = await this.client.sandboxes.sandbox(runtime.sandboxId).cmd(
+      "git",
+      {
+        command: ["git", "-C", root, ...args],
+        cwd: root,
+        envVars: { GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C" },
+        ttlSec: 15,
+      },
+    );
+    if (result.exitCode !== undefined && result.exitCode !== 0) {
+      throw new HttpError(
+        502,
+        "workspace_git_failed",
+        result.stderr.trim() || "Git could not inspect this Workspace.",
+      );
+    }
+    return result.stdout;
+  }
+
   async getAudit(runtime: RuntimeSessionRecord): Promise<SessionAuditFeed> {
     try {
       const response = await this.client.sandboxes
@@ -701,8 +941,8 @@ export class Sandbox0Runtime implements RuntimeAdapter {
         ...response,
         events: response.events.map((event) => ({
           ...event,
-          occurredAt: event.occurredAt.toISOString(),
-          ingestedAt: event.ingestedAt.toISOString(),
+          occurredAt: toUnixTimestamp(event.occurredAt),
+          ingestedAt: toUnixTimestamp(event.ingestedAt),
         })),
       };
     } catch (error) {
@@ -710,11 +950,14 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     }
   }
 
-  async getMetrics(runtime: RuntimeSessionRecord): Promise<SessionMetrics> {
+  async getMetrics(
+    runtime: RuntimeSessionRecord,
+    rangeSeconds: SessionMetricRangeSeconds,
+  ): Promise<SessionMetrics> {
     try {
       const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
       const endTime = new Date();
-      const startTime = new Date(endTime.getTime() - 60 * 60 * 1_000);
+      const startTime = new Date(endTime.getTime() - rangeSeconds * 1_000);
       const gauges = await sandbox.getMetrics({
         startTime,
         endTime,
@@ -846,7 +1089,7 @@ export class Sandbox0Runtime implements RuntimeAdapter {
                     stream: message.event.stream,
                     dataBase64: message.event.dataBase64,
                     type: message.event.type,
-                    occurredAt: message.event.occurredAt.toISOString(),
+                    occurredAt: toUnixTimestamp(message.event.occurredAt),
                   }
                 : undefined,
             };
@@ -995,7 +1238,7 @@ function metricProjection(series: SdkRuntimeMetricSeries): RuntimeMetricSeries {
     dimensions: series.dimensions,
     segments: series.segments.map((segment) => ({
       points: segment.points.map((point) => ({
-        at: point.time.toISOString(),
+        at: toUnixTimestamp(point.time),
         value: point.value,
       })),
     })),

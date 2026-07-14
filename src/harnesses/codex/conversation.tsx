@@ -128,11 +128,15 @@ export function CodexConversation({
 }: ConversationProps) {
   const ui = getCodexUiCopy(language).conversation;
   const [modelOptions, setModelOptions] = useState<CodexModelOption[]>([]);
+  const [selectedModelId, setSelectedModelId] = useState(
+    session.harnessState.modelId,
+  );
   const selectedModel = modelOptions.find(
-    (model) => model.id === session.harnessState.modelId,
+    (model) => model.id === selectedModelId,
   ) ?? {
-    id: session.harnessState.modelId || "default",
-    displayName: session.harnessState.modelId || "Default",
+    id: selectedModelId || session.harnessState.modelId || "default",
+    displayName: selectedModelId || session.harnessState.modelId || "Default",
+    isDefault: false,
   };
   const [draft, setDraft] = useState("");
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
@@ -168,6 +172,10 @@ export function CodexConversation({
   }, [session.id]);
 
   useEffect(() => {
+    setSelectedModelId(session.harnessState.modelId);
+  }, [session.id, session.harnessState.modelId]);
+
+  useEffect(() => {
     const controller = new AbortController();
     void apiFetch<ApiEnvelope<unknown>>(
       `/api/v1/sessions/${encodeURIComponent(session.id)}/models`,
@@ -176,6 +184,13 @@ export function CodexConversation({
       .then((response) => {
         const models = codexModelOptionsFromNativeResult(response.data);
         setModelOptions(models);
+        setSelectedModelId((current) =>
+          models.some((model) => model.id === current)
+            ? current
+            : (models.find((model) => model.isDefault)?.id ??
+              models[0]?.id ??
+              current),
+        );
       })
       .catch((error) => {
         if (!controller.signal.aborted) {
@@ -314,6 +329,9 @@ export function CodexConversation({
             body: JSON.stringify({
               text: content,
               images: pastedImages.map(encodeCodexComposerImage),
+              ...(selectedModel.id !== "default"
+                ? { modelId: selectedModel.id }
+                : {}),
             }),
           },
         );
@@ -338,6 +356,9 @@ export function CodexConversation({
             body: JSON.stringify({
               text: content,
               images: pastedImages.map(encodeCodexComposerImage),
+              ...(selectedModel.id !== "default"
+                ? { modelId: selectedModel.id }
+                : {}),
             }),
           },
         );
@@ -345,6 +366,10 @@ export function CodexConversation({
           ...sessionRef.current,
           status: "running" as const,
           unread: false,
+          harnessState: {
+            ...sessionRef.current.harnessState,
+            modelId: selectedModel.id,
+          },
         };
         sessionRef.current = next;
         onSessionChange(next);
@@ -921,8 +946,8 @@ export function CodexConversation({
                       environment.codingAgent.label,
                     )}
                     value={selectedModel.id}
-                    disabled
-                    title="The model is fixed when this Codex Session starts."
+                    disabled={modelOptions.length === 0 || sending}
+                    onChange={(event) => setSelectedModelId(event.target.value)}
                   >
                     {(modelOptions.length > 0
                       ? modelOptions
