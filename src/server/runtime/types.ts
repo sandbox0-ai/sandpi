@@ -169,6 +169,7 @@ export interface RuntimeAdapter {
   openTerminal(
     runtime: RuntimeSessionRecord,
     after?: number,
+    expectedTerminalSessionId?: string,
   ): Promise<RuntimeTerminalHandle>;
 }
 
@@ -189,11 +190,17 @@ export interface RuntimeTerminalMessage {
 export interface RuntimeTerminalHandle {
   sessionId: string;
   attemptId: string;
+  /** Effective Supervisor cursor used for this attachment. */
+  replayAfter: number;
+  /** Journal head captured before attaching the live event stream. */
+  replayUntil: number;
+  /** The retained journal no longer continues the browser's prior screen. */
+  replayReset: boolean;
   messages: AsyncIterable<RuntimeTerminalMessage>;
   send(message: {
     type: "input" | "resize" | "signal";
     requestId: string;
-    data?: string;
+    data?: Uint8Array;
     rows?: number;
     cols?: number;
     signal?: string;

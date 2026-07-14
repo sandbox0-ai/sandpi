@@ -378,13 +378,23 @@ Sandbox0 implementation details.
 - Supervisor output is the durable native transport. PostgreSQL stores replay
   identity, cursors and immutable native records; the browser may disconnect at
   any time without stopping Codex.
-- The Web terminal is resumable through a Supervisor Session. Web IDE reads and
-  writes are confined to regular UTF-8 files under `/workspace` with a 5 MiB
-  limit; `.git`, symbolic links and binary files are read-only. Its single file
-  tree includes staged, unstaged, untracked, renamed, deleted and conflicted Git
-  state across optional root or nested repositories. Workspace events refresh
-  clean files automatically and turn external changes to dirty files into an
-  explicit compare/reload/overwrite decision.
+- The Web terminal is resumable through a Supervisor Session. Its client stores
+  Supervisor sequence bookmarks for the last three submitted commands, so a
+  reopened renderer restores only that recent output. Historical bytes are
+  parsed with terminal input disabled until a captured journal head is reached,
+  preventing old device queries from writing replies into the live PTY. Live
+  input is forwarded in order, including xterm binary mouse reports, behind a
+  short-lived Session write-access lease instead of one database query per key.
+  The shell supplies Vim's native `EXINIT` fallback only when no user vimrc is
+  present, keeping arrow-key escape sequences usable in `vi` compatible mode
+  without overriding an Environment's editor configuration.
+  A bounded 4 MiB retained tail protects recovery when an older bookmark
+  expires. Web IDE reads and writes are confined to regular UTF-8 files under
+  `/workspace` with a 5 MiB limit; `.git`, symbolic links and binary files are
+  read-only. Its single file tree includes staged, unstaged, untracked, renamed,
+  deleted and conflicted Git state across optional root or nested repositories.
+  Workspace events refresh clean files automatically and turn external changes
+  to dirty files into an explicit compare/reload/overwrite decision.
 - The OSS server currently expects one active server replica. PostgreSQL and
   Supervisor replay make process restart recoverable, but multi-replica worker
   leadership is not yet part of the supported deployment contract.

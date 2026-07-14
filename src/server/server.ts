@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { isUtf8 } from "node:buffer";
+import { Buffer, isUtf8 } from "node:buffer";
 
 import fastifyCookie from "@fastify/cookie";
 import fastifyCors from "@fastify/cors";
@@ -47,10 +47,12 @@ import {
 } from "@/server/request-origin";
 import { SecretBox } from "@/server/secrets";
 import { SandpiStore } from "@/server/store";
+import { TerminalInputQueue } from "@/server/terminal-input-queue";
 
 const SESSION_COOKIE = "sandpi_session";
 const CODEX_IMAGE_BODY_LIMIT_BYTES = 36 * 1024 * 1024;
 const WORKSPACE_FILE_BODY_LIMIT_BYTES = 7 * 1024 * 1024;
+const TERMINAL_AUTHORIZATION_LEASE_MS = 250;
 
 export interface SandpiServerOptions {
   config?: SandpiConfig;
@@ -736,48 +738,101 @@ function registerApiRoutes(
     "/api/v1/sessions/:sessionId/terminal",
     { websocket: true },
     async (socket, request) => {
+      let terminal: Awaited<ReturnType<RuntimeAdapter["openTerminal"]>> | undefined;
+      let inputQueue: TerminalInputQueue<z.infer<typeof terminalInputSchema>> | undefined;
       try {
         const after = Number(queryString(request, "after") ?? 0);
         const runtime = await services.store.getRuntime(
           request.principal.userId,
           request.params.sessionId,
         );
-        const terminal = await services.runtime.openTerminal(
+        terminal = await services.runtime.openTerminal(
           runtime,
           Number.isFinite(after) ? after : 0,
+          queryString(request, "terminalSessionId"),
+        );
+        await services.store.assertTerminalWritable(
+          request.principal.userId,
+          request.params.sessionId,
         );
         if (runtime.terminalSessionId !== terminal.sessionId) {
           await services.store.setTerminalSession(request.params.sessionId, terminal.sessionId);
         }
+        inputQueue = new TerminalInputQueue({
+          authorize: () =>
+            services.store.assertTerminalWritable(
+              request.principal.userId,
+              request.params.sessionId,
+            ),
+          authorizationLeaseMs: TERMINAL_AUTHORIZATION_LEASE_MS,
+          initiallyAuthorized: true,
+          requiresAuthorization: (message) => message.type !== "resize",
+          forward: (message) => {
+            const requestId = message.requestId ?? randomUUID();
+            if (message.type === "input") {
+              terminal?.send({
+                type: "input",
+                requestId,
+                data: Buffer.from(message.data, "utf8"),
+              });
+              return;
+            }
+            if (message.type === "binary") {
+              terminal?.send({
+                type: "input",
+                requestId,
+                data: Buffer.from(message.dataBase64, "base64"),
+              });
+              return;
+            }
+            terminal?.send({ ...message, requestId });
+          },
+          onError: (error) => {
+            if (socket.readyState === socket.OPEN) {
+              socket.send(
+                JSON.stringify({
+                  type: "error",
+                  error: normalizeError(error).message,
+                }),
+              );
+              socket.close(1008, "Terminal input is locked");
+            }
+          },
+        });
         socket.send(
           JSON.stringify({
             type: "ready",
             sessionId: terminal.sessionId,
             attemptId: terminal.attemptId,
+            replayAfter: terminal.replayAfter,
+            replayUntil: terminal.replayUntil,
+            replayReset: terminal.replayReset,
           }),
         );
         socket.on("message", (raw) => {
-          void (async () => {
-            try {
-              await services.store.assertTerminalWritable(
-                request.principal.userId,
-                request.params.sessionId,
-              );
-              const message = terminalInputSchema.parse(JSON.parse(raw.toString()));
-              terminal.send({ requestId: message.requestId ?? randomUUID(), ...message });
-            } catch (error) {
+          try {
+            inputQueue?.enqueue(
+              terminalInputSchema.parse(JSON.parse(raw.toString())),
+            );
+          } catch (error) {
+            if (socket.readyState === socket.OPEN) {
               socket.send(
                 JSON.stringify({ type: "error", error: normalizeError(error).message }),
               );
             }
-          })();
+          }
         });
-        socket.on("close", () => terminal.close());
+        socket.on("close", () => {
+          inputQueue?.close();
+          terminal?.close();
+        });
         for await (const message of terminal.messages) {
           if (socket.readyState !== socket.OPEN) break;
           socket.send(JSON.stringify(message));
         }
       } catch (error) {
+        inputQueue?.close();
+        terminal?.close();
         if (socket.readyState === socket.OPEN) {
           socket.send(
             JSON.stringify({ type: "error", error: normalizeError(error).message }),
@@ -1010,6 +1065,17 @@ const terminalInputSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("input"),
     data: z.string().max(1_000_000),
+    requestId: z.string().optional(),
+  }),
+  z.object({
+    type: z.literal("binary"),
+    dataBase64: z
+      .string()
+      .max(1_000_000)
+      .regex(
+        /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/,
+        "dataBase64 must be canonical base64",
+      ),
     requestId: z.string().optional(),
   }),
   z.object({

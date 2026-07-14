@@ -6,10 +6,21 @@ import type { Terminal as XTerm } from "@xterm/xterm";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { apiWebSocketUrl } from "@/lib/api-client";
+import {
+  advanceTerminalSequence,
+  emptyTerminalReplayState,
+  parseTerminalReplayState,
+  rememberTerminalCommand,
+  resetTerminalReplay,
+  terminalReplayAfter,
+  terminalReplayStorageKey,
+  type TerminalReplayState,
+} from "@/lib/terminal-replay-state";
 
 export type TerminalConnectionState =
   | "initializing"
   | "connecting"
+  | "restoring"
   | "connected"
   | "disconnected"
   | "error"
@@ -28,6 +39,9 @@ interface TerminalMessage {
   error?: string;
   sessionId?: string;
   attemptId?: string;
+  replayAfter?: number;
+  replayUntil?: number;
+  replayReset?: boolean;
   event?: TerminalEvent;
 }
 
@@ -66,6 +80,8 @@ export function terminalConnectionLabel(state: TerminalConnectionState) {
       return "live";
     case "disconnected":
       return "reconnecting";
+    case "restoring":
+      return "restoring screen";
     case "error":
       return "connection error";
     case "exited":
@@ -109,11 +125,51 @@ export function useTerminalSession(
   const fitAddonRef = useRef<XTermFitAddon | null>(null);
   const searchAddonRef = useRef<XTermSearchAddon | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
-  const lastSequenceRef = useRef(0);
+  const replayStateRef = useRef<TerminalReplayState | null>(null);
+  if (replayStateRef.current === null) {
+    if (typeof window === "undefined") {
+      replayStateRef.current = emptyTerminalReplayState();
+    } else {
+      try {
+        replayStateRef.current = parseTerminalReplayState(
+          window.localStorage.getItem(terminalReplayStorageKey(sessionId)),
+        );
+      } catch {
+        replayStateRef.current = emptyTerminalReplayState();
+      }
+    }
+  }
+  const lastSequenceRef = useRef(
+    terminalReplayAfter(replayStateRef.current),
+  );
+  const receivedSequenceRef = useRef(lastSequenceRef.current);
   const currentAttemptIdRef = useRef<string | null>(null);
   const copiedTimerRef = useRef<number | undefined>(undefined);
+  const pendingCommandStartRef = useRef<number | null>(null);
+
+  const persistReplayState = useCallback(() => {
+    if (typeof window === "undefined" || !replayStateRef.current) return;
+    try {
+      window.localStorage.setItem(
+        terminalReplayStorageKey(sessionId),
+        JSON.stringify(replayStateRef.current),
+      );
+    } catch {
+      // Terminal recovery remains available for this mount when storage is disabled.
+    }
+  }, [sessionId]);
 
   const focusTerminal = useCallback(() => terminalRef.current?.focus(), []);
+
+  const fitTerminal = useCallback(() => {
+    const host = terminalHostRef.current;
+    if (!host || host.clientWidth === 0 || host.clientHeight === 0) return;
+    try {
+      fitAddonRef.current?.fit();
+    } catch {
+      // The dock can change layout between measuring and fitting.
+    }
+  }, []);
 
   const copySelection = useCallback(async () => {
     const selection = terminalRef.current?.getSelection() ?? "";
@@ -128,8 +184,15 @@ export function useTerminalSession(
 
   const clearTerminal = useCallback(() => {
     terminalRef.current?.clear();
+    if (replayStateRef.current) {
+      replayStateRef.current = resetTerminalReplay(
+        replayStateRef.current,
+        receivedSequenceRef.current,
+      );
+      persistReplayState();
+    }
     focusTerminal();
-  }, [focusTerminal]);
+  }, [focusTerminal, persistReplayState]);
 
   const restartTerminal = useCallback(() => {
     setConnectionError(null);
@@ -145,6 +208,7 @@ export function useTerminalSession(
     let reconnectTimer: number | undefined;
     let reconnectAttempt = 0;
     let fitFrame: number | undefined;
+    let replayPersistTimer: number | undefined;
     let terminalExited = false;
     let terminal: XTerm | undefined;
     let resizeObserver: ResizeObserver | undefined;
@@ -166,32 +230,94 @@ export function useTerminalSession(
       });
     };
 
+    const scheduleReplayPersist = () => {
+      if (replayPersistTimer !== undefined) return;
+      replayPersistTimer = window.setTimeout(() => {
+        replayPersistTimer = undefined;
+        persistReplayState();
+      }, 250);
+    };
+
+    const trackSubmittedCommands = (data: string) => {
+      // Bookmark the Supervisor cursor before the first input byte rather than
+      // at Enter, because PTY echo events may already contain most of the typed
+      // command by then. This stays a client concern and does not inject shell
+      // integration into the user's Bash configuration.
+      let changed = false;
+      for (const character of data) {
+        if (character === "\r" || character === "\n") {
+          if (
+            pendingCommandStartRef.current !== null &&
+            replayStateRef.current
+          ) {
+            replayStateRef.current = rememberTerminalCommand(
+              replayStateRef.current,
+              pendingCommandStartRef.current,
+            );
+            changed = true;
+          }
+          pendingCommandStartRef.current = null;
+          continue;
+        }
+        if (character === "\u0003") {
+          pendingCommandStartRef.current = null;
+          continue;
+        }
+        pendingCommandStartRef.current ??= receivedSequenceRef.current;
+      }
+      if (changed) persistReplayState();
+    };
+
     const scheduleFit = () => {
       if (fitFrame !== undefined) window.cancelAnimationFrame(fitFrame);
       fitFrame = window.requestAnimationFrame(() => {
         fitFrame = undefined;
         if (disposed || !fitAddonRef.current || !terminalRef.current) return;
-        try {
-          fitAddonRef.current.fit();
-        } catch {
-          // The host can briefly have zero dimensions while the dock closes.
-        }
+        fitTerminal();
       });
     };
 
     const connect = () => {
       if (disposed || terminalExited) return;
+      if (terminal) terminal.options.disableStdin = true;
       setConnectionState("connecting");
 
       const search = new URLSearchParams({
-        after: String(lastSequenceRef.current),
+        after: String(receivedSequenceRef.current),
       });
+      const expectedTerminalSessionId =
+        replayStateRef.current?.terminalSessionId;
+      if (expectedTerminalSessionId) {
+        search.set("terminalSessionId", expectedTerminalSessionId);
+      }
       const socket = new WebSocket(
         apiWebSocketUrl(
           `/api/v1/sessions/${encodeURIComponent(sessionId)}/terminal?${search.toString()}`,
         ),
       );
       socketRef.current = socket;
+      let replayUntil = receivedSequenceRef.current;
+      let replayFinished = false;
+
+      const finishReplay = () => {
+        if (
+          replayFinished ||
+          disposed ||
+          terminalExited ||
+          socketRef.current !== socket
+        ) {
+          return;
+        }
+        replayFinished = true;
+        if (terminal) terminal.options.disableStdin = false;
+        setConnectionState("connected");
+        setConnectionError(null);
+        fitTerminal();
+        if (terminalRef.current) {
+          sendResize(terminalRef.current.rows, terminalRef.current.cols);
+          terminalRef.current.focus();
+        }
+      };
 
       socket.addEventListener("open", () => {
         reconnectAttempt = 0;
@@ -201,14 +327,48 @@ export function useTerminalSession(
         try {
           const payload = JSON.parse(String(message.data)) as TerminalMessage;
           if (payload.type === "ready") {
+            const priorTerminalSessionId =
+              replayStateRef.current?.terminalSessionId;
+            const terminalChanged = Boolean(
+              priorTerminalSessionId &&
+                payload.sessionId &&
+                priorTerminalSessionId !== payload.sessionId,
+            );
+            if (typeof payload.replayAfter === "number") {
+              const replayReset = Boolean(
+                payload.replayReset || terminalChanged,
+              );
+              if (replayReset) {
+                terminal?.reset();
+                lastSequenceRef.current = payload.replayAfter;
+              }
+              receivedSequenceRef.current = payload.replayAfter;
+              replayUntil =
+                typeof payload.replayUntil === "number" &&
+                payload.replayUntil >= payload.replayAfter
+                  ? payload.replayUntil
+                  : payload.replayAfter;
+              if (replayStateRef.current) {
+                replayStateRef.current =
+                  replayReset
+                    ? resetTerminalReplay(
+                        replayStateRef.current,
+                        payload.replayAfter,
+                        payload.sessionId,
+                      )
+                    : {
+                        ...replayStateRef.current,
+                        terminalSessionId:
+                          payload.sessionId ?? priorTerminalSessionId,
+                      };
+                persistReplayState();
+              }
+            }
             currentAttemptIdRef.current = payload.attemptId ?? null;
-            setConnectionState("connected");
             setConnectionError(null);
             scheduleFit();
-            if (terminalRef.current) {
-              sendResize(terminalRef.current.rows, terminalRef.current.cols);
-              terminalRef.current.focus();
-            }
+            if (receivedSequenceRef.current >= replayUntil) finishReplay();
+            else setConnectionState("restoring");
             return;
           }
           if (payload.type === "error") {
@@ -217,14 +377,32 @@ export function useTerminalSession(
             return;
           }
           if (payload.type !== "event" || !payload.event) return;
-          if (payload.event.seq <= lastSequenceRef.current) return;
+          if (payload.event.seq <= receivedSequenceRef.current) return;
 
-          lastSequenceRef.current = payload.event.seq;
-          if (payload.event.dataBase64) {
-            // Decoding PTY chunks as text first would corrupt split UTF-8 and
-            // ANSI control sequences, so xterm receives the original bytes.
-            terminal?.write(decodeBase64(payload.event.dataBase64));
-          }
+          receivedSequenceRef.current = payload.event.seq;
+          const commitRenderedEvent = () => {
+            if (payload.event!.seq > lastSequenceRef.current) {
+              lastSequenceRef.current = payload.event!.seq;
+              if (replayStateRef.current) {
+                replayStateRef.current = advanceTerminalSequence(
+                  replayStateRef.current,
+                  payload.event!.seq,
+                );
+                scheduleReplayPersist();
+              }
+            }
+            if (payload.event!.seq >= replayUntil) finishReplay();
+          };
+          // Decoding PTY chunks as text first would corrupt split UTF-8 and
+          // ANSI control sequences. The callback also makes the persisted
+          // cursor represent output xterm has actually parsed, not merely
+          // WebSocket frames the browser received.
+          terminal?.write(
+            payload.event.dataBase64
+              ? decodeBase64(payload.event.dataBase64)
+              : new Uint8Array(),
+            commitRenderedEvent,
+          );
           if (
             isCurrentTerminalExit(
               payload.event,
@@ -243,6 +421,7 @@ export function useTerminalSession(
       });
       socket.addEventListener("close", () => {
         if (disposed || terminalExited || socketRef.current !== socket) return;
+        if (terminal) terminal.options.disableStdin = true;
         setConnectionState("disconnected");
         const delay = Math.min(750 * 2 ** reconnectAttempt, 10_000);
         reconnectAttempt += 1;
@@ -269,6 +448,7 @@ export function useTerminalSession(
           convertEol: false,
           cursorBlink: true,
           cursorStyle: "block",
+          disableStdin: true,
           fontFamily:
             '"SFMono-Regular", "SF Mono", Menlo, Monaco, "Cascadia Mono", "Roboto Mono", "Noto Sans Mono", "WenQuanYi Micro Hei Mono", Consolas, "Liberation Mono", monospace',
           fontSize: 12.5,
@@ -330,10 +510,24 @@ export function useTerminalSession(
 
         disposables.push(
           terminal.onData((data) => {
-            send({
+            const sent = send({
               type: "input",
               requestId: terminalRequestId("input"),
               data,
+            });
+            if (sent && terminal?.buffer.active.type === "normal") {
+              trackSubmittedCommands(data);
+            } else if (terminal?.buffer.active.type === "alternate") {
+              // Enter presses inside Vim and other full-screen TUIs are not
+              // shell command boundaries.
+              pendingCommandStartRef.current = null;
+            }
+          }),
+          terminal.onBinary((data) => {
+            send({
+              type: "binary",
+              requestId: terminalRequestId("binary"),
+              dataBase64: window.btoa(data),
             });
           }),
           terminal.onResize(({ rows, cols }) => sendResize(rows, cols)),
@@ -395,6 +589,10 @@ export function useTerminalSession(
       disposed = true;
       if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
       if (fitFrame !== undefined) window.cancelAnimationFrame(fitFrame);
+      if (replayPersistTimer !== undefined) {
+        window.clearTimeout(replayPersistTimer);
+      }
+      persistReplayState();
       resizeObserver?.disconnect();
       disposables.forEach((disposable) => disposable.dispose());
       socketRef.current?.close();
@@ -404,7 +602,7 @@ export function useTerminalSession(
       fitAddonRef.current = null;
       searchAddonRef.current = null;
     };
-  }, [onOpenSearch, rendererGeneration, sessionId]);
+  }, [fitTerminal, onOpenSearch, persistReplayState, rendererGeneration, sessionId]);
 
   useEffect(
     () => () => {

@@ -3,6 +3,7 @@ import {
   test,
   type APIRequestContext,
   type Page,
+  type WebSocketRoute,
 } from "@playwright/test";
 
 import type { ApiEnvelope } from "../src/lib/api-client";
@@ -111,6 +112,214 @@ test("warns before unloading an open Session chat only", async ({
     page.getByRole("heading", { name: "What should Codex work on?" }),
   ).toBeVisible();
   await expect.poll(() => pageBlocksUnload(page)).toBe(false);
+});
+
+test("replays only the last three terminal commands after reopen", async ({
+  page,
+  request,
+}) => {
+  const workspace = await activeWorkspace(request);
+  test.skip(!workspace, "An active Session is required for this check.");
+  if (!workspace) return;
+  const { environment, session } = workspace;
+  const terminalSessionId = "ses-terminal-e2e";
+  const attemptId = "attempt-terminal-e2e";
+  const connectionUrls: string[] = [];
+  const history: Array<{ seq: number; data: string }> = [
+    { seq: 1, data: "sandpi$ " },
+  ];
+
+  const sendOutput = (
+    socket: { send(message: string): void },
+    event: { seq: number; data: string },
+  ) => {
+    socket.send(
+      JSON.stringify({
+        type: "event",
+        event: {
+          seq: event.seq,
+          attemptId,
+          stream: "pty",
+          type: "output",
+          dataBase64: Buffer.from(event.data).toString("base64"),
+        },
+      }),
+    );
+  };
+
+  await page.routeWebSocket(
+    (url) =>
+      url.pathname ===
+      `/api/v1/sessions/${encodeURIComponent(session.id)}/terminal`,
+    (socket) => {
+      connectionUrls.push(socket.url());
+      const after = Number(new URL(socket.url()).searchParams.get("after") ?? 0);
+      socket.send(
+        JSON.stringify({
+          type: "ready",
+          sessionId: terminalSessionId,
+          attemptId,
+          replayAfter: after,
+          replayUntil: history.at(-1)?.seq ?? after,
+          replayReset: false,
+        }),
+      );
+      history.filter((event) => event.seq > after).forEach((event) => {
+        sendOutput(socket, event);
+      });
+
+      let input = "";
+      socket.onMessage((raw) => {
+        const message = JSON.parse(String(raw)) as {
+          type?: string;
+          data?: string;
+        };
+        if (message.type !== "input" || !message.data) return;
+        input += message.data;
+        if (!/[\r\n]/.test(message.data)) return;
+        const command = input.replace(/[\r\n]+$/g, "");
+        input = "";
+        const event = {
+          seq: history.at(-1)!.seq + 1,
+          data: `${command}\r\nresult:${command}\r\nsandpi$ `,
+        };
+        history.push(event);
+        sendOutput(socket, event);
+      });
+    },
+  );
+
+  await page.goto(
+    `/?team=${encodeURIComponent(environment.teamId)}&environment=${encodeURIComponent(environment.id)}&session=${encodeURIComponent(session.id)}`,
+  );
+  await page.getByRole("button", { name: "Terminal" }).click();
+  const terminal = page.getByRole("region", {
+    name: `Terminal for ${session.title}`,
+  });
+  await expect(terminal).toBeVisible();
+  await expect.poll(() => connectionUrls.length).toBe(1);
+
+  const screen = terminal.locator(".xterm-rows");
+  for (let command = 1; command <= 4; command += 1) {
+    await terminal.getByRole("application").click();
+    await page.keyboard.type(`command-${command}`);
+    await page.keyboard.press("Enter");
+    await expect(screen).toContainText(`result:command-${command}`);
+  }
+
+  await terminal.getByRole("button", { name: "Close terminal" }).click();
+  await expect(terminal).toBeHidden();
+
+  await page.getByRole("button", { name: "Terminal" }).click();
+  await expect(terminal).toBeVisible();
+  await expect.poll(() => connectionUrls.length).toBe(2);
+  const replayUrl = new URL(connectionUrls[1]!);
+  expect(replayUrl.searchParams.get("after")).toBe("2");
+  expect(replayUrl.searchParams.get("terminalSessionId")).toBe(
+    terminalSessionId,
+  );
+  await expect(screen).not.toContainText("result:command-1");
+  for (let command = 2; command <= 4; command += 1) {
+    await expect(screen).toContainText(`result:command-${command}`);
+  }
+
+  const storedReplay = await page.evaluate((storageKey) => {
+    return JSON.parse(window.localStorage.getItem(storageKey) ?? "null");
+  }, `sandpi.terminal-replay.v1:${session.id}`);
+  expect(storedReplay).toMatchObject({
+    terminalSessionId,
+    lastSequence: 5,
+    commandStartSequences: [2, 3, 4],
+  });
+});
+
+test("does not answer historical terminal queries on the live PTY", async ({
+  page,
+  request,
+}) => {
+  const workspace = await activeWorkspace(request);
+  test.skip(!workspace, "An active Session is required for this check.");
+  if (!workspace) return;
+  const { environment, session } = workspace;
+  const messages: Array<{
+    type?: string;
+    data?: string;
+    dataBase64?: string;
+  }> = [];
+  let terminalSocket: WebSocketRoute | undefined;
+
+  await page.routeWebSocket(
+    (url) =>
+      url.pathname ===
+      `/api/v1/sessions/${encodeURIComponent(session.id)}/terminal`,
+    (socket) => {
+      terminalSocket = socket;
+      socket.onMessage((raw) => {
+        messages.push(JSON.parse(String(raw)));
+      });
+      socket.send(
+        JSON.stringify({
+          type: "ready",
+          sessionId: "ses-terminal-query-e2e",
+          attemptId: "attempt-terminal-query-e2e",
+          replayAfter: 0,
+          replayUntil: 1,
+          replayReset: false,
+        }),
+      );
+      socket.send(
+        JSON.stringify({
+          type: "event",
+          event: {
+            seq: 1,
+            attemptId: "attempt-terminal-query-e2e",
+            stream: "pty",
+            type: "output",
+            // DSR 5 asks the emulator to answer ESC [ 0 n. A historical
+            // query must update the renderer without writing that answer to
+            // the live shell that now owns the PTY.
+            dataBase64: Buffer.from("\u001b[5nrestored screen").toString(
+              "base64",
+            ),
+          },
+        }),
+      );
+    },
+  );
+
+  await page.goto(
+    `/?team=${encodeURIComponent(environment.teamId)}&environment=${encodeURIComponent(environment.id)}&session=${encodeURIComponent(session.id)}`,
+  );
+  await page.getByRole("button", { name: "Terminal" }).click();
+  const terminal = page.getByRole("region", {
+    name: `Terminal for ${session.title}`,
+  });
+  await expect(terminal).toContainText("live");
+  await expect(terminal.locator(".xterm-rows")).toContainText(
+    "restored screen",
+  );
+  await page.waitForTimeout(100);
+  expect(messages.filter((message) => message.type === "input")).toEqual([]);
+
+  terminalSocket?.send(
+    JSON.stringify({
+      type: "event",
+      event: {
+        seq: 2,
+        attemptId: "attempt-terminal-query-e2e",
+        stream: "pty",
+        type: "output",
+        dataBase64: Buffer.from("\u001b[5n").toString("base64"),
+      },
+    }),
+  );
+  await expect
+    .poll(() =>
+      messages.some(
+        (message) => message.type === "input" && message.data === "\u001b[0n",
+      ),
+    )
+    .toBe(true);
 });
 
 test("shows a matching skeleton while each Inspector tab loads", async ({

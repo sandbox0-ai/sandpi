@@ -26,5 +26,6 @@ test("ignores a replayed exit event from an older terminal attempt", () => {
 test("accepts the legacy unscoped exit event and exposes recovery labels", () => {
   assert.equal(isCurrentTerminalExit({ type: "exit" }, "attempt-current"), true);
   assert.equal(terminalConnectionLabel("disconnected"), "reconnecting");
+  assert.equal(terminalConnectionLabel("restoring"), "restoring screen");
   assert.equal(terminalConnectionLabel("exited"), "process exited");
 });

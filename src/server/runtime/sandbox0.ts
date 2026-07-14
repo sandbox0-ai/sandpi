@@ -49,10 +49,19 @@ import {
   requireWorkspaceFileRevision,
   workspaceFileRevision,
 } from "./workspace-edit";
+import { reconcileTerminalReplayCursor } from "./terminal-replay";
+import {
+  terminalEnvironmentUpdate,
+  terminalSessionEnvironment,
+} from "./terminal-environment";
 
 const SESSION_HARD_TTL_SECONDS = 30 * 24 * 60 * 60;
 const EVENT_RETENTION_BYTES = 256 * 1024 * 1024;
 const EVENT_RETENTION_SECONDS = SESSION_HARD_TTL_SECONDS;
+// Supervisor journals retain decoded event structures in procd memory as well
+// as JSON on disk. A terminal only needs enough tail to rebuild xterm's visible
+// history, so it must not inherit the much larger coding-agent event budget.
+const TERMINAL_EVENT_RETENTION_BYTES = 4 * 1024 * 1024;
 const SESSION_CODEX_HOME = "/var/lib/sandpi/codex";
 const SESSION_CODEX_AUTH_FILE = CODEX_SESSION_CREDENTIAL_PATH;
 const DEVICE_CODEX_HOME = "/dev/shm/sandpi-codex-device";
@@ -1136,6 +1145,7 @@ export class Sandbox0Runtime implements RuntimeAdapter {
   async openTerminal(
     runtime: RuntimeSessionRecord,
     after = 0,
+    expectedTerminalSessionId?: string,
   ): Promise<RuntimeTerminalHandle> {
     const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
     let terminal: Awaited<ReturnType<typeof sandbox.getSession>> | undefined;
@@ -1152,7 +1162,7 @@ export class Sandbox0Runtime implements RuntimeAdapter {
           name: "sandpi-terminal",
           command: ["/bin/bash", "-l"],
           cwd: "/workspace",
-          env: { HOME: "/workspace", TERM: "xterm-256color" },
+          env: terminalSessionEnvironment(),
           io: {
             mode: "pty",
             terminal: { rows: 28, cols: 120, term: "xterm-256color" },
@@ -1163,7 +1173,7 @@ export class Sandbox0Runtime implements RuntimeAdapter {
           },
           readiness: { type: "process" },
           eventRetention: {
-            maxBytes: 64 * 1024 * 1024,
+            maxBytes: TERMINAL_EVENT_RETENTION_BYTES,
             maxAgeSeconds: EVENT_RETENTION_SECONDS,
           },
         },
@@ -1179,6 +1189,28 @@ export class Sandbox0Runtime implements RuntimeAdapter {
       terminal.phase === "exited" ||
       terminal.phase === "failed" ||
       terminal.phase === "stopped";
+    const terminalRetention = {
+      maxBytes: TERMINAL_EVENT_RETENTION_BYTES,
+      maxAgeSeconds: EVENT_RETENTION_SECONDS,
+    };
+    const retentionNeedsUpdate =
+      terminal.spec.eventRetention?.maxBytes !== terminalRetention.maxBytes ||
+      terminal.spec.eventRetention?.maxAgeSeconds !==
+        terminalRetention.maxAgeSeconds;
+    const environmentUpdate = terminalEnvironmentUpdate(
+      terminal.spec.env,
+      terminalStopped,
+    );
+    if (retentionNeedsUpdate || environmentUpdate) {
+      // Sandbox0 replaces a running attempt when its process environment
+      // changes. Apply that migration only after an explicit shell exit; a
+      // browser reconnect must never interrupt Vim or another active TUI.
+      terminal = await sandbox.updateSession(terminal.id, {
+        ...terminal.spec,
+        ...(environmentUpdate ? { env: environmentUpdate } : {}),
+        eventRetention: terminalRetention,
+      });
+    }
     if (terminalStopped) {
       terminal = await sandbox.createSessionAttempt(terminal.id, true);
       if (!terminal.attempt || terminal.attempt.id === finishedAttemptId) {
@@ -1193,11 +1225,24 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     if (!terminal.attempt) {
       throw new HttpError(502, "terminal_not_ready", "Terminal did not start.");
     }
-    const connection = await sandbox.connectSession(terminal.id, { after });
+    const terminalSessionChanged = Boolean(
+      expectedTerminalSessionId && expectedTerminalSessionId !== terminal.id,
+    );
+    const replay = reconcileTerminalReplayCursor(
+      after,
+      terminal.cursor,
+      terminalSessionChanged,
+    );
+    const connection = await sandbox.connectSession(terminal.id, {
+      after: replay.after,
+    });
     const attemptId = terminal.attempt.id;
     return {
       sessionId: terminal.id,
       attemptId,
+      replayAfter: replay.after,
+      replayUntil: terminal.cursor.latest,
+      replayReset: replay.reset,
       messages: {
         async *[Symbol.asyncIterator]() {
           for await (const message of connection.messages()) {
@@ -1224,7 +1269,7 @@ export class Sandbox0Runtime implements RuntimeAdapter {
             requestId: message.requestId,
             inputId: message.requestId,
             expectedAttemptId: attemptId,
-            dataBase64: Buffer.from(message.data ?? "", "utf8").toString("base64"),
+            dataBase64: Buffer.from(message.data ?? []).toString("base64"),
           });
           return;
         }
