@@ -1,4 +1,14 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
+
+import type { ApiEnvelope } from "../src/lib/api-client";
+import type { SandpiBootstrap } from "../src/lib/types";
+
+async function pageBlocksUnload(page: Page) {
+  return page.evaluate(() => {
+    const event = new Event("beforeunload", { cancelable: true });
+    return !window.dispatchEvent(event) && event.defaultPrevented;
+  });
+}
 
 test("loads the live workspace and Environment credential surface", async ({
   page,
@@ -56,6 +66,36 @@ test("serves shared Preferences and Team layouts", async ({ page }) => {
     page.getByRole("heading", { level: 1, name: "Sandpi", exact: true }),
   ).toBeVisible();
   await expect(page.getByText("Sandpi control plane", { exact: true })).toBeVisible();
+});
+
+test("warns before unloading an open Session chat only", async ({
+  page,
+  request,
+}) => {
+  const response = await request.get("/api/v1/bootstrap");
+  expect(response.ok()).toBeTruthy();
+  const bootstrap = (await response.json()) as ApiEnvelope<SandpiBootstrap>;
+  const session = bootstrap.data.sessions.find((candidate) => !candidate.archived);
+  const environment = bootstrap.data.environments.find(
+    (candidate) => candidate.id === session?.environmentId,
+  );
+
+  test.skip(!session || !environment, "An active Session is required for this check.");
+  if (!session || !environment) return;
+
+  await page.goto(
+    `/?team=${encodeURIComponent(environment.teamId)}&environment=${encodeURIComponent(environment.id)}&session=${encodeURIComponent(session.id)}`,
+  );
+  await expect(page.locator("#conversation")).toBeVisible();
+  await expect.poll(() => pageBlocksUnload(page)).toBe(true);
+
+  await page
+    .getByRole("button", { name: `New session in ${environment.name}` })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "What should Codex work on?" }),
+  ).toBeVisible();
+  await expect.poll(() => pageBlocksUnload(page)).toBe(false);
 });
 
 test("restores a new-Session deep link and keeps overlays usable in dark mode", async ({
