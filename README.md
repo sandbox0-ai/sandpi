@@ -68,8 +68,10 @@ Web today; iOS / Android / HarmonyOS later
   the current client/browser time zone.
 - **Live workspace contract:** the embedded file view and dedicated `/ide/`
   workbench consume the same Sandpi API. Sandpi proxies Sandbox0's recursive
-  `/workspace` file stream, parses Git porcelain v2 server-side, and projects
-  zero-context staged and working-tree diffs onto current line numbers. Text
+  `/workspace` file stream, discovers zero or more Git working trees beneath
+  that mount, parses porcelain v2 per repository, and projects zero-context
+  staged and working-tree diffs onto current line numbers. Sandpi never creates
+  or chooses a repository for the user or agent. Text
   saves carry the revision that was opened; stale writes return a conflict
   instead of silently replacing a newer file. The browser never receives the
   deployment API key or a direct Sandbox0 endpoint.
@@ -380,8 +382,9 @@ Sandbox0 implementation details.
   writes are confined to regular UTF-8 files under `/workspace` with a 5 MiB
   limit; `.git`, symbolic links and binary files are read-only. Its single file
   tree includes staged, unstaged, untracked, renamed, deleted and conflicted Git
-  state. Workspace events refresh clean files automatically and turn external
-  changes to dirty files into an explicit compare/reload/overwrite decision.
+  state across optional root or nested repositories. Workspace events refresh
+  clean files automatically and turn external changes to dirty files into an
+  explicit compare/reload/overwrite decision.
 - The OSS server currently expects one active server replica. PostgreSQL and
   Supervisor replay make process restart recoverable, but multi-replica worker
   leadership is not yet part of the supported deployment contract.

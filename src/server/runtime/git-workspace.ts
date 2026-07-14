@@ -3,7 +3,7 @@ import path from "node:path";
 import type {
   WorkspaceGitChangeKind,
   WorkspaceGitFileChange,
-  WorkspaceGitState,
+  WorkspaceGitRepository,
   WorkspaceLineChange,
 } from "@/lib/types";
 
@@ -81,9 +81,8 @@ function recordPath(record: string, prefixFields: number) {
 export function parseGitStatus(
   output: string,
   root = "/workspace",
-): WorkspaceGitState {
-  const state: WorkspaceGitState = {
-    isRepository: true,
+): WorkspaceGitRepository {
+  const state: WorkspaceGitRepository = {
     root,
     ahead: 0,
     behind: 0,
@@ -151,6 +150,33 @@ export function parseGitStatus(
     left.relativePath.localeCompare(right.relativePath),
   );
   return state;
+}
+
+/**
+ * Converts NUL-delimited `.git` marker paths from `find` into working-tree
+ * roots. Invalid and out-of-Workspace results are ignored defensively.
+ */
+export function gitRepositoryRootsFromMarkers(
+  output: string,
+  workspaceRoot = "/workspace",
+) {
+  const roots = new Set<string>();
+  for (const marker of output.split("\0")) {
+    if (!marker) continue;
+    const normalized = path.posix.normalize(marker);
+    if (
+      path.posix.basename(normalized) !== ".git" ||
+      (normalized !== `${workspaceRoot}/.git` &&
+        !normalized.startsWith(`${workspaceRoot}/`))
+    ) {
+      continue;
+    }
+    const root = path.posix.dirname(normalized);
+    if (root === workspaceRoot || root.startsWith(`${workspaceRoot}/`)) {
+      roots.add(root);
+    }
+  }
+  return [...roots].sort((left, right) => left.localeCompare(right));
 }
 
 function mergeChange(

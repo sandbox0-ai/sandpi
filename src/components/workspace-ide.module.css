@@ -162,7 +162,8 @@
 }
 
 .statusCode,
-.descendantCount {
+.descendantCount,
+.repositoryBadge {
   margin-left: auto;
   font-family: "SFMono-Regular", Consolas, monospace;
   font-size: 9px;
@@ -171,6 +172,23 @@
 
 .descendantCount {
   color: var(--ink-faint);
+}
+
+.repositoryBadge {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 82px;
+  align-items: center;
+  gap: 3px;
+  overflow: hidden;
+  color: var(--ink-faint);
+  font-size: 7.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.repositoryBadge svg {
+  flex: 0 0 auto;
 }
 
 .added,

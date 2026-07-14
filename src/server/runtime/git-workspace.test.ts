@@ -2,11 +2,28 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  gitRepositoryRootsFromMarkers,
   lineChangesFromDiff,
   mergeLineChanges,
   parseGitStatus,
   wholeFileLineChanges,
 } from "./git-workspace";
+
+test("discovers root, nested and worktree Git markers without choosing one", () => {
+  assert.deepEqual(
+    gitRepositoryRootsFromMarkers(
+      [
+        "/workspace/.git",
+        "/workspace/apps/web/.git",
+        "/workspace/packages/linked/.git",
+        "/workspace/apps/web/.git",
+        "/outside/.git",
+        "",
+      ].join("\0"),
+    ),
+    ["/workspace", "/workspace/apps/web", "/workspace/packages/linked"],
+  );
+});
 
 test("parses porcelain v2 branch, staged, unstaged, rename and untracked state", () => {
   const output = [

@@ -248,15 +248,22 @@ export interface WorkspaceGitFileChange {
   unstaged: boolean;
 }
 
-export interface WorkspaceGitState {
-  isRepository: boolean;
-  root?: string;
+export interface WorkspaceGitRepository {
+  root: string;
   branch?: string;
   head?: string;
   upstream?: string;
   ahead: number;
   behind: number;
   files: WorkspaceGitFileChange[];
+}
+
+export interface WorkspaceGitState {
+  /**
+   * Git working trees discovered below /workspace. Sandpi never creates or
+   * chooses a repository for the user; an empty array is a valid Workspace.
+   */
+  repositories: WorkspaceGitRepository[];
 }
 
 /**

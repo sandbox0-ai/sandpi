@@ -39,10 +39,16 @@ import {
 import type { OperationLanguage } from "@/lib/operation-ui";
 import { formatUnixTimestamp } from "@/lib/time";
 import { mergeWorkspaceGitFiles } from "@/lib/workspace-files";
+import {
+  repositoryForWorkspacePath,
+  workspaceGitChanges,
+  workspaceRepositoryLabel,
+} from "@/lib/workspace-git";
 import type {
   CodingSession,
   WorkspaceFile,
   WorkspaceGitFileChange,
+  WorkspaceGitRepository,
   WorkspaceIdeEvent,
   WorkspaceIdeFile,
   WorkspaceIdeSnapshot,
@@ -85,7 +91,8 @@ const copy = {
   en: {
     changes: (count: number) => `${count} uncommitted ${count === 1 ? "file" : "files"}`,
     clean: "Working tree clean",
-    noRepository: "This Workspace is not a Git repository",
+    noRepository: "No Git repositories in this Workspace",
+    repositories: (count: number) => `${count} Git repositories`,
     noFiles: "No files in /workspace",
     live: "Live",
     connecting: "Connecting",
@@ -118,7 +125,8 @@ const copy = {
   "zh-CN": {
     changes: (count: number) => `${count} 个未提交文件`,
     clean: "工作区干净",
-    noRepository: "此 Workspace 不是 Git 仓库",
+    noRepository: "此 Workspace 中没有 Git 仓库",
+    repositories: (count: number) => `${count} 个 Git 仓库`,
     noFiles: "/workspace 中没有文件",
     live: "实时",
     connecting: "正在连接",
@@ -279,11 +287,13 @@ function sessionHref(session: CodingSession) {
 function IdeFileTree({
   files,
   changes,
+  repositories,
   selectedPath,
   onOpen,
 }: {
   files: WorkspaceFile[];
   changes: Map<string, WorkspaceGitFileChange>;
+  repositories: Map<string, WorkspaceGitRepository>;
   selectedPath: string;
   onOpen: (path: string) => void;
 }) {
@@ -305,6 +315,7 @@ function IdeFileTree({
       const folder = file.kind === "folder";
       const isCollapsed = collapsed[file.path] ?? false;
       const change = changes.get(file.path);
+      const repository = repositories.get(file.path);
       const descendantCount = changedDescendants.get(file.path) ?? 0;
       return (
         <div key={file.path}>
@@ -342,6 +353,16 @@ function IdeFileTree({
             {change ? (
               <span className={`${styles.statusCode} ${styles[change.kind]}`}>
                 {statusCode(change)}
+              </span>
+            ) : repository ? (
+              <span
+                className={styles.repositoryBadge}
+                title={`${workspaceRepositoryLabel(repository.root)} · ${
+                  repository.branch ?? "detached HEAD"
+                }`}
+              >
+                <GitBranch size={9} />
+                {repository.branch ?? "Git"}
               </span>
             ) : folder && descendantCount > 0 ? (
               <span className={styles.descendantCount}>{descendantCount}</span>
@@ -474,7 +495,14 @@ export function WorkspaceIde({
     else void refreshSnapshot();
   }, [initialSnapshot, refreshSnapshot, session.id]);
 
-  const gitChanges = useMemo(() => snapshot?.git.files ?? [], [snapshot?.git.files]);
+  const repositories = useMemo(
+    () => snapshot?.git.repositories ?? [],
+    [snapshot?.git.repositories],
+  );
+  const gitChanges = useMemo(
+    () => workspaceGitChanges(snapshot?.git),
+    [snapshot?.git],
+  );
   const workspaceFiles = useMemo(
     () => mergeWorkspaceGitFiles(snapshot?.files ?? [], gitChanges),
     [gitChanges, snapshot?.files],
@@ -483,6 +511,10 @@ export function WorkspaceIde({
   const changesByPath = useMemo(
     () => new Map(gitChanges.map((change) => [change.path, change])),
     [gitChanges],
+  );
+  const repositoriesByRoot = useMemo(
+    () => new Map(repositories.map((repository) => [repository.root, repository])),
+    [repositories],
   );
 
   const openFile = useCallback(
@@ -769,6 +801,19 @@ export function WorkspaceIde({
       ? decodeBase64(document.conflict.content)
       : "";
   const locale = language === "zh-CN" ? "zh-CN" : "en-US";
+  const selectedRepository = repositoryForWorkspacePath(
+    repositories,
+    selectedPath,
+  );
+  const statusRepository =
+    selectedRepository ?? (repositories.length === 1 ? repositories[0] : undefined);
+  const statusRepositoryChanges = statusRepository
+    ? gitChanges.filter(
+        (change) =>
+          repositoryForWorkspacePath(repositories, change.path)?.root ===
+          statusRepository.root,
+      )
+    : [];
   const connectionLabel = {
     connecting: ui.connecting,
     live: ui.live,
@@ -804,6 +849,7 @@ export function WorkspaceIde({
               <IdeFileTree
                 files={workspaceFiles}
                 changes={changesByPath}
+                repositories={repositoriesByRoot}
                 selectedPath={selectedPath}
                 onOpen={openFile}
               />
@@ -1016,18 +1062,27 @@ export function WorkspaceIde({
       <footer className={styles.statusbar}>
         <span>
           <GitBranch size={12} />
-          {snapshot?.git.isRepository
-            ? snapshot.git.branch ?? "detached HEAD"
-            : ui.noRepository}
+          {statusRepository
+            ? `${workspaceRepositoryLabel(statusRepository.root)} · ${
+                statusRepository.branch ?? "detached HEAD"
+              }`
+            : repositories.length > 0
+              ? ui.repositories(repositories.length)
+              : ui.noRepository}
         </span>
-        {snapshot?.git.isRepository ? (
+        {statusRepository ? (
           <span>
             <GitCommitHorizontal size={12} />
-            {snapshot.git.files.length > 0
-              ? ui.changes(snapshot.git.files.length)
+            {statusRepositoryChanges.length > 0
+              ? ui.changes(statusRepositoryChanges.length)
               : ui.clean}
-            {snapshot.git.ahead > 0 ? ` ↑${snapshot.git.ahead}` : ""}
-            {snapshot.git.behind > 0 ? ` ↓${snapshot.git.behind}` : ""}
+            {statusRepository.ahead > 0 ? ` ↑${statusRepository.ahead}` : ""}
+            {statusRepository.behind > 0 ? ` ↓${statusRepository.behind}` : ""}
+          </span>
+        ) : repositories.length > 0 ? (
+          <span>
+            <GitCommitHorizontal size={12} />
+            {gitChanges.length > 0 ? ui.changes(gitChanges.length) : ui.clean}
           </span>
         ) : null}
         <span className={styles.statusSpacer} />

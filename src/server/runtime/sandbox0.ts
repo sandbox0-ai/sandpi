@@ -22,6 +22,7 @@ import type {
 } from "@/lib/types";
 import type { SessionMetricRangeSeconds } from "@/lib/session-metrics";
 import { toUnixTimestamp } from "@/lib/time";
+import { repositoryForWorkspacePath } from "@/lib/workspace-git";
 import { HttpError } from "@/server/http-error";
 import { toSandbox0NetworkPolicy } from "./network-policy";
 import {
@@ -38,6 +39,7 @@ import {
   type RuntimeWorkspaceWatchHandle,
 } from "./types";
 import {
+  gitRepositoryRootsFromMarkers,
   lineChangesFromDiff,
   mergeLineChanges,
   parseGitStatus,
@@ -60,6 +62,7 @@ const AUTH_SANDBOX_HARD_TTL_SECONDS = 30 * 60;
 const MAX_FILE_TREE_DEPTH = 12;
 const MAX_FILE_TREE_ENTRIES = 5_000;
 const MAX_FILE_PREVIEW_BYTES = 5 * 1024 * 1024;
+const GIT_STATUS_CONCURRENCY = 4;
 const MAX_CODEX_ROLLOUT_IMPORT_BYTES = 256 * 1024 * 1024;
 const HIDDEN_IDE_DIRECTORIES = new Set([".git", ".next", "node_modules"]);
 
@@ -721,29 +724,65 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     runtime: RuntimeSessionRecord,
   ): Promise<WorkspaceGitState> {
     const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
-    const rootResult = await sandbox.cmd("git", {
-      command: ["git", "-C", "/workspace", "rev-parse", "--show-toplevel"],
+    const discovered = await sandbox.cmd("find-git-repositories", {
+      command: [
+        "find",
+        "/workspace",
+        "-mindepth",
+        "1",
+        "-maxdepth",
+        String(MAX_FILE_TREE_DEPTH + 1),
+        "(",
+        "-type",
+        "d",
+        "(",
+        "-name",
+        "node_modules",
+        "-o",
+        "-name",
+        ".next",
+        ")",
+        ")",
+        "-prune",
+        "-o",
+        "-name",
+        ".git",
+        "-print0",
+        "-prune",
+      ],
       cwd: "/workspace",
-      envVars: { GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C" },
+      envVars: { LC_ALL: "C" },
       ttlSec: 15,
     });
-    if (rootResult.exitCode !== undefined && rootResult.exitCode !== 0) {
-      return {
-        isRepository: false,
-        ahead: 0,
-        behind: 0,
-        files: [],
-      };
+    if (discovered.exitCode !== undefined && discovered.exitCode !== 0) {
+      return { repositories: [] };
     }
-    const root = safeWorkspacePath(rootResult.stdout.trim());
-    const status = await this.runGit(runtime, root, [
-      "status",
-      "--porcelain=v2",
-      "--branch",
-      "-z",
-      "--untracked-files=all",
-    ]);
-    return parseGitStatus(status, root);
+    const roots = gitRepositoryRootsFromMarkers(discovered.stdout);
+    const repositories: WorkspaceGitState["repositories"] = [];
+    for (let offset = 0; offset < roots.length; offset += GIT_STATUS_CONCURRENCY) {
+      const batch = await Promise.all(
+        roots
+          .slice(offset, offset + GIT_STATUS_CONCURRENCY)
+          .map(async (root) => {
+            try {
+              const status = await this.runGit(runtime, root, [
+                "status",
+                "--porcelain=v2",
+                "--branch",
+                "-z",
+                "--untracked-files=all",
+              ]);
+              return parseGitStatus(status, root);
+            } catch {
+              // A stale/invalid .git marker must not hide other repositories or
+              // make a non-Git Workspace unusable in the file browser.
+              return undefined;
+            }
+          }),
+      );
+      repositories.push(...batch.filter((item) => item !== undefined));
+    }
+    return { repositories };
   }
 
   async readWorkspaceIdeFile(
@@ -753,7 +792,10 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     const filePath = safeWorkspacePath(requestedPath);
     const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
     const git = await this.getWorkspaceGitState(runtime);
-    const change = git.files.find((candidate) => candidate.path === filePath);
+    const repository = repositoryForWorkspacePath(git.repositories, filePath);
+    const change = repository?.files.find(
+      (candidate) => candidate.path === filePath,
+    );
     let content: Uint8Array;
     let size: number | undefined;
     let modifiedAt: Date | undefined;
@@ -781,15 +823,15 @@ export class Sandbox0Runtime implements RuntimeAdapter {
       if (
         !change ||
         change.kind !== "deleted" ||
-        !git.root ||
+        !repository ||
         !isMissingResource(error)
       ) {
         throw error;
       }
-      const relativePath = path.posix.relative(git.root, filePath);
+      const relativePath = path.posix.relative(repository.root, filePath);
       const revision = change.staged ? `HEAD:${relativePath}` : `:${relativePath}`;
       content = Buffer.from(
-        await this.runGit(runtime, git.root, ["show", revision]),
+        await this.runGit(runtime, repository.root, ["show", revision]),
       );
       size = content.byteLength;
     }
@@ -813,7 +855,7 @@ export class Sandbox0Runtime implements RuntimeAdapter {
           );
     let lineChanges: WorkspaceLineChange[] = [];
 
-    if (text !== undefined && change && git.root) {
+    if (text !== undefined && change && repository) {
       if (change.kind === "untracked") {
         lineChanges = wholeFileLineChanges(lineCount, "added", "unstaged");
       } else if (change.kind === "deleted") {
@@ -832,10 +874,10 @@ export class Sandbox0Runtime implements RuntimeAdapter {
           "unstaged",
         ).map((line) => ({ ...line, staged: change.staged }));
       } else {
-        const relativePath = path.posix.relative(git.root, filePath);
+        const relativePath = path.posix.relative(repository.root, filePath);
         const [stagedDiff, unstagedDiff] = await Promise.all([
           change.staged
-            ? this.runGit(runtime, git.root, [
+            ? this.runGit(runtime, repository.root, [
                 "diff",
                 "--cached",
                 "--no-color",
@@ -846,7 +888,7 @@ export class Sandbox0Runtime implements RuntimeAdapter {
               ])
             : "",
           change.unstaged
-            ? this.runGit(runtime, git.root, [
+            ? this.runGit(runtime, repository.root, [
                 "diff",
                 "--no-color",
                 "--no-ext-diff",

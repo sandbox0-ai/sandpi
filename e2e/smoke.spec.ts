@@ -219,22 +219,25 @@ test("renders the dedicated live Web IDE with Git state and changed lines", asyn
       },
     ],
     git: {
-      isRepository: true,
-      root: "/workspace",
-      branch: "feature/live-ide",
-      head: "abc123",
-      upstream: "origin/feature/live-ide",
-      ahead: 1,
-      behind: 0,
-      files: [
+      repositories: [
         {
-          path: "/workspace/src/demo.ts",
-          relativePath: "src/demo.ts",
-          kind: "modified",
-          indexStatus: ".",
-          worktreeStatus: "M",
-          staged: false,
-          unstaged: true,
+          root: "/workspace/src",
+          branch: "feature/live-ide",
+          head: "abc123",
+          upstream: "origin/feature/live-ide",
+          ahead: 1,
+          behind: 0,
+          files: [
+            {
+              path: "/workspace/src/demo.ts",
+              relativePath: "demo.ts",
+              kind: "modified",
+              indexStatus: ".",
+              worktreeStatus: "M",
+              staged: false,
+              unstaged: true,
+            },
+          ],
         },
       ],
     },
@@ -257,7 +260,7 @@ test("renders the dedicated live Web IDE with Git state and changed lines", asyn
     editable: true,
     size: "83 B",
     modifiedAt: now,
-    git: snapshot.git.files[0],
+    git: snapshot.git.repositories[0]?.files[0],
     lineChanges: [
       {
         line: 2,
@@ -330,6 +333,7 @@ test("renders the dedicated live Web IDE with Git state and changed lines", asyn
   await expect(page.locator(".sandpi-line-modified")).toHaveCount(1);
   await expect(page.locator(".sandpi-line-added")).toHaveCount(1);
   await expect(page.getByText("feature/live-ide", { exact: true })).toBeVisible();
+  await expect(page.getByText("src · feature/live-ide", { exact: true })).toBeVisible();
   await expect(page.getByText(/1 uncommitted file.*↑1/)).toBeVisible();
   const editor = page.locator(".monaco-editor").first();
   await editor.click();
@@ -354,6 +358,13 @@ test("renders the dedicated live Web IDE with Git state and changed lines", asyn
   await page.getByRole("button", { name: "Use latest" }).click();
   await expect(page.getByText("export const externalChange = true;")).toBeVisible();
   await expect(save).toBeDisabled();
+
+  snapshot.git = { repositories: [] };
+  remoteFile = { ...remoteFile, git: undefined, lineChanges: [] };
+  await page.getByRole("button", { name: "Refresh Workspace" }).click();
+  await expect(
+    page.getByText("No Git repositories in this Workspace", { exact: true }),
+  ).toBeVisible();
   await expect.poll(() => pageBlocksUnload(page)).toBe(true);
   expect(browserErrors).toEqual([]);
 });
