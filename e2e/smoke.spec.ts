@@ -242,6 +242,7 @@ test("renders the dedicated live Web IDE with Git state and changed lines", asyn
   const file: WorkspaceIdeFile = {
     path: "/workspace/src/demo.ts",
     name: "demo.ts",
+    revision: `sha256:${"a".repeat(43)}`,
     encoding: "base64",
     content: Buffer.from(
       [
@@ -253,6 +254,7 @@ test("renders the dedicated live Web IDE with Git state and changed lines", asyn
       ].join("\n"),
     ).toString("base64"),
     kind: "text",
+    editable: true,
     size: "83 B",
     modifiedAt: now,
     git: snapshot.git.files[0],
@@ -268,11 +270,47 @@ test("renders the dedicated live Web IDE with Git state and changed lines", asyn
   };
   const browserErrors: string[] = [];
   page.on("console", (message) => {
-    if (message.type() === "error") browserErrors.push(message.text());
+    if (
+      message.type() === "error" &&
+      !message.text().includes("status of 409 (Conflict)")
+    ) {
+      browserErrors.push(message.text());
+    }
   });
   page.on("pageerror", (error) => browserErrors.push(error.message));
+  let savedContent = "";
+  let remoteFile = file;
   await page.route("**/api/v1/sessions/**/ide/file?*", async (route) => {
-    await route.fulfill({ json: { data: file } });
+    if (route.request().method() === "PUT") {
+      const body = route.request().postDataJSON() as {
+        content: string;
+        baseRevision: string;
+      };
+      if (body.baseRevision !== remoteFile.revision) {
+        await route.fulfill({
+          status: 409,
+          json: {
+            error: {
+              code: "workspace_file_conflict",
+              message: "The file changed after it was opened.",
+              details: { currentRevision: remoteFile.revision },
+            },
+          },
+        });
+        return;
+      }
+      savedContent = Buffer.from(body.content, "base64").toString("utf8");
+      remoteFile = {
+        ...remoteFile,
+        revision: `sha256:${"b".repeat(43)}`,
+        content: body.content,
+      };
+      await route.fulfill({
+        json: { data: remoteFile },
+      });
+      return;
+    }
+    await route.fulfill({ json: { data: remoteFile } });
   });
   await page.route("**/api/v1/sessions/**/ide", async (route) => {
     await route.fulfill({ json: { data: snapshot } });
@@ -289,10 +327,33 @@ test("renders the dedicated live Web IDE with Git state and changed lines", asyn
     page.locator('button[title="/workspace/src/demo.ts"]'),
   ).toBeVisible();
   await expect(page.getByText('const transport = "websocket";')).toBeVisible();
-  await expect(page.locator('[class*="line-modified"]')).toHaveCount(1);
-  await expect(page.locator('[class*="line-added"]')).toHaveCount(1);
+  await expect(page.locator(".sandpi-line-modified")).toHaveCount(1);
+  await expect(page.locator(".sandpi-line-added")).toHaveCount(1);
   await expect(page.getByText("feature/live-ide", { exact: true })).toBeVisible();
   await expect(page.getByText(/1 uncommitted file.*↑1/)).toBeVisible();
+  const editor = page.locator(".monaco-editor").first();
+  await editor.click();
+  await page.keyboard.press("Control+A");
+  await page.keyboard.insertText("export const editedInBrowser = true;\n");
+  const save = page.getByRole("button", { name: /Save file/ });
+  await expect(save).toBeEnabled();
+  await save.click();
+  await expect.poll(() => savedContent).toContain("editedInBrowser");
+  await expect(save).toBeDisabled();
+
+  await editor.click();
+  await page.keyboard.press("Control+End");
+  await page.keyboard.insertText("// local draft\n");
+  remoteFile = {
+    ...remoteFile,
+    revision: `sha256:${"c".repeat(43)}`,
+    content: Buffer.from("export const externalChange = true;\n").toString("base64"),
+  };
+  await save.click();
+  await expect(page.getByText("This file changed outside the editor.")).toBeVisible();
+  await page.getByRole("button", { name: "Use latest" }).click();
+  await expect(page.getByText("export const externalChange = true;")).toBeVisible();
+  await expect(save).toBeDisabled();
   await expect.poll(() => pageBlocksUnload(page)).toBe(true);
   expect(browserErrors).toEqual([]);
 });

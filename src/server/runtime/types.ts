@@ -152,6 +152,12 @@ export interface RuntimeAdapter {
     runtime: RuntimeSessionRecord,
     path: string,
   ): Promise<WorkspaceIdeFile>;
+  writeWorkspaceIdeFile(
+    runtime: RuntimeSessionRecord,
+    path: string,
+    content: Uint8Array,
+    baseRevision: string,
+  ): Promise<WorkspaceIdeFile>;
   watchWorkspaceFiles(
     runtime: RuntimeSessionRecord,
   ): Promise<RuntimeWorkspaceWatchHandle>;

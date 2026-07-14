@@ -18,6 +18,7 @@ interface ApiErrorBody {
     code?: string;
     message?: string;
     loginUrl?: string;
+    details?: unknown;
   };
   code?: string;
   message?: string;
@@ -28,6 +29,7 @@ export class ApiError extends Error {
   readonly status: number;
   readonly code?: string;
   readonly loginUrl?: string;
+  readonly details?: unknown;
   readonly body?: unknown;
 
   constructor(
@@ -36,6 +38,7 @@ export class ApiError extends Error {
       status: number;
       code?: string;
       loginUrl?: string;
+      details?: unknown;
       body?: unknown;
     },
   ) {
@@ -44,6 +47,7 @@ export class ApiError extends Error {
     this.status = options.status;
     this.code = options.code;
     this.loginUrl = options.loginUrl;
+    this.details = options.details;
     this.body = options.body;
   }
 }
@@ -121,6 +125,7 @@ export async function apiFetch<T>(
         errorBody?.loginUrl ??
         response.headers.get("location") ??
         undefined,
+      details: nestedError?.details,
       body,
     });
   }

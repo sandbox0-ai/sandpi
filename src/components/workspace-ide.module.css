@@ -271,6 +271,14 @@
   background: var(--amber);
 }
 
+.tabGitState {
+  color: var(--amber);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 8px;
+  font-style: normal;
+  font-weight: 700;
+}
+
 .closeTab {
   display: inline-flex;
   width: 18px;
@@ -361,6 +369,15 @@
   gap: 3px;
 }
 
+.saveState {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--ink-faint);
+  font-size: 8px;
+  white-space: nowrap;
+}
+
 .gitPill {
   padding: 2px 5px;
   border: 1px solid currentColor;
@@ -370,106 +387,117 @@
   font-weight: 620;
 }
 
-.code {
+.documentBody {
+  position: relative;
   min-width: 0;
   min-height: 0;
-  margin: 0;
-  overflow: auto;
-  padding: 8px 0 24px;
+  overflow: hidden;
+}
+
+.code {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
   background: var(--panel);
   color: var(--ink-soft);
-  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  font-size: 10px;
-  line-height: 1.58;
-  tab-size: 2;
-  scrollbar-width: thin;
 }
 
-.standalone .code {
-  font-size: 11.5px;
-  line-height: 1.62;
-}
-
-.lineGroup,
-.codeLine {
-  display: block;
-  min-width: max-content;
-}
-
-.codeLine {
-  position: relative;
-  min-height: 16px;
-  padding-right: 18px;
-  white-space: pre;
-}
-
-.changeGutter {
-  display: inline-block;
-  width: 3px;
-  height: 100%;
-  position: absolute;
-  top: 0;
-  left: 0;
-}
-
-.codeLine b {
-  display: inline-block;
-  width: 43px;
-  padding-right: 10px;
-  color: var(--ink-faint);
-  font-weight: 400;
-  text-align: right;
-  user-select: none;
-}
-
-.codeLine code {
-  font: inherit;
-}
-
-.line-added {
-  background: color-mix(in srgb, var(--green-soft) 78%, transparent);
-}
-
-.line-added .changeGutter {
-  background: var(--green);
-}
-
-.line-modified {
-  background: color-mix(in srgb, var(--amber-soft) 72%, transparent);
-}
-
-.line-modified .changeGutter {
-  background: var(--amber);
-}
-
-.line-deleted {
-  background: color-mix(in srgb, var(--red-soft) 76%, transparent);
-}
-
-.line-deleted .changeGutter {
-  background: var(--red);
-}
-
-.deletedLines {
+.code > span {
   display: flex;
-  min-width: max-content;
-  height: 16px;
+  height: 100%;
   align-items: center;
-  gap: 7px;
-  padding-left: 43px;
-  border-top: 1px solid color-mix(in srgb, var(--red) 35%, transparent);
-  border-bottom: 1px solid color-mix(in srgb, var(--red) 25%, transparent);
-  background: color-mix(in srgb, var(--red-soft) 82%, transparent);
-  color: var(--red);
-  font-family: Inter, ui-sans-serif, sans-serif;
-  font-size: 8px;
-  font-style: normal;
+  justify-content: center;
+  color: var(--ink-faint);
+  font-size: 10px;
 }
 
-.deletedLines i {
-  width: 10px;
-  height: 1px;
-  background: var(--red);
+.code :global(.sandpi-line-added) {
+  background: color-mix(in srgb, var(--green-soft) 70%, transparent);
+}
+
+.code :global(.sandpi-line-modified) {
+  background: color-mix(in srgb, var(--amber-soft) 66%, transparent);
+}
+
+.code :global(.sandpi-line-deleted) {
+  background: color-mix(in srgb, var(--red-soft) 70%, transparent);
+}
+
+.code :global(.sandpi-gutter-added) {
+  border-left: 3px solid var(--green);
+}
+
+.code :global(.sandpi-gutter-modified) {
+  border-left: 3px solid var(--amber);
+}
+
+.code :global(.sandpi-gutter-deleted) {
+  border-left: 3px solid var(--red);
+}
+
+.conflictBanner,
+.documentError,
+.readOnlyNotice {
+  display: flex;
+  position: absolute;
+  z-index: 5;
+  right: 10px;
+  left: 10px;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--panel-strong) 94%, transparent);
+  box-shadow: 0 8px 24px rgb(20 20 16 / 10%);
+  font-size: 9px;
+}
+
+.conflictBanner {
+  top: 9px;
+  color: var(--amber);
+}
+
+.conflictBanner > span {
+  min-width: 0;
+  flex: 1;
+}
+
+.conflictBanner button {
+  flex: 0 0 auto;
+  padding: 3px 6px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ink-soft);
+  font: inherit;
+  cursor: pointer;
+}
+
+.conflictBanner button:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+.conflictBanner .overwriteButton {
+  border-color: color-mix(in srgb, var(--red) 35%, var(--line));
+  color: var(--red);
+}
+
+.documentError {
+  bottom: 10px;
+  color: var(--red);
+}
+
+.readOnlyNotice {
+  right: auto;
+  bottom: 10px;
+  left: 50%;
+  max-width: calc(100% - 20px);
+  transform: translateX(-50%);
+  color: var(--ink-faint);
 }
 
 .loading,

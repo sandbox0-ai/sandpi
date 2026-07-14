@@ -389,11 +389,14 @@ export class CodexService {
       input.modelId,
     );
     const requestId = `turn-start:${randomUUID()}`;
+    let runtime: Awaited<ReturnType<SandpiStore["getRuntime"]>> | undefined;
+    let inputSnapshotId: string | undefined;
+    let inputSnapshotRecorded = false;
     try {
       // Reserve the Session before touching its Sandbox. A Turn edit/delete/fork
       // restores Workspace state, so even credential materialization must not race
       // with a history operation on the same Session.
-      const runtime = await this.store.getRuntime(input.userId, input.sessionId);
+      runtime = await this.store.getRuntime(input.userId, input.sessionId);
       await this.ensureCurrentRuntimeCredential(input.sessionId, runtime);
       if (!runtime.threadId) {
         throw new HttpError(
@@ -402,6 +405,19 @@ export class CodexService {
           "Codex thread is not ready.",
         );
       }
+      // Browser/terminal edits can happen between native Turns. Capture that exact
+      // input state once here so a later message edit/delete restores what the
+      // user actually gave this Turn, rather than the previous Turn's output.
+      const inputSnapshot = await this.runtime.createWorkspaceCheckpoint(
+        runtime,
+        `sandpi-turn-input-${randomUUID().slice(0, 12)}`,
+      );
+      inputSnapshotId = inputSnapshot.snapshotId;
+      await this.store.recordPendingTurnInputSnapshot(
+        input.sessionId,
+        inputSnapshotId,
+      );
+      inputSnapshotRecorded = true;
       await this.runtime.writeCodexMessage(
         runtime,
         {
@@ -417,6 +433,33 @@ export class CodexService {
         `turn-input:${randomUUID()}`,
       );
     } catch (error) {
+      if (inputSnapshotId) {
+        let detached = !inputSnapshotRecorded;
+        if (inputSnapshotRecorded) {
+          try {
+            await this.store.clearPendingTurnInputSnapshot(
+              input.sessionId,
+              inputSnapshotId,
+            );
+            detached = true;
+          } catch (cleanupError) {
+            this.logger.warn(
+              { sessionId: input.sessionId, error: errorMessage(cleanupError) },
+              "Failed Turn input checkpoint could not be detached",
+            );
+          }
+        }
+        if (detached && runtime) {
+          await this.runtime
+            .deleteWorkspaceCheckpoint(runtime, inputSnapshotId)
+            .catch((cleanupError) => {
+              this.logger.warn(
+                { sessionId: input.sessionId, error: errorMessage(cleanupError) },
+                "Failed Turn input checkpoint cleanup failed",
+              );
+            });
+        }
+      }
       await this.store.releaseSessionTurn(input.sessionId);
       throw error;
     }
@@ -675,6 +718,7 @@ export class CodexService {
     let originalThreadId: string | undefined;
     let replacementThreadId: string | undefined;
     let replacementTurnId: string | undefined;
+    let replacementInputSnapshotRecorded = false;
     try {
       const originalRuntime = await this.store.getRuntime(userId, sessionId);
       originalThreadId = originalRuntime.threadId;
@@ -709,6 +753,14 @@ export class CodexService {
       if (replacementInput) {
         const replacementRuntime = await this.store.decoderState(sessionId);
         requestId = `turn-start:${randomUUID()}`;
+        // The restored pre-Turn snapshot becomes the edited Turn's input too.
+        // Ownership is transferred to its output checkpoint when completion is
+        // ingested; finalizeTurnMutation excludes it from superseded cleanup.
+        await this.store.recordPendingTurnInputSnapshot(
+          sessionId,
+          context.restoreSnapshotId,
+        );
+        replacementInputSnapshotRecorded = true;
         await this.runtime.writeCodexMessage(
           replacementRuntime,
           {
@@ -763,6 +815,16 @@ export class CodexService {
       this.ensureWorker(sessionId);
       return { requestId };
     } catch (error) {
+      if (replacementInputSnapshotRecorded) {
+        await this.store
+          .clearPendingTurnInputSnapshot(sessionId, context.restoreSnapshotId)
+          .catch((cleanupError) => {
+            this.logger.warn(
+              { sessionId, error: errorMessage(cleanupError) },
+              "Failed replacement Turn input checkpoint could not be detached",
+            );
+          });
+      }
       if (restoreStarted && !finalized && originalThreadId) {
         try {
           if (replacementThreadId && replacementTurnId) {

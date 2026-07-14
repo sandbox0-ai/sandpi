@@ -36,6 +36,7 @@ test("migration history contains every durable Sandpi boundary", async () => {
       "0009_retryable_turn_checkpoints",
       "0010_session_history_revision",
       "0011_default_browser_timezone",
+      "0012_turn_input_checkpoints",
     ],
   );
 
@@ -76,4 +77,8 @@ test("migration history contains every durable Sandpi boundary", async () => {
   assert.match(checkpointsSql, /CREATE TABLE session_turn_checkpoints\b/);
   assert.match(checkpointsSql, /workspace_snapshot_id TEXT/);
   assert.match(checkpointsSql, /ADD COLUMN visible BOOLEAN NOT NULL DEFAULT TRUE/);
+
+  const turnInputsSql = migrations[11]?.sql ?? "";
+  assert.match(turnInputsSql, /pending_turn_input_snapshot_id TEXT/);
+  assert.match(turnInputsSql, /input_workspace_snapshot_id TEXT/);
 });

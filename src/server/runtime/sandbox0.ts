@@ -43,6 +43,10 @@ import {
   parseGitStatus,
   wholeFileLineChanges,
 } from "./git-workspace";
+import {
+  requireWorkspaceFileRevision,
+  workspaceFileRevision,
+} from "./workspace-edit";
 
 const SESSION_HARD_TTL_SECONDS = 30 * 24 * 60 * 60;
 const EVENT_RETENTION_BYTES = 256 * 1024 * 1024;
@@ -862,13 +866,88 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     return {
       path: filePath,
       name: path.posix.basename(filePath),
+      revision: workspaceFileRevision(content),
       encoding: "base64",
       content: Buffer.from(content).toString("base64"),
       kind: text === undefined ? "binary" : "text",
+      bom: hasUtf8Bom(content) ? "utf8" : undefined,
+      editable: text !== undefined && change?.kind !== "deleted",
+      readOnlyReason:
+        text === undefined
+          ? "binary"
+          : change?.kind === "deleted"
+            ? "deleted"
+            : undefined,
       size: size === undefined ? undefined : formatFileSize(size),
       modifiedAt: modifiedAt ? toUnixTimestamp(modifiedAt) : undefined,
       git: change,
       lineChanges,
+    };
+  }
+
+  async writeWorkspaceIdeFile(
+    runtime: RuntimeSessionRecord,
+    requestedPath: string,
+    content: Uint8Array,
+    baseRevision: string,
+  ): Promise<WorkspaceIdeFile> {
+    const filePath = safeEditableWorkspacePath(requestedPath);
+    if (content.byteLength > MAX_FILE_PREVIEW_BYTES) {
+      throw new HttpError(
+        413,
+        "workspace_file_too_large",
+        "Files larger than 5 MiB cannot be edited in the Web IDE.",
+      );
+    }
+    if (!isUtf8(content)) {
+      throw new HttpError(
+        415,
+        "workspace_file_not_utf8",
+        "The Web IDE currently saves UTF-8 text files only.",
+      );
+    }
+
+    const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
+    await assertWorkspacePathHasNoSymlink(sandbox, filePath);
+    const file = await sandbox.statFile(filePath);
+    if (file.type !== "file") {
+      throw new HttpError(
+        400,
+        "workspace_file_not_regular",
+        "Only existing regular files can be edited in the Web IDE.",
+      );
+    }
+    if ((file.size ?? 0) > MAX_FILE_PREVIEW_BYTES) {
+      throw new HttpError(
+        413,
+        "workspace_file_too_large",
+        "Files larger than 5 MiB cannot be edited in the Web IDE.",
+      );
+    }
+    const current = await sandbox.readFile(filePath);
+    if (!isUtf8(current)) {
+      throw new HttpError(
+        415,
+        "workspace_file_not_utf8",
+        "Binary files cannot be edited in the Web IDE.",
+      );
+    }
+    // This rejects stale Sandpi clients and the store serializes browser saves
+    // with Turn mutations. sdk-js does not yet expose an atomic If-Match write,
+    // so a direct terminal write can still race between this check and writeFile.
+    requireWorkspaceFileRevision(current, baseRevision);
+    await sandbox.writeFile(filePath, content);
+    return {
+      path: filePath,
+      name: path.posix.basename(filePath),
+      revision: workspaceFileRevision(content),
+      encoding: "base64",
+      content: Buffer.from(content).toString("base64"),
+      kind: "text",
+      bom: hasUtf8Bom(content) ? "utf8" : undefined,
+      editable: true,
+      size: formatFileSize(content.byteLength),
+      lineChanges: [],
     };
   }
 
@@ -1188,10 +1267,50 @@ function safeWorkspacePath(requestedPath: string) {
   return normalized;
 }
 
+function safeEditableWorkspacePath(requestedPath: string) {
+  const filePath = safeWorkspacePath(requestedPath);
+  if (
+    path.posix
+      .relative("/workspace", filePath)
+      .split("/")
+      .includes(".git")
+  ) {
+    throw new HttpError(
+      403,
+      "workspace_git_metadata_protected",
+      "Git metadata cannot be edited from the Web IDE.",
+    );
+  }
+  return filePath;
+}
+
+async function assertWorkspacePathHasNoSymlink(
+  sandbox: ReturnType<Client["sandboxes"]["sandbox"]>,
+  filePath: string,
+) {
+  const relative = path.posix.relative("/workspace", filePath);
+  let current = "/workspace";
+  for (const component of relative.split("/").filter(Boolean)) {
+    current = path.posix.join(current, component);
+    const file = await sandbox.statFile(current);
+    if (file.type === "symlink" || file.isLink) {
+      throw new HttpError(
+        403,
+        "workspace_symlink_not_editable",
+        "Files reached through symbolic links cannot be edited in the Web IDE.",
+      );
+    }
+  }
+}
+
 function formatFileSize(bytes: number) {
   if (bytes < 1_024) return `${bytes} B`;
   if (bytes < 1_024 * 1_024) return `${Math.round(bytes / 1_024)} KiB`;
   return `${Math.round((bytes / 1_024 / 1_024) * 10) / 10} MiB`;
+}
+
+function hasUtf8Bom(content: Uint8Array) {
+  return content[0] === 0xef && content[1] === 0xbb && content[2] === 0xbf;
 }
 
 function requireMetric(

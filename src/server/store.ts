@@ -930,6 +930,58 @@ export class SandpiStore {
     return runtimeFromRow(row);
   }
 
+  /**
+   * Serialize a browser Workspace write with Turn/history mutations across all
+   * Sandpi server replicas. The transaction lock intentionally spans the short
+   * Sandbox0 file write; PostgreSQL releases it if this server disconnects.
+   */
+  async withWorkspaceFileWrite<T>(
+    userId: string,
+    sessionId: string,
+    write: (runtime: StoredRuntime) => Promise<T>,
+  ): Promise<T> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [sessionId]);
+      const result = await client.query<RuntimeRow & { session_status: string }>(
+        `SELECT r.*, s.status AS session_status
+         FROM session_runtime r
+         JOIN sessions s ON s.id = r.session_id
+         JOIN team_memberships m
+           ON m.team_id = s.team_id
+          AND m.user_id = $1
+          AND m.status = 'active'
+         WHERE s.created_by_user_id = $1 AND s.id = $2
+           AND s.hard_expires_at > NOW()`,
+        [userId, sessionId],
+      );
+      const row = result.rows[0];
+      if (!row) throw notFound("session_not_found", "Session not found.");
+      if (row.session_status !== "waiting") {
+        throw new HttpError(
+          409,
+          "workspace_write_not_ready",
+          "Wait for the current coding-agent Turn to finish before saving Workspace files.",
+        );
+      }
+      if (!row.sandbox_id || !row.supervisor_session_id || !row.workspace_volume_id) {
+        throw notFound(
+          "session_runtime_not_ready",
+          "Session runtime is not ready.",
+        );
+      }
+      const value = await write(runtimeFromRow(row));
+      await client.query("COMMIT");
+      return value;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async setTerminalSession(sessionId: string, terminalSessionId: string) {
     await this.pool.query(
       "UPDATE session_runtime SET terminal_session_id = $2 WHERE session_id = $1",
@@ -1040,31 +1092,44 @@ export class SandpiStore {
     sessionId: string,
     modelId?: string,
   ) {
-    const result = await this.pool.query(
-      `WITH writable AS (
-         UPDATE sessions s
-         SET status = 'running', unread = FALSE
-         FROM team_memberships m
-         WHERE s.id = $2
-           AND s.created_by_user_id = $1
-           AND m.team_id = s.team_id
-           AND m.user_id = $1
-           AND m.status = 'active'
-           AND s.status = 'waiting'
-           AND s.hard_expires_at > NOW()
-         RETURNING s.id
-       ), runtime_updated AS (
-         UPDATE session_runtime r
-         SET model_id = COALESCE($3::TEXT, r.model_id),
-             version = r.version + 1, updated_at = NOW()
-         FROM writable w
-         WHERE r.session_id = w.id
-         RETURNING r.session_id
-       )
-       SELECT id FROM writable`,
-      [userId, sessionId, modelId ?? null],
-    );
-    if (result.rowCount) return;
+    const client = await this.pool.connect();
+    let started = false;
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [sessionId]);
+      const result = await client.query(
+        `WITH writable AS (
+           UPDATE sessions s
+           SET status = 'running', unread = FALSE
+           FROM team_memberships m
+           WHERE s.id = $2
+             AND s.created_by_user_id = $1
+             AND m.team_id = s.team_id
+             AND m.user_id = $1
+             AND m.status = 'active'
+             AND s.status = 'waiting'
+             AND s.hard_expires_at > NOW()
+           RETURNING s.id
+         ), runtime_updated AS (
+           UPDATE session_runtime r
+           SET model_id = COALESCE($3::TEXT, r.model_id),
+               version = r.version + 1, updated_at = NOW()
+           FROM writable w
+           WHERE r.session_id = w.id
+           RETURNING r.session_id
+         )
+         SELECT id FROM writable`,
+        [userId, sessionId, modelId ?? null],
+      );
+      started = Boolean(result.rowCount);
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+    if (started) return;
     const session = await this.getSession(userId, sessionId);
     if (session.status === "running") {
       throw new HttpError(
@@ -1088,16 +1153,58 @@ export class SandpiStore {
     );
   }
 
-  async reserveSessionFork(userId: string, sessionId: string) {
-    const reserved = await this.pool.query(
-      `UPDATE sessions
-       SET status = 'running', unread = FALSE
-       WHERE id = $1 AND created_by_user_id = $2 AND status = 'waiting'
-         AND hard_expires_at > NOW()
-       RETURNING id`,
-      [sessionId, userId],
+  async recordPendingTurnInputSnapshot(sessionId: string, snapshotId: string) {
+    const recorded = await this.pool.query(
+      `UPDATE session_runtime r
+       SET pending_turn_input_snapshot_id = $2, updated_at = NOW()
+       FROM sessions s
+       WHERE r.session_id = $1 AND s.id = r.session_id
+         AND s.status IN ('running', 'paused')
+         AND r.pending_turn_input_snapshot_id IS NULL
+       RETURNING r.session_id`,
+      [sessionId, snapshotId],
     );
-    if (reserved.rowCount) return;
+    if (!recorded.rowCount) {
+      throw new HttpError(
+        409,
+        "turn_input_checkpoint_conflict",
+        "The Session already has an active Turn input checkpoint.",
+      );
+    }
+  }
+
+  async clearPendingTurnInputSnapshot(sessionId: string, snapshotId: string) {
+    await this.pool.query(
+      `UPDATE session_runtime
+       SET pending_turn_input_snapshot_id = NULL, updated_at = NOW()
+       WHERE session_id = $1 AND pending_turn_input_snapshot_id = $2`,
+      [sessionId, snapshotId],
+    );
+  }
+
+  async reserveSessionFork(userId: string, sessionId: string) {
+    const client = await this.pool.connect();
+    let ready = false;
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [sessionId]);
+      const reserved = await client.query(
+        `UPDATE sessions
+         SET status = 'running', unread = FALSE
+         WHERE id = $1 AND created_by_user_id = $2 AND status = 'waiting'
+           AND hard_expires_at > NOW()
+         RETURNING id`,
+        [sessionId, userId],
+      );
+      ready = Boolean(reserved.rowCount);
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+    if (ready) return;
     await this.getSession(userId, sessionId);
     throw new HttpError(
       409,
@@ -1400,19 +1507,60 @@ export class SandpiStore {
   }
 
   async completeTurnCheckpoint(checkpointId: string, snapshotId: string) {
-    const completed = await this.pool.query(
-      `UPDATE session_turn_checkpoints
-       SET status = 'ready', workspace_snapshot_id = $2, error = NULL
-       WHERE id = $1 AND status = 'creating'
-       RETURNING id`,
-      [checkpointId, snapshotId],
-    );
-    if (!completed.rowCount) {
-      throw new HttpError(
-        409,
-        "turn_checkpoint_claim_lost",
-        "The Workspace checkpoint claim is no longer active.",
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const selected = await client.query<{ session_id: string }>(
+        `SELECT session_id FROM session_turn_checkpoints WHERE id = $1`,
+        [checkpointId],
       );
+      const sessionId = selected.rows[0]?.session_id;
+      if (!sessionId) {
+        throw new HttpError(
+          409,
+          "turn_checkpoint_claim_lost",
+          "The Workspace checkpoint claim is no longer active.",
+        );
+      }
+      await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [sessionId]);
+      const completed = await client.query<{
+        pending_turn_input_snapshot_id: string | null;
+      }>(
+        `UPDATE session_turn_checkpoints checkpoint
+         SET status = 'ready', workspace_snapshot_id = $2,
+             input_workspace_snapshot_id = CASE
+               WHEN checkpoint.ordinal = 0 THEN checkpoint.input_workspace_snapshot_id
+               ELSE runtime.pending_turn_input_snapshot_id
+             END,
+             error = NULL
+         FROM session_runtime runtime
+         WHERE checkpoint.id = $1 AND checkpoint.status = 'creating'
+           AND runtime.session_id = checkpoint.session_id
+         RETURNING runtime.pending_turn_input_snapshot_id`,
+        [checkpointId, snapshotId],
+      );
+      const row = completed.rows[0];
+      if (!row) {
+        throw new HttpError(
+          409,
+          "turn_checkpoint_claim_lost",
+          "The Workspace checkpoint claim is no longer active.",
+        );
+      }
+      if (row.pending_turn_input_snapshot_id) {
+        await client.query(
+          `UPDATE session_runtime
+           SET pending_turn_input_snapshot_id = NULL, updated_at = NOW()
+           WHERE session_id = $1 AND pending_turn_input_snapshot_id = $2`,
+          [sessionId, row.pending_turn_input_snapshot_id],
+        );
+      }
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
     }
   }
 
@@ -1555,8 +1703,9 @@ export class SandpiStore {
       const selected = await client.query<{
         ordinal: number;
         turn_id: string;
+        input_workspace_snapshot_id: string | null;
       }>(
-        `SELECT ordinal, turn_id
+        `SELECT ordinal, turn_id, input_workspace_snapshot_id
          FROM session_turn_checkpoints
          WHERE session_id = $1 AND user_message_item_id = $2
            AND status = 'ready'`,
@@ -1652,7 +1801,8 @@ export class SandpiStore {
         selectedOrdinal: Number(checkpoint.ordinal),
         boundarySequence: Number(boundary.rows[0].sequence),
         upperSequence: Number(upper.rows[0]?.sequence ?? 0),
-        restoreSnapshotId: restore.workspace_snapshot_id,
+        restoreSnapshotId:
+          checkpoint.input_workspace_snapshot_id ?? restore.workspace_snapshot_id,
         headSnapshotId: head.rows[0].workspace_snapshot_id,
         branchThroughTurnId: restore.native_head_turn_id ?? undefined,
       };
@@ -1702,28 +1852,48 @@ export class SandpiStore {
          WHERE session_id = $1 AND sequence BETWEEN $2 AND $3 AND visible`,
         [sessionId, context.boundarySequence, context.upperSequence],
       );
-      const invalidated = await client.query<{ workspace_snapshot_id: string }>(
+      const invalidated = await client.query<{
+        workspace_snapshot_id: string | null;
+        input_workspace_snapshot_id: string | null;
+      }>(
         `UPDATE session_turn_checkpoints
          SET status = 'deleted'
          WHERE session_id = $1 AND ordinal >= $2 AND status = 'ready'
-         RETURNING workspace_snapshot_id`,
+         RETURNING workspace_snapshot_id, input_workspace_snapshot_id`,
         [sessionId, context.selectedOrdinal],
       );
       await client.query(
         `UPDATE sessions SET status = $2, unread = FALSE WHERE id = $1`,
         [sessionId, status],
       );
-      await client.query(
+      const runtimeUpdated = await client.query<{
+        pending_turn_input_snapshot_id: string | null;
+      }>(
         `UPDATE session_runtime
          SET desired_state = 'running', observed_state = 'running',
              history_revision = history_revision + 1,
              model_id = COALESCE($2::TEXT, model_id),
              version = version + 1, updated_at = NOW()
-         WHERE session_id = $1`,
+         WHERE session_id = $1
+         RETURNING pending_turn_input_snapshot_id`,
         [sessionId, modelId ?? null],
       );
       await client.query("COMMIT");
-      return invalidated.rows.map((row) => row.workspace_snapshot_id);
+      const retainedInputSnapshotId =
+        runtimeUpdated.rows[0]?.pending_turn_input_snapshot_id;
+      return [
+        ...new Set(
+          invalidated.rows
+            .flatMap((row) => [
+              row.workspace_snapshot_id,
+              row.input_workspace_snapshot_id,
+            ])
+            .filter(
+              (snapshotId): snapshotId is string =>
+                Boolean(snapshotId) && snapshotId !== retainedInputSnapshotId,
+            ),
+        ),
+      ];
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;

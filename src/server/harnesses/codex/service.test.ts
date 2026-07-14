@@ -221,6 +221,7 @@ test("reserves a Session before materializing credentials for a new Turn", async
 test("passes the selected native Codex model to turn/start", async () => {
   const writes: Array<Record<string, unknown>> = [];
   let reservedModelId: string | undefined;
+  let recordedInputSnapshotId: string | undefined;
   const selectedModelId = "native-codex-model";
   const selectedRuntime = { ...runtimeRecord, modelId: selectedModelId };
   const store = {
@@ -240,9 +241,18 @@ test("passes the selected native Codex model to turn/start", async () => {
     async retryableTurnCheckpoints() {
       return [];
     },
+    async recordPendingTurnInputSnapshot(
+      _sessionId: string,
+      snapshotId: string,
+    ) {
+      recordedInputSnapshotId = snapshotId;
+    },
   } as unknown as SandpiStore;
   const runtime = {
     async installCodexSessionCredential() {},
+    async createWorkspaceCheckpoint() {
+      return { snapshotId: "snapshot-turn-input" };
+    },
     async writeCodexMessage(
       _runtime: StoredRuntime,
       message: Record<string, unknown>,
@@ -264,6 +274,7 @@ test("passes the selected native Codex model to turn/start", async () => {
       modelId: selectedModelId,
     });
     assert.equal(reservedModelId, selectedModelId);
+    assert.equal(recordedInputSnapshotId, "snapshot-turn-input");
     const turnStart = writes.find((message) => message.method === "turn/start");
     assert.equal(
       (turnStart?.params as { model?: string } | undefined)?.model,
@@ -272,6 +283,70 @@ test("passes the selected native Codex model to turn/start", async () => {
   } finally {
     await service.close();
   }
+});
+
+test("removes a pre-Turn input snapshot when turn/start cannot be written", async () => {
+  const operations: string[] = [];
+  const store = {
+    async beginSessionTurn() {
+      operations.push("reserve");
+    },
+    async getRuntime() {
+      return runtimeRecord;
+    },
+    async recordPendingTurnInputSnapshot(
+      _sessionId: string,
+      snapshotId: string,
+    ) {
+      operations.push(`record:${snapshotId}`);
+    },
+    async clearPendingTurnInputSnapshot(
+      _sessionId: string,
+      snapshotId: string,
+    ) {
+      operations.push(`clear:${snapshotId}`);
+    },
+    async releaseSessionTurn() {
+      operations.push("release");
+    },
+  } as unknown as SandpiStore;
+  const runtime = {
+    async installCodexSessionCredential() {},
+    async createWorkspaceCheckpoint() {
+      operations.push("create");
+      return { snapshotId: "snapshot-turn-input" };
+    },
+    async writeCodexMessage() {
+      operations.push("write");
+      throw new Error("native input rejected");
+    },
+    async deleteWorkspaceCheckpoint(
+      _runtime: StoredRuntime,
+      snapshotId: string,
+    ) {
+      operations.push(`delete:${snapshotId}`);
+    },
+  } as unknown as RuntimeAdapter;
+  const service = new CodexService(store, runtime, logger, credentials);
+
+  await assert.rejects(
+    service.startTurn({
+      userId: "user-test",
+      sessionId: runtimeRecord.id,
+      text: "hello",
+      images: [],
+    }),
+    /native input rejected/,
+  );
+  assert.deepEqual(operations, [
+    "reserve",
+    "create",
+    "record:snapshot-turn-input",
+    "write",
+    "clear:snapshot-turn-input",
+    "delete:snapshot-turn-input",
+    "release",
+  ]);
 });
 
 test("removes an uncommitted Workspace snapshot when checkpoint persistence fails", async () => {
@@ -500,6 +575,8 @@ test("compensates a failed Turn edit by restoring the original Workspace head", 
   let finalizeAttempts = 0;
   let released = 0;
   let aborted = 0;
+  let recordedInput = 0;
+  let clearedInput = 0;
   let currentRuntime: StoredRuntime = { ...runtimeRecord, threadId: "thread-original" };
   const mutation = {
     selectedTurnId: "turn-edit",
@@ -528,6 +605,20 @@ test("compensates a failed Turn edit by restoring the original Workspace head", 
     },
     async setRuntimeThread(_sessionId: string, threadId: string) {
       currentRuntime = { ...currentRuntime, threadId };
+    },
+    async recordPendingTurnInputSnapshot(
+      _sessionId: string,
+      snapshotId: string,
+    ) {
+      assert.equal(snapshotId, mutation.restoreSnapshotId);
+      recordedInput += 1;
+    },
+    async clearPendingTurnInputSnapshot(
+      _sessionId: string,
+      snapshotId: string,
+    ) {
+      assert.equal(snapshotId, mutation.restoreSnapshotId);
+      clearedInput += 1;
     },
     async getRpcResponse(_sessionId: string, requestId: string) {
       if (requestId.startsWith("initialize:")) return { result: {} };
@@ -609,6 +700,8 @@ test("compensates a failed Turn edit by restoring the original Workspace head", 
     assert.equal(finalizeAttempts, 3);
     assert.equal(released, 1);
     assert.equal(aborted, 0);
+    assert.equal(recordedInput, 1);
+    assert.equal(clearedInput, 1);
     assert.ok(writes.some((message) => message.method === "turn/interrupt"));
     const replacement = writes.find((message) => message.method === "turn/start");
     assert.equal(

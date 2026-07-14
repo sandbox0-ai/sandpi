@@ -50,6 +50,7 @@ import { SandpiStore } from "@/server/store";
 
 const SESSION_COOKIE = "sandpi_session";
 const CODEX_IMAGE_BODY_LIMIT_BYTES = 36 * 1024 * 1024;
+const WORKSPACE_FILE_BODY_LIMIT_BYTES = 7 * 1024 * 1024;
 
 export interface SandpiServerOptions {
   config?: SandpiConfig;
@@ -630,6 +631,31 @@ function registerApiRoutes(
       };
     },
   );
+  app.put<{ Params: { sessionId: string }; Body: unknown }>(
+    "/api/v1/sessions/:sessionId/ide/file",
+    { bodyLimit: WORKSPACE_FILE_BODY_LIMIT_BYTES },
+    async (request) => {
+      const filePath = queryString(request, "path");
+      if (!filePath) {
+        throw new HttpError(400, "path_required", "File path is required.");
+      }
+      const input = workspaceIdeWriteSchema.parse(request.body);
+      const content = Buffer.from(input.content, "base64");
+      return {
+        data: await services.store.withWorkspaceFileWrite(
+          request.principal.userId,
+          request.params.sessionId,
+          (runtime) =>
+            services.runtime.writeWorkspaceIdeFile(
+              runtime,
+              filePath,
+              content,
+              input.baseRevision,
+            ),
+        ),
+      };
+    },
+  );
   app.get<{ Params: { sessionId: string } }>(
     "/api/v1/sessions/:sessionId/ide/events",
     { websocket: true },
@@ -966,6 +992,18 @@ const preferencesSchema: z.ZodType<SandpiPreferences> = z.object({
     sessionCompleted: z.boolean(),
     needsAttention: z.boolean(),
   }),
+});
+
+const workspaceIdeWriteSchema = z.object({
+  encoding: z.literal("base64"),
+  content: z
+    .string()
+    .max(Math.ceil((5 * 1024 * 1024 * 4) / 3) + 4)
+    .regex(
+      /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/,
+      "content must be canonical base64",
+    ),
+  baseRevision: z.string().regex(/^sha256:[A-Za-z0-9_-]{43}$/),
 });
 
 const terminalInputSchema = z.discriminatedUnion("type", [

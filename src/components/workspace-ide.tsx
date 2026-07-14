@@ -4,6 +4,7 @@ import {
   ArrowLeft,
   ChevronDown,
   ChevronRight,
+  Check,
   CircleAlert,
   ExternalLink,
   File,
@@ -16,9 +17,11 @@ import {
   GitCommitHorizontal,
   Radio,
   RefreshCw,
+  Save,
   Share2,
   X,
 } from "lucide-react";
+import dynamic from "next/dynamic";
 import {
   useCallback,
   useEffect,
@@ -27,7 +30,12 @@ import {
   useState,
 } from "react";
 
-import { apiFetch, apiWebSocketUrl, type ApiEnvelope } from "@/lib/api-client";
+import {
+  ApiError,
+  apiFetch,
+  apiWebSocketUrl,
+  type ApiEnvelope,
+} from "@/lib/api-client";
 import type { OperationLanguage } from "@/lib/operation-ui";
 import { formatUnixTimestamp } from "@/lib/time";
 import { mergeWorkspaceGitFiles } from "@/lib/workspace-files";
@@ -38,7 +46,7 @@ import type {
   WorkspaceIdeEvent,
   WorkspaceIdeFile,
   WorkspaceIdeSnapshot,
-  WorkspaceLineChange,
+  WorkspaceIdeWriteRequest,
 } from "@/lib/types";
 
 import styles from "./workspace-ide.module.css";
@@ -53,9 +61,25 @@ interface WorkspaceIdeProps {
 
 interface DocumentState {
   data?: WorkspaceIdeFile;
+  draft?: string;
   loading: boolean;
+  saving?: boolean;
+  dirty?: boolean;
+  conflict?: WorkspaceIdeFile;
+  comparing?: boolean;
   error?: string;
 }
+
+const WorkspaceCodeEditor = dynamic(
+  () =>
+    import("./workspace-code-editor").then((module) => module.WorkspaceCodeEditor),
+  { ssr: false, loading: () => <span>Loading editor…</span> },
+);
+const WorkspaceConflictDiff = dynamic(
+  () =>
+    import("./workspace-code-editor").then((module) => module.WorkspaceConflictDiff),
+  { ssr: false, loading: () => <span>Loading comparison…</span> },
+);
 
 const copy = {
   en: {
@@ -73,7 +97,19 @@ const copy = {
     shareFuture: "File sharing requires the future scoped-grant API.",
     back: "Back to Session",
     binary: "Binary files cannot be rendered as text.",
-    deleted: (count: number) => `${count} deleted ${count === 1 ? "line" : "lines"}`,
+    deletedFile: "Deleted files are read-only. Restore them from Git before editing.",
+    save: "Save file (⌘/Ctrl+S)",
+    saved: "Saved",
+    saving: "Saving…",
+    unsaved: "Unsaved changes",
+    saveBlocked: "The coding agent is working. Your draft is safe; save after this Turn finishes.",
+    externalChange: "This file changed outside the editor.",
+    compare: "Compare",
+    hideCompare: "Hide comparison",
+    useLatest: "Use latest",
+    overwrite: "Overwrite with mine",
+    discardClose: "Discard the unsaved changes and close this file?",
+    reloadDiscard: "Discard unsaved changes and reload the Workspace?",
     loading: "Loading Workspace…",
     selectFile: "Select a file from workspace.",
     staged: "staged",
@@ -94,7 +130,19 @@ const copy = {
     shareFuture: "文件分享需要后续的 scoped-grant API。",
     back: "返回 Session",
     binary: "二进制文件无法按文本显示。",
-    deleted: (count: number) => `删除了 ${count} 行`,
+    deletedFile: "已删除文件为只读；请先通过 Git 恢复后再编辑。",
+    save: "保存文件（⌘/Ctrl+S）",
+    saved: "已保存",
+    saving: "正在保存…",
+    unsaved: "有未保存修改",
+    saveBlocked: "Coding Agent 正在工作。草稿仍会保留，请在本轮结束后保存。",
+    externalChange: "此文件已在编辑器外发生变化。",
+    compare: "比较",
+    hideCompare: "隐藏比较",
+    useLatest: "使用最新版本",
+    overwrite: "用我的版本覆盖",
+    discardClose: "放弃未保存修改并关闭此文件？",
+    reloadDiscard: "放弃未保存修改并刷新 Workspace？",
     loading: "正在加载 Workspace…",
     selectFile: "从 workspace 中选择文件。",
     staged: "已暂存",
@@ -146,6 +194,37 @@ function languageLabel(fileName: string) {
   );
 }
 
+function monacoLanguage(fileName: string) {
+  const extension = fileName.split(".").pop()?.toLowerCase();
+  return (
+    {
+      ts: "typescript",
+      tsx: "typescript",
+      js: "javascript",
+      jsx: "javascript",
+      json: "json",
+      md: "markdown",
+      mdx: "markdown",
+      css: "css",
+      scss: "scss",
+      less: "less",
+      html: "html",
+      go: "go",
+      rs: "rust",
+      py: "python",
+      sh: "shell",
+      bash: "shell",
+      yaml: "yaml",
+      yml: "yaml",
+      toml: "toml",
+      sql: "sql",
+      java: "java",
+      kt: "kotlin",
+      swift: "swift",
+    }[extension ?? ""] ?? "plaintext"
+  );
+}
+
 function statusCode(change: WorkspaceGitFileChange) {
   return {
     added: "A",
@@ -162,6 +241,22 @@ function decodeBase64(content: string) {
   const raw = window.atob(content);
   const bytes = Uint8Array.from(raw, (character) => character.charCodeAt(0));
   return new TextDecoder().decode(bytes);
+}
+
+function encodeBase64(content: string, bom?: "utf8") {
+  const encoded = new TextEncoder().encode(content);
+  let bytes = encoded;
+  if (bom === "utf8") {
+    bytes = new Uint8Array(encoded.byteLength + 3);
+    bytes.set([0xef, 0xbb, 0xbf]);
+    bytes.set(encoded, 3);
+  }
+  let binary = "";
+  const chunkSize = 32_768;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+  return window.btoa(binary);
 }
 
 export function workspaceIdeHref(session: CodingSession, filePath?: string) {
@@ -263,64 +358,6 @@ function IdeFileTree({
   return <>{render(files, 0)}</>;
 }
 
-function EditorLines({
-  content,
-  changes,
-  deletedLabel,
-  stagedLabel,
-  unstagedLabel,
-}: {
-  content: string;
-  changes: WorkspaceLineChange[];
-  deletedLabel: (count: number) => string;
-  stagedLabel: string;
-  unstagedLabel: string;
-}) {
-  const lineChanges = new Map<number, WorkspaceLineChange>();
-  const before = new Map<number, WorkspaceLineChange>();
-  const after = new Map<number, WorkspaceLineChange>();
-  for (const change of changes) {
-    if (change.placement === "before") before.set(change.line, change);
-    else if (change.placement === "after") after.set(change.line, change);
-    else lineChanges.set(change.line, change);
-  }
-
-  function deletion(change: WorkspaceLineChange | undefined, key: string) {
-    if (!change?.deletedLines) return null;
-    return (
-      <span className={styles.deletedLines} key={key}>
-        <i /> {deletedLabel(change.deletedLines)}
-      </span>
-    );
-  }
-
-  return content.split("\n").map((line, index) => {
-    const lineNumber = index + 1;
-    const change = lineChanges.get(lineNumber);
-    const source = change
-      ? `${change.staged ? stagedLabel : ""}${
-          change.staged && change.unstaged ? " + " : ""
-        }${change.unstaged ? unstagedLabel : ""}`
-      : undefined;
-    return (
-      <span className={styles.lineGroup} key={lineNumber}>
-        {deletion(before.get(lineNumber), `before-${lineNumber}`)}
-        <span
-          className={`${styles.codeLine} ${
-            change ? styles[`line-${change.kind}`] : ""
-          }`}
-          title={source}
-        >
-          <i className={styles.changeGutter} aria-hidden="true" />
-          <b>{lineNumber}</b>
-          <code>{line || " "}</code>
-        </span>
-        {deletion(after.get(lineNumber), `after-${lineNumber}`)}
-      </span>
-    );
-  });
-}
-
 export function WorkspaceIde({
   language,
   timeZone,
@@ -340,20 +377,29 @@ export function WorkspaceIde({
   const [connection, setConnection] = useState<
     "connecting" | "live" | "reconnecting" | "offline"
   >("connecting");
+  const documentsRef = useRef(documents);
   const openPathsRef = useRef(openPaths);
   const pendingPathsRef = useRef(new Set<string>());
   const refreshTimerRef = useRef<number | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
+    documentsRef.current = documents;
+  }, [documents]);
+
+  useEffect(() => {
     openPathsRef.current = openPaths;
   }, [openPaths]);
 
   const loadDocument = useCallback(
-    async (filePath: string) => {
+    async (filePath: string, reason: "open" | "external" | "reload" = "open") => {
       setDocuments((current) => ({
         ...current,
-        [filePath]: { ...current[filePath], loading: true, error: undefined },
+        [filePath]: {
+          ...current[filePath],
+          loading: reason !== "external" || !current[filePath]?.data,
+          error: undefined,
+        },
       }));
       try {
         const query = new URLSearchParams({ path: filePath });
@@ -362,7 +408,25 @@ export function WorkspaceIde({
         );
         setDocuments((current) => ({
           ...current,
-          [filePath]: { data: response.data, loading: false },
+          [filePath]:
+            reason === "external" && current[filePath]?.dirty
+              ? {
+                  ...current[filePath],
+                  loading: false,
+                  conflict:
+                    current[filePath]?.data?.revision === response.data.revision
+                      ? current[filePath]?.conflict
+                      : response.data,
+                }
+              : {
+                  data: response.data,
+                  draft:
+                    response.data.kind === "text"
+                      ? decodeBase64(response.data.content)
+                      : undefined,
+                  loading: false,
+                  dirty: false,
+                },
         }));
       } catch (cause) {
         setDocuments((current) => ({
@@ -388,9 +452,11 @@ export function WorkspaceIde({
         setSnapshot(response.data);
         setError("");
       } catch (cause) {
-        setError(
-          cause instanceof Error ? cause.message : "Workspace unavailable",
-        );
+        if (!silent) {
+          setError(
+            cause instanceof Error ? cause.message : "Workspace unavailable",
+          );
+        }
       } finally {
         if (!silent) setLoading(false);
       }
@@ -490,7 +556,7 @@ export function WorkspaceIde({
                 openPath === changedPath || openPath.startsWith(`${changedPath}/`),
             )
           ) {
-            void loadDocument(openPath);
+            void loadDocument(openPath, "external");
           }
         }
       }, 180);
@@ -544,7 +610,145 @@ export function WorkspaceIde({
     };
   }, [loadDocument, refreshSnapshot, session.id]);
 
+  useEffect(() => {
+    const warnForUnsavedFiles = (event: BeforeUnloadEvent) => {
+      if (!Object.values(documentsRef.current).some((candidate) => candidate.dirty)) {
+        return;
+      }
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warnForUnsavedFiles);
+    return () => window.removeEventListener("beforeunload", warnForUnsavedFiles);
+  }, []);
+
+  function updateDraft(filePath: string, draft: string) {
+    setDocuments((current) => {
+      const document = current[filePath];
+      if (!document?.data) return current;
+      const original =
+        document.data.kind === "text" ? decodeBase64(document.data.content) : "";
+      const next = {
+        ...current,
+        [filePath]: {
+          ...document,
+          draft,
+          dirty: draft !== original,
+          error: undefined,
+        },
+      };
+      documentsRef.current = next;
+      return next;
+    });
+  }
+
+  async function saveDocument(filePath: string, revisionOverride?: string) {
+    const document = documentsRef.current[filePath];
+    if (
+      !document?.data?.editable ||
+      document.draft === undefined ||
+      document.saving ||
+      (!document.dirty && !revisionOverride)
+    ) {
+      return;
+    }
+    setDocuments((current) => ({
+      ...current,
+      [filePath]: { ...current[filePath], saving: true, error: undefined },
+    }));
+    const body: WorkspaceIdeWriteRequest = {
+      encoding: "base64",
+      content: encodeBase64(document.draft, document.data.bom),
+      baseRevision: revisionOverride ?? document.data.revision,
+    };
+    try {
+      const query = new URLSearchParams({ path: filePath });
+      const response = await apiFetch<ApiEnvelope<WorkspaceIdeFile>>(
+        `/api/v1/sessions/${encodeURIComponent(session.id)}/ide/file?${query.toString()}`,
+        { method: "PUT", body: JSON.stringify(body) },
+      );
+      const savedDraft = decodeBase64(response.data.content);
+      setDocuments((current) => ({
+        ...current,
+        [filePath]: {
+          data: response.data,
+          draft: savedDraft,
+          loading: false,
+          saving: false,
+          dirty: false,
+        },
+      }));
+      await refreshSnapshot(true);
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.code === "workspace_file_conflict") {
+        await loadDocument(filePath, "external");
+        setDocuments((current) => ({
+          ...current,
+          [filePath]: { ...current[filePath], saving: false },
+        }));
+        return;
+      }
+      setDocuments((current) => ({
+        ...current,
+        [filePath]: {
+          ...current[filePath],
+          saving: false,
+          error:
+            cause instanceof ApiError && cause.code === "workspace_write_not_ready"
+              ? ui.saveBlocked
+              : cause instanceof Error
+                ? cause.message
+                : "File could not be saved.",
+        },
+      }));
+    }
+  }
+
+  function acceptLatestFile(filePath: string) {
+    setDocuments((current) => {
+      const document = current[filePath];
+      const latest = document?.conflict;
+      if (!document || !latest) return current;
+      return {
+        ...current,
+        [filePath]: {
+          data: latest,
+          draft: latest.kind === "text" ? decodeBase64(latest.content) : undefined,
+          loading: false,
+          dirty: false,
+        },
+      };
+    });
+  }
+
+  function toggleComparison(filePath: string) {
+    setDocuments((current) => ({
+      ...current,
+      [filePath]: {
+        ...current[filePath],
+        comparing: !current[filePath]?.comparing,
+      },
+    }));
+  }
+
+  async function refreshWorkspace() {
+    const dirty = Object.values(documentsRef.current).some(
+      (candidate) => candidate.dirty,
+    );
+    if (dirty && !window.confirm(ui.reloadDiscard)) return;
+    await refreshSnapshot();
+    await Promise.all(
+      openPathsRef.current.map((filePath) => loadDocument(filePath, "reload")),
+    );
+  }
+
   function closeTab(filePath: string) {
+    if (
+      documentsRef.current[filePath]?.dirty &&
+      !window.confirm(ui.discardClose)
+    ) {
+      return;
+    }
     setOpenPaths((current) => {
       const index = current.indexOf(filePath);
       const next = current.filter((path) => path !== filePath);
@@ -558,7 +762,12 @@ export function WorkspaceIde({
   const document = selectedPath ? documents[selectedPath] : undefined;
   const selectedFile = document?.data;
   const text =
-    selectedFile?.kind === "text" ? decodeBase64(selectedFile.content) : "";
+    document?.draft ??
+    (selectedFile?.kind === "text" ? decodeBase64(selectedFile.content) : "");
+  const latestConflictText =
+    document?.conflict?.kind === "text"
+      ? decodeBase64(document.conflict.content)
+      : "";
   const locale = language === "zh-CN" ? "zh-CN" : "en-US";
   const connectionLabel = {
     connecting: ui.connecting,
@@ -617,7 +826,13 @@ export function WorkspaceIde({
               >
                 {fileIcon(filePath)}
                 <span>{filePath.split("/").at(-1)}</span>
-                {changesByPath.has(filePath) ? <i className={styles.dirtyDot} /> : null}
+                {documents[filePath]?.dirty ? (
+                  <i className={styles.dirtyDot} title={ui.unsaved} />
+                ) : changesByPath.has(filePath) ? (
+                  <i className={styles.tabGitState}>
+                    {statusCode(changesByPath.get(filePath)!)}
+                  </i>
+                ) : null}
                 <span
                   role="button"
                   tabIndex={0}
@@ -643,7 +858,7 @@ export function WorkspaceIde({
               <button
                 type="button"
                 aria-label={ui.refresh}
-                onClick={() => void refreshSnapshot()}
+                onClick={() => void refreshWorkspace()}
               >
                 <RefreshCw size={13} />
               </button>
@@ -687,6 +902,29 @@ export function WorkspaceIde({
                       {selectedFile.git.unstaged ? ui.unstaged : ""}
                     </b>
                   ) : null}
+                  {document?.saving ? (
+                    <span className={styles.saveState}>{ui.saving}</span>
+                  ) : document?.dirty ? (
+                    <span className={styles.saveState}>{ui.unsaved}</span>
+                  ) : selectedFile?.editable ? (
+                    <span className={styles.saveState}>
+                      <Check size={10} /> {ui.saved}
+                    </span>
+                  ) : null}
+                  <button
+                    type="button"
+                    aria-label={ui.save}
+                    title={ui.save}
+                    disabled={
+                      !selectedFile?.editable ||
+                      !document?.dirty ||
+                      document.saving ||
+                      Boolean(document.conflict)
+                    }
+                    onClick={() => void saveDocument(selectedPath)}
+                  >
+                    <Save size={13} />
+                  </button>
                   <button
                     type="button"
                     aria-label={ui.share(selectedFile?.name ?? selectedPath)}
@@ -697,27 +935,69 @@ export function WorkspaceIde({
                   </button>
                 </span>
               </header>
-              {document?.loading && !selectedFile ? (
-                <div className={styles.loading} role="status">
-                  <RefreshCw size={17} /> {ui.loading}
-                </div>
-              ) : document?.error ? (
-                <div className={styles.loading} role="alert">
-                  <CircleAlert size={16} /> {document.error}
-                </div>
-              ) : selectedFile?.kind === "binary" ? (
-                <div className={styles.loading}>{ui.binary}</div>
-              ) : selectedFile ? (
-                <pre className={styles.code} aria-label={selectedFile.name}>
-                  <EditorLines
-                    content={text}
-                    changes={selectedFile.lineChanges}
-                    deletedLabel={ui.deleted}
-                    stagedLabel={ui.staged}
-                    unstagedLabel={ui.unstaged}
-                  />
-                </pre>
-              ) : null}
+              <div className={styles.documentBody}>
+                {document?.conflict ? (
+                  <div className={styles.conflictBanner} role="alert">
+                    <CircleAlert size={13} />
+                    <span>{ui.externalChange}</span>
+                    <button type="button" onClick={() => toggleComparison(selectedPath)}>
+                      {document.comparing ? ui.hideCompare : ui.compare}
+                    </button>
+                    <button type="button" onClick={() => acceptLatestFile(selectedPath)}>
+                      {ui.useLatest}
+                    </button>
+                    <button
+                      type="button"
+                      className={styles.overwriteButton}
+                      onClick={() =>
+                        void saveDocument(selectedPath, document.conflict?.revision)
+                      }
+                    >
+                      {ui.overwrite}
+                    </button>
+                  </div>
+                ) : null}
+                {document?.error ? (
+                  <div className={styles.documentError} role="alert">
+                    <CircleAlert size={13} /> {document.error}
+                  </div>
+                ) : null}
+                {selectedFile?.readOnlyReason ? (
+                  <div className={styles.readOnlyNotice}>
+                    {selectedFile.readOnlyReason === "deleted"
+                      ? ui.deletedFile
+                      : ui.binary}
+                  </div>
+                ) : null}
+                {document?.loading && !selectedFile ? (
+                  <div className={styles.loading} role="status">
+                    <RefreshCw size={17} /> {ui.loading}
+                  </div>
+                ) : selectedFile?.kind === "binary" ? (
+                  <div className={styles.loading}>{ui.binary}</div>
+                ) : selectedFile ? (
+                  <div className={styles.code} aria-label={selectedFile.name}>
+                    {document?.comparing && document.conflict ? (
+                      <WorkspaceConflictDiff
+                        modelPath={`sandpi://${session.id}${selectedPath}`}
+                        latest={latestConflictText}
+                        local={text}
+                        language={monacoLanguage(selectedFile.name)}
+                      />
+                    ) : (
+                      <WorkspaceCodeEditor
+                        modelPath={`sandpi://${session.id}${selectedPath}`}
+                        value={text}
+                        language={monacoLanguage(selectedFile.name)}
+                        readOnly={!selectedFile.editable}
+                        lineChanges={document?.dirty ? [] : selectedFile.lineChanges}
+                        onChange={(value) => updateDraft(selectedPath, value)}
+                        onSave={() => void saveDocument(selectedPath)}
+                      />
+                    )}
+                  </div>
+                ) : null}
+              </div>
               {document?.loading && selectedFile ? (
                 <span className={styles.documentRefreshing}>
                   <RefreshCw size={11} />

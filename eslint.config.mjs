@@ -13,6 +13,7 @@ const config = [
       "dist/**",
       "node_modules/**",
       "out/**",
+      "public/monaco/**",
       "next-env.d.ts",
     ],
   },

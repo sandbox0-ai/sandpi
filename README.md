@@ -69,8 +69,10 @@ Web today; iOS / Android / HarmonyOS later
 - **Live workspace contract:** the embedded file view and dedicated `/ide/`
   workbench consume the same Sandpi API. Sandpi proxies Sandbox0's recursive
   `/workspace` file stream, parses Git porcelain v2 server-side, and projects
-  zero-context staged and working-tree diffs onto current line numbers. The
-  browser never receives the deployment API key or a direct Sandbox0 endpoint.
+  zero-context staged and working-tree diffs onto current line numbers. Text
+  saves carry the revision that was opened; stale writes return a conflict
+  instead of silently replacing a newer file. The browser never receives the
+  deployment API key or a direct Sandbox0 endpoint.
 - **Environment grouping:** an Environment fixes the harness, official harness
   authentication, Sandbox template, network policy and workspace baseline.
   Sessions cannot switch harnesses dynamically.
@@ -90,8 +92,10 @@ Web today; iOS / Android / HarmonyOS later
   still survive runtime recovery.
 - **Snapshot-backed history:** Session fork copies Sandbox rootfs and the
   Session's private Workspace Volume. Sandpi captures a Workspace Volume
-  snapshot before the first Turn and after every completed Turn. Turn fork,
-  edit and delete use those checkpoints and never restore or fork rootfs.
+  snapshot before the first Turn, immediately before each later Turn, and after
+  every completed Turn. The input snapshot preserves Web IDE or terminal edits
+  made between Turns; Turn fork, edit and delete use these checkpoints and never
+  restore or fork rootfs.
 - **Native Codex history:** a Turn fork imports Codex's native rollout into a
   fresh `coding-agent` Sandbox, then calls native `thread/fork` at the selected
   Turn. Sandpi transports the native artifact; it does not synthesize a second
@@ -372,10 +376,12 @@ Sandbox0 implementation details.
 - Supervisor output is the durable native transport. PostgreSQL stores replay
   identity, cursors and immutable native records; the browser may disconnect at
   any time without stopping Codex.
-- The Web terminal is resumable through a Supervisor Session. Web IDE file
-  reads are confined to `/workspace`, regular files, and a 5 MiB limit. Its
-  source-control view includes staged, unstaged, untracked, renamed, deleted and
-  conflicted files; Workspace and Git metadata events refresh it without polling.
+- The Web terminal is resumable through a Supervisor Session. Web IDE reads and
+  writes are confined to regular UTF-8 files under `/workspace` with a 5 MiB
+  limit; `.git`, symbolic links and binary files are read-only. Its single file
+  tree includes staged, unstaged, untracked, renamed, deleted and conflicted Git
+  state. Workspace events refresh clean files automatically and turn external
+  changes to dirty files into an explicit compare/reload/overwrite decision.
 - The OSS server currently expects one active server replica. PostgreSQL and
   Supervisor replay make process restart recoverable, but multi-replica worker
   leadership is not yet part of the supported deployment contract.

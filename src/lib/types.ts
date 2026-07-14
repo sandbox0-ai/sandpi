@@ -282,13 +282,24 @@ export interface WorkspaceLineChange {
 export interface WorkspaceIdeFile {
   path: string;
   name: string;
+  /** Content revision used for optimistic, cross-client Workspace writes. */
+  revision: string;
   encoding: "base64";
   content: string;
   kind: "binary" | "text";
+  bom?: "utf8";
+  editable: boolean;
+  readOnlyReason?: "binary" | "deleted";
   size?: string;
   modifiedAt?: UnixTimestamp;
   git?: WorkspaceGitFileChange;
   lineChanges: WorkspaceLineChange[];
+}
+
+export interface WorkspaceIdeWriteRequest {
+  encoding: "base64";
+  content: string;
+  baseRevision: string;
 }
 
 export type WorkspaceIdeEvent =
