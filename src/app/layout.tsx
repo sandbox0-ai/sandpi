@@ -5,6 +5,7 @@ import {
   getClientPreferencesBootstrapScript,
 } from "@/lib/client-preferences";
 
+import "@xterm/xterm/css/xterm.css";
 import "./globals.css";
 
 export const metadata: Metadata = {

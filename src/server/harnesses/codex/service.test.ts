@@ -117,6 +117,61 @@ test("hard-TTL reaper removes runtime resources before clearing metadata", async
   assert.deepEqual(operations, ["delete", `mark:${runtimeRecord.id}`]);
 });
 
+test("starts the API recovery workers when one Sandbox is temporarily unreachable", async () => {
+  const warnings: Array<{ fields: object; message: string }> = [];
+  const store = {
+    async expiredRuntimeSessions() {
+      return [];
+    },
+    async failedRuntimeSessions() {
+      return [];
+    },
+    async recoverStaleTurnCheckpointClaims() {},
+    async interruptedTurnMutations() {
+      return [];
+    },
+    async activeRuntimeSessionIds() {
+      return [runtimeRecord.id];
+    },
+    async reconcileSessionStatus() {},
+    async decoderState() {
+      return runtimeRecord;
+    },
+    async retryableTurnCheckpoints() {
+      return [];
+    },
+  } as unknown as SandpiStore;
+  const runtime = {
+    async readCodexSessionCredential() {
+      throw new Error("Sandbox0 unavailable");
+    },
+    async installCodexSessionCredential() {
+      throw new Error("Sandbox0 unavailable");
+    },
+    async listCodexEvents() {
+      return { events: [], cursor: { earliest: 0, latest: 0 } };
+    },
+  } as unknown as RuntimeAdapter;
+  const service = new CodexService(
+    store,
+    runtime,
+    {
+      ...logger,
+      warn(fields, message) {
+        warnings.push({ fields, message });
+      },
+    },
+    credentials,
+  );
+
+  await service.resumeWorkers();
+  await service.close();
+
+  assert.equal(warnings.length, 1);
+  assert.equal(warnings[0]?.message, "Codex runtime recovery deferred");
+  assert.match(JSON.stringify(warnings[0]?.fields), /Sandbox0 unavailable/);
+});
+
 test("reserves a Session before materializing credentials for a new Turn", async () => {
   const operations: string[] = [];
   const store = {

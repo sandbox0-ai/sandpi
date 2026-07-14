@@ -1,6 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  type CSSProperties,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 
 import { Conversation } from "@/components/conversation";
 import { AppFrame } from "@/components/app-frame";
@@ -66,6 +72,9 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
   const [newEnvironmentOpen, setNewEnvironmentOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(false);
+  const [terminalHeight, setTerminalHeight] = useState(320);
+  const [terminalMaximized, setTerminalMaximized] = useState(false);
+  const [terminalRestoreHeight, setTerminalRestoreHeight] = useState(320);
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("files");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -454,6 +463,22 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
     );
   }, []);
 
+  const handleTerminalHeightChange = useCallback((height: number) => {
+    setTerminalHeight(height);
+    setTerminalMaximized(false);
+  }, []);
+
+  const handleToggleTerminalMaximize = useCallback(() => {
+    if (terminalMaximized) {
+      setTerminalHeight(terminalRestoreHeight);
+      setTerminalMaximized(false);
+      return;
+    }
+    setTerminalRestoreHeight(terminalHeight);
+    setTerminalHeight(Math.max(360, Math.floor(window.innerHeight * 0.72)));
+    setTerminalMaximized(true);
+  }, [terminalHeight, terminalMaximized, terminalRestoreHeight]);
+
   if (!selectedTeam || !selectedEnvironment) {
     return <div className="empty-app">No Team Environment is available.</div>;
   }
@@ -469,6 +494,11 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
       } ${sidebarOpen ? "sidebar-is-open" : ""} ${
         sidebarCollapsed ? "sidebar-is-collapsed" : ""
       }`}
+      style={
+        showTerminal
+          ? ({ "--terminal-height": `${terminalHeight}px` } as CSSProperties)
+          : undefined
+      }
     >
       <a className="skip-link" href="#conversation">
         Skip to conversation
@@ -571,6 +601,10 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
       {showTerminal && selectedSession ? (
         <TerminalDock
           session={selectedSession}
+          height={terminalHeight}
+          maximized={terminalMaximized}
+          onHeightChange={handleTerminalHeightChange}
+          onToggleMaximize={handleToggleTerminalMaximize}
           onClose={() => setTerminalOpen(false)}
         />
       ) : null}

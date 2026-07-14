@@ -625,7 +625,13 @@ function registerApiRoutes(
         if (runtime.terminalSessionId !== terminal.sessionId) {
           await services.store.setTerminalSession(request.params.sessionId, terminal.sessionId);
         }
-        socket.send(JSON.stringify({ type: "ready", sessionId: terminal.sessionId }));
+        socket.send(
+          JSON.stringify({
+            type: "ready",
+            sessionId: terminal.sessionId,
+            attemptId: terminal.attemptId,
+          }),
+        );
         socket.on("message", (raw) => {
           void (async () => {
             try {

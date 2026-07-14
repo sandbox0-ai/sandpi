@@ -774,9 +774,14 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     after = 0,
   ): Promise<RuntimeTerminalHandle> {
     const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
-    let terminal = runtime.terminalSessionId
-      ? await sandbox.getSession(runtime.terminalSessionId)
-      : undefined;
+    let terminal: Awaited<ReturnType<typeof sandbox.getSession>> | undefined;
+    if (runtime.terminalSessionId) {
+      try {
+        terminal = await sandbox.getSession(runtime.terminalSessionId);
+      } catch (error) {
+        if (!isMissingResource(error)) throw translateSandbox0Error(error);
+      }
+    }
     if (!terminal) {
       terminal = await sandbox.createSession(
         {
@@ -801,6 +806,25 @@ export class Sandbox0Runtime implements RuntimeAdapter {
         { idempotencyKey: `sandpi-terminal-${runtime.id}` },
       );
     }
+
+    const finishedAttemptId = terminal.attempt?.finishedAt
+      ? terminal.attempt.id
+      : undefined;
+    const terminalStopped =
+      finishedAttemptId !== undefined ||
+      terminal.phase === "exited" ||
+      terminal.phase === "failed" ||
+      terminal.phase === "stopped";
+    if (terminalStopped) {
+      terminal = await sandbox.createSessionAttempt(terminal.id, true);
+      if (!terminal.attempt || terminal.attempt.id === finishedAttemptId) {
+        terminal = await waitForNewAttempt(
+          sandbox,
+          terminal.id,
+          finishedAttemptId,
+        );
+      }
+    }
     if (!terminal.attempt) terminal = await waitForAttempt(sandbox, terminal.id);
     if (!terminal.attempt) {
       throw new HttpError(502, "terminal_not_ready", "Terminal did not start.");
@@ -818,6 +842,7 @@ export class Sandbox0Runtime implements RuntimeAdapter {
               event: message.event
                 ? {
                     seq: message.event.seq,
+                    attemptId: message.event.attemptId,
                     stream: message.event.stream,
                     dataBase64: message.event.dataBase64,
                     type: message.event.type,

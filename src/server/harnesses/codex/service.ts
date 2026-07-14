@@ -85,12 +85,27 @@ export class CodexService {
     await this.recoverInterruptedTurnMutations();
     const sessionIds = await this.store.activeRuntimeSessionIds();
     for (const sessionId of sessionIds) {
-      await this.store.reconcileSessionStatus(sessionId);
-      await this.restoreRuntimeCredential(sessionId);
+      try {
+        await this.store.reconcileSessionStatus(sessionId);
+        await this.restoreRuntimeCredential(sessionId);
+      } catch (error) {
+        // One temporarily unreachable Sandbox must not prevent the Sandpi API
+        // or unrelated Sessions from recovering after a server restart. The
+        // worker below keeps retrying the native Supervisor connection.
+        this.logger.warn(
+          { sessionId, error: errorMessage(error) },
+          "Codex runtime recovery deferred",
+        );
+      }
       this.ensureWorker(sessionId);
     }
     this.reaperTimer ??= setInterval(() => {
-      void this.reapExpiredSessions();
+      void this.reapExpiredSessions().catch((error) => {
+        this.logger.error(
+          { error: errorMessage(error) },
+          "Session resource reaper failed",
+        );
+      });
     }, RESOURCE_REAPER_INTERVAL_MS);
     this.reaperTimer.unref();
   }

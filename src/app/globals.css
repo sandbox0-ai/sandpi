@@ -126,7 +126,7 @@ pre,
 }
 
 .app-shell.terminal-is-open {
-  grid-template-rows: minmax(0, 1fr) 238px;
+  grid-template-rows: minmax(220px, 1fr) var(--terminal-height, 320px);
 }
 
 .icon-button,
@@ -3901,7 +3901,7 @@ pre,
   }
 
   .app-shell.terminal-is-open {
-    grid-template-rows: minmax(0, 1fr) 215px;
+    grid-template-rows: minmax(180px, 1fr) var(--terminal-height, 280px);
   }
 
   .sidebar {
@@ -3985,7 +3985,10 @@ pre,
   }
 
   .conversation-header-actions .header-action-button {
-    display: none;
+    display: inline-flex;
+    width: 32px;
+    justify-content: center;
+    padding: 0;
   }
 
   .conversation-breadcrumb {

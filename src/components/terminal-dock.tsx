@@ -1,223 +1,206 @@
 "use client";
 
-import { Maximize2, SquareTerminal, X } from "lucide-react";
 import {
-  type FormEvent,
+  ChevronDown,
+  ChevronUp,
+  ClipboardCopy,
+  Eraser,
+  Maximize2,
+  Minimize2,
+  RotateCcw,
+  Search,
+  SquareTerminal,
+  X,
+} from "lucide-react";
+import {
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+  useCallback,
   useEffect,
-  useId,
   useRef,
   useState,
 } from "react";
 
-import { apiWebSocketUrl } from "@/lib/api-client";
 import type { CodingSession } from "@/lib/types";
 
 import styles from "./terminal-dock.module.css";
+import {
+  terminalConnectionLabel,
+  useTerminalSession,
+} from "./use-terminal-session";
 
 export interface TerminalDockProps {
   session: CodingSession;
+  height: number;
+  maximized: boolean;
+  onHeightChange: (height: number) => void;
+  onToggleMaximize: () => void;
   onClose: () => void;
-  onExpand?: () => void;
 }
 
-type TerminalLineKind = "command" | "error" | "output" | "system";
+const MIN_TERMINAL_HEIGHT = 190;
+const SEARCH_OPTIONS = {
+  caseSensitive: false,
+  incremental: true,
+} as const;
 
-interface TerminalLine {
-  id: number;
-  kind: TerminalLineKind;
-  content: string;
+function maxTerminalHeight() {
+  return Math.max(MIN_TERMINAL_HEIGHT, Math.floor(window.innerHeight * 0.72));
 }
 
-function initialLines(session: CodingSession): TerminalLine[] {
-  return [
-    {
-      id: 0,
-      kind: "system",
-      content: `Connecting to ${session.sandboxId} through the durable Sandpi terminal stream…`,
-    },
-  ];
+function clampTerminalHeight(height: number) {
+  return Math.min(maxTerminalHeight(), Math.max(MIN_TERMINAL_HEIGHT, height));
 }
 
-function decodeBase64(data: string) {
-  const raw = window.atob(data);
-  return Uint8Array.from(raw, (character) => character.charCodeAt(0));
-}
+function TerminalDockSession({
+  session,
+  height,
+  maximized,
+  onHeightChange,
+  onToggleMaximize,
+  onClose,
+}: TerminalDockProps) {
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchFound, setSearchFound] = useState<boolean | null>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const resizePointerRef = useRef<number | null>(null);
 
-type TerminalConnectionState = "connecting" | "connected" | "disconnected" | "error";
+  const openSearch = useCallback(() => {
+    setSearchOpen(true);
+    window.requestAnimationFrame(() => searchInputRef.current?.focus());
+  }, []);
 
-function TerminalDockSession({ session, onClose, onExpand }: TerminalDockProps) {
-  const [draft, setDraft] = useState("");
-  const [lines, setLines] = useState<TerminalLine[]>(() => initialLines(session));
-  const [connectionState, setConnectionState] =
-    useState<TerminalConnectionState>("connecting");
-  const inputId = useId();
-  const outputRef = useRef<HTMLDivElement>(null);
-  const nextLineId = useRef(1);
-  const socketRef = useRef<WebSocket | null>(null);
-  const lastSequenceRef = useRef(0);
-  const decoderRef = useRef(new TextDecoder());
+  const {
+    terminalHostRef,
+    searchAddonRef,
+    connectionState,
+    connectionError,
+    hasSelection,
+    copied,
+    focusTerminal,
+    copySelection,
+    clearTerminal,
+    restartTerminal,
+  } = useTerminalSession(session.id, openSearch);
 
-  const sandboxState = connectionState === "connected" ? "ready" : "connecting";
-  const supervisorState = connectionState;
-  const sandboxAvailable = connectionState === "connected";
-  const supervisorConnected = connectionState === "connected";
+  const closeSearch = useCallback(() => {
+    searchAddonRef.current?.clearDecorations();
+    setSearchOpen(false);
+    setSearchFound(null);
+    window.requestAnimationFrame(focusTerminal);
+  }, [focusTerminal, searchAddonRef]);
 
-  useEffect(() => {
-    let disposed = false;
-    let reconnectTimer: number | undefined;
-    let reconnectAttempt = 0;
-
-    const appendLine = (kind: TerminalLineKind, content: string) => {
-      if (!content) {
+  const findNext = useCallback(
+    (query = searchQuery) => {
+      if (!query) {
+        searchAddonRef.current?.clearDecorations();
+        setSearchFound(null);
         return;
       }
-      setLines((current) => [
-        ...current,
-        { id: nextLineId.current++, kind, content },
-      ]);
-    };
-
-    const connect = () => {
-      if (disposed) {
-        return;
-      }
-      setConnectionState("connecting");
-      const search = new URLSearchParams({
-        after: String(lastSequenceRef.current),
-      });
-      const socket = new WebSocket(
-        apiWebSocketUrl(
-          `/api/v1/sessions/${encodeURIComponent(session.id)}/terminal?${search.toString()}`,
-        ),
+      setSearchFound(
+        searchAddonRef.current?.findNext(query, SEARCH_OPTIONS) ?? false,
       );
-      socketRef.current = socket;
+    },
+    [searchAddonRef, searchQuery],
+  );
 
-      socket.addEventListener("open", () => {
-        reconnectAttempt = 0;
-        setConnectionState("connected");
-      });
-      socket.addEventListener("message", (message) => {
-        try {
-          const payload = JSON.parse(String(message.data)) as {
-            type: "ack" | "error" | "event" | "ready";
-            error?: string;
-            sessionId?: string;
-            event?: {
-              seq: number;
-              stream?: string;
-              dataBase64?: string;
-              type: string;
-            };
-          };
-          if (payload.type === "ready") {
-            appendLine(
-              "system",
-              `Connected to ${session.sandboxId}${payload.sessionId ? ` · terminal ${payload.sessionId}` : ""}.`,
-            );
-            return;
-          }
-          if (payload.type === "error") {
-            setConnectionState("error");
-            appendLine("error", payload.error ?? "Terminal request failed.");
-            return;
-          }
-          if (payload.type !== "event" || !payload.event) {
-            return;
-          }
-          if (payload.event.seq <= lastSequenceRef.current) {
-            return;
-          }
-          lastSequenceRef.current = payload.event.seq;
-          if (payload.event.dataBase64) {
-            const content = decoderRef.current.decode(
-              decodeBase64(payload.event.dataBase64),
-              { stream: true },
-            );
-            appendLine(
-              payload.event.stream === "stderr" ? "error" : "output",
-              content,
-            );
-          } else if (payload.event.type === "exit") {
-            appendLine("system", "Terminal process exited.");
-          }
-        } catch (error) {
-          setConnectionState("error");
-          appendLine(
-            "error",
-            error instanceof Error ? error.message : "Invalid terminal event.",
-          );
-        }
-      });
-      socket.addEventListener("close", () => {
-        if (disposed) {
-          return;
-        }
-        setConnectionState("disconnected");
-        const delay = Math.min(1_000 * 2 ** reconnectAttempt, 10_000);
-        reconnectAttempt += 1;
-        reconnectTimer = window.setTimeout(connect, delay);
-      });
-      socket.addEventListener("error", () => {
-        setConnectionState("error");
-      });
-    };
-
-    connect();
-    return () => {
-      disposed = true;
-      if (reconnectTimer !== undefined) {
-        window.clearTimeout(reconnectTimer);
-      }
-      socketRef.current?.close();
-      socketRef.current = null;
-    };
-  }, [session.id, session.sandboxId]);
+  const findPrevious = useCallback(() => {
+    if (searchQuery) {
+      setSearchFound(
+        searchAddonRef.current?.findPrevious(searchQuery, SEARCH_OPTIONS) ??
+          false,
+      );
+    }
+  }, [searchAddonRef, searchQuery]);
 
   useEffect(() => {
-    const output = outputRef.current;
-    if (output) {
-      output.scrollTop = output.scrollHeight;
-    }
-  }, [lines]);
+    if (searchOpen) searchInputRef.current?.focus();
+  }, [searchOpen]);
 
-  function submitCommand(event: FormEvent<HTMLFormElement>) {
+  useEffect(() => {
+    const handleWindowResize = () => {
+      if (height > maxTerminalHeight()) {
+        onHeightChange(maxTerminalHeight());
+      }
+    };
+    window.addEventListener("resize", handleWindowResize);
+    return () => window.removeEventListener("resize", handleWindowResize);
+  }, [height, onHeightChange]);
+
+  useEffect(
+    () => () => {
+      document.body.style.removeProperty("cursor");
+      document.body.style.removeProperty("user-select");
+    },
+    [],
+  );
+
+  function handleResizePointerDown(event: ReactPointerEvent<HTMLDivElement>) {
+    if (maximized || event.button !== 0) return;
+    resizePointerRef.current = event.pointerId;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    document.body.style.cursor = "ns-resize";
+    document.body.style.userSelect = "none";
+  }
+
+  function handleResizePointerMove(event: ReactPointerEvent<HTMLDivElement>) {
+    if (resizePointerRef.current !== event.pointerId) return;
+    onHeightChange(clampTerminalHeight(window.innerHeight - event.clientY));
+  }
+
+  function handleResizePointerUp(event: ReactPointerEvent<HTMLDivElement>) {
+    if (resizePointerRef.current !== event.pointerId) return;
+    resizePointerRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    document.body.style.removeProperty("cursor");
+    document.body.style.removeProperty("user-select");
+  }
+
+  function handleResizeKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
     event.preventDefault();
-    const command = draft.trim();
+    const delta = event.key === "ArrowUp" ? 24 : -24;
+    onHeightChange(clampTerminalHeight(height + delta));
+  }
 
-    if (!command) {
+  function handleSearchChange(value: string) {
+    setSearchQuery(value);
+    if (!value) {
+      searchAddonRef.current?.clearDecorations();
+      setSearchFound(null);
       return;
     }
-
-    setDraft("");
-
-    if (command === "clear") {
-      setLines([]);
-      return;
-    }
-
-    const socket = socketRef.current;
-    if (!socket || socket.readyState !== WebSocket.OPEN) {
-      setLines((current) => [
-        ...current,
-        {
-          id: nextLineId.current++,
-          kind: "error",
-          content: "Terminal is reconnecting. Try again in a moment.",
-        },
-      ]);
-      return;
-    }
-    socket.send(
-      JSON.stringify({
-        type: "input",
-        requestId: `terminal-input-${Date.now()}`,
-        data: `${command}\n`,
-      }),
+    setSearchFound(
+      searchAddonRef.current?.findNext(value, SEARCH_OPTIONS) ?? false,
     );
   }
 
+  const stateLabel = terminalConnectionLabel(connectionState);
+  const showConnectionNotice = connectionState !== "connected";
+
   return (
     <section className={styles.dock} aria-label={`Terminal for ${session.title}`}>
+      <div
+        className={`${styles.resizeHandle} ${maximized ? styles.resizeHandleDisabled : ""}`}
+        role="separator"
+        aria-label="Resize terminal"
+        aria-orientation="horizontal"
+        aria-valuemin={MIN_TERMINAL_HEIGHT}
+        aria-valuemax={maxTerminalHeight()}
+        aria-valuenow={Math.round(height)}
+        tabIndex={maximized ? -1 : 0}
+        onKeyDown={handleResizeKeyDown}
+        onPointerDown={handleResizePointerDown}
+        onPointerMove={handleResizePointerMove}
+        onPointerUp={handleResizePointerUp}
+        onPointerCancel={handleResizePointerUp}
+      >
+        <span aria-hidden="true" />
+      </div>
+
       <header className={styles.header}>
         <div className={styles.titleGroup}>
           <span className={styles.terminalIcon} aria-hidden="true">
@@ -226,103 +209,176 @@ function TerminalDockSession({ session, onClose, onExpand }: TerminalDockProps) 
           <strong>Terminal</strong>
           <span className={styles.titleSeparator}>/</span>
           <span className={styles.shellName}>bash</span>
+          <span className={styles.path} title={session.workspaceRoot}>
+            {session.workspaceRoot}
+          </span>
         </div>
 
         <div className={styles.statuses} aria-label="Terminal connection status">
-          <span className={styles.statusItem}>
-            <span
-              className={`${styles.statusDot} ${
-                sandboxAvailable ? styles.statusReady : styles.statusOffline
-              }`}
-              aria-hidden="true"
-            />
-            <span>sandbox</span>
-            <strong>{sandboxState}</strong>
+          <span className={styles.sandboxName} title={session.sandboxId}>
+            {session.sandboxId}
           </span>
           <span className={styles.statusDivider} aria-hidden="true" />
           <span className={styles.statusItem}>
             <span
               className={`${styles.statusDot} ${
-                supervisorConnected
+                connectionState === "connected"
                   ? styles.statusReady
-                  : supervisorState === "error" ||
-                      supervisorState === "disconnected"
+                  : connectionState === "error" || connectionState === "exited"
                     ? styles.statusOffline
                     : styles.statusWaiting
               }`}
               aria-hidden="true"
             />
-            <span>supervisor</span>
-            <strong>{supervisorState}</strong>
+            <strong>{stateLabel}</strong>
           </span>
         </div>
 
         <div className={styles.actions}>
-          {onExpand ? (
-            <button
-              type="button"
-              className={styles.iconButton}
-              aria-label="Expand terminal"
-              onClick={onExpand}
-            >
-              <Maximize2 size={15} aria-hidden="true" />
-            </button>
-          ) : null}
+          <button
+            type="button"
+            className={`${styles.iconButton} ${searchOpen ? styles.iconButtonActive : ""}`}
+            aria-label="Search terminal"
+            aria-pressed={searchOpen}
+            title="Search (⌘/Ctrl F)"
+            onClick={() => (searchOpen ? closeSearch() : openSearch())}
+          >
+            <Search size={14} aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            className={styles.iconButton}
+            aria-label={copied ? "Selection copied" : "Copy terminal selection"}
+            title={copied ? "Copied" : "Copy selection"}
+            disabled={!hasSelection}
+            onClick={() => void copySelection()}
+          >
+            <ClipboardCopy size={14} aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            className={styles.iconButton}
+            aria-label="Clear terminal"
+            title="Clear buffer"
+            onClick={clearTerminal}
+          >
+            <Eraser size={14} aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            className={styles.iconButton}
+            aria-label={maximized ? "Restore terminal size" : "Maximize terminal"}
+            title={maximized ? "Restore" : "Maximize"}
+            onClick={onToggleMaximize}
+          >
+            {maximized ? (
+              <Minimize2 size={14} aria-hidden="true" />
+            ) : (
+              <Maximize2 size={14} aria-hidden="true" />
+            )}
+          </button>
           <button
             type="button"
             className={styles.iconButton}
             aria-label="Close terminal"
+            title="Close terminal"
             onClick={onClose}
           >
-            <X size={16} aria-hidden="true" />
+            <X size={15} aria-hidden="true" />
           </button>
         </div>
       </header>
 
       <div className={styles.body}>
-        <div
-          ref={outputRef}
-          className={styles.outputRegion}
-          role="log"
-          aria-label="Terminal output"
-          aria-live="polite"
-          aria-relevant="additions"
-        >
-          {lines.map((line) => (
-            <div className={`${styles.line} ${styles[line.kind]}`} key={line.id}>
-              {line.kind === "command" ? (
-                <span className={styles.previousPrompt} aria-hidden="true">
-                  sandpi@{session.sandboxId}:<b>{session.workspaceRoot}</b>$
-                </span>
-              ) : null}
-              <span>{line.content}</span>
-            </div>
-          ))}
-        </div>
+        {searchOpen ? (
+          <div className={styles.searchBar} role="search">
+            <Search size={13} aria-hidden="true" />
+            <input
+              ref={searchInputRef}
+              type="search"
+              value={searchQuery}
+              aria-label="Search terminal output"
+              placeholder="Find in terminal"
+              spellCheck={false}
+              onChange={(event) => handleSearchChange(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") closeSearch();
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  if (event.shiftKey) findPrevious();
+                  else findNext();
+                }
+              }}
+            />
+            <span className={styles.searchCount} aria-live="polite">
+              {searchQuery
+                ? searchFound
+                  ? "Match"
+                  : "No results"
+                : ""}
+            </span>
+            <button
+              type="button"
+              className={styles.searchButton}
+              aria-label="Previous match"
+              disabled={!searchQuery}
+              onClick={findPrevious}
+            >
+              <ChevronUp size={14} aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              className={styles.searchButton}
+              aria-label="Next match"
+              disabled={!searchQuery}
+              onClick={() => findNext()}
+            >
+              <ChevronDown size={14} aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              className={styles.searchButton}
+              aria-label="Close terminal search"
+              onClick={closeSearch}
+            >
+              <X size={14} aria-hidden="true" />
+            </button>
+          </div>
+        ) : null}
 
-        <form className={styles.promptRow} onSubmit={submitCommand}>
-          <label className={styles.visuallyHidden} htmlFor={inputId}>
-            Terminal command
-          </label>
-          <span className={styles.prompt} aria-hidden="true">
-            <span>sandpi@{session.sandboxId}</span>:<b>{session.workspaceRoot}</b>$
-          </span>
-          <input
-            id={inputId}
-            name="terminal-command"
-            className={styles.input}
-            type="text"
-            value={draft}
-            autoComplete="off"
-            autoCapitalize="none"
-            spellCheck={false}
-            aria-describedby={`${inputId}-hint`}
-            onChange={(event) => setDraft(event.target.value)}
-          />
-          <span id={`${inputId}-hint`} className={styles.visuallyHidden}>
-            Press Enter to send the command to the Session terminal.
-          </span>
-        </form>
+        <div
+          ref={terminalHostRef}
+          className={styles.terminalHost}
+          role="application"
+          aria-label={`Interactive terminal in ${session.sandboxId}`}
+        />
+
+        {showConnectionNotice ? (
+          <div
+            className={`${styles.connectionNotice} ${
+              connectionState === "error" || connectionState === "exited"
+                ? styles.connectionNoticeError
+                : ""
+            }`}
+            role="status"
+          >
+            <span
+              className={`${styles.statusDot} ${
+                connectionState === "error" || connectionState === "exited"
+                  ? styles.statusOffline
+                  : styles.statusWaiting
+              }`}
+              aria-hidden="true"
+            />
+            <span>{connectionError ?? stateLabel}</span>
+            {connectionState === "exited" ? (
+              <button type="button" onClick={restartTerminal}>
+                <RotateCcw size={11} aria-hidden="true" />
+                Restart shell
+              </button>
+            ) : null}
+          </div>
+        ) : null}
       </div>
     </section>
   );

@@ -157,6 +157,7 @@ export interface RuntimeTerminalMessage {
   error?: string;
   event?: {
     seq: number;
+    attemptId?: string;
     stream?: string;
     dataBase64?: string;
     type: string;

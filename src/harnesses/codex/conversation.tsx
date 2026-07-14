@@ -516,6 +516,9 @@ export function CodexConversation({
           <button
             type="button"
             className={`header-action-button ${terminalOpen ? "is-active" : ""}`}
+            aria-label={ui.terminal}
+            aria-pressed={terminalOpen}
+            title={ui.terminal}
             onClick={onToggleTerminal}
           >
             <SquareTerminal size={15} aria-hidden="true" />

@@ -1,6 +1,6 @@
 import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 
 import { SandpiBrandLockup } from "@/components/sidebar-primitives";
 
@@ -8,16 +8,21 @@ import { SandpiBrandLockup } from "@/components/sidebar-primitives";
 export function AppFrame({
   as = "div",
   className,
+  style,
   children,
 }: {
   as?: "div" | "main";
   className?: string;
+  style?: CSSProperties;
   children: ReactNode;
 }) {
   const Component = as;
 
   return (
-    <Component className={`app-frame${className ? ` ${className}` : ""}`}>
+    <Component
+      className={`app-frame${className ? ` ${className}` : ""}`}
+      style={style}
+    >
       {children}
     </Component>
   );
