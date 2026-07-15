@@ -41,9 +41,11 @@ import { formatUnixTimestamp } from "@/lib/time";
 import { mergeWorkspaceGitFiles } from "@/lib/workspace-files";
 import {
   repositoryForWorkspacePath,
+  userVisibleWorkspaceGitState,
   workspaceGitChanges,
   workspaceRepositoryLabel,
 } from "@/lib/workspace-git";
+import { userVisibleWorkspacePath } from "@/lib/workspace-path-policy";
 import type {
   CodingSession,
   WorkspaceFile,
@@ -97,6 +99,7 @@ const copy = {
     live: "Live",
     connecting: "Connecting",
     reconnecting: "Reconnecting",
+    polling: "Polling",
     offline: "Disconnected",
     refresh: "Refresh Workspace",
     openFull: "Open full Web IDE",
@@ -131,6 +134,7 @@ const copy = {
     live: "实时",
     connecting: "正在连接",
     reconnecting: "正在重连",
+    polling: "轮询更新",
     offline: "已断开",
     refresh: "刷新 Workspace",
     openFull: "在完整 Web IDE 中打开",
@@ -272,7 +276,10 @@ export function workspaceIdeHref(session: CodingSession, filePath?: string) {
     environment: session.environmentId,
     session: session.id,
   });
-  if (filePath) search.set("path", filePath);
+  const visibleFilePath = filePath
+    ? userVisibleWorkspacePath(filePath)
+    : undefined;
+  if (visibleFilePath) search.set("path", visibleFilePath);
   return `/ide/?${search.toString()}`;
 }
 
@@ -396,7 +403,7 @@ export function WorkspaceIde({
   const [loading, setLoading] = useState(!initialSnapshot);
   const [error, setError] = useState("");
   const [connection, setConnection] = useState<
-    "connecting" | "live" | "reconnecting" | "offline"
+    "connecting" | "live" | "reconnecting" | "polling" | "offline"
   >("connecting");
   const documentsRef = useRef(documents);
   const openPathsRef = useRef(openPaths);
@@ -414,36 +421,43 @@ export function WorkspaceIde({
 
   const loadDocument = useCallback(
     async (filePath: string, reason: "open" | "external" | "reload" = "open") => {
+      const visiblePath = userVisibleWorkspacePath(filePath);
+      if (!visiblePath) return;
       setDocuments((current) => ({
         ...current,
-        [filePath]: {
-          ...current[filePath],
-          loading: reason !== "external" || !current[filePath]?.data,
+        [visiblePath]: {
+          ...current[visiblePath],
+          loading: reason !== "external" || !current[visiblePath]?.data,
           error: undefined,
         },
       }));
       try {
-        const query = new URLSearchParams({ path: filePath });
+        const query = new URLSearchParams({ path: visiblePath });
         const response = await apiFetch<ApiEnvelope<WorkspaceIdeFile>>(
           `/api/v1/sessions/${encodeURIComponent(session.id)}/ide/file?${query.toString()}`,
         );
+        const responsePath = userVisibleWorkspacePath(response.data.path);
+        if (!responsePath || responsePath !== visiblePath) {
+          throw new Error("Workspace returned an internal or unexpected file path.");
+        }
+        const responseData = { ...response.data, path: responsePath };
         setDocuments((current) => ({
           ...current,
-          [filePath]:
-            reason === "external" && current[filePath]?.dirty
+          [visiblePath]:
+            reason === "external" && current[visiblePath]?.dirty
               ? {
-                  ...current[filePath],
+                  ...current[visiblePath],
                   loading: false,
                   conflict:
-                    current[filePath]?.data?.revision === response.data.revision
-                      ? current[filePath]?.conflict
-                      : response.data,
+                    current[visiblePath]?.data?.revision === responseData.revision
+                      ? current[visiblePath]?.conflict
+                      : responseData,
                 }
               : {
-                  data: response.data,
+                  data: responseData,
                   draft:
-                    response.data.kind === "text"
-                      ? decodeBase64(response.data.content)
+                    responseData.kind === "text"
+                      ? decodeBase64(responseData.content)
                       : undefined,
                   loading: false,
                   dirty: false,
@@ -452,8 +466,8 @@ export function WorkspaceIde({
       } catch (cause) {
         setDocuments((current) => ({
           ...current,
-          [filePath]: {
-            ...current[filePath],
+          [visiblePath]: {
+            ...current[visiblePath],
             loading: false,
             error: cause instanceof Error ? cause.message : "File unavailable",
           },
@@ -495,13 +509,14 @@ export function WorkspaceIde({
     else void refreshSnapshot();
   }, [initialSnapshot, refreshSnapshot, session.id]);
 
-  const repositories = useMemo(
-    () => snapshot?.git.repositories ?? [],
-    [snapshot?.git.repositories],
-  );
-  const gitChanges = useMemo(
-    () => workspaceGitChanges(snapshot?.git),
+  const visibleGit = useMemo(
+    () => userVisibleWorkspaceGitState(snapshot?.git),
     [snapshot?.git],
+  );
+  const repositories = visibleGit.repositories;
+  const gitChanges = useMemo(
+    () => workspaceGitChanges(visibleGit),
+    [visibleGit],
   );
   const workspaceFiles = useMemo(
     () => mergeWorkspaceGitFiles(snapshot?.files ?? [], gitChanges),
@@ -517,14 +532,47 @@ export function WorkspaceIde({
     [repositories],
   );
 
+  useEffect(() => {
+    setOpenPaths((current) => {
+      const visible = [
+        ...new Set(current.flatMap((filePath) => {
+          const normalized = userVisibleWorkspacePath(filePath);
+          return normalized ? [normalized] : [];
+        })),
+      ];
+      openPathsRef.current = visible;
+      return visible;
+    });
+    setDocuments((current) => {
+      const visible = Object.fromEntries(
+        Object.entries(current).flatMap(([filePath, document]) => {
+          const normalized = userVisibleWorkspacePath(filePath);
+          return normalized ? [[normalized, document] as const] : [];
+        }),
+      );
+      documentsRef.current = visible;
+      return visible;
+    });
+    setSelectedPath((current) =>
+      current ? (userVisibleWorkspacePath(current) ?? "") : "",
+    );
+    pendingPathsRef.current = new Set(
+      [...pendingPathsRef.current].filter((filePath) =>
+        Boolean(userVisibleWorkspacePath(filePath)),
+      ),
+    );
+  }, [snapshot]);
+
   const openFile = useCallback(
     (filePath: string) => {
+      const visiblePath = userVisibleWorkspacePath(filePath);
+      if (!visiblePath) return;
       setOpenPaths((current) =>
-        current.includes(filePath) ? current : [...current, filePath],
+        current.includes(visiblePath) ? current : [...current, visiblePath],
       );
-      setSelectedPath(filePath);
-      if (!documents[filePath]?.data && !documents[filePath]?.loading) {
-        void loadDocument(filePath);
+      setSelectedPath(visiblePath);
+      if (!documents[visiblePath]?.data && !documents[visiblePath]?.loading) {
+        void loadDocument(visiblePath);
       }
     },
     [documents, loadDocument],
@@ -532,10 +580,11 @@ export function WorkspaceIde({
 
   useEffect(() => {
     if (!snapshot || selectedPath) return;
-    const requestedPath =
+    const requestedPathValue =
       typeof window === "undefined"
         ? ""
         : new URLSearchParams(window.location.search).get("path") ?? "";
+    const requestedPath = userVisibleWorkspacePath(requestedPathValue) ?? "";
     const firstFile = allFiles.find((file) => file.kind === "file")?.path;
     const initialPath =
       (requestedPath &&
@@ -561,9 +610,20 @@ export function WorkspaceIde({
   ]);
 
   useEffect(() => {
-    if (variant !== "standalone" || !selectedPath) return;
+    if (variant !== "standalone") return;
     const url = new URL(window.location.href);
-    url.searchParams.set("path", selectedPath);
+    const requestedPath = url.searchParams.get("path");
+    const visibleSelectedPath = selectedPath
+      ? userVisibleWorkspacePath(selectedPath)
+      : undefined;
+    if (visibleSelectedPath) {
+      if (requestedPath === visibleSelectedPath) return;
+      url.searchParams.set("path", visibleSelectedPath);
+    } else if (requestedPath && !userVisibleWorkspacePath(requestedPath)) {
+      url.searchParams.delete("path");
+    } else {
+      return;
+    }
     window.history.replaceState(window.history.state, "", url);
   }, [selectedPath, variant]);
 
@@ -571,9 +631,13 @@ export function WorkspaceIde({
     let disposed = false;
     let socket: WebSocket | undefined;
     let retry = 0;
+    let pollingFallback = false;
+    let pollingTimer: number | undefined;
 
     const scheduleRefresh = (filePath: string) => {
-      pendingPathsRef.current.add(filePath);
+      const visiblePath = userVisibleWorkspacePath(filePath);
+      if (!visiblePath) return;
+      pendingPathsRef.current.add(visiblePath);
       if (refreshTimerRef.current !== null) {
         window.clearTimeout(refreshTimerRef.current);
       }
@@ -594,9 +658,30 @@ export function WorkspaceIde({
       }, 180);
     };
 
+    const stopPolling = () => {
+      if (pollingTimer === undefined) return;
+      window.clearInterval(pollingTimer);
+      pollingTimer = undefined;
+    };
+
+    const startPolling = () => {
+      if (disposed || pollingTimer !== undefined) return;
+      scheduleRefresh("/workspace");
+      pollingTimer = window.setInterval(
+        () => scheduleRefresh("/workspace"),
+        3_000,
+      );
+    };
+
     const connect = () => {
       if (disposed) return;
-      setConnection(retry === 0 ? "connecting" : "reconnecting");
+      setConnection(
+        pollingFallback
+          ? "polling"
+          : retry === 0
+            ? "connecting"
+            : "reconnecting",
+      );
       socket = new WebSocket(
         apiWebSocketUrl(
           `/api/v1/sessions/${encodeURIComponent(session.id)}/ide/events`,
@@ -607,11 +692,20 @@ export function WorkspaceIde({
           const event = JSON.parse(message.data as string) as WorkspaceIdeEvent;
           if (event.type === "ready") {
             retry = 0;
+            pollingFallback = false;
+            stopPolling();
+            setError("");
             setConnection("live");
           } else if (event.type === "change") {
             scheduleRefresh(event.path);
           } else if (event.type === "error") {
-            setError(event.error);
+            if (event.code === "workspace_watch_unavailable") {
+              pollingFallback = true;
+              startPolling();
+              setConnection("polling");
+            } else {
+              setError(event.error);
+            }
           }
         } catch {
           setError("Workspace event stream returned invalid data.");
@@ -620,10 +714,21 @@ export function WorkspaceIde({
       socket.addEventListener("close", () => {
         if (disposed) return;
         retry += 1;
-        setConnection(retry > 5 ? "offline" : "reconnecting");
+        // Keep editor state fresh only while the native watch is unavailable
+        // or reconnecting. A subsequent `ready` event stops this fallback.
+        startPolling();
+        setConnection(
+          pollingFallback
+            ? "polling"
+            : retry > 5
+              ? "polling"
+              : "reconnecting",
+        );
         reconnectTimerRef.current = window.setTimeout(
           connect,
-          Math.min(5_000, 500 * 2 ** Math.min(retry, 4)),
+          pollingFallback
+            ? 30_000
+            : Math.min(5_000, 500 * 2 ** Math.min(retry, 4)),
         );
       });
       socket.addEventListener("error", () => socket?.close());
@@ -632,6 +737,7 @@ export function WorkspaceIde({
     connect();
     return () => {
       disposed = true;
+      stopPolling();
       socket?.close();
       if (refreshTimerRef.current !== null) {
         window.clearTimeout(refreshTimerRef.current);
@@ -675,7 +781,9 @@ export function WorkspaceIde({
   }
 
   async function saveDocument(filePath: string, revisionOverride?: string) {
-    const document = documentsRef.current[filePath];
+    const visiblePath = userVisibleWorkspacePath(filePath);
+    if (!visiblePath) return;
+    const document = documentsRef.current[visiblePath];
     if (
       !document?.data?.editable ||
       document.draft === undefined ||
@@ -686,7 +794,11 @@ export function WorkspaceIde({
     }
     setDocuments((current) => ({
       ...current,
-      [filePath]: { ...current[filePath], saving: true, error: undefined },
+      [visiblePath]: {
+        ...current[visiblePath],
+        saving: true,
+        error: undefined,
+      },
     }));
     const body: WorkspaceIdeWriteRequest = {
       encoding: "base64",
@@ -694,16 +806,21 @@ export function WorkspaceIde({
       baseRevision: revisionOverride ?? document.data.revision,
     };
     try {
-      const query = new URLSearchParams({ path: filePath });
+      const query = new URLSearchParams({ path: visiblePath });
       const response = await apiFetch<ApiEnvelope<WorkspaceIdeFile>>(
         `/api/v1/sessions/${encodeURIComponent(session.id)}/ide/file?${query.toString()}`,
         { method: "PUT", body: JSON.stringify(body) },
       );
-      const savedDraft = decodeBase64(response.data.content);
+      const responsePath = userVisibleWorkspacePath(response.data.path);
+      if (!responsePath || responsePath !== visiblePath) {
+        throw new Error("Workspace returned an internal or unexpected file path.");
+      }
+      const responseData = { ...response.data, path: responsePath };
+      const savedDraft = decodeBase64(responseData.content);
       setDocuments((current) => ({
         ...current,
-        [filePath]: {
-          data: response.data,
+        [visiblePath]: {
+          data: responseData,
           draft: savedDraft,
           loading: false,
           saving: false,
@@ -713,17 +830,17 @@ export function WorkspaceIde({
       await refreshSnapshot(true);
     } catch (cause) {
       if (cause instanceof ApiError && cause.code === "workspace_file_conflict") {
-        await loadDocument(filePath, "external");
+        await loadDocument(visiblePath, "external");
         setDocuments((current) => ({
           ...current,
-          [filePath]: { ...current[filePath], saving: false },
+          [visiblePath]: { ...current[visiblePath], saving: false },
         }));
         return;
       }
       setDocuments((current) => ({
         ...current,
-        [filePath]: {
-          ...current[filePath],
+        [visiblePath]: {
+          ...current[visiblePath],
           saving: false,
           error:
             cause instanceof ApiError && cause.code === "workspace_write_not_ready"
@@ -818,6 +935,7 @@ export function WorkspaceIde({
     connecting: ui.connecting,
     live: ui.live,
     reconnecting: ui.reconnecting,
+    polling: ui.polling,
     offline: ui.offline,
   }[connection];
 

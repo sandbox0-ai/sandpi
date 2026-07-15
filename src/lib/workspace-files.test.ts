@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { WorkspaceFile, WorkspaceGitFileChange } from "./types";
-import { mergeWorkspaceGitFiles } from "./workspace-files";
+import {
+  mergeWorkspaceGitFiles,
+  userVisibleWorkspaceFiles,
+} from "./workspace-files";
 
 const deleted: WorkspaceGitFileChange = {
   path: "/workspace/src/deleted.ts",
@@ -72,4 +75,63 @@ test("does not duplicate a changed file already returned by Sandbox0", () => {
 
   const merged = mergeWorkspaceGitFiles(files, [deleted]);
   assert.equal(merged[0]?.children?.[0]?.children?.length, 1);
+});
+
+test("removes Sandpi state from both native trees and Git-only placeholders", () => {
+  const files: WorkspaceFile[] = [
+    {
+      id: "workspace",
+      name: "workspace",
+      path: "/workspace",
+      kind: "folder",
+      children: [
+        {
+          id: "internal",
+          name: ".sandpi",
+          path: "/workspace/.sandpi",
+          kind: "folder",
+          children: [
+            {
+              id: "rollout",
+              name: "rollout.jsonl",
+              path: "/workspace/.sandpi/codex/rollout.jsonl",
+              kind: "file",
+            },
+          ],
+        },
+        {
+          id: "similar",
+          name: ".sandpi-other",
+          path: "/workspace/.sandpi-other",
+          kind: "folder",
+        },
+      ],
+    },
+  ];
+  const internalChange: WorkspaceGitFileChange = {
+    ...deleted,
+    path: "/workspace/.sandpi/codex/deleted.jsonl",
+    relativePath: ".sandpi/codex/deleted.jsonl",
+  };
+  const renamedFromInternal: WorkspaceGitFileChange = {
+    ...deleted,
+    path: "/workspace/exported.jsonl",
+    relativePath: "exported.jsonl",
+    originalPath: "/workspace/.sandpi/codex/rollout.jsonl",
+    kind: "renamed",
+  };
+
+  const visible = userVisibleWorkspaceFiles(files);
+  assert.deepEqual(
+    visible[0]?.children?.map((file) => file.path),
+    ["/workspace/.sandpi-other"],
+  );
+  const merged = mergeWorkspaceGitFiles(files, [
+    internalChange,
+    renamedFromInternal,
+  ]);
+  assert.deepEqual(
+    merged[0]?.children?.map((file) => file.path),
+    ["/workspace/.sandpi-other"],
+  );
 });

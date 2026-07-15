@@ -41,8 +41,8 @@ Web today; iOS / Android / HarmonyOS later
              +--------+--------+
              |                 |
         PostgreSQL        Sandbox0 SDK
-      product state,       deployment API
-      cursors, events            |
+      control state,       deployment API
+       checkpoints               |
                                 Sandbox
                       native Codex app-server,
                       /workspace Volume, PTY
@@ -52,9 +52,11 @@ Web today; iOS / Android / HarmonyOS later
   service. Platform-specific clients must not reimplement orchestration rules.
 - **Client/server execution:** the browser is only an interaction client. A
   coding agent runs through its native harness in a Sandbox0 Supervisor Session.
-- **Recoverable sessions:** Supervisor output is persisted with replay cursors,
-  so closing the browser or losing the client network does not terminate the
-  coding-agent session.
+- **Recoverable sessions:** the harness-native Session and rollout remain in
+  the Session Workspace Volume, so closing the browser or losing the client
+  network does not terminate the coding agent. A reconnect reads a native harness snapshot,
+  then resumes from a bounded Supervisor/live notification transport; Sandpi
+  does not persist a parallel chat transcript.
 - **Native harness boundary:** shared code owns Sandbox lifecycle, durable
   transport, files, terminal, audit and metrics. Each harness owns its native
   message/tool rendering, approvals, slash commands and model list. Sandpi does
@@ -73,8 +75,10 @@ Web today; iOS / Android / HarmonyOS later
   staged and working-tree diffs onto current line numbers. Sandpi never creates
   or chooses a repository for the user or agent. Text
   saves carry the revision that was opened; stale writes return a conflict
-  instead of silently replacing a newer file. The browser never receives the
-  deployment API key or a direct Sandbox0 endpoint.
+  instead of silently replacing a newer file. The internal
+  `/workspace/.sandpi` subtree is excluded and rejected by the server, not just
+  hidden by the UI. The browser never receives the deployment API key or a
+  direct Sandbox0 endpoint.
 - **Environment grouping:** an Environment fixes the harness, official harness
   authentication, Sandbox template, network policy and workspace baseline.
   Sessions cannot switch harnesses dynamically.
@@ -90,18 +94,22 @@ Web today; iOS / Android / HarmonyOS later
 - **Credential boundary:** provider authentication belongs to an Environment
   and is encrypted in PostgreSQL. A Session materializes plaintext only in
   `/dev/shm`; its persistent Codex home contains a link, so rootfs and workspace
-  snapshots cannot copy the credential while native thread/rollout state can
-  still survive runtime recovery.
+  snapshots cannot copy the credential while native thread/rollout state in
+  `/workspace/.sandpi/harnesses/codex` survives runtime recovery.
 - **Snapshot-backed history:** Session fork copies Sandbox rootfs and the
   Session's private Workspace Volume. Sandpi captures a Workspace Volume
-  snapshot before the first Turn, immediately before each later Turn, and after
-  every completed Turn. The input snapshot preserves Web IDE or terminal edits
-  made between Turns; Turn fork, edit and delete use these checkpoints and never
-  restore or fork rootfs.
-- **Native Codex history:** a Turn fork imports Codex's native rollout into a
-  fresh `coding-agent` Sandbox, then calls native `thread/fork` at the selected
-  Turn. Sandpi transports the native artifact; it does not synthesize a second
+  baseline before the first Turn, an exact input snapshot immediately before
+  each later Turn, and an output snapshot after every completed Turn. The input
+  snapshot preserves Web IDE or terminal edits made between Turns; Turn fork,
+  edit and delete use these checkpoints and never restore or fork rootfs.
+- **Native Codex history:** the selected Turn checkpoint already contains
+  Codex's native rollout. A Turn fork creates a fresh `coding-agent` Sandbox
+  from that Volume snapshot and calls native `thread/fork` at the selected
+  Turn; Sandpi neither extracts the rollout nor synthesizes a second
   conversation format.
+
+The detailed authority, reconnect and mutation invariants are documented in
+[Native coding-agent Session authority](docs/architecture/native-session-authority.md).
 
 The Sandpi database is authoritative for Team ownership of every Environment,
 Session, Sandbox and Volume. The deployment Sandbox0 key does not identify a
@@ -133,10 +141,18 @@ snapshots owned by another Session.
 
 History mutation is a server-side transaction across Sandbox0 and PostgreSQL:
 Sandpi reserves the Session, restores the pre-Turn Workspace checkpoint,
-branches the native Codex thread, commits the visible-history revision, and
-then removes superseded checkpoints. If finalization fails, it restores the
-original Workspace head and native thread. Connected clients receive an SSE
-`reset` event whenever that visible-history revision changes.
+restarts the harness and resumes the same native Codex Session, then atomically
+commits the history revision, active Turn and checkpoint suffix. Candidate
+replacement-Turn events are not visible before that commit. If finalization
+fails, Sandpi restores the original Volume head and resumes the same native
+Session. Connected clients receive an SSE invalidation and replace their view
+with a fresh native harness snapshot after the history change.
+
+Codex does not write a rollout for an empty thread. Consequently, editing or
+deleting the first Turn is the one native-id exception: after restoring the
+pre-first-Turn Volume, Sandpi starts a new empty Codex thread and atomically
+commits that id. There is no earlier native conversation to discard. Once a
+rollout has been materialized, history mutation resumes the same native id.
 
 ## Requirements
 
@@ -328,8 +344,9 @@ future sharing must introduce an explicit ACL and credential policy first.
 
 Codex receives the official native file at
 `/dev/shm/sandpi-codex-auth.json`. Its persistent `CODEX_HOME/auth.json` is a
-symlink to that memory-backed file, so neither a rootfs snapshot nor a Workspace
-Volume snapshot contains provider tokens. Before a Turn, Sandpi materializes
+symlink from `/workspace/.sandpi/harnesses/codex` to that memory-backed file, so
+neither a rootfs snapshot nor a Workspace Volume snapshot contains provider
+tokens. Before a Turn, Sandpi materializes
 the current Environment revision. After a completed Turn and after runtime
 recovery, it reads native refreshes back, encrypts a new Environment revision,
 and advances stale Session bindings. The Session owner still has terminal and
@@ -376,15 +393,16 @@ Sandbox0 implementation details.
 - A Session has a Sandbox0-enforced 30-day hard TTL. The resource reaper also
   journals and retries cleanup for partially provisioned or failed Sessions.
 - Supervisor output is the durable native transport. PostgreSQL stores replay
-  identity, cursors and immutable native records; the browser may disconnect at
-  any time without stopping Codex.
+  identity, cursors and scalar recovery coordinates, never a parallel Codex
+  transcript; the browser may disconnect at any time without stopping Codex.
 - The Web terminal is resumable through a Supervisor Session. Its client stores
   Supervisor sequence bookmarks for the last three submitted commands, so a
   reopened renderer restores only that recent output. Historical bytes are
   parsed with terminal input disabled until a captured journal head is reached,
   preventing old device queries from writing replies into the live PTY. Live
-  input is forwarded in order, including xterm binary mouse reports, behind a
-  short-lived Session write-access lease instead of one database query per key.
+  input is forwarded in order, including xterm binary mouse reports. Every
+  writable frame is reauthorized and serialized behind the Session database
+  fence; resize-only frames do not require write access.
   The shell supplies Vim's native `EXINIT` fallback only when no user vimrc is
   present, keeping arrow-key escape sequences usable in `vi` compatible mode
   without overriding an Environment's editor configuration.

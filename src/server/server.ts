@@ -52,7 +52,6 @@ import { TerminalInputQueue } from "@/server/terminal-input-queue";
 const SESSION_COOKIE = "sandpi_session";
 const CODEX_IMAGE_BODY_LIMIT_BYTES = 36 * 1024 * 1024;
 const WORKSPACE_FILE_BODY_LIMIT_BYTES = 7 * 1024 * 1024;
-const TERMINAL_AUTHORIZATION_LEASE_MS = 250;
 
 export interface SandpiServerOptions {
   config?: SandpiConfig;
@@ -472,6 +471,20 @@ function registerApiRoutes(
     },
   );
   app.post<{ Params: { sessionId: string } }>(
+    "/api/v1/sessions/:sessionId/turns/interrupt",
+    async (request, reply) => {
+      const body = z
+        .object({ turnId: z.string().trim().min(1).max(200) })
+        .parse(request.body);
+      const result = await services.codex.interruptActiveTurn({
+        userId: request.principal.userId,
+        sessionId: request.params.sessionId,
+        turnId: body.turnId,
+      });
+      return reply.status(202).send({ data: result });
+    },
+  );
+  app.post<{ Params: { sessionId: string } }>(
     "/api/v1/sessions/:sessionId/fork",
     async (request, reply) => {
       const body = z
@@ -492,9 +505,9 @@ function registerApiRoutes(
     },
   );
   app.post<{
-    Params: { sessionId: string; userMessageItemId: string };
+    Params: { sessionId: string; nativeTurnId: string };
   }>(
-    "/api/v1/sessions/:sessionId/turns/:userMessageItemId/fork",
+    "/api/v1/sessions/:sessionId/turns/:nativeTurnId/fork",
     async (request, reply) => {
       const body = z
         .object({ title: z.string().trim().min(1).max(200).optional() })
@@ -503,7 +516,7 @@ function registerApiRoutes(
       const sessionId = await services.codex.forkTurn({
         userId: request.principal.userId,
         sessionId: request.params.sessionId,
-        userMessageItemId: request.params.userMessageItemId,
+        nativeTurnId: request.params.nativeTurnId,
         title: body.title,
       });
       return reply.status(201).send({
@@ -514,8 +527,8 @@ function registerApiRoutes(
       });
     },
   );
-  app.put<{ Params: { sessionId: string; userMessageItemId: string } }>(
-    "/api/v1/sessions/:sessionId/turns/:userMessageItemId",
+  app.put<{ Params: { sessionId: string; nativeTurnId: string } }>(
+    "/api/v1/sessions/:sessionId/turns/:nativeTurnId",
     { bodyLimit: CODEX_IMAGE_BODY_LIMIT_BYTES },
     async (request, reply) => {
       const body = z
@@ -531,7 +544,7 @@ function registerApiRoutes(
       const result = await services.codex.editTurn({
         userId: request.principal.userId,
         sessionId: request.params.sessionId,
-        userMessageItemId: request.params.userMessageItemId,
+        nativeTurnId: request.params.nativeTurnId,
         text: body.text,
         images: body.images,
         modelId: body.modelId,
@@ -539,44 +552,66 @@ function registerApiRoutes(
       return reply.status(202).send({ data: result });
     },
   );
-  app.delete<{ Params: { sessionId: string; userMessageItemId: string } }>(
-    "/api/v1/sessions/:sessionId/turns/:userMessageItemId",
+  app.delete<{ Params: { sessionId: string; nativeTurnId: string } }>(
+    "/api/v1/sessions/:sessionId/turns/:nativeTurnId",
     async (request) => ({
       data: await services.codex.deleteTurn(
         request.principal.userId,
         request.params.sessionId,
-        request.params.userMessageItemId,
+        request.params.nativeTurnId,
       ),
     }),
   );
   app.get<{ Params: { sessionId: string } }>(
     "/api/v1/sessions/:sessionId/models",
-    async (request) => ({
-      data: await services.codex.listModels(
-        request.principal.userId,
-        request.params.sessionId,
-      ),
-    }),
+    async (request) => {
+      try {
+        return {
+          data: await services.codex.listModels(
+            request.principal.userId,
+            request.params.sessionId,
+          ),
+          meta: { availability: "available", source: "codex" },
+        };
+      } catch (error) {
+        if (!isOptionalCodexRuntimeError(error)) throw error;
+        request.log.warn(
+          { sessionId: request.params.sessionId, code: error.code },
+          "Codex model catalog unavailable with Session runtime",
+        );
+        // Model discovery is a native Codex capability, but it is optional for
+        // rendering durable history. Never invent a Sandpi-owned fallback list.
+        return {
+          data: { data: [] },
+          meta: {
+            availability: "runtime-unavailable",
+            source: "codex",
+            message: error.message,
+          },
+        };
+      }
+    },
   );
   app.get<{ Params: { sessionId: string } }>(
     "/api/v1/sessions/:sessionId/events",
     async (request, reply) => {
       await services.store.getSession(request.principal.userId, request.params.sessionId);
       services.codex.ensureWorker(request.params.sessionId);
-      return streamHarnessEvents(request, reply, services.store, services.codex);
+      return streamHarnessEvents(request, reply, services.codex);
     },
   );
   app.get<{ Params: { sessionId: string } }>(
     "/api/v1/sessions/:sessionId/files",
     async (request) => {
-      const runtime = await services.store.getRuntime(
-        request.principal.userId,
-        request.params.sessionId,
-      );
       return {
-        data: await services.runtime.listFiles(
-          runtime,
-          queryString(request, "path") ?? "/workspace",
+        data: await services.codex.withRuntimeRecovery(
+          request.principal.userId,
+          request.params.sessionId,
+          (runtime) =>
+            services.runtime.listFiles(
+              runtime,
+              queryString(request, "path") ?? "/workspace",
+            ),
         ),
       };
     },
@@ -586,11 +621,11 @@ function registerApiRoutes(
     async (request) => {
       const filePath = queryString(request, "path");
       if (!filePath) throw new HttpError(400, "path_required", "File path is required.");
-      const runtime = await services.store.getRuntime(
+      const content = await services.codex.withRuntimeRecovery(
         request.principal.userId,
         request.params.sessionId,
+        (runtime) => services.runtime.readFile(runtime, filePath),
       );
-      const content = await services.runtime.readFile(runtime, filePath);
       return {
         data: {
           path: filePath,
@@ -604,17 +639,18 @@ function registerApiRoutes(
   app.get<{ Params: { sessionId: string } }>(
     "/api/v1/sessions/:sessionId/ide",
     async (request) => {
-      const runtime = await services.store.getRuntime(
+      const data = await services.codex.withRuntimeRecovery(
         request.principal.userId,
         request.params.sessionId,
+        async (runtime) => {
+          const [files, git] = await Promise.all([
+            services.runtime.listFiles(runtime, "/workspace"),
+            services.runtime.getWorkspaceGitState(runtime),
+          ]);
+          return { files, git, refreshedAt: toUnixTimestamp(new Date()) };
+        },
       );
-      const [files, git] = await Promise.all([
-        services.runtime.listFiles(runtime, "/workspace"),
-        services.runtime.getWorkspaceGitState(runtime),
-      ]);
-      return {
-        data: { files, git, refreshedAt: toUnixTimestamp(new Date()) },
-      };
+      return { data };
     },
   );
   app.get<{ Params: { sessionId: string } }>(
@@ -624,12 +660,12 @@ function registerApiRoutes(
       if (!filePath) {
         throw new HttpError(400, "path_required", "File path is required.");
       }
-      const runtime = await services.store.getRuntime(
-        request.principal.userId,
-        request.params.sessionId,
-      );
       return {
-        data: await services.runtime.readWorkspaceIdeFile(runtime, filePath),
+        data: await services.codex.withRuntimeRecovery(
+          request.principal.userId,
+          request.params.sessionId,
+          (runtime) => services.runtime.readWorkspaceIdeFile(runtime, filePath),
+        ),
       };
     },
   );
@@ -666,11 +702,11 @@ function registerApiRoutes(
         | Awaited<ReturnType<RuntimeAdapter["watchWorkspaceFiles"]>>
         | undefined;
       try {
-        const runtime = await services.store.getRuntime(
+        watcher = await services.codex.withRuntimeRecovery(
           request.principal.userId,
           request.params.sessionId,
+          (runtime) => services.runtime.watchWorkspaceFiles(runtime),
         );
-        watcher = await services.runtime.watchWorkspaceFiles(runtime);
         socket.send(
           JSON.stringify({ type: "ready", at: toUnixTimestamp(new Date()) }),
         );
@@ -685,12 +721,13 @@ function registerApiRoutes(
             }),
           );
         }
-      } catch (error) {
+      } catch {
         if (socket.readyState === socket.OPEN) {
           socket.send(
             JSON.stringify({
               type: "error",
-              error: normalizeError(error).message,
+              code: "workspace_watch_unavailable",
+              error: "Live Workspace events are temporarily unavailable.",
               at: toUnixTimestamp(new Date()),
             }),
           );
@@ -746,47 +783,52 @@ function registerApiRoutes(
           request.principal.userId,
           request.params.sessionId,
         );
-        terminal = await services.runtime.openTerminal(
-          runtime,
-          Number.isFinite(after) ? after : 0,
-          queryString(request, "terminalSessionId"),
-        );
-        await services.store.assertTerminalWritable(
+        // Opening/recovering a terminal and every later input frame share the
+        // source-Session reservation lock with fork/history operations.
+        terminal = await services.store.withTerminalAccess(
           request.principal.userId,
           request.params.sessionId,
+          () =>
+            services.runtime.openTerminal(
+              runtime,
+              Number.isFinite(after) ? after : 0,
+              queryString(request, "terminalSessionId"),
+            ),
         );
         if (runtime.terminalSessionId !== terminal.sessionId) {
           await services.store.setTerminalSession(request.params.sessionId, terminal.sessionId);
         }
+        const forwardTerminalMessage = (
+          message: z.infer<typeof terminalInputSchema>,
+        ) => {
+          const requestId = message.requestId ?? randomUUID();
+          if (message.type === "input") {
+            terminal?.send({
+              type: "input",
+              requestId,
+              data: Buffer.from(message.data, "utf8"),
+            });
+            return;
+          }
+          if (message.type === "binary") {
+            terminal?.send({
+              type: "input",
+              requestId,
+              data: Buffer.from(message.dataBase64, "base64"),
+            });
+            return;
+          }
+          terminal?.send({ ...message, requestId });
+        };
         inputQueue = new TerminalInputQueue({
-          authorize: () =>
-            services.store.assertTerminalWritable(
+          authorizeAndForward: (message) =>
+            services.store.withTerminalAccess(
               request.principal.userId,
               request.params.sessionId,
+              () => forwardTerminalMessage(message),
             ),
-          authorizationLeaseMs: TERMINAL_AUTHORIZATION_LEASE_MS,
-          initiallyAuthorized: true,
           requiresAuthorization: (message) => message.type !== "resize",
-          forward: (message) => {
-            const requestId = message.requestId ?? randomUUID();
-            if (message.type === "input") {
-              terminal?.send({
-                type: "input",
-                requestId,
-                data: Buffer.from(message.data, "utf8"),
-              });
-              return;
-            }
-            if (message.type === "binary") {
-              terminal?.send({
-                type: "input",
-                requestId,
-                data: Buffer.from(message.dataBase64, "base64"),
-              });
-              return;
-            }
-            terminal?.send({ ...message, requestId });
-          },
+          forward: forwardTerminalMessage,
           onError: (error) => {
             if (socket.readyState === socket.OPEN) {
               socket.send(
@@ -873,18 +915,39 @@ function registerApiRoutes(
 async function streamHarnessEvents(
   request: FastifyRequest<{ Params: { sessionId: string } }>,
   reply: FastifyReply,
-  store: SandpiStore,
   codex: CodexService,
 ) {
-  const headerCursor = request.headers["last-event-id"];
-  let cursor = Number(
-    queryString(request, "after") ??
-      (Array.isArray(headerCursor) ? headerCursor[0] : headerCursor) ??
-      0,
-  );
-  if (!Number.isFinite(cursor) || cursor < 0) cursor = 0;
-  let historyRevision = Number(queryString(request, "revision") ?? 0);
-  if (!Number.isFinite(historyRevision) || historyRevision < 0) historyRevision = 0;
+  const sessionId = request.params.sessionId;
+  // Codex captures the live cursor at the exact thread/read response record.
+  // Notifications before that boundary belong to the native snapshot; only
+  // the suffix after it is streamed to the client.
+  let initial: Awaited<ReturnType<CodexService["readNativeSnapshotWithCursor"]>>
+    | undefined;
+  let initialInvalidation: { reason: string; message: string; unrecoverable: true }
+    | undefined;
+  try {
+    initial = await codex.readNativeSnapshotWithCursor(
+      request.principal.userId,
+      sessionId,
+    );
+  } catch (error) {
+    const normalized = normalizeError(error);
+    if (
+      normalized.code !== "codex_native_session_unrecoverable" &&
+      normalized.code !== "session_allocation_unrecoverable"
+    ) {
+      throw error;
+    }
+    initialInvalidation = {
+      reason:
+        normalized.code === "session_allocation_unrecoverable"
+          ? "session-allocation-unrecoverable"
+          : "native-session-unrecoverable",
+      message: normalized.message,
+      unrecoverable: true,
+    };
+  }
+  let cursor = initial?.liveCursor ?? codex.liveCursor(sessionId);
   reply.hijack();
   reply.raw.writeHead(200, {
     "Content-Type": "text/event-stream; charset=utf-8",
@@ -893,39 +956,74 @@ async function streamHarnessEvents(
     "X-Accel-Buffering": "no",
   });
   reply.raw.write("retry: 1000\n\n");
+  if (initial) {
+    reply.raw.write("event: snapshot\n");
+    reply.raw.write(`data: ${JSON.stringify(initial.snapshot)}\n\n`);
+  } else {
+    reply.raw.write(`id: ${cursor}\n`);
+    reply.raw.write("event: invalidation\n");
+    reply.raw.write(`data: ${JSON.stringify(initialInvalidation)}\n\n`);
+  }
   const controller = new AbortController();
   request.raw.once("close", () => controller.abort());
 
   while (!controller.signal.aborted && !reply.raw.destroyed) {
-    const currentRevision = await store.sessionHistoryRevision(
-      request.principal.userId,
-      request.params.sessionId,
-    );
-    if (currentRevision !== historyRevision) {
-      const session = await store.getSession(
-        request.principal.userId,
-        request.params.sessionId,
-      );
-      reply.raw.write("event: reset\n");
-      reply.raw.write(`data: ${JSON.stringify(session)}\n\n`);
-      historyRevision = currentRevision;
-    }
-    const events = await store.listHarnessNotifications(
-      request.principal.userId,
-      request.params.sessionId,
-      cursor,
-    );
-    if (events.length > 0) {
-      for (const event of events) {
-        reply.raw.write(`id: ${event.sequence}\n`);
-        reply.raw.write("event: harness\n");
-        reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
-        cursor = event.sequence;
+    const updates = codex.listLiveNotifications(sessionId, cursor);
+    if (updates.length > 0) {
+      let snapshotReplacedSuffix = false;
+      for (const update of updates) {
+        reply.raw.write(`id: ${update.cursor}\n`);
+        if (update.kind === "notification") {
+          reply.raw.write("event: notification\n");
+          reply.raw.write(`data: ${JSON.stringify(update.event)}\n\n`);
+        } else {
+          reply.raw.write("event: invalidation\n");
+          reply.raw.write(
+            `data: ${JSON.stringify({
+              reason: update.reason,
+              message: update.message,
+              unrecoverable: update.unrecoverable,
+            })}\n\n`,
+          );
+          if (!update.unrecoverable) {
+            try {
+              const refreshed = await codex.readNativeSnapshotWithCursor(
+                request.principal.userId,
+                sessionId,
+              );
+              reply.raw.write("event: snapshot\n");
+              reply.raw.write(
+                `data: ${JSON.stringify(refreshed.snapshot)}\n\n`,
+              );
+              // Discard the old drain batch and continue strictly after the
+              // response boundary returned with the replacement snapshot.
+              cursor = refreshed.liveCursor;
+              snapshotReplacedSuffix = true;
+            } catch (error) {
+              reply.raw.write("event: invalidation\n");
+              reply.raw.write(
+                `data: ${JSON.stringify({
+                  reason: "native-snapshot-unavailable",
+                  message: normalizeError(error).message,
+                  unrecoverable: false,
+                })}\n\n`,
+              );
+              // A transient native read failure is not evidence that the
+              // rollout disappeared. Close this transport so EventSource can
+              // reconnect and perform a clean native snapshot handshake.
+              controller.abort();
+              break;
+            }
+          }
+        }
+        if (snapshotReplacedSuffix) break;
+        cursor = update.cursor;
       }
+      if (controller.signal.aborted) break;
       continue;
     }
     reply.raw.write(": keepalive\n\n");
-    await codex.waitForSessionUpdate(request.params.sessionId, controller.signal);
+    await codex.waitForSessionUpdate(sessionId, controller.signal);
   }
   if (!reply.raw.destroyed) reply.raw.end();
 }
@@ -1020,6 +1118,17 @@ function normalizeError(error: unknown): HttpError {
     500,
     "internal_error",
     "Internal server error.",
+  );
+}
+
+function isOptionalCodexRuntimeError(error: unknown): error is HttpError {
+  return (
+    error instanceof HttpError &&
+    (error.code === "codex_native_session_unrecoverable" ||
+      error.code === "session_allocation_unrecoverable" ||
+      error.code === "supervisor_not_running" ||
+      (error.code.startsWith("sandbox0_") &&
+        [404, 409, 503].includes(error.statusCode)))
   );
 }
 

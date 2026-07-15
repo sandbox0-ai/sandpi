@@ -10,12 +10,15 @@ test("forwards terminal input in arrival order across an asynchronous check", as
   });
   const forwarded: string[] = [];
   const queue = new TerminalInputQueue<string>({
-    authorize: () => authorization,
-    forward: (message) => forwarded.push(message),
+    async authorizeAndForward(message) {
+      await authorization;
+      forwarded.push(message);
+    },
+    forward: (message) => {
+      forwarded.push(message);
+    },
     requiresAuthorization: () => true,
     onError: (error) => assert.fail(String(error)),
-    authorizationLeaseMs: 250,
-    now: () => 1_000,
   });
 
   for (const message of ["A", "B", "C", "D"]) queue.enqueue(message);
@@ -27,32 +30,28 @@ test("forwards terminal input in arrival order across an asynchronous check", as
   assert.deepEqual(forwarded, ["A", "B", "C", "D"]);
 });
 
-test("leases successful authorization without bypassing later revalidation", async () => {
-  let now = 1_000;
+test("authorizes every writable frame and bypasses resize-only frames", async () => {
   let authorizationCount = 0;
   const forwarded: string[] = [];
   const queue = new TerminalInputQueue<string>({
-    authorize: async () => {
+    authorizeAndForward: async (message) => {
       authorizationCount += 1;
+      forwarded.push(message);
     },
-    forward: (message) => forwarded.push(message),
+    forward: (message) => {
+      forwarded.push(message);
+    },
     requiresAuthorization: (message) => message !== "resize",
     onError: (error) => assert.fail(String(error)),
-    authorizationLeaseMs: 250,
-    initiallyAuthorized: true,
-    now: () => now,
   });
 
   queue.enqueue("A");
   queue.enqueue("resize");
   await queue.drain();
-  assert.equal(authorizationCount, 0);
-
-  now = 1_251;
   queue.enqueue("B");
   queue.enqueue("C");
   await queue.drain();
-  assert.equal(authorizationCount, 1);
+  assert.equal(authorizationCount, 3);
   assert.deepEqual(forwarded, ["A", "resize", "B", "C"]);
 });
 
@@ -61,13 +60,14 @@ test("stops forwarding after authorization fails", async () => {
   const errors: unknown[] = [];
   const forwarded: string[] = [];
   const queue = new TerminalInputQueue<string>({
-    authorize: async () => {
+    authorizeAndForward: async () => {
       throw failure;
     },
-    forward: (message) => forwarded.push(message),
+    forward: (message) => {
+      forwarded.push(message);
+    },
     requiresAuthorization: () => true,
     onError: (error) => errors.push(error),
-    authorizationLeaseMs: 0,
   });
 
   queue.enqueue("A");

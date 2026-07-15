@@ -1,10 +1,23 @@
 import type { WorkspaceFile, WorkspaceGitFileChange } from "./types";
+import { userVisibleWorkspacePath } from "./workspace-path-policy";
 
-function cloneFile(file: WorkspaceFile): WorkspaceFile {
+function cloneVisibleFile(file: WorkspaceFile): WorkspaceFile | undefined {
+  const filePath = userVisibleWorkspacePath(file.path);
+  if (!filePath) return undefined;
   return {
     ...file,
-    children: file.children?.map(cloneFile),
+    path: filePath,
+    children: file.children
+      ?.map(cloneVisibleFile)
+      .filter((child): child is WorkspaceFile => child !== undefined),
   };
+}
+
+/** Client-side defense for snapshots produced by old servers or test fixtures. */
+export function userVisibleWorkspaceFiles(files: WorkspaceFile[]) {
+  return files
+    .map(cloneVisibleFile)
+    .filter((file): file is WorkspaceFile => file !== undefined);
 }
 
 function sortFiles(files: WorkspaceFile[]) {
@@ -26,7 +39,7 @@ export function mergeWorkspaceGitFiles(
   files: WorkspaceFile[],
   changes: WorkspaceGitFileChange[],
 ): WorkspaceFile[] {
-  const merged = files.map(cloneFile);
+  const merged = userVisibleWorkspaceFiles(files);
   const entries = new Map<string, WorkspaceFile>();
 
   const index = (items: WorkspaceFile[]) => {
@@ -51,13 +64,19 @@ export function mergeWorkspaceGitFiles(
   }
 
   for (const change of changes) {
+    const changePath = userVisibleWorkspacePath(change.path);
+    const originalPath = change.originalPath
+      ? userVisibleWorkspacePath(change.originalPath)
+      : undefined;
     if (
-      entries.has(change.path) ||
-      !change.path.startsWith("/workspace/")
+      !changePath ||
+      (change.originalPath && !originalPath) ||
+      entries.has(changePath) ||
+      !changePath.startsWith("/workspace/")
     ) {
       continue;
     }
-    const parts = change.path.slice("/workspace/".length).split("/");
+    const parts = changePath.slice("/workspace/".length).split("/");
     let parent = workspace;
     let parentPath = "/workspace";
     let validParent = true;
@@ -89,16 +108,16 @@ export function mergeWorkspaceGitFiles(
     }
 
     const name = parts.at(-1);
-    if (!validParent || !name || entries.has(change.path)) continue;
+    if (!validParent || !name || entries.has(changePath)) continue;
     parent.children ??= [];
     const file: WorkspaceFile = {
-      id: `git:${change.path}`,
+      id: `git:${changePath}`,
       name,
-      path: change.path,
+      path: changePath,
       kind: "file",
     };
     parent.children.push(file);
-    entries.set(change.path, file);
+    entries.set(changePath, file);
   }
 
   sortFiles(merged);

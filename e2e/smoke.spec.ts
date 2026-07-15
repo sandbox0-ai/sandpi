@@ -340,6 +340,43 @@ test("shows a matching skeleton while each Inspector tab loads", async ({
     if (/\/(ide|audit|metrics)$/.test(path)) {
       await new Promise((resolve) => setTimeout(resolve, 700));
     }
+    if (path.endsWith("/ide")) {
+      await route.fulfill({
+        json: {
+          data: {
+            files: [],
+            git: { repositories: [] },
+            refreshedAt: Date.now() / 1_000,
+          },
+        },
+      });
+      return;
+    }
+    if (path.endsWith("/audit")) {
+      await route.fulfill({ json: { data: session.audit } });
+      return;
+    }
+    if (path.endsWith("/metrics")) {
+      await route.fulfill({ json: { data: session.metrics } });
+      return;
+    }
+    if (path.endsWith("/models")) {
+      await route.fulfill({
+        json: {
+          data: {
+            data: [
+              {
+                id: "e2e-native-codex-model",
+                displayName: "E2E native Codex model",
+                isDefault: true,
+              },
+            ],
+          },
+          meta: { availability: "available", source: "codex" },
+        },
+      });
+      return;
+    }
     await route.continue();
   });
 

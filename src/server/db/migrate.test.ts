@@ -37,6 +37,15 @@ test("migration history contains every durable Sandpi boundary", async () => {
       "0010_session_history_revision",
       "0011_default_browser_timezone",
       "0012_turn_input_checkpoints",
+      "0013_supervisor_journal_epochs",
+      "0014_native_session_authority",
+      "0015_native_session_recovery",
+      "0016_workspace_native_state",
+      "0017_turn_submission_recovery",
+      "0018_codex_delivery_outbox",
+      "0019_session_exclusive_operations",
+      "0020_native_history_materialization",
+      "0021_session_operation_recovery",
     ],
   );
 
@@ -81,4 +90,78 @@ test("migration history contains every durable Sandpi boundary", async () => {
   const turnInputsSql = migrations[11]?.sql ?? "";
   assert.match(turnInputsSql, /pending_turn_input_snapshot_id TEXT/);
   assert.match(turnInputsSql, /input_workspace_snapshot_id TEXT/);
+
+  const supervisorEpochSql = migrations[12]?.sql ?? "";
+  assert.match(supervisorEpochSql, /ADD COLUMN supervisor_session_id TEXT/);
+  assert.match(
+    supervisorEpochSql,
+    /UNIQUE \(\s*session_id,\s*supervisor_session_id,\s*supervisor_sequence,\s*record_index\s*\)/,
+  );
+
+  const nativeAuthoritySql = migrations[13]?.sql ?? "";
+  assert.match(
+    nativeAuthoritySql,
+    /RENAME COLUMN thread_id TO native_session_id/,
+  );
+  assert.match(nativeAuthoritySql, /DROP COLUMN history_revision/);
+  assert.match(nativeAuthoritySql, /CREATE TABLE session_turn_mutations\b/);
+  assert.match(nativeAuthoritySql, /DROP TABLE harness_events/);
+  assert.doesNotMatch(
+    nativeAuthoritySql,
+    /INSERT INTO harness_events|CREATE TABLE harness_events/,
+  );
+
+  const nativeRecoverySql = migrations[14]?.sql ?? "";
+  assert.match(nativeRecoverySql, /pending_interrupted_native_turn_id TEXT/);
+  assert.match(nativeRecoverySql, /workspace_volume_id TEXT/);
+  assert.match(nativeRecoverySql, /ALTER COLUMN workspace_volume_id SET NOT NULL/);
+  assert.doesNotMatch(nativeRecoverySql, /message|notification|payload JSONB/);
+
+  const workspaceNativeStateSql = migrations[15]?.sql ?? "";
+  assert.match(
+    workspaceNativeStateSql,
+    /RENAME COLUMN native_branch_revision TO history_revision/,
+  );
+  assert.match(workspaceNativeStateSql, /harness_state_layout TEXT NOT NULL/);
+  assert.match(workspaceNativeStateSql, /head_volume_snapshot_id TEXT/);
+  assert.match(workspaceNativeStateSql, /includes_native_state BOOLEAN/);
+  assert.match(workspaceNativeStateSql, /workspace_volume_id TEXT/);
+  assert.match(workspaceNativeStateSql, /expected_history_revision BIGINT/);
+  assert.match(workspaceNativeStateSql, /result_native_session_id TEXT/);
+  assert.match(workspaceNativeStateSql, /replacement_started/);
+  assert.match(workspaceNativeStateSql, /DROP COLUMN replacement_native_session_id/);
+  assert.match(workspaceNativeStateSql, /DROP COLUMN branch_through_native_turn_id/);
+  assert.doesNotMatch(workspaceNativeStateSql, /payload JSONB|notification JSONB/);
+
+  const turnSubmissionSql = migrations[16]?.sql ?? "";
+  assert.match(turnSubmissionSql, /pending_turn_request_id TEXT/);
+  assert.match(turnSubmissionSql, /pending_turn_client_message_id TEXT/);
+  assert.match(turnSubmissionSql, /pending_turn_stable_input_id TEXT/);
+  assert.match(turnSubmissionSql, /pending_turn_phase TEXT/);
+  assert.doesNotMatch(
+    turnSubmissionSql,
+    /prompt\s+(TEXT|JSONB)|input\s+JSONB|payload\s+JSONB/i,
+  );
+
+  const deliveryOutboxSql = migrations[17]?.sql ?? "";
+  assert.match(deliveryOutboxSql, /'staged'/);
+  assert.doesNotMatch(
+    deliveryOutboxSql,
+    /prompt\s+(TEXT|JSONB)|input\s+JSONB|payload\s+JSONB/i,
+  );
+
+  const exclusiveOperationsSql = migrations[18]?.sql ?? "";
+  assert.match(exclusiveOperationsSql, /exclusive_operation_id TEXT/);
+  assert.match(exclusiveOperationsSql, /'session_fork', 'turn_fork'/);
+
+  const nativeHistorySql = migrations[19]?.sql ?? "";
+  assert.match(nativeHistorySql, /native_history_materialized BOOLEAN/);
+  assert.doesNotMatch(nativeHistorySql, /message|prompt|payload JSONB/i);
+
+  const operationRecoverySql = migrations[20]?.sql ?? "";
+  assert.match(operationRecoverySql, /exclusive_operation_heartbeat_at/);
+  assert.match(operationRecoverySql, /native_state_migration_snapshot_id/);
+  assert.match(operationRecoverySql, /'runtime_recovery'/);
+  assert.match(operationRecoverySql, /'native_state_migration'/);
+  assert.doesNotMatch(operationRecoverySql, /message|prompt|payload JSONB/i);
 });

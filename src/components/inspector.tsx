@@ -427,7 +427,7 @@ export function Inspector({
             { files: ui.files, audit: ui.audit, metrics: ui.metrics }[activeTab],
           )}
         />
-      ) : activeTab === "files" ? (
+      ) : !currentLoadError && activeTab === "files" ? (
         <div className="inspector-panel files-panel ide-panel">
           <WorkspaceIde
             language={language}

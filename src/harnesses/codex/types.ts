@@ -1,8 +1,13 @@
-import type { CodingSession, HarnessEventEnvelope } from "@/lib/types";
+import type {
+  CodingSession,
+  HarnessEventEnvelope,
+  SessionStatus,
+} from "@/lib/types";
 
 /**
- * Mock-only subset of the Codex app-server v2 schema. Production builds must generate and use
- * the exact TypeScript schema from the Codex binary pinned to the Environment with
+ * Hand-maintained subset of the Codex app-server v2 schema used by the current UI and mock
+ * fixtures. Production packaging should generate the exact TypeScript schema from the Codex
+ * binary pinned to the Environment with
  * `codex app-server generate-ts --out <dir>`. Keeping the native method and item names here is
  * intentional: Sandpi must not translate them into a cross-harness chat or tool-call model.
  */
@@ -19,6 +24,12 @@ export interface CodexFileUpdateChange {
   diff: string;
 }
 
+export type CodexCommandAction =
+  | { type: "read"; command: string; name: string; path: string }
+  | { type: "listFiles"; command: string; path: string | null }
+  | { type: "search"; command: string; query: string | null; path: string | null }
+  | { type: "unknown"; command: string };
+
 export type CodexThreadItem =
   | {
       type: "userMessage";
@@ -34,6 +45,17 @@ export type CodexThreadItem =
       memoryCitation: null;
     }
   | {
+      type: "plan";
+      id: string;
+      text: string;
+    }
+  | {
+      type: "reasoning";
+      id: string;
+      summary: string[];
+      content: string[];
+    }
+  | {
       type: "commandExecution";
       id: string;
       command: string;
@@ -41,7 +63,7 @@ export type CodexThreadItem =
       processId: string | null;
       source: "agent" | "userShell" | "unifiedExecStartup" | "unifiedExecInteraction";
       status: "inProgress" | "completed" | "failed" | "declined";
-      commandActions: [];
+      commandActions: CodexCommandAction[];
       aggregatedOutput: string | null;
       exitCode: number | null;
       durationMs: number | null;
@@ -56,12 +78,35 @@ export type CodexThreadItem =
 export interface CodexTurn {
   id: string;
   items: CodexThreadItem[];
-  itemsView: "full";
+  itemsView: "notLoaded" | "summary" | "full";
   status: "completed" | "interrupted" | "failed" | "inProgress";
-  error: null;
+  error: {
+    message: string;
+    codexErrorInfo: unknown | null;
+    additionalDetails: string | null;
+  } | null;
   startedAt: number | null;
   completedAt: number | null;
   durationMs: number | null;
+}
+
+export type CodexThreadStatus =
+  | { type: "notLoaded" | "idle" | "systemError" }
+  | {
+      type: "active";
+      activeFlags: Array<"waitingOnApproval" | "waitingOnUserInput">;
+    };
+
+/** Native app-server Thread returned by thread/read(includeTurns=true). */
+export interface CodexThread {
+  id: string;
+  sessionId?: string;
+  forkedFromId?: string | null;
+  preview?: string;
+  createdAt?: number;
+  updatedAt?: number;
+  status: CodexThreadStatus;
+  turns: CodexTurn[];
 }
 
 export type CodexServerNotification =
@@ -81,6 +126,66 @@ export type CodexServerNotification =
       params: { threadId: string; turnId: string; itemId: string; delta: string };
     }
   | {
+      method: "item/plan/delta";
+      params: { threadId: string; turnId: string; itemId: string; delta: string };
+    }
+  | {
+      method: "item/reasoning/summaryTextDelta";
+      params: {
+        threadId: string;
+        turnId: string;
+        itemId: string;
+        delta: string;
+        summaryIndex: number;
+      };
+    }
+  | {
+      method: "item/reasoning/summaryPartAdded";
+      params: {
+        threadId: string;
+        turnId: string;
+        itemId: string;
+        summaryIndex: number;
+      };
+    }
+  | {
+      method: "item/reasoning/textDelta";
+      params: {
+        threadId: string;
+        turnId: string;
+        itemId: string;
+        delta: string;
+        contentIndex: number;
+      };
+    }
+  | {
+      method: "item/commandExecution/outputDelta";
+      params: { threadId: string; turnId: string; itemId: string; delta: string };
+    }
+  | {
+      method: "item/commandExecution/terminalInteraction";
+      params: {
+        threadId: string;
+        turnId: string;
+        itemId: string;
+        processId: string;
+        stdin: string;
+      };
+    }
+  | {
+      method: "item/fileChange/outputDelta";
+      params: { threadId: string; turnId: string; itemId: string; delta: string };
+    }
+  | {
+      method: "item/fileChange/patchUpdated";
+      params: {
+        threadId: string;
+        turnId: string;
+        itemId: string;
+        changes: CodexFileUpdateChange[];
+      };
+    }
+  | {
       method: "item/completed";
       params: {
         item: CodexThreadItem;
@@ -91,19 +196,70 @@ export type CodexServerNotification =
     }
   | { method: "turn/completed"; params: { threadId: string; turn: CodexTurn } };
 
+/**
+ * Native app-server notifications needed to reconstruct the live Codex transcript. Keep the
+ * names intact: this is a Codex transport contract, not a cross-harness event vocabulary.
+ */
+export const CODEX_TRANSCRIPT_NOTIFICATION_METHODS = [
+  "turn/started",
+  "item/started",
+  "item/agentMessage/delta",
+  "item/plan/delta",
+  "item/reasoning/summaryTextDelta",
+  "item/reasoning/summaryPartAdded",
+  "item/reasoning/textDelta",
+  "item/commandExecution/outputDelta",
+  "item/commandExecution/terminalInteraction",
+  "item/fileChange/outputDelta",
+  "item/fileChange/patchUpdated",
+  "item/completed",
+  "turn/completed",
+] as const;
+
 export type CodexEventEnvelope = HarnessEventEnvelope<"codex", CodexServerNotification>;
 
 export interface CodexHarnessState {
   protocol: "codex-app-server";
+  /** Opaque native reference only. Conversation history remains in CODEX_HOME. */
   threadId: string;
   modelId: string;
   harnessVersion: string;
   protocolVersion: "v2";
-  /** Monotonic server branch revision used to reset other connected clients. */
-  historyRevision?: number;
-  events: CodexEventEnvelope[];
-  /** User-message item IDs backed by a ready Workspace Volume checkpoint. */
-  recoverableUserMessageItemIds?: string[];
+  /** Changes whenever the visible native history is destructively rewritten. */
+  historyRevision: number;
+}
+
+/**
+ * Codex-specific read model. `thread` is the unmodified native app-server
+ * payload; Sandpi adds only checkpoint capability and current model metadata.
+ */
+export interface CodexNativeSnapshot {
+  protocol: "codex-app-server";
+  nativeSessionId: string;
+  historyRevision: number;
+  modelId: string;
+  /**
+   * Product lifecycle authority after Sandpi has completed any post-Turn
+   * checkpoint and persistence work. Native `turn/completed` alone must not
+   * move the Session back to `waiting`.
+   */
+  sessionStatus: SessionStatus;
+  thread: CodexThread;
+  /** Native Turns whose completed Workspace checkpoint can seed a child Session. */
+  forkableTurnIds: string[];
+  /** Native Turns with a restorable pre-Turn Workspace state for edit/delete. */
+  rewindableTurnIds: string[];
+}
+
+/**
+ * A native branch became stale. A recoverable invalidation is followed by a
+ * fresh `snapshot`; an unrecoverable invalidation means the Codex rollout is
+ * gone and Sandpi must not substitute a database transcript for it.
+ */
+export interface CodexNativeInvalidation {
+  reason?: string;
+  message?: string;
+  unrecoverable?: boolean;
 }
 
 export type CodexSession = CodingSession<"codex", CodexHarnessState>;

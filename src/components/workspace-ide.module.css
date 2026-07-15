@@ -80,6 +80,10 @@
   color: var(--green);
 }
 
+.liveBadge.polling {
+  color: var(--amber);
+}
+
 .workbench {
   display: grid;
   min-width: 0;
@@ -619,6 +623,7 @@
 }
 
 .connection.reconnecting i,
+.connection.polling i,
 .connection.connecting i {
   background: var(--amber);
 }

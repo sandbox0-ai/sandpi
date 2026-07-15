@@ -132,9 +132,8 @@ export interface NativeHarnessNotification {
 }
 
 /**
- * Sandpi's durable transport envelope preserves ordering and replay metadata only. The native
- * notification stays opaque to the shared runtime and is interpreted exclusively by the UI
- * module for `harness`. Do not add normalized message, tool-call or approval fields here.
+ * Bounded live-transport envelope. Sandpi never persists it as conversation
+ * history; a reconnect starts from the harness-native Session snapshot.
  */
 export interface HarnessEventEnvelope<
   THarness extends HarnessId = HarnessId,
@@ -270,6 +269,8 @@ export interface WorkspaceGitState {
  * Cross-client Web IDE contract. Web, iOS, Android and HarmonyOS clients consume
  * this snapshot and treat WorkspaceIdeEvent as an invalidation signal; clients
  * must not connect to a Sandbox0 file endpoint or infer Git state themselves.
+ * Server projections must never include `/workspace/.sandpi` or descendants;
+ * clients apply the shared path policy again only as defense in depth.
  */
 export interface WorkspaceIdeSnapshot {
   files: WorkspaceFile[];
@@ -317,7 +318,12 @@ export type WorkspaceIdeEvent =
       path: string;
       at: UnixTimestamp;
     }
-  | { type: "error"; error: string; at: UnixTimestamp };
+  | {
+      type: "error";
+      error: string;
+      code?: "workspace_watch_unavailable";
+      at: UnixTimestamp;
+    };
 
 type SdkSandboxAuditEvent = SandboxObservabilityEvents["events"][number];
 
@@ -386,12 +392,9 @@ export interface SessionOrigin {
 }
 
 /**
- * Durable history boundary implemented by the Sandpi server:
- * - Session fork branches Sandbox rootfs plus the current Workspace Volume.
- * - Each completed Turn owns a Workspace Volume snapshot; Turn fork/edit/rollback never
- *   branch or restore the Session rootfs.
- * - Inherited Turns in a fork are display history. The fork baseline is the first mutable
- *   checkpoint owned by the child Session.
+ * Product Session metadata. The coding-agent native Session is the only
+ * durable conversation history; `harnessState` contains an opaque reference,
+ * never copied messages or tool events.
  */
 export interface CodingSession<
   THarness extends HarnessId = HarnessId,
@@ -407,10 +410,7 @@ export interface CodingSession<
   archived: boolean;
   harness: THarness;
   harnessLabel: string;
-  /**
-   * Native conversation state. Shared Sandpi code may store, clone and transport it, but must
-   * never inspect it or convert it into a universal message/tool schema.
-   */
+  /** Opaque native Session reference and non-conversation harness metadata. */
   harnessState: THarnessState;
   createdAt: UnixTimestamp;
   updatedAt: UnixTimestamp;

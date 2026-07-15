@@ -15,11 +15,13 @@ import {
   Paperclip,
   Pencil,
   Settings2,
+  Square,
   SquareTerminal,
+  TriangleAlert,
   Trash2,
   X,
 } from "lucide-react";
-import { useEffect, useRef, useState, type UIEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type UIEvent } from "react";
 
 import type { InspectorTab } from "@/components/inspector";
 import { SessionActionsMenu } from "@/components/session-actions-menu";
@@ -27,6 +29,7 @@ import {
   codexModelOptionsFromNativeResult,
   type CodexModelOption,
 } from "@/harnesses/codex/models";
+import { codexTurnCapabilitySets } from "@/harnesses/codex/capabilities";
 import {
   clipboardCodexImageFiles,
   encodeCodexComposerImage,
@@ -35,14 +38,27 @@ import {
   selectCodexImageFiles,
   type CodexImageSelectionIssue,
 } from "@/harnesses/codex/composer-images";
-import { visibleCodexConversationWhileEditing } from "@/harnesses/codex/timeline";
+import {
+  CodexCommandActivity,
+  CodexFileChangeActivity,
+  CodexNativeItemActivity,
+  CodexRunningTurn,
+  CodexTurnResult,
+} from "@/harnesses/codex/activity";
+import {
+  visibleCodexTimelineWhileEditing,
+} from "@/harnesses/codex/timeline";
 import type {
   CodexComposerImage,
+  CodexEventEnvelope,
+  CodexNativeInvalidation,
+  CodexNativeSnapshot,
   CodexSession,
 } from "@/harnesses/codex/types";
-import type {
-  CodexMessageView,
-  CodexToolActivityView,
+import {
+  projectCodexTimeline,
+  shouldRefreshCodexNativeSnapshot,
+  type CodexMessageView,
 } from "@/harnesses/codex/events";
 import {
   apiFetch,
@@ -78,34 +94,18 @@ interface ConversationProps {
   onTogglePinSession: (sessionId: string) => void;
 }
 
-function activityIcon(status: CodexToolActivityView["status"]) {
-  if (status === "completed") {
-    return <Check size={13} strokeWidth={2.6} />;
-  }
-  return <span className="activity-spinner" />;
-}
-
 function syncComposerHeight(textarea: HTMLTextAreaElement) {
   textarea.style.height = "auto";
   textarea.style.height = `${textarea.scrollHeight}px`;
 }
 
-function completedTurnUserItemId(
-  events: CodexSession["harnessState"]["events"],
-  turnId: string,
-) {
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const notification = events[index]?.notification;
-    if (
-      notification?.method === "item/completed" &&
-      notification.params.turnId === turnId &&
-      notification.params.item.type === "userMessage"
-    ) {
-      return notification.params.item.id;
-    }
-  }
-  return undefined;
-}
+const CODEX_SESSION_STATUSES = new Set<CodexNativeSnapshot["sessionStatus"]>([
+  "running",
+  "waiting",
+  "paused",
+  "completed",
+  "failed",
+]);
 
 export function CodexConversation({
   language,
@@ -142,34 +142,108 @@ export function CodexConversation({
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [deleteMessageId, setDeleteMessageId] = useState<string | null>(null);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [editingTurnId, setEditingTurnId] = useState<string | null>(null);
   const [pastedImages, setPastedImages] = useState<CodexComposerImage[]>([]);
   const [attachmentError, setAttachmentError] = useState("");
   const [sending, setSending] = useState(false);
+  const [interrupting, setInterrupting] = useState(false);
   const [forkingMessageId, setForkingMessageId] = useState<string | null>(null);
+  const [modelCatalogUnavailable, setModelCatalogUnavailable] = useState("");
+  const [nativeSnapshot, setNativeSnapshot] =
+    useState<CodexNativeSnapshot | null>(null);
+  const [liveNotifications, setLiveNotifications] = useState<
+    CodexEventEnvelope[]
+  >([]);
+  const [nativeStreamEpoch, setNativeStreamEpoch] = useState(0);
+  const [nativeStreamReady, setNativeStreamReady] = useState(false);
+  const [nativeHistoryError, setNativeHistoryError] = useState("");
+  const [activityClock, setActivityClock] = useState(() => Date.now());
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
+  const conversationScrollRef = useRef<HTMLDivElement>(null);
+  const stickToConversationEndRef = useRef(true);
   const scrollbarHideTimerRef = useRef<number | null>(null);
+  const pendingTurnStartedAtRef = useRef<number | null>(null);
+  const hasNativeSnapshotRef = useRef(false);
+  const liveNotificationSequencesRef = useRef(new Set<number>());
+  const liveNotificationCountRef = useRef(0);
+  const nativeSnapshotRefreshRequestedRef = useRef(false);
   const sessionRef = useRef(session);
   // This operates on Codex-native Turn/item boundaries. Other clients must implement the same
   // editing UX in their own harness reducer instead of consuming a shared message timeline.
-  const visibleMessages = visibleCodexConversationWhileEditing(
-    session.harnessState.events,
-    editingMessageId,
+  const visibleTimeline = useMemo(() => {
+    const projected = projectCodexTimeline(
+      nativeSnapshot?.thread,
+      liveNotifications,
+    );
+    return visibleCodexTimelineWhileEditing(projected, editingMessageId);
+  }, [editingMessageId, liveNotifications, nativeSnapshot?.thread]);
+  const turnCapabilities = useMemo(
+    () => codexTurnCapabilitySets(nativeSnapshot),
+    [nativeSnapshot],
   );
+  const runningTurn =
+    visibleTimeline.activeTurn ??
+    (session.status === "running" && !editingMessageId
+      ? {
+          turnId: `pending:${session.id}`,
+          startedAt: pendingTurnStartedAtRef.current ?? session.updatedAt,
+          state: "working" as const,
+        }
+      : undefined);
+  const runningTurnId = runningTurn?.turnId;
+  const interruptibleTurnId = visibleTimeline.activeTurn?.turnId;
+  const turnRunning = Boolean(runningTurnId);
+  const nativeReady =
+    Boolean(nativeSnapshot) && nativeStreamReady && !nativeHistoryError;
 
   useEffect(() => {
     sessionRef.current = session;
   }, [session]);
 
   useEffect(() => {
+    stickToConversationEndRef.current = true;
+    pendingTurnStartedAtRef.current = null;
     setDraft("");
     setDeleteMessageId(null);
     setEditingMessageId(null);
+    setEditingTurnId(null);
     setPastedImages([]);
     setAttachmentError("");
     setSending(false);
+    setInterrupting(false);
     setForkingMessageId(null);
+    setModelCatalogUnavailable("");
+    setNativeSnapshot(null);
+    setLiveNotifications([]);
+    setNativeStreamReady(false);
+    setNativeHistoryError("");
+    hasNativeSnapshotRef.current = false;
+    liveNotificationSequencesRef.current.clear();
+    liveNotificationCountRef.current = 0;
+    nativeSnapshotRefreshRequestedRef.current = false;
   }, [session.id]);
+
+  const latestEventSequence = liveNotifications.at(-1)?.sequence ?? 0;
+  useEffect(() => {
+    if (!stickToConversationEndRef.current) return;
+    const frame = window.requestAnimationFrame(() => {
+      const scrollRegion = conversationScrollRef.current;
+      if (scrollRegion) scrollRegion.scrollTop = scrollRegion.scrollHeight;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [latestEventSequence, nativeSnapshot?.historyRevision, session.id]);
+
+  useEffect(() => {
+    if (!runningTurnId) return;
+    setActivityClock(Date.now());
+    const timer = window.setInterval(() => setActivityClock(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, [runningTurnId]);
+
+  useEffect(() => {
+    setInterrupting(false);
+  }, [runningTurnId]);
 
   useEffect(() => {
     setSelectedModelId(session.harnessState.modelId);
@@ -177,6 +251,7 @@ export function CodexConversation({
 
   useEffect(() => {
     const controller = new AbortController();
+    setModelCatalogUnavailable("");
     void apiFetch<ApiEnvelope<unknown>>(
       `/api/v1/sessions/${encodeURIComponent(session.id)}/models`,
       { signal: controller.signal },
@@ -184,6 +259,13 @@ export function CodexConversation({
       .then((response) => {
         const models = codexModelOptionsFromNativeResult(response.data);
         setModelOptions(models);
+        setModelCatalogUnavailable(
+          response.meta?.availability === "runtime-unavailable"
+            ? typeof response.meta.message === "string"
+              ? response.meta.message
+              : ui.modelListUnavailable
+            : "",
+        );
         setSelectedModelId((current) =>
           models.some((model) => model.id === current)
             ? current
@@ -194,75 +276,113 @@ export function CodexConversation({
       })
       .catch((error) => {
         if (!controller.signal.aborted) {
-          console.error("Unable to load Codex models", error);
+          setModelOptions([]);
+          setModelCatalogUnavailable(
+            error instanceof Error ? error.message : ui.modelListUnavailable,
+          );
         }
       });
     return () => controller.abort();
-  }, [session.id]);
+  }, [session.id, ui.modelListUnavailable]);
 
   useEffect(() => {
-    const latestSequence = sessionRef.current.harnessState.events.at(-1)?.sequence ?? 0;
-    const search = new URLSearchParams({
-      after: String(latestSequence),
-      revision: String(sessionRef.current.harnessState.historyRevision ?? 0),
-    });
     const source = new EventSource(
-      apiUrl(
-        `/api/v1/sessions/${encodeURIComponent(session.id)}/events?${search.toString()}`,
-      ),
+      apiUrl(`/api/v1/sessions/${encodeURIComponent(session.id)}/events`),
       { withCredentials: true },
     );
 
-    const handleHarnessEvent = (event: MessageEvent<string>) => {
+    const handleSnapshot = (event: MessageEvent<string>) => {
       try {
-        const envelope = JSON.parse(event.data) as CodexSession["harnessState"]["events"][number];
-        const current = sessionRef.current;
+        const snapshot = JSON.parse(event.data) as CodexNativeSnapshot;
         if (
-          envelope.harness !== "codex" ||
-          current.harnessState.events.some(
-            (candidate) => candidate.sequence === envelope.sequence,
-          )
+          snapshot.protocol !== "codex-app-server" ||
+          !snapshot.thread ||
+          snapshot.thread.id !== snapshot.nativeSessionId ||
+          !Array.isArray(snapshot.thread.turns) ||
+          !Number.isSafeInteger(snapshot.historyRevision) ||
+          snapshot.historyRevision < 0 ||
+          !CODEX_SESSION_STATUSES.has(snapshot.sessionStatus) ||
+          !Array.isArray(snapshot.forkableTurnIds) ||
+          snapshot.forkableTurnIds.some((turnId) => typeof turnId !== "string") ||
+          !Array.isArray(snapshot.rewindableTurnIds) ||
+          snapshot.rewindableTurnIds.some((turnId) => typeof turnId !== "string")
         ) {
-          return;
+          throw new Error("Invalid Codex native snapshot");
         }
-        const events = [...current.harnessState.events, envelope];
-        const completedTurnId =
-          envelope.notification.method === "turn/completed"
-            ? envelope.notification.params.turn.id
-            : undefined;
-        const recoverableItemId = completedTurnId
-          ? completedTurnUserItemId(events, completedTurnId)
-          : undefined;
+        hasNativeSnapshotRef.current = true;
+        nativeSnapshotRefreshRequestedRef.current = false;
+        liveNotificationSequencesRef.current.clear();
+        liveNotificationCountRef.current = 0;
+        setNativeSnapshot(snapshot);
+        // A snapshot is the new native authority. Never replay the prior
+        // connection's notification suffix on top of it.
+        setLiveNotifications([]);
+        setNativeStreamReady(true);
+        setNativeHistoryError("");
+        setSelectedModelId(snapshot.modelId);
+        const current = sessionRef.current;
         const next: CodexSession = {
           ...current,
-          updatedAt: envelope.receivedAt,
-          status:
-            envelope.notification.method === "turn/completed"
-              ? "waiting"
-              : envelope.notification.method === "turn/started"
-                ? "running"
-                : current.status,
-          unread:
-            envelope.notification.method === "turn/completed"
-              ? document.visibilityState !== "visible"
-              : current.unread,
+          updatedAt: snapshot.thread.updatedAt ?? current.updatedAt,
+          status: snapshot.sessionStatus,
           harnessState: {
             ...current.harnessState,
-            events,
-            recoverableUserMessageItemIds: recoverableItemId
-              ? [
-                  ...(current.harnessState.recoverableUserMessageItemIds ?? []),
-                  recoverableItemId,
-                ].filter((itemId, index, all) => all.indexOf(itemId) === index)
-              : current.harnessState.recoverableUserMessageItemIds,
+            threadId: snapshot.thread.id,
+            modelId: snapshot.modelId,
+            historyRevision: snapshot.historyRevision,
           },
         };
         sessionRef.current = next;
         onSessionChange(next);
-        if (
-          envelope.notification.method === "turn/completed" &&
-          document.visibilityState === "visible"
-        ) {
+      } catch (error) {
+        hasNativeSnapshotRef.current = false;
+        liveNotificationSequencesRef.current.clear();
+        liveNotificationCountRef.current = 0;
+        setNativeSnapshot(null);
+        setLiveNotifications([]);
+        setNativeStreamReady(false);
+        setNativeHistoryError(ui.nativeRolloutUnavailableBody);
+        console.error("Unable to decode Codex native snapshot", error);
+      }
+    };
+
+    const handleNotification = (event: MessageEvent<string>) => {
+      try {
+        const envelope = JSON.parse(event.data) as CodexEventEnvelope;
+        if (envelope.harness !== "codex" || !hasNativeSnapshotRef.current) {
+          return;
+        }
+        if (liveNotificationSequencesRef.current.has(envelope.sequence)) return;
+        if (shouldRefreshCodexNativeSnapshot(liveNotificationCountRef.current)) {
+          // Projection replays the suffix over the native Thread snapshot. Cap
+          // that work and reconnect so app-server supplies a fresh authority
+          // instead of letting a long Turn grow memory and replay cost without
+          // bound.
+          if (!nativeSnapshotRefreshRequestedRef.current) {
+            nativeSnapshotRefreshRequestedRef.current = true;
+            hasNativeSnapshotRef.current = false;
+            setNativeStreamReady(false);
+            setNativeStreamEpoch((current) => current + 1);
+          }
+          return;
+        }
+        liveNotificationSequencesRef.current.add(envelope.sequence);
+        liveNotificationCountRef.current += 1;
+        setLiveNotifications((current) => [...current, envelope]);
+
+        const current = sessionRef.current;
+        const completed = envelope.notification.method === "turn/completed";
+        const next: CodexSession = {
+          ...current,
+          updatedAt: envelope.receivedAt,
+          unread:
+            completed && document.visibilityState !== "visible"
+              ? true
+              : current.unread,
+        };
+        sessionRef.current = next;
+        onSessionChange(next);
+        if (completed && document.visibilityState === "visible") {
           void apiFetch(
             `/api/v1/sessions/${encodeURIComponent(session.id)}/metadata`,
             {
@@ -274,24 +394,51 @@ export function CodexConversation({
           );
         }
       } catch (error) {
-        console.error("Unable to decode Codex event", error);
+        console.error("Unable to decode Codex live notification", error);
       }
     };
 
-    source.addEventListener("harness", handleHarnessEvent as EventListener);
-    source.addEventListener("reset", ((event: MessageEvent<string>) => {
+    const handleInvalidation = (event: MessageEvent<string>) => {
+      let invalidation: CodexNativeInvalidation = {};
       try {
-        const replacement = JSON.parse(event.data) as CodexSession;
-        sessionRef.current = replacement;
-        setDeleteMessageId(null);
-        setEditingMessageId(null);
-        onSessionChange(replacement);
+        invalidation = event.data
+          ? (JSON.parse(event.data) as CodexNativeInvalidation)
+          : {};
       } catch (error) {
-        console.error("Unable to replace superseded Codex history", error);
+        console.error("Unable to decode Codex native invalidation", error);
       }
-    }) as EventListener);
+      hasNativeSnapshotRef.current = false;
+      liveNotificationSequencesRef.current.clear();
+      liveNotificationCountRef.current = 0;
+      setNativeSnapshot(null);
+      setLiveNotifications([]);
+      setNativeStreamReady(false);
+      setDeleteMessageId(null);
+      setEditingMessageId(null);
+      setEditingTurnId(null);
+      const reason = invalidation.reason?.toLowerCase() ?? "";
+      const unrecoverable =
+        invalidation.unrecoverable === true ||
+        reason.includes("unrecoverable") ||
+        reason.includes("rollout-lost") ||
+        reason.includes("rollout_lost");
+      setNativeHistoryError(
+        unrecoverable
+          ? invalidation.message || ui.nativeRolloutUnavailableBody
+          : "",
+      );
+    };
+
+    source.addEventListener("snapshot", handleSnapshot as EventListener);
+    source.addEventListener("notification", handleNotification as EventListener);
+    source.addEventListener("invalidation", handleInvalidation as EventListener);
     return () => source.close();
-  }, [onSessionChange, session.id]);
+  }, [
+    nativeStreamEpoch,
+    onSessionChange,
+    session.id,
+    ui.nativeRolloutUnavailableBody,
+  ]);
 
   useEffect(() => {
     if (composerRef.current) {
@@ -313,17 +460,16 @@ export function CodexConversation({
     if (!content && pastedImages.length === 0) {
       return;
     }
-    if (sending) {
+    if (sending || turnRunning || session.status !== "waiting" || !nativeReady) {
       return;
     }
-    if (editingMessageId) {
+    if (editingMessageId && editingTurnId) {
+      if (!turnCapabilities.rewindableTurnIds.has(editingTurnId)) return;
       setSending(true);
       setAttachmentError("");
       try {
-        const response = await apiFetch<
-          ApiEnvelope<{ requestId: string; session: CodexSession }>
-        >(
-          `/api/v1/sessions/${encodeURIComponent(session.id)}/turns/${encodeURIComponent(editingMessageId)}`,
+        await apiFetch<ApiEnvelope<{ requestId: string }>>(
+          `/api/v1/sessions/${encodeURIComponent(session.id)}/turns/${encodeURIComponent(editingTurnId)}`,
           {
             method: "PUT",
             body: JSON.stringify({
@@ -335,9 +481,8 @@ export function CodexConversation({
             }),
           },
         );
-        sessionRef.current = response.data.session;
-        onSessionChange(response.data.session);
-        setEditingMessageId(null);
+        // Keep the edited Turn and its descendants hidden until the server
+        // invalidates this native branch and sends the replacement snapshot.
       } catch (error) {
         setAttachmentError(
           error instanceof Error ? error.message : "Could not edit the Codex Turn.",
@@ -371,6 +516,7 @@ export function CodexConversation({
             modelId: selectedModel.id,
           },
         };
+        pendingTurnStartedAtRef.current = Date.now() / 1_000;
         sessionRef.current = next;
         onSessionChange(next);
       } catch (error) {
@@ -387,18 +533,45 @@ export function CodexConversation({
     setSending(false);
   }
 
+  async function interruptActiveTurn() {
+    if (!interruptibleTurnId || interrupting) {
+      return;
+    }
+    setInterrupting(true);
+    setAttachmentError("");
+    try {
+      await apiFetch<ApiEnvelope<{ requestId: string }>>(
+        `/api/v1/sessions/${encodeURIComponent(session.id)}/turns/interrupt`,
+        {
+          method: "POST",
+          body: JSON.stringify({ turnId: interruptibleTurnId }),
+        },
+      );
+      // Keep the stop state until the native active Turn disappears. Product
+      // Session status still converges only from the post-checkpoint snapshot.
+    } catch (error) {
+      setAttachmentError(
+        error instanceof Error ? error.message : ui.interruptTurnFailed,
+      );
+      setInterrupting(false);
+    }
+  }
+
   async function deleteTurn(message: CodexMessageView) {
-    if (sending) return;
+    if (
+      sending ||
+      !turnCapabilities.rewindableTurnIds.has(message.turnId)
+    ) {
+      return;
+    }
     setSending(true);
     setDeleteMessageId(null);
     setAttachmentError("");
     try {
-      const response = await apiFetch<ApiEnvelope<CodexSession>>(
-        `/api/v1/sessions/${encodeURIComponent(session.id)}/turns/${encodeURIComponent(message.id)}`,
+      await apiFetch<ApiEnvelope<{ requestId: string }>>(
+        `/api/v1/sessions/${encodeURIComponent(session.id)}/turns/${encodeURIComponent(message.turnId)}`,
         { method: "DELETE" },
       );
-      sessionRef.current = response.data;
-      onSessionChange(response.data);
     } catch (error) {
       setAttachmentError(
         error instanceof Error ? error.message : "Could not delete the Codex Turn.",
@@ -409,14 +582,16 @@ export function CodexConversation({
   }
 
   async function forkTurn(message: CodexMessageView) {
-    if (sending) return;
+    if (sending || !turnCapabilities.forkableTurnIds.has(message.turnId)) {
+      return;
+    }
     setSending(true);
     setForkingMessageId(message.id);
     setDeleteMessageId(null);
     setAttachmentError("");
     try {
       const response = await apiFetch<ApiEnvelope<CodexSession>>(
-        `/api/v1/sessions/${encodeURIComponent(session.id)}/turns/${encodeURIComponent(message.id)}/fork`,
+        `/api/v1/sessions/${encodeURIComponent(session.id)}/turns/${encodeURIComponent(message.turnId)}/fork`,
         { method: "POST", body: JSON.stringify({}) },
       );
       onDerivedSessionCreated(response.data);
@@ -431,8 +606,10 @@ export function CodexConversation({
   }
 
   function beginEditing(message: CodexMessageView) {
+    if (!turnCapabilities.rewindableTurnIds.has(message.turnId)) return;
     setDeleteMessageId(null);
     setEditingMessageId(message.id);
+    setEditingTurnId(message.turnId);
     setDraft(message.content);
     setPastedImages(message.attachments ?? []);
     setAttachmentError("");
@@ -478,6 +655,8 @@ export function CodexConversation({
 
   function handleConversationScroll(event: UIEvent<HTMLDivElement>) {
     const scrollRegion = event.currentTarget;
+    stickToConversationEndRef.current =
+      scrollRegion.scrollHeight - scrollRegion.scrollTop - scrollRegion.clientHeight < 96;
     scrollRegion.classList.add("is-scrolling");
     if (scrollbarHideTimerRef.current !== null) {
       window.clearTimeout(scrollbarHideTimerRef.current);
@@ -572,13 +751,65 @@ export function CodexConversation({
         </div>
       </header>
 
-      <div className="conversation-scroll" onScroll={handleConversationScroll}>
+      <div
+        ref={conversationScrollRef}
+        className="conversation-scroll"
+        onScroll={handleConversationScroll}
+      >
         <div className="message-column">
-          {visibleMessages.map((message) => (
-            <article
-              className={`message message-${message.role}`}
-              key={message.id}
-            >
+          {nativeHistoryError ? (
+            <div className="native-context-reset-notice" role="alert">
+              <TriangleAlert size={16} aria-hidden="true" />
+              <span>
+                <strong>{ui.nativeRolloutUnavailableTitle}</strong>
+                <small>{nativeHistoryError}</small>
+              </span>
+            </div>
+          ) : null}
+          {visibleTimeline.entries.map((entry) => {
+            if (entry.kind === "command") {
+              return (
+                <CodexCommandActivity
+                  key={entry.id}
+                  activity={entry}
+                  language={language}
+                />
+              );
+            }
+            if (entry.kind === "fileChange") {
+              return (
+                <CodexFileChangeActivity
+                  key={entry.id}
+                  activity={entry}
+                  language={language}
+                  onOpenFiles={() => onOpenInspector("files")}
+                />
+              );
+            }
+            if (entry.kind === "nativeItem") {
+              return (
+                <CodexNativeItemActivity
+                  key={entry.id}
+                  activity={entry}
+                  language={language}
+                />
+              );
+            }
+            if (entry.kind === "turnResult") {
+              return (
+                <CodexTurnResult
+                  key={entry.id}
+                  result={entry}
+                  language={language}
+                />
+              );
+            }
+            const message = entry;
+            return (
+              <article
+                className={`message message-${message.role}`}
+                key={message.id}
+              >
               {message.role === "assistant" ? (
                 <div className="assistant-avatar" aria-label="Codex">
                   <span />
@@ -608,65 +839,16 @@ export function CodexConversation({
                     ))}
                   </div>
                 ) : null}
-                {message.content ? <p>{message.content}</p> : null}
-
-                {message.activities ? (
-                  <div className="activity-list">
-                    {message.activities.map((activity) => (
-                      <div className="activity-row" key={activity.id}>
-                        <span
-                          className={`activity-status status-${activity.status}`}
-                        >
-                          {activityIcon(activity.status)}
-                        </span>
-                        <span className="activity-copy">
-                          <strong>{activity.label}</strong>
-                          <small>{activity.detail}</small>
-                        </span>
-                        {activity.duration ? (
-                          <span className="activity-duration">
-                            {activity.duration}
-                          </span>
-                        ) : null}
-                      </div>
-                    ))}
-                  </div>
-                ) : null}
-
-                {message.diff ? (
-                  <div className="diff-card">
-                    <div className="diff-header">
-                      <span>{message.diff.file}</span>
-                      <span className="diff-stats">
-                        <b>+{message.diff.additions}</b>
-                        <i>-{message.diff.deletions}</i>
-                      </span>
-                    </div>
-                    <pre>
-                      <code>
-                        {message.diff.lines.map((line, index) => (
-                          <span
-                            className={
-                              line.startsWith("+")
-                                ? "diff-addition"
-                                : line.startsWith("-")
-                                  ? "diff-deletion"
-                                  : ""
-                            }
-                            key={`${line}-${index}`}
-                          >
-                            {line}
-                          </span>
-                        ))}
-                      </code>
-                    </pre>
-                    <button
-                      type="button"
-                      className="diff-open-button"
-                      onClick={() => onOpenInspector("files")}
-                    >
-                      {ui.openFile}
-                    </button>
+                {message.content ? (
+                  <p>{message.content}</p>
+                ) : message.streaming ? (
+                  <div
+                    className="assistant-streaming"
+                    aria-label={ui.turnActivity("responding")}
+                  >
+                    <span />
+                    <span />
+                    <span />
                   </div>
                 ) : null}
 
@@ -723,9 +905,7 @@ export function CodexConversation({
                           disabled={
                             sending ||
                             session.status !== "waiting" ||
-                            !session.harnessState.recoverableUserMessageItemIds?.includes(
-                              message.id,
-                            )
+                            !turnCapabilities.rewindableTurnIds.has(message.turnId)
                           }
                           onClick={() => beginEditing(message)}
                         >
@@ -739,9 +919,7 @@ export function CodexConversation({
                           disabled={
                             sending ||
                             session.status !== "waiting" ||
-                            !session.harnessState.recoverableUserMessageItemIds?.includes(
-                              message.id,
-                            )
+                            !turnCapabilities.forkableTurnIds.has(message.turnId)
                           }
                           onClick={() => void forkTurn(message)}
                         >
@@ -770,9 +948,7 @@ export function CodexConversation({
                           disabled={
                             sending ||
                             session.status !== "waiting" ||
-                            !session.harnessState.recoverableUserMessageItemIds?.includes(
-                              message.id,
-                            )
+                            !turnCapabilities.rewindableTurnIds.has(message.turnId)
                           }
                           onClick={() => setDeleteMessageId(message.id)}
                         >
@@ -788,8 +964,16 @@ export function CodexConversation({
                   YA
                 </div>
               ) : null}
-            </article>
-          ))}
+              </article>
+            );
+          })}
+          {runningTurn ? (
+            <CodexRunningTurn
+              turn={runningTurn}
+              language={language}
+              now={activityClock}
+            />
+          ) : null}
         </div>
       </div>
 
@@ -807,6 +991,7 @@ export function CodexConversation({
                 title={ui.cancelEditing}
                 onClick={() => {
                   setEditingMessageId(null);
+                  setEditingTurnId(null);
                   setDraft("");
                   setPastedImages([]);
                   setAttachmentError("");
@@ -936,7 +1121,13 @@ export function CodexConversation({
                 <span className="composer-harness-label">
                   {environment.codingAgent.label}
                 </span>
-                <label className="composer-model-picker">
+                <label
+                  className="composer-model-picker"
+                  title={modelCatalogUnavailable || undefined}
+                  data-availability={
+                    modelCatalogUnavailable ? "runtime-unavailable" : "available"
+                  }
+                >
                   <span className="sr-only">
                     {ui.selectModel(environment.codingAgent.label)}
                   </span>
@@ -964,21 +1155,49 @@ export function CodexConversation({
             </div>
             <div className="composer-send-area">
               <span className="connection-copy">
-                <span /> {ui.durableSession}
+                <span />
+                {ui.durableSession}
               </span>
-              <button
-                type="button"
-                className="send-button"
-                disabled={
-                  sending ||
-                  session.status !== "waiting" ||
-                  (!draft.trim() && pastedImages.length === 0)
-                }
-                aria-label={ui.sendMessage}
-                onClick={() => void submitMessage()}
-              >
-                <ArrowUp size={17} strokeWidth={2.5} />
-              </button>
+              {turnRunning ? (
+                <button
+                  type="button"
+                  className={`send-button is-running ${
+                    interrupting ? "is-interrupting" : ""
+                  }`}
+                  disabled={interrupting || !interruptibleTurnId}
+                  aria-label={
+                    interrupting
+                      ? ui.interruptingTurn
+                      : interruptibleTurnId
+                        ? ui.interruptTurn
+                        : ui.turnStarting
+                  }
+                  aria-busy={interrupting}
+                  title={ui.interruptTurn}
+                  onClick={() => void interruptActiveTurn()}
+                >
+                  {interrupting ? (
+                    <span className="activity-spinner" aria-hidden="true" />
+                  ) : (
+                    <Square size={10} fill="currentColor" aria-hidden="true" />
+                  )}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="send-button"
+                  disabled={
+                    sending ||
+                    session.status !== "waiting" ||
+                    !nativeReady ||
+                    (!draft.trim() && pastedImages.length === 0)
+                  }
+                  aria-label={ui.sendMessage}
+                  onClick={() => void submitMessage()}
+                >
+                  <ArrowUp size={17} strokeWidth={2.5} />
+                </button>
+              )}
             </div>
           </div>
         </div>

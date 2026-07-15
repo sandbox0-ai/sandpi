@@ -2,70 +2,382 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { toUnixTimestamp } from "@/lib/time";
-import { createMockCodexHarnessState } from "./events";
+
 import {
-  appendCodexTurn,
-  replaceCodexTurn,
-  truncateCodexEventsBeforeUserItem,
-  visibleCodexConversationWhileEditing,
-} from "./timeline";
+  createMockCodexHarnessState,
+  createMockCodexThread,
+  createMockCodexTurn,
+  projectCodexConversation,
+  projectCodexTimeline,
+  shouldRefreshCodexNativeSnapshot,
+} from "./events";
+import { visibleCodexTimelineWhileEditing } from "./timeline";
+import { CODEX_TRANSCRIPT_NOTIFICATION_METHODS } from "./types";
+import type {
+  CodexEventEnvelope,
+  CodexServerNotification,
+  CodexThreadItem,
+  CodexTurn,
+} from "./types";
 
 const timestamp = (value: string) => toUnixTimestamp(new Date(value));
 
-const initial = createMockCodexHarnessState("thread-test", "gpt-5.2-codex", {
+function liveTurn(
+  id: string,
+  status: CodexTurn["status"] = "inProgress",
+  items: CodexThreadItem[] = [],
+): CodexTurn {
+  return {
+    id,
+    items,
+    itemsView: "full",
+    status,
+    error: null,
+    startedAt: timestamp("2026-07-12T01:00:00Z"),
+    completedAt:
+      status === "inProgress" ? null : timestamp("2026-07-12T01:01:00Z"),
+    durationMs: status === "inProgress" ? null : 60_000,
+  };
+}
+
+function nativeEvent(
+  sequence: number,
+  notification: CodexServerNotification,
+): CodexEventEnvelope {
+  return {
+    harness: "codex",
+    harnessVersion: "test",
+    protocolVersion: "v2",
+    sequence,
+    receivedAt: timestamp("2026-07-12T01:00:00Z") + sequence,
+    notification,
+  };
+}
+
+const firstTurn = createMockCodexTurn({
   content: "first",
   assistantText: "first reply",
   createdAt: timestamp("2026-07-12T00:00:00Z"),
 });
-const state = appendCodexTurn(initial, {
+const secondTurn = createMockCodexTurn({
   content: "second",
   assistantText: "second reply",
   createdAt: timestamp("2026-07-12T00:01:00Z"),
 });
-const secondUser = visibleCodexConversationWhileEditing(state.events, null).find(
-  (message) => message.content === "second",
-);
+const nativeThread = createMockCodexThread("thread-test", [
+  firstTurn,
+  secondTurn,
+]);
 
-test("projects native Codex item notifications without a shared chat schema", () => {
+test("projects a native thread/read snapshot without DTO event history", () => {
   assert.deepEqual(
-    visibleCodexConversationWhileEditing(state.events, null).map((message) => message.content),
+    projectCodexConversation(nativeThread).map((message) => message.content),
     ["first", "first reply", "second", "second reply"],
   );
-});
-
-test("uses the native Codex Turn boundary for delete and edit", () => {
-  assert.ok(secondUser);
-  const prefix = truncateCodexEventsBeforeUserItem(state.events, secondUser.id);
-  assert.deepEqual(
-    visibleCodexConversationWhileEditing(prefix ?? [], null).map((message) => message.content),
-    ["first", "first reply"],
+  const state = createMockCodexHarnessState(
+    nativeThread.id,
+    "gpt-5.2-codex",
   );
-
-  const replacement = replaceCodexTurn(state, secondUser.id, {
-    content: "edited",
-    assistantText: "edited reply",
-    createdAt: timestamp("2026-07-12T00:02:00Z"),
-  });
-  assert.deepEqual(
-    visibleCodexConversationWhileEditing(replacement?.events ?? [], null).map(
-      (message) => message.content,
-    ),
-    ["first", "first reply", "edited", "edited reply"],
-  );
+  assert.equal("events" in state, false);
+  assert.equal(state.historyRevision, 0);
 });
 
 test("editing hides the selected native Turn and every descendant", () => {
-  assert.ok(secondUser);
+  const projection = projectCodexTimeline(nativeThread);
+  const secondUser = projection.entries.find(
+    (entry) => entry.kind === "message" && entry.content === "second",
+  );
+  assert.ok(secondUser?.kind === "message");
+
+  const visible = visibleCodexTimelineWhileEditing(
+    projection,
+    secondUser.id,
+  );
   assert.deepEqual(
-    visibleCodexConversationWhileEditing(state.events, secondUser.id).map(
-      (message) => message.content,
-    ),
+    visible.entries
+      .filter((entry) => entry.kind === "message")
+      .map((entry) => entry.content),
     ["first", "first reply"],
   );
-  assert.deepEqual(
-    visibleCodexConversationWhileEditing(state.events, "missing").map(
-      (message) => message.content,
+  assert.equal(visible.activeTurn, undefined);
+});
+
+test("a replacement snapshot does not inherit a prior live suffix", () => {
+  const oldTurnId = "turn-old-live";
+  const oldSuffix = [
+    nativeEvent(1, {
+      method: "turn/started",
+      params: { threadId: nativeThread.id, turn: liveTurn(oldTurnId) },
+    }),
+    nativeEvent(2, {
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: nativeThread.id,
+        turnId: oldTurnId,
+        itemId: "old-stream",
+        delta: "stale live text",
+      },
+    }),
+  ];
+  assert.ok(
+    projectCodexConversation(nativeThread, oldSuffix).some(
+      (message) => message.content === "stale live text",
     ),
-    ["first", "first reply", "second", "second reply"],
   );
+
+  const replacement = createMockCodexThread("thread-replacement", [firstTurn]);
+  assert.deepEqual(
+    projectCodexConversation(replacement).map((message) => message.content),
+    ["first", "first reply"],
+  );
+});
+
+test("updates one running command row from the in-memory native suffix", () => {
+  const turnId = "turn-live";
+  const command: Extract<CodexThreadItem, { type: "commandExecution" }> = {
+    type: "commandExecution",
+    id: "exec-live",
+    command: "/bin/bash -lc 'npm install'",
+    cwd: "/workspace",
+    processId: "42",
+    source: "unifiedExecStartup",
+    status: "inProgress",
+    commandActions: [{ type: "unknown", command: "npm install" }],
+    aggregatedOutput: null,
+    exitCode: null,
+    durationMs: null,
+  };
+  const events = [
+    nativeEvent(1, {
+      method: "turn/started",
+      params: { threadId: nativeThread.id, turn: liveTurn(turnId) },
+    }),
+    nativeEvent(2, {
+      method: "item/started",
+      params: {
+        threadId: nativeThread.id,
+        turnId,
+        item: command,
+        startedAtMs: Date.parse("2026-07-12T01:00:02Z"),
+      },
+    }),
+    nativeEvent(3, {
+      method: "item/commandExecution/outputDelta",
+      params: {
+        threadId: nativeThread.id,
+        turnId,
+        itemId: command.id,
+        delta: "installing\n",
+      },
+    }),
+  ];
+
+  const running = projectCodexTimeline(nativeThread, [...events, events[2]]);
+  const activity = running.entries.find((entry) => entry.kind === "command");
+  assert.ok(activity?.kind === "command");
+  assert.equal(activity.status, "running");
+  assert.equal(activity.output, "installing\n");
+  assert.equal(
+    running.entries.filter((entry) => entry.id === command.id).length,
+    1,
+  );
+  assert.equal(running.activeTurn?.state, "runningCommand");
+
+  const waiting = projectCodexTimeline(nativeThread, [
+    ...events,
+    nativeEvent(4, {
+      method: "item/commandExecution/terminalInteraction",
+      params: {
+        threadId: nativeThread.id,
+        turnId,
+        itemId: command.id,
+        processId: "42",
+        stdin: "",
+      },
+    }),
+  ]);
+  assert.equal(waiting.activeTurn?.state, "waitingForCommand");
+
+  const completedCommand = {
+    ...command,
+    status: "completed" as const,
+    aggregatedOutput: "installing\ndone\n",
+    exitCode: 0,
+    durationMs: 5_200,
+  };
+  const completedTurn = liveTurn(turnId, "completed", [completedCommand]);
+  const completed = projectCodexTimeline(nativeThread, [
+    ...events,
+    nativeEvent(5, {
+      method: "item/completed",
+      params: {
+        threadId: nativeThread.id,
+        turnId,
+        item: completedCommand,
+        completedAtMs: Date.parse("2026-07-12T01:00:05Z"),
+      },
+    }),
+    nativeEvent(6, {
+      method: "turn/completed",
+      params: { threadId: nativeThread.id, turn: completedTurn },
+    }),
+  ]);
+  const finalized = completed.entries.find(
+    (entry) => entry.id === command.id,
+  );
+  assert.ok(finalized?.kind === "command");
+  assert.equal(finalized.status, "completed");
+  assert.equal(finalized.output, "installing\ndone\n");
+  assert.equal(completed.activeTurn, undefined);
+});
+
+test("shows live file patches and lets the completed native item replace them", () => {
+  const turnId = "turn-files";
+  const firstChange = {
+    path: "/workspace/app/page.tsx",
+    kind: { type: "update" as const, move_path: null },
+    diff: "-old\n+new",
+  };
+  const secondChange = {
+    path: "/workspace/app/theme.css",
+    kind: { type: "add" as const },
+    diff: "+body {}",
+  };
+  const events = [
+    nativeEvent(10, {
+      method: "turn/started",
+      params: { threadId: nativeThread.id, turn: liveTurn(turnId) },
+    }),
+    nativeEvent(11, {
+      method: "item/fileChange/patchUpdated",
+      params: {
+        threadId: nativeThread.id,
+        turnId,
+        itemId: "files-live",
+        changes: [firstChange, secondChange],
+      },
+    }),
+  ];
+  const applying = projectCodexTimeline(nativeThread, events);
+  const liveFiles = applying.entries.find(
+    (entry) => entry.id === "files-live",
+  );
+  assert.ok(liveFiles?.kind === "fileChange");
+  assert.equal(liveFiles.status, "running");
+  assert.equal(liveFiles.changes.length, 2);
+  assert.equal(applying.activeTurn?.state, "editingFiles");
+
+  const completedItem: Extract<CodexThreadItem, { type: "fileChange" }> = {
+    type: "fileChange",
+    id: "files-live",
+    changes: [firstChange],
+    status: "completed",
+  };
+  const done = projectCodexTimeline(nativeThread, [
+    ...events,
+    nativeEvent(12, {
+      method: "item/completed",
+      params: {
+        threadId: nativeThread.id,
+        turnId,
+        item: completedItem,
+        completedAtMs: Date.parse("2026-07-12T01:00:12Z"),
+      },
+    }),
+  ]);
+  const completedFiles = done.entries.find(
+    (entry) => entry.id === "files-live",
+  );
+  assert.ok(completedFiles?.kind === "fileChange");
+  assert.equal(completedFiles.status, "completed");
+  assert.deepEqual(
+    completedFiles.changes.map((change) => change.file),
+    [firstChange.path],
+  );
+});
+
+test("renders interruption from native thread/read without a synthetic recovery", () => {
+  const interrupted = liveTurn("turn-interrupted", "interrupted", [
+    {
+      type: "commandExecution",
+      id: "command-interrupted",
+      command: "npm install",
+      cwd: "/workspace",
+      processId: null,
+      source: "agent",
+      status: "inProgress",
+      commandActions: [],
+      aggregatedOutput: "",
+      exitCode: null,
+      durationMs: null,
+    },
+  ]);
+  const projected = projectCodexTimeline(
+    createMockCodexThread("thread-interrupted", [interrupted]),
+  );
+  assert.equal(projected.activeTurn, undefined);
+  assert.equal(projected.entries[0]?.kind, "command");
+  assert.equal(
+    projected.entries[0]?.kind === "command"
+      ? projected.entries[0].status
+      : undefined,
+    "interrupted",
+  );
+  assert.equal(projected.entries[1]?.kind, "turnResult");
+});
+
+test("renders unmodeled Codex ThreadItems as Codex-native fallback activities", () => {
+  const nativeTool = {
+    type: "mcpToolCall",
+    id: "mcp-tool-1",
+    server: "github",
+    tool: "search_code",
+    status: "completed",
+  } as unknown as CodexThreadItem;
+  const reasoning: Extract<CodexThreadItem, { type: "reasoning" }> = {
+    type: "reasoning",
+    id: "reasoning-1",
+    summary: ["Checked the repository structure"],
+    content: ["private chain of thought must stay hidden"],
+  };
+  const projected = projectCodexTimeline(
+    createMockCodexThread("thread-native-fallback", [
+      liveTurn("turn-native-fallback", "completed", [nativeTool, reasoning]),
+    ]),
+  );
+
+  const toolActivity = projected.entries.find(
+    (entry) => entry.id === "mcp-tool-1",
+  );
+  assert.ok(toolActivity?.kind === "nativeItem");
+  assert.equal(toolActivity.itemType, "mcpToolCall");
+  assert.equal(toolActivity.status, "completed");
+  assert.equal(toolActivity.detail, "github · search_code");
+
+  const reasoningActivity = projected.entries.find(
+    (entry) => entry.id === "reasoning-1",
+  );
+  assert.ok(reasoningActivity?.kind === "nativeItem");
+  assert.equal(reasoningActivity.detail, "Checked the repository structure");
+  assert.equal(reasoningActivity.detail?.includes("private chain"), false);
+});
+
+test("keeps every modeled plan and reasoning notification in the live suffix", () => {
+  assert.equal(CODEX_TRANSCRIPT_NOTIFICATION_METHODS.includes("item/plan/delta"), true);
+  assert.equal(
+    CODEX_TRANSCRIPT_NOTIFICATION_METHODS.includes(
+      "item/reasoning/summaryPartAdded",
+    ),
+    true,
+  );
+  assert.equal(
+    CODEX_TRANSCRIPT_NOTIFICATION_METHODS.includes("item/reasoning/textDelta"),
+    true,
+  );
+});
+
+test("refreshes the native snapshot at the bounded live suffix limit", () => {
+  assert.equal(shouldRefreshCodexNativeSnapshot(255), false);
+  assert.equal(shouldRefreshCodexNativeSnapshot(256), true);
+  assert.equal(shouldRefreshCodexNativeSnapshot(10_000), true);
 });

@@ -15,6 +15,8 @@ export interface ProvisionedEnvironment {
   rootfsSnapshotId?: string;
 }
 
+export type HarnessStateLayout = "rootfs_v1" | "workspace_v2" | "migrating";
+
 export interface ProvisionedSession {
   sandboxId: string;
   workspaceVolumeId: string;
@@ -22,6 +24,8 @@ export interface ProvisionedSession {
   attemptId: string;
   runtimeGeneration: number;
   nativeCredentialTargetPath: string;
+  /** New runtime allocations always keep native harness state in the Volume. */
+  harnessStateLayout: "workspace_v2";
 }
 
 export const CODEX_SESSION_CREDENTIAL_PATH = "/dev/shm/sandpi-codex-auth.json";
@@ -33,7 +37,9 @@ export interface RuntimeSessionRecord {
   supervisorSessionId: string;
   terminalSessionId?: string;
   supervisorCursor: number;
-  threadId?: string;
+  /** Opaque coding-agent native Session id; Codex names it a thread id. */
+  nativeSessionId?: string;
+  harnessStateLayout: HarnessStateLayout;
   modelId?: string;
   attemptId?: string;
   runtimeGeneration?: number;
@@ -63,26 +69,29 @@ export interface RuntimeForkSessionInput extends RuntimeProvisionSessionInput {
 }
 
 export interface RuntimeForkTurnInput extends RuntimeProvisionSessionInput {
-  source: RuntimeSessionRecord;
-  sourceThreadPath: string;
   workspaceSnapshotId: string;
 }
 
-export interface ProvisionedTurnFork extends ProvisionedSession {
-  /**
-   * Temporary native rollout imported into the child Codex home. Codex finds
-   * it by its native thread ID; Sandpi deletes it once the child thread exists.
-   */
-  nativeThreadImportPath: string;
-}
-
-export interface WorkspaceCheckpoint {
+export interface VolumeCheckpoint {
   snapshotId: string;
 }
 
 export interface RestoredWorkspaceRuntime {
   attemptId: string;
   runtimeGeneration: number;
+}
+
+export interface RecoveredCodexRuntime {
+  supervisorSessionId: string;
+  attemptId: string;
+  runtimeGeneration: number;
+  sandboxRestarted: boolean;
+}
+
+export interface MigratedCodexNativeState extends RecoveredCodexRuntime {
+  harnessStateLayout: "workspace_v2";
+  /** Exact rootfs evidence captured after the legacy Supervisor was stopped. */
+  sourceHadRollout: boolean;
 }
 
 export interface CodexAuthRuntime {
@@ -98,21 +107,21 @@ export interface RuntimeAdapter {
   deleteEnvironmentResources(resources: ProvisionedEnvironment): Promise<void>;
   provisionSession(input: RuntimeProvisionSessionInput): Promise<ProvisionedSession>;
   forkSession(input: RuntimeForkSessionInput): Promise<ProvisionedSession>;
-  forkTurn(input: RuntimeForkTurnInput): Promise<ProvisionedTurnFork>;
-  deleteCodexThreadImport(
-    runtime: RuntimeSessionRecord,
-    importPath: string,
-  ): Promise<void>;
+  forkTurn(input: RuntimeForkTurnInput): Promise<ProvisionedSession>;
   deleteSessionResources(resources: Partial<ProvisionedSession>): Promise<void>;
-  createWorkspaceCheckpoint(
+  createVolumeCheckpoint(
     runtime: RuntimeSessionRecord,
     label: string,
-  ): Promise<WorkspaceCheckpoint>;
-  deleteWorkspaceCheckpoint(
+  ): Promise<VolumeCheckpoint>;
+  findVolumeCheckpoint(
+    runtime: RuntimeSessionRecord,
+    label: string,
+  ): Promise<VolumeCheckpoint | undefined>;
+  deleteVolumeCheckpoint(
     runtime: RuntimeSessionRecord,
     snapshotId: string,
   ): Promise<void>;
-  restoreWorkspaceCheckpoint(
+  restoreVolumeCheckpoint(
     runtime: RuntimeSessionRecord,
     snapshotId: string,
   ): Promise<RestoredWorkspaceRuntime>;
@@ -136,10 +145,38 @@ export interface RuntimeAdapter {
     authJson: string,
   ): Promise<void>;
   readCodexSessionCredential(runtime: RuntimeSessionRecord): Promise<string>;
+  recoverCodexRuntime(
+    runtime: RuntimeSessionRecord,
+    authJson: string,
+  ): Promise<RecoveredCodexRuntime>;
+  migrateCodexNativeState(
+    runtime: RuntimeSessionRecord,
+    authJson: string,
+  ): Promise<MigratedCodexNativeState>;
+  /** Called only after the service durably commits workspace_v2 coordinates. */
+  cleanupLegacyCodexNativeState(runtime: RuntimeSessionRecord): Promise<void>;
   writeCodexMessage(
     runtime: RuntimeSessionRecord,
     message: unknown,
     stableInputId?: string,
+  ): Promise<void>;
+  /** Stages an exact native RPC frame in the Session rootfs, outside snapshots. */
+  stageCodexMessage(
+    runtime: RuntimeSessionRecord,
+    message: unknown,
+    stableInputId: string,
+  ): Promise<void>;
+  hasStagedCodexMessage(
+    runtime: RuntimeSessionRecord,
+    stableInputId: string,
+  ): Promise<boolean>;
+  dispatchStagedCodexMessage(
+    runtime: RuntimeSessionRecord,
+    stableInputId: string,
+  ): Promise<void>;
+  discardStagedCodexMessage(
+    runtime: RuntimeSessionRecord,
+    stableInputId: string,
   ): Promise<void>;
   listCodexEvents(
     runtime: RuntimeSessionRecord,
