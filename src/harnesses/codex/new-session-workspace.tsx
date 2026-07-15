@@ -215,7 +215,7 @@ export function CodexNewSessionWorkspace({
               aria-hidden="true"
             />
             {environment.status === "ready"
-              ? ui.readyToFork(environment.revision)
+              ? ui.environmentReady(environment.revision)
               : environment.status === "error"
                 ? ui.environmentFailed
                 : ui.preparingEnvironment}
@@ -247,7 +247,7 @@ export function CodexNewSessionWorkspace({
               <LockKeyhole size={13} aria-hidden="true" />{" "}
               {ui.agentBound(environment.codingAgent.label)}
             </span>
-            <span>{ui.hardTtl}</span>
+            <span>{ui.sharedRuntime}</span>
           </div>
         </div>
 

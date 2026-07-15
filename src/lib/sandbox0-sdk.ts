@@ -28,8 +28,8 @@ export const sandbox0SdkCapabilities = [
   },
   {
     id: "workspace-volumes",
-    label: "Volume fork and file browser",
-    sdk: "client.volumes.fork / listFiles / readFile / watchFiles",
+    label: "Environment Volume and file browser",
+    sdk: "client.volumes.create / listFiles / readFile / watchFiles",
     status: "available",
   },
   {

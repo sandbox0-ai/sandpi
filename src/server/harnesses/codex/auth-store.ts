@@ -6,7 +6,7 @@ import type { CodexDecoderState } from "./jsonl";
 import { toUnixTimestamp, type UnixTimestamp } from "@/lib/time";
 import type { EncryptedValue } from "@/server/secrets";
 import {
-  CODEX_SESSION_CREDENTIAL_PATH,
+  CODEX_ENVIRONMENT_CREDENTIAL_PATH,
   type CodexAuthRuntime,
 } from "@/server/runtime/types";
 import { notFound } from "@/server/http-error";
@@ -421,22 +421,20 @@ export class CodexAuthStore {
     }
   }
 
-  async getCredentialForSession(sessionId: string) {
+  async getCredentialForEnvironmentRuntime(environmentId: string) {
     const result = await this.pool.query<RuntimeCredentialRow>(
       `SELECT c.*, b.credential_source_id AS binding_source_id,
               b.source_revision AS binding_revision,
               b.status AS binding_status
-       FROM sessions s
-       JOIN harness_credentials c
-         ON c.environment_id = s.environment_id
+       FROM harness_credentials c
+       LEFT JOIN environment_credential_bindings b
+         ON b.environment_id = c.environment_id
+        AND b.harness = 'codex'
+       WHERE c.environment_id = $1
         AND c.harness = 'codex'
         AND c.revoked_at IS NULL
-       LEFT JOIN sandbox_credential_bindings b
-         ON b.session_id = s.id
-        AND b.harness = 'codex'
-       WHERE s.id = $1
        LIMIT 1`,
-      [sessionId],
+      [environmentId],
     );
     const row = result.rows[0];
     if (!row) return undefined;
@@ -452,33 +450,23 @@ export class CodexAuthStore {
     };
   }
 
-  async replaceCredentialFromSession(
-    sessionId: string,
+  async replaceCredentialFromEnvironment(
+    environmentId: string,
     expectedSourceId: string | undefined,
     encrypted: EncryptedValue,
   ) {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
-      const session = await client.query<{
-        environment_id: string;
-        binding_source_id: string | null;
-      }>(
-        `SELECT s.environment_id,
-                b.credential_source_id AS binding_source_id
-         FROM sessions s
-         LEFT JOIN sandbox_credential_bindings b
-           ON b.session_id = s.id AND b.harness = 'codex'
-         WHERE s.id = $1
-         FOR UPDATE OF s`,
-        [sessionId],
-      );
-      const environmentId = session.rows[0]?.environment_id;
-      if (!environmentId) throw notFound("session_not_found", "Session not found.");
-      await client.query(
-        "SELECT id FROM environments WHERE id = $1 FOR UPDATE",
+      const environment = await client.query(
+        `SELECT id FROM environments
+         WHERE id = $1 AND harness = 'codex' AND status <> 'archived'
+         FOR UPDATE`,
         [environmentId],
       );
+      if (!environment.rowCount) {
+        throw notFound("environment_not_found", "Environment not found.");
+      }
       const current = await client.query<CredentialRow>(
         `SELECT * FROM harness_credentials
          WHERE environment_id = $1 AND harness = 'codex' AND revoked_at IS NULL
@@ -490,14 +478,20 @@ export class CodexAuthStore {
       if (!currentSource) {
         throw new Error("Environment has no active Codex Credential Source");
       }
+      const binding = await client.query<{ credential_source_id: string }>(
+        `SELECT credential_source_id FROM environment_credential_bindings
+         WHERE environment_id = $1 AND harness = 'codex'`,
+        [environmentId],
+      );
       const boundSourceId =
-        expectedSourceId ?? session.rows[0]?.binding_source_id ?? undefined;
+        expectedSourceId ?? binding.rows[0]?.credential_source_id;
       if (boundSourceId && currentSource.id !== boundSourceId) {
         await client.query(
-          `UPDATE sandbox_credential_bindings
+          `UPDATE environment_credential_bindings
            SET status = 'stale', updated_at = NOW()
-           WHERE session_id = $1 AND harness = 'codex' AND status <> 'revoked'`,
-          [sessionId],
+           WHERE environment_id = $1 AND harness = 'codex'
+             AND status <> 'revoked'`,
+          [environmentId],
         );
         await client.query("COMMIT");
         return { replaced: false as const, credential: credentialFromRow(currentSource) };
@@ -508,24 +502,12 @@ export class CodexAuthStore {
         metadata: currentSource.non_secret_metadata ?? { type: "chatgpt" },
       });
       await client.query(
-        `UPDATE sandbox_credential_bindings b
-         SET status = CASE WHEN b.session_id = $2 THEN 'active' ELSE 'stale' END,
-             credential_source_id = CASE
-               WHEN b.session_id = $2 THEN $3 ELSE b.credential_source_id
-             END,
-             source_revision = CASE
-               WHEN b.session_id = $2 THEN $4 ELSE b.source_revision
-             END,
-             last_synced_at = CASE
-               WHEN b.session_id = $2 THEN NOW() ELSE b.last_synced_at
-             END,
-             updated_at = NOW()
-         FROM sessions s
-         WHERE s.id = b.session_id
-           AND s.environment_id = $1
-           AND b.harness = 'codex'
-           AND b.status <> 'revoked'`,
-        [environmentId, sessionId, next.sourceId, next.revision],
+        `UPDATE environment_credential_bindings
+         SET status = 'active', credential_source_id = $2,
+             source_revision = $3, last_synced_at = NOW(), updated_at = NOW()
+         WHERE environment_id = $1 AND harness = 'codex'
+           AND status <> 'revoked'`,
+        [environmentId, next.sourceId, next.revision],
       );
       await client.query("COMMIT");
       return {
@@ -546,26 +528,26 @@ export class CodexAuthStore {
   }
 
   async markCredentialMaterialized(
-    sessionId: string,
+    environmentId: string,
     sourceId: string,
     sourceRevision: number,
   ) {
     const result = await this.pool.query(
-      `INSERT INTO sandbox_credential_bindings (
-         id, session_id, sandbox_id, credential_source_id, harness,
+      `INSERT INTO environment_credential_bindings (
+         id, environment_id, sandbox_id, credential_source_id, harness,
          source_revision, native_target_path, status
        )
-       SELECT $1, s.id, r.sandbox_id, c.id, 'codex', c.revision, $5, 'active'
-       FROM sessions s
-       JOIN session_runtime r
-         ON r.session_id = s.id AND r.sandbox_id IS NOT NULL
+       SELECT $1, e.id, r.sandbox_id, c.id, 'codex', c.revision, $5, 'active'
+       FROM environments e
+       JOIN environment_runtime r
+         ON r.environment_id = e.id AND r.sandbox_id IS NOT NULL
        JOIN harness_credentials c
          ON c.id = $2
-        AND c.environment_id = s.environment_id
+        AND c.environment_id = e.id
         AND c.harness = 'codex'
         AND c.revoked_at IS NULL
-       WHERE s.id = $3 AND c.revision = $4
-       ON CONFLICT (session_id, harness) DO UPDATE
+       WHERE e.id = $3 AND c.revision = $4
+       ON CONFLICT (environment_id) DO UPDATE
        SET sandbox_id = EXCLUDED.sandbox_id,
            credential_source_id = EXCLUDED.credential_source_id,
            source_revision = EXCLUDED.source_revision,
@@ -575,13 +557,13 @@ export class CodexAuthStore {
       [
         `binding_${randomUUID()}`,
         sourceId,
-        sessionId,
+        environmentId,
         sourceRevision,
-        CODEX_SESSION_CREDENTIAL_PATH,
+        CODEX_ENVIRONMENT_CREDENTIAL_PATH,
       ],
     );
     if (!result.rowCount) {
-      throw new Error("Codex Credential Source cannot be bound to this Sandbox");
+      throw new Error("Codex Credential Source cannot be bound to this Environment");
     }
   }
 }
@@ -677,13 +659,10 @@ async function replaceEnvironmentCredentialSource(
     ],
   );
   await client.query(
-    `UPDATE sandbox_credential_bindings b
+    `UPDATE environment_credential_bindings
      SET status = 'stale', updated_at = NOW()
-     FROM sessions s
-     WHERE s.id = b.session_id
-       AND s.environment_id = $1
-       AND b.harness = 'codex'
-       AND b.status <> 'revoked'`,
+     WHERE environment_id = $1 AND harness = 'codex'
+       AND status <> 'revoked'`,
     [input.environmentId],
   );
   await client.query(

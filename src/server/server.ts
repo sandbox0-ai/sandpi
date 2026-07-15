@@ -20,9 +20,9 @@ import type {
   SandpiPreferences,
 } from "@/lib/types";
 import {
-  DEFAULT_SESSION_METRIC_RANGE_SECONDS,
-  isSessionMetricRangeSeconds,
-} from "@/lib/session-metrics";
+  DEFAULT_ENVIRONMENT_METRIC_RANGE_SECONDS,
+  isEnvironmentMetricRangeSeconds,
+} from "@/lib/environment-metrics";
 import { toUnixTimestamp } from "@/lib/time";
 import { OidcIdentityService } from "@/server/auth/oidc";
 import type { Principal } from "@/server/auth/principal";
@@ -302,7 +302,7 @@ function registerApiRoutes(
         })
         .parse(request.body);
       return {
-        data: await services.store.updateEnvironment(
+        data: await services.environments.update(
           request.principal.userId,
           request.params.environmentId,
           body,
@@ -600,13 +600,13 @@ function registerApiRoutes(
       return streamHarnessEvents(request, reply, services.codex);
     },
   );
-  app.get<{ Params: { sessionId: string } }>(
-    "/api/v1/sessions/:sessionId/files",
+  app.get<{ Params: { environmentId: string } }>(
+    "/api/v1/environments/:environmentId/files",
     async (request) => {
       return {
-        data: await services.codex.withRuntimeRecovery(
+        data: await services.codex.withEnvironmentRuntimeRecovery(
           request.principal.userId,
-          request.params.sessionId,
+          request.params.environmentId,
           (runtime) =>
             services.runtime.listFiles(
               runtime,
@@ -616,14 +616,14 @@ function registerApiRoutes(
       };
     },
   );
-  app.get<{ Params: { sessionId: string } }>(
-    "/api/v1/sessions/:sessionId/file",
+  app.get<{ Params: { environmentId: string } }>(
+    "/api/v1/environments/:environmentId/file",
     async (request) => {
       const filePath = queryString(request, "path");
       if (!filePath) throw new HttpError(400, "path_required", "File path is required.");
-      const content = await services.codex.withRuntimeRecovery(
+      const content = await services.codex.withEnvironmentRuntimeRecovery(
         request.principal.userId,
-        request.params.sessionId,
+        request.params.environmentId,
         (runtime) => services.runtime.readFile(runtime, filePath),
       );
       return {
@@ -636,12 +636,12 @@ function registerApiRoutes(
       };
     },
   );
-  app.get<{ Params: { sessionId: string } }>(
-    "/api/v1/sessions/:sessionId/ide",
+  app.get<{ Params: { environmentId: string } }>(
+    "/api/v1/environments/:environmentId/ide",
     async (request) => {
-      const data = await services.codex.withRuntimeRecovery(
+      const data = await services.codex.withEnvironmentRuntimeRecovery(
         request.principal.userId,
-        request.params.sessionId,
+        request.params.environmentId,
         async (runtime) => {
           const [files, git] = await Promise.all([
             services.runtime.listFiles(runtime, "/workspace"),
@@ -653,24 +653,24 @@ function registerApiRoutes(
       return { data };
     },
   );
-  app.get<{ Params: { sessionId: string } }>(
-    "/api/v1/sessions/:sessionId/ide/file",
+  app.get<{ Params: { environmentId: string } }>(
+    "/api/v1/environments/:environmentId/ide/file",
     async (request) => {
       const filePath = queryString(request, "path");
       if (!filePath) {
         throw new HttpError(400, "path_required", "File path is required.");
       }
       return {
-        data: await services.codex.withRuntimeRecovery(
+        data: await services.codex.withEnvironmentRuntimeRecovery(
           request.principal.userId,
-          request.params.sessionId,
+          request.params.environmentId,
           (runtime) => services.runtime.readWorkspaceIdeFile(runtime, filePath),
         ),
       };
     },
   );
-  app.put<{ Params: { sessionId: string }; Body: unknown }>(
-    "/api/v1/sessions/:sessionId/ide/file",
+  app.put<{ Params: { environmentId: string }; Body: unknown }>(
+    "/api/v1/environments/:environmentId/ide/file",
     { bodyLimit: WORKSPACE_FILE_BODY_LIMIT_BYTES },
     async (request) => {
       const filePath = queryString(request, "path");
@@ -682,7 +682,7 @@ function registerApiRoutes(
       return {
         data: await services.store.withWorkspaceFileWrite(
           request.principal.userId,
-          request.params.sessionId,
+          request.params.environmentId,
           (runtime) =>
             services.runtime.writeWorkspaceIdeFile(
               runtime,
@@ -694,17 +694,17 @@ function registerApiRoutes(
       };
     },
   );
-  app.get<{ Params: { sessionId: string } }>(
-    "/api/v1/sessions/:sessionId/ide/events",
+  app.get<{ Params: { environmentId: string } }>(
+    "/api/v1/environments/:environmentId/ide/events",
     { websocket: true },
     async (socket, request) => {
       let watcher:
         | Awaited<ReturnType<RuntimeAdapter["watchWorkspaceFiles"]>>
         | undefined;
       try {
-        watcher = await services.codex.withRuntimeRecovery(
+        watcher = await services.codex.withEnvironmentRuntimeRecovery(
           request.principal.userId,
-          request.params.sessionId,
+          request.params.environmentId,
           (runtime) => services.runtime.watchWorkspaceFiles(runtime),
         );
         socket.send(
@@ -738,56 +738,56 @@ function registerApiRoutes(
       }
     },
   );
-  app.get<{ Params: { sessionId: string } }>(
-    "/api/v1/sessions/:sessionId/audit",
+  app.get<{ Params: { environmentId: string } }>(
+    "/api/v1/environments/:environmentId/audit",
     async (request) => {
-      const runtime = await services.store.getRuntime(
+      const runtime = await services.store.getEnvironmentRuntime(
         request.principal.userId,
-        request.params.sessionId,
+        request.params.environmentId,
       );
       return { data: await services.runtime.getAudit(runtime) };
     },
   );
-  app.get<{ Params: { sessionId: string } }>(
-    "/api/v1/sessions/:sessionId/metrics",
+  app.get<{ Params: { environmentId: string } }>(
+    "/api/v1/environments/:environmentId/metrics",
     async (request) => {
       const requestedRange = Number(
         queryString(request, "rangeSeconds") ??
-          DEFAULT_SESSION_METRIC_RANGE_SECONDS,
+          DEFAULT_ENVIRONMENT_METRIC_RANGE_SECONDS,
       );
-      if (!isSessionMetricRangeSeconds(requestedRange)) {
+      if (!isEnvironmentMetricRangeSeconds(requestedRange)) {
         throw new HttpError(
           400,
           "invalid_metrics_range",
-          "The requested Session metrics range is not supported.",
+          "The requested Environment metrics range is not supported.",
         );
       }
-      const runtime = await services.store.getRuntime(
+      const runtime = await services.store.getEnvironmentRuntime(
         request.principal.userId,
-        request.params.sessionId,
+        request.params.environmentId,
       );
       return {
         data: await services.runtime.getMetrics(runtime, requestedRange),
       };
     },
   );
-  app.get<{ Params: { sessionId: string } }>(
-    "/api/v1/sessions/:sessionId/terminal",
+  app.get<{ Params: { environmentId: string } }>(
+    "/api/v1/environments/:environmentId/terminal",
     { websocket: true },
     async (socket, request) => {
       let terminal: Awaited<ReturnType<RuntimeAdapter["openTerminal"]>> | undefined;
       let inputQueue: TerminalInputQueue<z.infer<typeof terminalInputSchema>> | undefined;
       try {
         const after = Number(queryString(request, "after") ?? 0);
-        const runtime = await services.store.getRuntime(
+        const runtime = await services.store.getEnvironmentRuntime(
           request.principal.userId,
-          request.params.sessionId,
+          request.params.environmentId,
         );
-        // Opening/recovering a terminal and every later input frame share the
-        // source-Session reservation lock with fork/history operations.
+        // A terminal belongs to the shared Environment runtime. Switching
+        // product Sessions must not create or replay a different shell.
         terminal = await services.store.withTerminalAccess(
           request.principal.userId,
-          request.params.sessionId,
+          request.params.environmentId,
           () =>
             services.runtime.openTerminal(
               runtime,
@@ -796,7 +796,10 @@ function registerApiRoutes(
             ),
         );
         if (runtime.terminalSessionId !== terminal.sessionId) {
-          await services.store.setTerminalSession(request.params.sessionId, terminal.sessionId);
+          await services.store.setEnvironmentTerminalSession(
+            request.params.environmentId,
+            terminal.sessionId,
+          );
         }
         const forwardTerminalMessage = (
           message: z.infer<typeof terminalInputSchema>,
@@ -824,7 +827,7 @@ function registerApiRoutes(
           authorizeAndForward: (message) =>
             services.store.withTerminalAccess(
               request.principal.userId,
-              request.params.sessionId,
+              request.params.environmentId,
               () => forwardTerminalMessage(message),
             ),
           requiresAuthorization: (message) => message.type !== "resize",

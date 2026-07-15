@@ -1,118 +1,115 @@
 # Native coding-agent Session authority
 
 Sandpi treats the coding agent's native Session as the only durable source of
-conversation truth. For Codex this is the app-server Thread and its rollout in
-the Session Workspace Volume. Sandpi does not persist, normalize, or
-reconstruct a parallel chat transcript in PostgreSQL.
+conversation truth. For Codex this is an app-server Thread and its rollout under
+the Environment's persistent `CODEX_HOME`. Sandpi never persists, normalizes or
+reconstructs a parallel chat transcript in PostgreSQL.
 
-## Boundaries
+## Resource boundaries
 
-- PostgreSQL stores product metadata, immutable Sandbox and Workspace Volume
-  allocation coordinates, the opaque native Session id, Supervisor decoder
-  coordinates, active native Turn state, checkpoint indexes, and operation
-  recovery state. It never stores message, reasoning, tool-call, delta, or
-  JSON-RPC response payloads.
-- The Supervisor journal and the server's bounded notification ring are live
-  transport. A reconnect always starts with a native harness snapshot; neither
-  transport is conversation authority.
-- A native snapshot is paired with the live cursor captured at the matching
-  JSON-RPC response record. The client applies only the notification suffix
-  after that boundary, so snapshot refresh neither loses nor duplicates live
-  output.
-- A missing native rollout is an invariant failure. Sandpi reports it and does
-  not silently start a replacement native Session or display a database copy.
-- A Sandpi Session keeps its initial Sandbox and Workspace Volume allocation
-  for its lifetime. Runtime recovery may replace a Supervisor/process attempt,
-  but never rebind the product Session to another Sandbox. If that immutable
-  Sandbox disappears, the Session fails explicitly while its allocation and
-  Workspace Volume coordinates remain available for diagnosis or recovery.
-- Harness state and user workspace state share one Session-owned snapshot
-  boundary. Codex stores its persistent home at
-  `/workspace/.sandpi/harnesses/codex`; the Web IDE, file APIs, Git projection,
-  file watch, and future sharing APIs must treat `/workspace/.sandpi` as a
-  server-enforced internal subtree.
-- Provider credentials are not part of that boundary. The Environment-scoped
-  credential source is materialized at
-  `/dev/shm/sandpi-codex-auth.json`; the persistent Codex home contains only a
-  symlink to that ephemeral file, so snapshots and forks do not copy the
-  credential body.
+```text
+Environment
+  Sandbox + /workspace Volume + credential binding
+  + one native harness process + Supervisor journal + Terminal
+       |
+       +-- Sandpi Session A -> native Thread A
+       +-- Sandpi Session B -> native Thread B
+       +-- Sandpi Session C -> native Thread C
+```
 
-The reserved subtree is a product API boundary, not a privilege boundary
-inside the Session. The coding agent and the Session owner have terminal access
-to the same Sandbox and can inspect or corrupt their own native state, just as
-they can with a local harness. Sandpi must never place a deployment secret or a
-different user's credential there.
+- An Environment owns the Sandbox0 resource allocation. Its Sandbox, Workspace
+  Volume, Supervisor decoder cursor, Terminal, audit and metrics are shared by
+  every product Session in that Environment.
+- A Sandpi Session stores product metadata and one opaque harness-native Session
+  id. It owns no Sandbox, Volume, Terminal or transcript.
+- PostgreSQL stores scalar recovery state: native Session id, selected model,
+  history revision, active native Turn id and ambiguous delivery coordinates.
+  It never stores message, reasoning, tool-call, delta or JSON-RPC payloads.
+- The Supervisor journal is a durable transport, not conversation storage. One
+  Environment worker decodes it once and routes native notifications to the
+  owning product Session by native Thread id.
+- A reconnect begins with `thread/read(includeTurns: true)`. The server captures
+  a process-local live cursor at the matching JSON-RPC response record, and the
+  client applies only the bounded notification suffix after that point.
+- A missing native rollout is an invariant failure. Sandpi reports it and never
+  substitutes a database transcript or silently starts a replacement Thread.
 
-## Branch and checkpoint semantics
+## Persistent native state and credentials
 
-- Session fork creates a new Sandbox and Workspace Volume fork, then asks the
-  native harness to fork its Session.
-- Turn fork creates a new Sandbox, initializes its Workspace Volume from the
-  selected source checkpoint, and asks the harness to fork through the selected
-  native Turn. The checkpoint already contains the native rollout; Sandpi does
-  not extract or import a second copy. Inherited Turns do not gain child-owned
-  rollback capability unless their Volume checkpoints are explicitly recreated
-  on the child Volume.
-- At native Turn completion, the Supervisor cursor and a pending Workspace
-  Volume checkpoint obligation are committed atomically. Snapshot creation can
-  then retry safely without retaining the native event payload.
-- Before native `turn/start` is dispatched, Sandpi journals only stable delivery
-  coordinates (request id, native client-message id, Supervisor input id, input
-  snapshot id, and delivery phase) in PostgreSQL. The exact RPC frame lives
-  briefly in a rootfs transport outbox until Codex accepts it, then conversation
-  content remains in the harness rollout. On a server restart Sandpi reconciles
-  the coordinates and staged frame against the native Session without creating
-  a database transcript.
-- Edit and delete restore the exact pre-Turn Volume checkpoint, restart the
-  native harness, and resume the same native Session id. Restoring one Volume
-  rewinds both the rollout and the user workspace, so edit/delete do not create
-  a native branch. The candidate replacement Turn and its live events remain
-  private until one PostgreSQL transaction commits the history revision,
-  active Turn, and checkpoint suffix. `session_turn_mutations` stores only the
-  coordinates required to compensate by restoring the former head snapshot
-  after a crash.
-- Codex does not materialize an empty `thread/start` as a rollout. Restoring the
-  input snapshot of the very first Turn therefore leaves no resumable native
-  id. Only for that empty-history boundary, Sandpi uses `thread/start` and
-  atomically records the returned id; no prior native conversation exists to
-  branch or lose. Every materialized-history edit/delete resumes the same id.
-- Edit/delete intentionally do not rewind rootfs-only side effects such as an
-  OS package installed outside `/workspace`. A full Session fork still copies
-  rootfs plus the Workspace Volume because it represents a new execution
-  environment, not a history rewrite in the existing Session.
-- Codex uses `thread/resume`, `thread/read(includeTurns: true)`, and
-  `thread/fork(lastTurnId)`. `thread/fork` is reserved for a new Sandpi Session
-  (Session fork or Turn fork) and interrupted-Turn canonicalization; it is not
-  an edit/delete implementation. Sandpi does not use deprecated
-  `thread/rollback`.
+Codex uses `/workspace/.sandpi/harnesses/codex` as its persistent `CODEX_HOME`.
+This keeps all native Threads on the Environment Workspace Volume, so a Sandbox
+runtime or harness process restart can resume them without a Sandpi chat store.
+The Web IDE, file APIs, Git projection and file watcher reject the reserved
+`/workspace/.sandpi` subtree.
 
-## Layout migration
+The Environment credential source is encrypted in PostgreSQL and materialized
+at `/dev/shm/sandpi-codex-auth.json`. Persistent `CODEX_HOME/auth.json` is only a
+symlink to that ephemeral file; the Workspace Volume contains no provider
+credential body. The Environment owner and its coding agents have execution in
+the same Sandbox and must still be treated as able to inspect their own native
+credential, just as with a local harness.
 
-Sessions created before the Volume layout stored Codex state in the Sandbox
-rootfs. Their immutable historical Volume snapshots cannot be upgraded with
-SQL because those snapshots never contained the rollout. Sandpi therefore
-migrates an idle legacy Session lazily before its next state-changing operation:
-it stops the old Supervisor, atomically copies the native home into the reserved
-Volume subtree, starts a Volume-backed Supervisor, resumes and verifies the same
-native Session, and only then commits the new layout. Legacy checkpoints remain
-readable history but are never advertised as forkable or rewindable. New
-checkpoints become capable as they are created on the Volume-backed layout.
-The durable `migrating` state is scanned by startup maintenance without blocking
-the API listener or unrelated Session workers, so a backend restart resumes the
-migration instead of leaving the product Session permanently paused. Concurrent
-callers in one Sandpi backend server share one in-flight migration promise.
+## Start, resume and event routing
 
-The native snapshot exposes forkable and rewindable Turn ids separately. An
-output snapshot is sufficient to fork a new Session; edit/delete additionally
-requires the exact input snapshot so IDE or Terminal changes made between Turns
-are not discarded.
+Creating a Sandpi Session calls native `thread/start`; it does not claim or fork
+a Sandbox0 resource. Subsequent Turns call `turn/start` with that native Thread
+id. Codex app-server can own many Threads, so one Environment Supervisor is
+sufficient.
 
-Harness integrations remain native by design. A future Claude Code, OpenCode,
-or Pi integration must define its own snapshot, live events, tool UI, models,
-commands, and branching rules instead of being coerced into a Sandpi-wide chat
-or tool-call schema.
+When Sandpi starts or recovers an Environment app-server, it initializes that
+one transport and calls native `thread/resume` for every referenced Thread.
+Each resume response repairs only the Session's active-Turn/status projection;
+the returned conversation remains native and is not written to PostgreSQL. A
+failure to resume one Thread does not replace it or invent a new conversation,
+and does not prevent other Threads in the Environment from reattaching.
 
-Codex currently describes `thread/read(includeTurns: true)` as a lossy UI
-projection: transient deltas and some execution lifecycle details may not be
-present after reconnect. Sandpi intentionally accepts the harness-visible
-native projection instead of creating a second durable conversation store.
+The Environment decoder extracts only scalar control transitions from
+`turn/started` and `turn/completed` for refresh-safe button/status state. The
+unmodified native notifications remain in bounded process memory for SSE and
+are discarded after their live window. Browser disconnects therefore have no
+effect on the native process or rollout.
+
+## Branch and mutation semantics
+
+- Session fork calls native `thread/fork` without a Turn boundary and creates a
+  new product Session pointing to the returned native Thread.
+- Turn fork calls `thread/fork(lastTurnId)` and creates a new product Session
+  pointing to that native child.
+- Edit reads the native Thread, branches through the predecessor of the selected
+  Turn (or calls `thread/start` at the empty-history boundary), starts the
+  replacement Turn on the candidate Thread, then compare-and-swaps the product
+  Session to the candidate native id.
+- Delete performs the same branch but does not start a replacement Turn.
+- The original native Thread is not destroyed. A failed compare-and-swap may
+  leave an unreferenced candidate Thread, but cannot corrupt the referenced
+  Session.
+- None of these operations snapshots, forks or restores `/workspace`. The
+  Workspace is intentionally shared and mutable at Environment scope, so
+  rolling it back for one Session would corrupt every other Session.
+- Sandpi does not use deprecated `thread/rollback`.
+
+The native snapshot exposes fork and mutation capability sets separately even
+when a particular Codex version implements both with branching. Each future
+harness integration must define its own native rules instead of inheriting a
+cross-harness Sandpi abstraction.
+
+## Concurrency consequence
+
+Multiple native Sessions in one Environment can observe and modify the same
+files. This is the intended workspace model, not isolation. Sandpi must never
+label a product Session as a private checkout or imply that edit/delete rewinds
+files. Users or agents may create Git worktrees or repositories when they need
+source-level isolation; Sandpi does not choose that policy for them.
+
+## Legacy isolated Sessions
+
+Sessions created by the retired per-Session Sandbox architecture cannot be
+silently rebound: their native rollout lived on a different private Workspace
+Volume. Migration preserves their opaque native ids for diagnosis, marks them
+`legacy_isolated_runtime`, and fails them explicitly. New Sessions immediately
+use the Environment runtime. Sandpi does not copy a legacy transcript into the
+database to make it appear resumable.
+
+Codex documents `thread/read(includeTurns: true)` as a UI projection that may
+omit transient deltas. Sandpi intentionally accepts the harness-visible native
+projection instead of creating a second durable conversation store.

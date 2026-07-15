@@ -1,21 +1,21 @@
-import type { SessionAuditEvent } from "@/lib/types";
+import type { EnvironmentAuditEvent } from "@/lib/types";
 
-export interface SessionAuditOperation {
+export interface EnvironmentAuditOperation {
   operationId: string;
-  events: SessionAuditEvent[];
-  primaryEvent: SessionAuditEvent;
-  outcome: SessionAuditEvent["outcome"];
+  events: EnvironmentAuditEvent[];
+  primaryEvent: EnvironmentAuditEvent;
+  outcome: EnvironmentAuditEvent["outcome"];
   integrityIssueCount: number;
 }
 
-export type SessionAuditView =
+export type EnvironmentAuditView =
   | "all"
   | "attention"
   | "network"
   | "process"
   | "sandbox";
 
-const outcomeSeverity: Record<SessionAuditEvent["outcome"], number> = {
+const outcomeSeverity: Record<EnvironmentAuditEvent["outcome"], number> = {
   completed: 0,
   succeeded: 0,
   accepted: 1,
@@ -26,12 +26,12 @@ const outcomeSeverity: Record<SessionAuditEvent["outcome"], number> = {
 };
 
 export function isNegativeAuditOutcome(
-  outcome: SessionAuditEvent["outcome"],
+  outcome: EnvironmentAuditEvent["outcome"],
 ) {
   return outcome === "denied" || outcome === "failed" || outcome === "error";
 }
 
-export function hasAuditIntegrityIssue(event: SessionAuditEvent) {
+export function hasAuditIntegrityIssue(event: EnvironmentAuditEvent) {
   return (
     event.integrity.signatureStatus !== "verified" ||
     event.integrity.eventIdConflict === true
@@ -43,10 +43,10 @@ export function hasAuditIntegrityIssue(event: SessionAuditEvent) {
  * The UI can therefore make one operation expandable without merging away event identity,
  * phase, producer or integrity status.
  */
-export function groupSessionAuditOperations(
-  events: SessionAuditEvent[],
-): SessionAuditOperation[] {
-  const grouped = new Map<string, SessionAuditEvent[]>();
+export function groupEnvironmentAuditOperations(
+  events: EnvironmentAuditEvent[],
+): EnvironmentAuditOperation[] {
+  const grouped = new Map<string, EnvironmentAuditEvent[]>();
   for (const event of events) {
     const operationEvents = grouped.get(event.operationId) ?? [];
     operationEvents.push(event);
@@ -64,7 +64,7 @@ export function groupSessionAuditOperations(
         throw new Error(`Audit operation ${operationId} has no events.`);
       }
       const negativeOutcome = sortedEvents.reduce<
-        SessionAuditEvent["outcome"] | undefined
+        EnvironmentAuditEvent["outcome"] | undefined
       >(
         (current, event) =>
           isNegativeAuditOutcome(event.outcome) &&
@@ -90,7 +90,7 @@ export function groupSessionAuditOperations(
 }
 
 export function auditOperationNeedsAttention(
-  operation: SessionAuditOperation,
+  operation: EnvironmentAuditOperation,
 ) {
   return (
     isNegativeAuditOutcome(operation.outcome) ||
@@ -99,9 +99,9 @@ export function auditOperationNeedsAttention(
 }
 
 /** Product-level views deliberately hide the backend's source/type matrix. */
-export function filterSessionAuditOperations(
-  operations: SessionAuditOperation[],
-  view: SessionAuditView,
+export function filterEnvironmentAuditOperations(
+  operations: EnvironmentAuditOperation[],
+  view: EnvironmentAuditView,
 ) {
   if (view === "all") {
     return operations;
@@ -127,8 +127,8 @@ export function filterSessionAuditOperations(
   );
 }
 
-export function summarizeSessionAudit(events: SessionAuditEvent[]) {
-  const operations = groupSessionAuditOperations(events);
+export function summarizeEnvironmentAudit(events: EnvironmentAuditEvent[]) {
+  const operations = groupEnvironmentAuditOperations(events);
   return {
     events: events.length,
     operations: operations.length,
@@ -141,7 +141,7 @@ export function summarizeSessionAudit(events: SessionAuditEvent[]) {
   };
 }
 
-function auditAttributes(event: SessionAuditEvent): Record<string, unknown> {
+function auditAttributes(event: EnvironmentAuditEvent): Record<string, unknown> {
   if (
     !event.attributes ||
     typeof event.attributes !== "object" ||
@@ -179,7 +179,7 @@ export interface NetworkAuditSynopsis {
 
 /** View-only projection; callers still retain and render the complete signed attributes. */
 export function networkAuditSynopsis(
-  event: SessionAuditEvent,
+  event: EnvironmentAuditEvent,
 ): NetworkAuditSynopsis | undefined {
   if (event.eventType !== "network_audit") {
     return undefined;

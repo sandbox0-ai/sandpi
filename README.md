@@ -19,8 +19,8 @@ This repository contains the runnable open-source Web application and Sandpi
 server. The current implementation includes PostgreSQL persistence,
 deployment-level identity configuration, Environment and Session APIs,
 Sandbox0 runtime wiring, Codex app-server event transport, native model
-discovery, image input, Session and Turn forks, snapshot-backed Turn edit and
-delete, a live Web IDE, terminal, signed audit and runtime metrics.
+discovery, image input, native Session/Turn branching, a live Web IDE,
+Environment terminal, signed audit and runtime metrics.
 
 Webhooks, cron jobs, mobile clients, explicit Environment sharing and additional
 native harness integrations remain future work. Sandpi's `/api/v1` contract is
@@ -41,19 +41,19 @@ Web today; iOS / Android / HarmonyOS later
              +--------+--------+
              |                 |
         PostgreSQL        Sandbox0 SDK
-      control state,       deployment API
-       checkpoints               |
-                                Sandbox
-                      native Codex app-server,
-                      /workspace Volume, PTY
+       product and         deployment API
+       control state              |
+                            Environment Sandbox
+                      native Codex app-server with
+                      many Threads, /workspace, PTY
 ```
 
 - **One backend:** every client uses the same versioned REST, SSE and WebSocket
   service. Platform-specific clients must not reimplement orchestration rules.
 - **Client/server execution:** the browser is only an interaction client. A
   coding agent runs through its native harness in a Sandbox0 Supervisor Session.
-- **Recoverable sessions:** the harness-native Session and rollout remain in
-  the Session Workspace Volume, so closing the browser or losing the client
+- **Recoverable sessions:** every harness-native Session and rollout remains in
+  the Environment Workspace Volume, so closing the browser or losing the client
   network does not terminate the coding agent. A reconnect reads a native harness snapshot,
   then resumes from a bounded Supervisor/live notification transport; Sandpi
   does not persist a parallel chat transcript.
@@ -79,40 +79,33 @@ Web today; iOS / Android / HarmonyOS later
   `/workspace/.sandpi` subtree is excluded and rejected by the server, not just
   hidden by the UI. The browser never receives the deployment API key or a
   direct Sandbox0 endpoint.
-- **Environment grouping:** an Environment fixes the harness, official harness
-  authentication, Sandbox template, network policy and workspace baseline.
-  Sessions cannot switch harnesses dynamically.
+- **Environment grouping:** an Environment owns one Sandbox, one mounted
+  Workspace Volume, one harness process, official harness authentication,
+  template and network policy. Product Sessions are lightweight references to
+  native harness Sessions inside that runtime and cannot switch harnesses.
+  Network-policy edits are applied to that running Environment Sandbox rather
+  than deferred to a future product Session.
 - **Private execution by default:** in the OSS MVP an Environment and its
   Sessions are accessible only to their creator. Team membership supplies the
   tenant and billing boundary, not implicit access to another member's Codex
   credential, workspace or terminal. Explicit Environment sharing requires a
   future ACL and remains disabled.
-- **Session isolation:** each Session receives its own Sandbox and a private
-  fork of the Environment workspace Volume. Session Sandboxes have a fixed
-  30-day hard TTL; the server reaper deletes the associated Volume and clears
-  runtime coordinates when that TTL expires.
 - **Credential boundary:** provider authentication belongs to an Environment
-  and is encrypted in PostgreSQL. A Session materializes plaintext only in
-  `/dev/shm`; its persistent Codex home contains a link, so rootfs and workspace
-  snapshots cannot copy the credential while native thread/rollout state in
+  and is encrypted in PostgreSQL. The Environment runtime materializes
+  plaintext only in `/dev/shm`; its persistent Codex home contains a link, so
+  the Workspace Volume does not contain the credential while native rollouts in
   `/workspace/.sandpi/harnesses/codex` survives runtime recovery.
-- **Snapshot-backed history:** Session fork copies Sandbox rootfs and the
-  Session's private Workspace Volume. Sandpi captures a Workspace Volume
-  baseline before the first Turn, an exact input snapshot immediately before
-  each later Turn, and an output snapshot after every completed Turn. The input
-  snapshot preserves Web IDE or terminal edits made between Turns; Turn fork,
-  edit and delete use these checkpoints and never restore or fork rootfs.
-- **Native Codex history:** the selected Turn checkpoint already contains
-  Codex's native rollout. A Turn fork creates a fresh `coding-agent` Sandbox
-  from that Volume snapshot and calls native `thread/fork` at the selected
-  Turn; Sandpi neither extracts the rollout nor synthesizes a second
-  conversation format.
+- **Native branching:** Session fork, Turn fork, edit and delete use Codex
+  `thread/fork` (or `thread/start` at the empty-history boundary). They never
+  copy or restore the shared Workspace. Edit/delete switch the product Session
+  to the candidate native Thread with a PostgreSQL compare-and-swap, while the
+  original native rollout remains harness-owned.
 
 The detailed authority, reconnect and mutation invariants are documented in
 [Native coding-agent Session authority](docs/architecture/native-session-authority.md).
 
 The Sandpi database is authoritative for Team ownership of every Environment,
-Session, Sandbox and Volume. The deployment Sandbox0 key does not identify a
+native Session reference, Sandbox and Volume. The deployment Sandbox0 key does not identify a
 Sandpi Team, so every SDK operation must be authorized against Sandpi metadata
 first.
 
@@ -121,46 +114,35 @@ first.
 ```text
 Environment
   coding-agent template + network policy + encrypted Codex Credential Source
-  + baseline Workspace Volume
+  + Sandbox + mounted Workspace Volume + native harness process
        |
-       +-- Session A: Sandbox A + private Workspace Volume A + native thread A
+       +-- Session A: native thread A
        |
-       +-- Session B: Sandbox B + private Workspace Volume B + native thread B
+       +-- Session B: native thread B
 ```
 
-Creating a Session forks the Environment baseline Volume and claims a new
-Sandbox. Therefore concurrent Sessions never write the same mounted Workspace
-Volume. A Session fork pauses its source only for the consistent rootfs and
-Workspace copy, then resumes it. A Turn fork leaves the source untouched and
-creates a fresh Sandbox from the selected immutable Workspace checkpoint.
+Creating or forking a product Session does not allocate Sandbox0 resources.
+Sandpi asks the Environment's native harness to start or fork a Session and
+stores only its opaque id. File APIs, Web IDE, Terminal, audit and metrics are
+Environment resources, so switching between Sessions in one Environment does
+not switch shells or workspaces. Native agent Turns may therefore observe the
+same mutable files; clients must not present a Session as an isolated checkout.
+The Web IDE can also be addressed by Environment without an active Session.
 
-Inherited Turns in either child are readable native history. They intentionally
-do not become child-owned rollback points: the child's fork baseline is its
-first mutable checkpoint. This prevents one Session from deleting or restoring
-snapshots owned by another Session.
-
-History mutation is a server-side transaction across Sandbox0 and PostgreSQL:
-Sandpi reserves the Session, restores the pre-Turn Workspace checkpoint,
-restarts the harness and resumes the same native Codex Session, then atomically
-commits the history revision, active Turn and checkpoint suffix. Candidate
-replacement-Turn events are not visible before that commit. If finalization
-fails, Sandpi restores the original Volume head and resumes the same native
-Session. Connected clients receive an SSE invalidation and replace their view
-with a fresh native harness snapshot after the history change.
-
-Codex does not write a rollout for an empty thread. Consequently, editing or
-deleting the first Turn is the one native-id exception: after restoring the
-pre-first-Turn Volume, Sandpi starts a new empty Codex thread and atomically
-commits that id. There is no earlier native conversation to discard. Once a
-rollout has been materialized, history mutation resumes the same native id.
+For edit/delete Sandpi creates a candidate native branch immediately before the
+selected Turn, optionally starts the replacement Turn, then atomically switches
+the product Session's opaque native id and history revision. A failed compare
+and-swap leaves only an unreferenced native branch; it never rolls back files
+belonging to other Sessions. Connected clients receive an SSE invalidation and
+reload the harness-native snapshot.
 
 ## Requirements
 
 - Node.js 24 and npm 11
 - PostgreSQL 15 or newer
 - A Sandbox0 deployment and deployment API key
-- A Sandbox0 `coding-agent` template with `/workspace` mounted as the workspace
-  Volume for real Session provisioning
+- A Sandbox0 `coding-agent` template; Sandpi mounts each Environment's
+  Workspace Volume at `/workspace`
 - Docker Engine with Compose v2 for the container workflow
 
 Signed Sandbox audit additionally requires the Sandbox0 `sandbox_audit` feature
@@ -215,7 +197,7 @@ Open the Environment menu, choose **Coding agent**, and select **Connect Codex**
 Sandpi starts the official Codex device-login protocol in a short-lived
 `coding-agent` Sandbox and displays the native verification URL and user code.
 The resulting `auth.json` becomes an encrypted Environment-scoped Credential
-Source; every Session records its own Sandbox-scoped materialization binding.
+Source; the Environment records one Sandbox-scoped materialization binding.
 
 For local development only, an existing native Codex login can be imported
 without copying it through the browser:
@@ -334,8 +316,8 @@ An admin-mode deployment may also boot without `SANDPI_SECRET_KEY`, but it must
 set one before connecting an Environment to Codex. Changing the key makes
 previously stored Environment credentials unreadable.
 
-The Environment creator is the credential owner. A native coding agent and Web
-Terminal execute inside that creator's Session Sandbox, so the creator must be
+The Environment creator is the credential owner. Native coding-agent Sessions
+and the Web Terminal execute inside that creator's Environment Sandbox, so the creator must be
 treated as capable of exporting their own provider credential, just as with a
 local native harness. Sandpi does not grant this access to other Team members;
 future sharing must introduce an explicit ACL and credential policy first.
@@ -345,13 +327,12 @@ future sharing must introduce an explicit ACL and credential policy first.
 Codex receives the official native file at
 `/dev/shm/sandpi-codex-auth.json`. Its persistent `CODEX_HOME/auth.json` is a
 symlink from `/workspace/.sandpi/harnesses/codex` to that memory-backed file, so
-neither a rootfs snapshot nor a Workspace Volume snapshot contains provider
-tokens. Before a Turn, Sandpi materializes
-the current Environment revision. After a completed Turn and after runtime
-recovery, it reads native refreshes back, encrypts a new Environment revision,
-and advances stale Session bindings. The Session owner still has terminal and
-agent execution inside their own Sandbox and must be treated as able to export
-their own provider credential, just as with a local Codex installation.
+the Workspace Volume contains no provider tokens. Sandpi materializes the
+current Environment credential when starting or recovering the shared harness
+runtime and reconciles a native refresh during runtime recovery. The
+Environment owner still has terminal and agent execution in that Sandbox and
+must be treated as able to export their own provider credential, just as with a
+local Codex installation.
 
 Sandpi never sends this credential to Sandbox0's deployment API as an API key;
 the Sandbox0 host and key remain independent deployment-level server secrets.
@@ -387,11 +368,10 @@ Sandbox0 implementation details.
 
 ## Runtime guarantees and current limits
 
-- One product Session always owns one Sandbox and one private Workspace Volume.
+- One Environment owns one Sandbox, one mounted Workspace Volume, one Terminal
+  and one native harness process; all product Sessions in it share them.
 - Every Environment is provisioned from the fixed Sandbox0 `coding-agent`
-  template; neither users nor Sessions can override it.
-- A Session has a Sandbox0-enforced 30-day hard TTL. The resource reaper also
-  journals and retries cleanup for partially provisioned or failed Sessions.
+  template; product Sessions allocate only native harness Sessions.
 - Supervisor output is the durable native transport. PostgreSQL stores replay
   identity, cursors and scalar recovery coordinates, never a parallel Codex
   transcript; the browser may disconnect at any time without stopping Codex.
@@ -401,7 +381,7 @@ Sandbox0 implementation details.
   parsed with terminal input disabled until a captured journal head is reached,
   preventing old device queries from writing replies into the live PTY. Live
   input is forwarded in order, including xterm binary mouse reports. Every
-  writable frame is reauthorized and serialized behind the Session database
+  writable frame is reauthorized against the Environment
   fence; resize-only frames do not require write access.
   The shell supplies Vim's native `EXINIT` fallback only when no user vimrc is
   present, keeping arrow-key escape sequences usable in `vi` compatible mode

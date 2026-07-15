@@ -48,6 +48,7 @@ import {
 import { userVisibleWorkspacePath } from "@/lib/workspace-path-policy";
 import type {
   CodingSession,
+  Environment,
   WorkspaceFile,
   WorkspaceGitFileChange,
   WorkspaceGitRepository,
@@ -62,7 +63,9 @@ import styles from "./workspace-ide.module.css";
 interface WorkspaceIdeProps {
   language: OperationLanguage;
   timeZone: string;
-  session: CodingSession;
+  environment: Environment;
+  /** Optional navigation context; Workspace ownership belongs to Environment. */
+  session?: CodingSession;
   variant: "embedded" | "standalone";
   initialSnapshot?: WorkspaceIdeSnapshot;
 }
@@ -106,6 +109,7 @@ const copy = {
     share: (name: string) => `Share ${name}`,
     shareFuture: "File sharing requires the future scoped-grant API.",
     back: "Back to Session",
+    backEnvironment: "Back to Environment",
     binary: "Binary files cannot be rendered as text.",
     deletedFile: "Deleted files are read-only. Restore them from Git before editing.",
     save: "Save file (⌘/Ctrl+S)",
@@ -141,6 +145,7 @@ const copy = {
     share: (name: string) => `分享 ${name}`,
     shareFuture: "文件分享需要后续的 scoped-grant API。",
     back: "返回 Session",
+    backEnvironment: "返回 Environment",
     binary: "二进制文件无法按文本显示。",
     deletedFile: "已删除文件为只读；请先通过 Git 恢复后再编辑。",
     save: "保存文件（⌘/Ctrl+S）",
@@ -271,11 +276,15 @@ function encodeBase64(content: string, bom?: "utf8") {
   return window.btoa(binary);
 }
 
-export function workspaceIdeHref(session: CodingSession, filePath?: string) {
+export function workspaceIdeHref(
+  environmentId: string,
+  sessionId?: string,
+  filePath?: string,
+) {
   const search = new URLSearchParams({
-    environment: session.environmentId,
-    session: session.id,
+    environment: environmentId,
   });
+  if (sessionId) search.set("session", sessionId);
   const visibleFilePath = filePath
     ? userVisibleWorkspacePath(filePath)
     : undefined;
@@ -283,11 +292,11 @@ export function workspaceIdeHref(session: CodingSession, filePath?: string) {
   return `/ide/?${search.toString()}`;
 }
 
-function sessionHref(session: CodingSession) {
+function environmentHref(environmentId: string, sessionId?: string) {
   const search = new URLSearchParams({
-    environment: session.environmentId,
-    session: session.id,
+    environment: environmentId,
   });
+  if (sessionId) search.set("session", sessionId);
   return `/?${search.toString()}`;
 }
 
@@ -389,6 +398,7 @@ function IdeFileTree({
 export function WorkspaceIde({
   language,
   timeZone,
+  environment,
   session,
   variant,
   initialSnapshot,
@@ -434,7 +444,7 @@ export function WorkspaceIde({
       try {
         const query = new URLSearchParams({ path: visiblePath });
         const response = await apiFetch<ApiEnvelope<WorkspaceIdeFile>>(
-          `/api/v1/sessions/${encodeURIComponent(session.id)}/ide/file?${query.toString()}`,
+          `/api/v1/environments/${encodeURIComponent(environment.id)}/ide/file?${query.toString()}`,
         );
         const responsePath = userVisibleWorkspacePath(response.data.path);
         if (!responsePath || responsePath !== visiblePath) {
@@ -474,7 +484,7 @@ export function WorkspaceIde({
         }));
       }
     },
-    [session.id],
+    [environment.id],
   );
 
   const refreshSnapshot = useCallback(
@@ -482,7 +492,7 @@ export function WorkspaceIde({
       if (!silent) setLoading(true);
       try {
         const response = await apiFetch<ApiEnvelope<WorkspaceIdeSnapshot>>(
-          `/api/v1/sessions/${encodeURIComponent(session.id)}/ide`,
+          `/api/v1/environments/${encodeURIComponent(environment.id)}/ide`,
         );
         setSnapshot(response.data);
         setError("");
@@ -496,7 +506,7 @@ export function WorkspaceIde({
         if (!silent) setLoading(false);
       }
     },
-    [session.id],
+    [environment.id],
   );
 
   useEffect(() => {
@@ -507,7 +517,7 @@ export function WorkspaceIde({
     setError("");
     if (initialSnapshot) setLoading(false);
     else void refreshSnapshot();
-  }, [initialSnapshot, refreshSnapshot, session.id]);
+  }, [environment.id, initialSnapshot, refreshSnapshot]);
 
   const visibleGit = useMemo(
     () => userVisibleWorkspaceGitState(snapshot?.git),
@@ -684,7 +694,7 @@ export function WorkspaceIde({
       );
       socket = new WebSocket(
         apiWebSocketUrl(
-          `/api/v1/sessions/${encodeURIComponent(session.id)}/ide/events`,
+          `/api/v1/environments/${encodeURIComponent(environment.id)}/ide/events`,
         ),
       );
       socket.addEventListener("message", (message) => {
@@ -746,7 +756,7 @@ export function WorkspaceIde({
         window.clearTimeout(reconnectTimerRef.current);
       }
     };
-  }, [loadDocument, refreshSnapshot, session.id]);
+  }, [environment.id, loadDocument, refreshSnapshot]);
 
   useEffect(() => {
     const warnForUnsavedFiles = (event: BeforeUnloadEvent) => {
@@ -808,7 +818,7 @@ export function WorkspaceIde({
     try {
       const query = new URLSearchParams({ path: visiblePath });
       const response = await apiFetch<ApiEnvelope<WorkspaceIdeFile>>(
-        `/api/v1/sessions/${encodeURIComponent(session.id)}/ide/file?${query.toString()}`,
+        `/api/v1/environments/${encodeURIComponent(environment.id)}/ide/file?${query.toString()}`,
         { method: "PUT", body: JSON.stringify(body) },
       );
       const responsePath = userVisibleWorkspacePath(response.data.path);
@@ -948,11 +958,14 @@ export function WorkspaceIde({
     >
       {variant === "standalone" ? (
         <header className={styles.topbar}>
-          <a href={sessionHref(session)} className={styles.backLink}>
-            <ArrowLeft size={14} /> {ui.back}
+          <a
+            href={environmentHref(environment.id, session?.id)}
+            className={styles.backLink}
+          >
+            <ArrowLeft size={14} /> {session ? ui.back : ui.backEnvironment}
           </a>
           <span className={styles.brand}>
-            <i /> sandpi <b>/</b> {session.title}
+            <i /> sandpi <b>/</b> {session?.title ?? environment.name}
           </span>
           <span className={`${styles.liveBadge} ${styles[connection]}`}>
             <Radio size={12} /> {connectionLabel}
@@ -1028,7 +1041,11 @@ export function WorkspaceIde({
               </button>
               {variant === "embedded" ? (
                 <a
-                  href={workspaceIdeHref(session, selectedPath || undefined)}
+                  href={workspaceIdeHref(
+                    environment.id,
+                    session?.id,
+                    selectedPath || undefined,
+                  )}
                   target="_blank"
                   rel="noreferrer"
                   aria-label={ui.openFull}
@@ -1143,14 +1160,14 @@ export function WorkspaceIde({
                   <div className={styles.code} aria-label={selectedFile.name}>
                     {document?.comparing && document.conflict ? (
                       <WorkspaceConflictDiff
-                        modelPath={`sandpi://${session.id}${selectedPath}`}
+                        modelPath={`sandpi://${environment.id}${selectedPath}`}
                         latest={latestConflictText}
                         local={text}
                         language={monacoLanguage(selectedFile.name)}
                       />
                     ) : (
                       <WorkspaceCodeEditor
-                        modelPath={`sandpi://${session.id}${selectedPath}`}
+                        modelPath={`sandpi://${environment.id}${selectedPath}`}
                         value={text}
                         language={monacoLanguage(selectedFile.name)}
                         readOnly={!selectedFile.editable}

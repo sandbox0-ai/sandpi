@@ -21,22 +21,25 @@ import {
 import { copyTextToClipboard } from "@/lib/clipboard";
 import {
   auditOperationNeedsAttention,
-  filterSessionAuditOperations,
-  groupSessionAuditOperations,
+  filterEnvironmentAuditOperations,
+  groupEnvironmentAuditOperations,
   hasAuditIntegrityIssue,
   networkAuditSynopsis,
-  summarizeSessionAudit,
-  type SessionAuditOperation,
-  type SessionAuditView,
+  summarizeEnvironmentAudit,
+  type EnvironmentAuditOperation,
+  type EnvironmentAuditView,
 } from "@/lib/session-audit";
 import { unixTimestampToIso } from "@/lib/time";
-import type { SessionAuditEvent, SessionAuditFeed } from "@/lib/types";
+import type {
+  EnvironmentAuditEvent,
+  EnvironmentAuditFeed,
+} from "@/lib/types";
 
-interface SessionAuditPanelProps {
+interface EnvironmentAuditPanelProps {
   language: OperationLanguage;
   timeZone: string;
-  sessionId: string;
-  audit: SessionAuditFeed;
+  environmentId: string;
+  audit: EnvironmentAuditFeed;
 }
 
 type ActivityKind =
@@ -52,7 +55,7 @@ interface ActivityDescriptor {
   subject: string;
 }
 
-function eventAttributes(event: SessionAuditEvent) {
+function eventAttributes(event: EnvironmentAuditEvent) {
   return event.attributes &&
     typeof event.attributes === "object" &&
     !Array.isArray(event.attributes)
@@ -60,7 +63,7 @@ function eventAttributes(event: SessionAuditEvent) {
     : {};
 }
 
-function describeActivity(operation: SessionAuditOperation): ActivityDescriptor {
+function describeActivity(operation: EnvironmentAuditOperation): ActivityDescriptor {
   const event = operation.primaryEvent;
   const network = networkAuditSynopsis(event);
   if (network) {
@@ -115,7 +118,7 @@ function AuditTechnicalDetails({
   event,
   language,
 }: {
-  event: SessionAuditEvent;
+  event: EnvironmentAuditEvent;
   language: OperationLanguage;
 }) {
   const ui = getOperationUiCopy(language).inspector;
@@ -174,7 +177,7 @@ function AuditEventStep({
   language,
   timeZone,
 }: {
-  event: SessionAuditEvent;
+  event: EnvironmentAuditEvent;
   language: OperationLanguage;
   timeZone: string;
 }) {
@@ -207,7 +210,7 @@ function AuditActivity({
   language,
   timeZone,
 }: {
-  operation: SessionAuditOperation;
+  operation: EnvironmentAuditOperation;
   language: OperationLanguage;
   timeZone: string;
 }) {
@@ -286,26 +289,29 @@ function AuditActivity({
   );
 }
 
-export function SessionAuditPanel({
+export function EnvironmentAuditPanel({
   language,
   timeZone,
-  sessionId,
+  environmentId,
   audit,
-}: SessionAuditPanelProps) {
+}: EnvironmentAuditPanelProps) {
   const ui = getOperationUiCopy(language).inspector;
-  const [view, setView] = useState<SessionAuditView>("all");
+  const [view, setView] = useState<EnvironmentAuditView>("all");
   const allOperations = useMemo(
-    () => groupSessionAuditOperations(audit.events),
+    () => groupEnvironmentAuditOperations(audit.events),
     [audit.events],
   );
   const operations = useMemo(
-    () => filterSessionAuditOperations(allOperations, view),
+    () => filterEnvironmentAuditOperations(allOperations, view),
     [allOperations, view],
   );
-  const summary = useMemo(() => summarizeSessionAudit(audit.events), [audit.events]);
+  const summary = useMemo(
+    () => summarizeEnvironmentAudit(audit.events),
+    [audit.events],
+  );
   const verificationIssues = summary.events - summary.verified;
 
-  useEffect(() => setView("all"), [sessionId]);
+  useEffect(() => setView("all"), [environmentId]);
 
   return (
     <div className="inspector-panel audit-panel">
@@ -318,7 +324,9 @@ export function SessionAuditPanel({
           <span className="sr-only">{ui.activityFilter}</span>
           <select
             value={view}
-            onChange={(event) => setView(event.target.value as SessionAuditView)}
+            onChange={(event) =>
+              setView(event.target.value as EnvironmentAuditView)
+            }
             aria-label={ui.activityFilter}
             disabled={audit.events.length === 0}
           >

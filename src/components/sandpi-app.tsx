@@ -500,8 +500,8 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
     return <div className="empty-app">No Team Environment is available.</div>;
   }
 
-  const showInspector = inspectorOpen && Boolean(selectedSession);
-  const showTerminal = terminalOpen && Boolean(selectedSession);
+  const showInspector = inspectorOpen;
+  const showTerminal = terminalOpen;
 
   return (
     <AppFrame
@@ -604,10 +604,11 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
         />
       )}
 
-      {showInspector && selectedSession ? (
+      {showInspector ? (
         <Inspector
           language={preferences.general.language}
           timeZone={preferences.general.timeZone}
+          environment={selectedEnvironment}
           session={selectedSession}
           activeTab={inspectorTab}
           onTabChange={setInspectorTab}
@@ -615,9 +616,9 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
         />
       ) : null}
 
-      {showTerminal && selectedSession ? (
+      {showTerminal ? (
         <TerminalDock
-          session={selectedSession}
+          environment={selectedEnvironment}
           height={terminalHeight}
           maximized={terminalMaximized}
           onHeightChange={handleTerminalHeightChange}

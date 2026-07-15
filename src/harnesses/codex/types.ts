@@ -225,13 +225,13 @@ export interface CodexHarnessState {
   modelId: string;
   harnessVersion: string;
   protocolVersion: "v2";
-  /** Changes whenever the visible native history is destructively rewritten. */
+  /** Changes whenever the product Session switches to another native branch. */
   historyRevision: number;
 }
 
 /**
  * Codex-specific read model. `thread` is the unmodified native app-server
- * payload; Sandpi adds only checkpoint capability and current model metadata.
+ * payload; Sandpi adds only native branch capability and control metadata.
  */
 export interface CodexNativeSnapshot {
   protocol: "codex-app-server";
@@ -239,16 +239,15 @@ export interface CodexNativeSnapshot {
   historyRevision: number;
   modelId: string;
   /**
-   * Product lifecycle authority after Sandpi has completed any post-Turn
-   * checkpoint and persistence work. Native `turn/completed` alone must not
-   * move the Session back to `waiting`.
+   * Product control state derived from the same native event stream. Sandpi
+   * persists this scalar for refresh recovery, never the transcript payload.
    */
   sessionStatus: SessionStatus;
   thread: CodexThread;
-  /** Native Turns whose completed Workspace checkpoint can seed a child Session. */
+  /** Completed native Turns through which Codex can fork a child Thread. */
   forkableTurnIds: string[];
-  /** Native Turns with a restorable pre-Turn Workspace state for edit/delete. */
-  rewindableTurnIds: string[];
+  /** Completed native Turns that can be replaced or removed through branching. */
+  mutableTurnIds: string[];
 }
 
 /**

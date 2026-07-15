@@ -11,7 +11,7 @@ interface SessionActionsMenuProps {
   session: CodingSession;
   triggerClassName: string;
   triggerIconSize?: number;
-  /** The server forks rootfs, Workspace Volume and the native thread as one product operation. */
+  /** The server creates a new product Session through the bound harness's native fork. */
   sessionForkEnabled?: boolean;
   onForkSession: (sessionId: string) => void;
   onRenameSession: (sessionId: string, title: string) => void;

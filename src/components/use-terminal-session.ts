@@ -110,7 +110,7 @@ export function isCurrentTerminalExit(
  * cursor requests only output missed during the network interruption.
  */
 export function useTerminalSession(
-  sessionId: string,
+  environmentId: string,
   onOpenSearch: () => void,
 ) {
   const [connectionState, setConnectionState] =
@@ -132,7 +132,7 @@ export function useTerminalSession(
     } else {
       try {
         replayStateRef.current = parseTerminalReplayState(
-          window.localStorage.getItem(terminalReplayStorageKey(sessionId)),
+          window.localStorage.getItem(terminalReplayStorageKey(environmentId)),
         );
       } catch {
         replayStateRef.current = emptyTerminalReplayState();
@@ -151,13 +151,13 @@ export function useTerminalSession(
     if (typeof window === "undefined" || !replayStateRef.current) return;
     try {
       window.localStorage.setItem(
-        terminalReplayStorageKey(sessionId),
+        terminalReplayStorageKey(environmentId),
         JSON.stringify(replayStateRef.current),
       );
     } catch {
       // Terminal recovery remains available for this mount when storage is disabled.
     }
-  }, [sessionId]);
+  }, [environmentId]);
 
   const focusTerminal = useCallback(() => terminalRef.current?.focus(), []);
 
@@ -292,7 +292,7 @@ export function useTerminalSession(
       }
       const socket = new WebSocket(
         apiWebSocketUrl(
-          `/api/v1/sessions/${encodeURIComponent(sessionId)}/terminal?${search.toString()}`,
+          `/api/v1/environments/${encodeURIComponent(environmentId)}/terminal?${search.toString()}`,
         ),
       );
       socketRef.current = socket;
@@ -602,7 +602,7 @@ export function useTerminalSession(
       fitAddonRef.current = null;
       searchAddonRef.current = null;
     };
-  }, [fitTerminal, onOpenSearch, persistReplayState, rendererGeneration, sessionId]);
+  }, [environmentId, fitTerminal, onOpenSearch, persistReplayState, rendererGeneration]);
 
   useEffect(
     () => () => {

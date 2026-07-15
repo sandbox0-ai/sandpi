@@ -21,7 +21,7 @@ import {
   useState,
 } from "react";
 
-import type { CodingSession } from "@/lib/types";
+import type { Environment } from "@/lib/types";
 
 import styles from "./terminal-dock.module.css";
 import {
@@ -30,7 +30,7 @@ import {
 } from "./use-terminal-session";
 
 export interface TerminalDockProps {
-  session: CodingSession;
+  environment: Environment;
   height: number;
   maximized: boolean;
   onHeightChange: (height: number) => void;
@@ -53,7 +53,7 @@ function clampTerminalHeight(height: number) {
 }
 
 function TerminalDockSession({
-  session,
+  environment,
   height,
   maximized,
   onHeightChange,
@@ -82,7 +82,7 @@ function TerminalDockSession({
     copySelection,
     clearTerminal,
     restartTerminal,
-  } = useTerminalSession(session.id, openSearch);
+  } = useTerminalSession(environment.id, openSearch);
 
   const closeSearch = useCallback(() => {
     searchAddonRef.current?.clearDecorations();
@@ -182,7 +182,10 @@ function TerminalDockSession({
   const showConnectionNotice = connectionState !== "connected";
 
   return (
-    <section className={styles.dock} aria-label={`Terminal for ${session.title}`}>
+    <section
+      className={styles.dock}
+      aria-label={`Terminal for ${environment.name}`}
+    >
       <div
         className={`${styles.resizeHandle} ${maximized ? styles.resizeHandleDisabled : ""}`}
         role="separator"
@@ -209,14 +212,14 @@ function TerminalDockSession({
           <strong>Terminal</strong>
           <span className={styles.titleSeparator}>/</span>
           <span className={styles.shellName}>bash</span>
-          <span className={styles.path} title={session.workspaceRoot}>
-            {session.workspaceRoot}
+          <span className={styles.path} title={environment.workspaceRoot}>
+            {environment.workspaceRoot}
           </span>
         </div>
 
         <div className={styles.statuses} aria-label="Terminal connection status">
-          <span className={styles.sandboxName} title={session.sandboxId}>
-            {session.sandboxId}
+          <span className={styles.sandboxName} title={environment.sandboxId}>
+            {environment.sandboxId}
           </span>
           <span className={styles.statusDivider} aria-hidden="true" />
           <span className={styles.statusItem}>
@@ -350,7 +353,7 @@ function TerminalDockSession({
           ref={terminalHostRef}
           className={styles.terminalHost}
           role="application"
-          aria-label={`Interactive terminal in ${session.sandboxId}`}
+          aria-label={`Interactive terminal in ${environment.sandboxId}`}
         />
 
         {showConnectionNotice ? (
@@ -385,5 +388,5 @@ function TerminalDockSession({
 }
 
 export function TerminalDock(props: TerminalDockProps) {
-  return <TerminalDockSession key={props.session.id} {...props} />;
+  return <TerminalDockSession key={props.environment.id} {...props} />;
 }

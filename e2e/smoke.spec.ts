@@ -12,6 +12,10 @@ import type {
   WorkspaceIdeFile,
   WorkspaceIdeSnapshot,
 } from "../src/lib/types";
+import {
+  mockEnvironmentAudit,
+  mockEnvironmentMetrics,
+} from "../src/lib/mock-data";
 
 async function pageBlocksUnload(page: Page) {
   return page.evaluate(() => {
@@ -150,7 +154,7 @@ test("replays only the last three terminal commands after reopen", async ({
   await page.routeWebSocket(
     (url) =>
       url.pathname ===
-      `/api/v1/sessions/${encodeURIComponent(session.id)}/terminal`,
+      `/api/v1/environments/${encodeURIComponent(environment.id)}/terminal`,
     (socket) => {
       connectionUrls.push(socket.url());
       const after = Number(new URL(socket.url()).searchParams.get("after") ?? 0);
@@ -194,7 +198,7 @@ test("replays only the last three terminal commands after reopen", async ({
   );
   await page.getByRole("button", { name: "Terminal" }).click();
   const terminal = page.getByRole("region", {
-    name: `Terminal for ${session.title}`,
+    name: `Terminal for ${environment.name}`,
   });
   await expect(terminal).toBeVisible();
   await expect.poll(() => connectionUrls.length).toBe(1);
@@ -225,7 +229,7 @@ test("replays only the last three terminal commands after reopen", async ({
 
   const storedReplay = await page.evaluate((storageKey) => {
     return JSON.parse(window.localStorage.getItem(storageKey) ?? "null");
-  }, `sandpi.terminal-replay.v1:${session.id}`);
+  }, `sandpi.terminal-replay.v2:${environment.id}`);
   expect(storedReplay).toMatchObject({
     terminalSessionId,
     lastSequence: 5,
@@ -251,7 +255,7 @@ test("does not answer historical terminal queries on the live PTY", async ({
   await page.routeWebSocket(
     (url) =>
       url.pathname ===
-      `/api/v1/sessions/${encodeURIComponent(session.id)}/terminal`,
+      `/api/v1/environments/${encodeURIComponent(environment.id)}/terminal`,
     (socket) => {
       terminalSocket = socket;
       socket.onMessage((raw) => {
@@ -292,7 +296,7 @@ test("does not answer historical terminal queries on the live PTY", async ({
   );
   await page.getByRole("button", { name: "Terminal" }).click();
   const terminal = page.getByRole("region", {
-    name: `Terminal for ${session.title}`,
+    name: `Terminal for ${environment.name}`,
   });
   await expect(terminal).toContainText("live");
   await expect(terminal.locator(".xterm-rows")).toContainText(
@@ -335,7 +339,7 @@ test("shows a matching skeleton while each Inspector tab loads", async ({
     if (message.type() === "error") browserErrors.push(message.text());
   });
   page.on("pageerror", (error) => browserErrors.push(error.message));
-  await page.route("**/api/v1/sessions/**", async (route) => {
+  await page.route("**/api/v1/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (/\/(ide|audit|metrics)$/.test(path)) {
       await new Promise((resolve) => setTimeout(resolve, 700));
@@ -353,11 +357,11 @@ test("shows a matching skeleton while each Inspector tab loads", async ({
       return;
     }
     if (path.endsWith("/audit")) {
-      await route.fulfill({ json: { data: session.audit } });
+      await route.fulfill({ json: { data: mockEnvironmentAudit } });
       return;
     }
     if (path.endsWith("/metrics")) {
-      await route.fulfill({ json: { data: session.metrics } });
+      await route.fulfill({ json: { data: mockEnvironmentMetrics } });
       return;
     }
     if (path.endsWith("/models")) {
@@ -401,7 +405,7 @@ test("shows a matching skeleton while each Inspector tab loads", async ({
   const rangeRequest = page.waitForRequest((candidate) => {
     const url = new URL(candidate.url());
     return (
-      url.pathname.endsWith(`/sessions/${session.id}/metrics`) &&
+      url.pathname.endsWith(`/environments/${environment.id}/metrics`) &&
       url.searchParams.get("rangeSeconds") === "21600"
     );
   });
@@ -433,7 +437,7 @@ test("renders the dedicated live Web IDE with Git state and changed lines", asyn
   const workspace = await activeWorkspace(request);
   test.skip(!workspace, "An active Session is required for this check.");
   if (!workspace) return;
-  const { environment, session } = workspace;
+  const { environment } = workspace;
   const now = Date.now() / 1_000;
   const snapshot: WorkspaceIdeSnapshot = {
     refreshedAt: now,
@@ -529,7 +533,7 @@ test("renders the dedicated live Web IDE with Git state and changed lines", asyn
   page.on("pageerror", (error) => browserErrors.push(error.message));
   let savedContent = "";
   let remoteFile = file;
-  await page.route("**/api/v1/sessions/**/ide/file?*", async (route) => {
+  await page.route("**/api/v1/environments/**/ide/file?*", async (route) => {
     if (route.request().method() === "PUT") {
       const body = route.request().postDataJSON() as {
         content: string;
@@ -561,16 +565,20 @@ test("renders the dedicated live Web IDE with Git state and changed lines", asyn
     }
     await route.fulfill({ json: { data: remoteFile } });
   });
-  await page.route("**/api/v1/sessions/**/ide", async (route) => {
+  await page.route("**/api/v1/environments/**/ide", async (route) => {
     await route.fulfill({ json: { data: snapshot } });
   });
 
   await page.goto(
-    `/ide/?team=${encodeURIComponent(environment.teamId)}&environment=${encodeURIComponent(environment.id)}&session=${encodeURIComponent(session.id)}`,
+    `/ide/?team=${encodeURIComponent(environment.teamId)}&environment=${encodeURIComponent(environment.id)}&new=1`,
   );
   await expect(
     page.getByRole("region", { name: "Sandpi Web IDE" }),
   ).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "Back to Environment" }),
+  ).toBeVisible();
+  await expect(page.getByText(`sandpi / ${environment.name}`)).toBeVisible();
   await expect(page.getByText("workspace", { exact: true })).toBeVisible();
   await expect(
     page.locator('button[title="/workspace/src/demo.ts"]'),

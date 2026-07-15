@@ -1,20 +1,20 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { mockSessions } from "@/lib/mock-data";
+import { mockEnvironmentAudit } from "@/lib/mock-data";
 
 import {
-  filterSessionAuditOperations,
-  groupSessionAuditOperations,
+  filterEnvironmentAuditOperations,
+  groupEnvironmentAuditOperations,
   hasAuditIntegrityIssue,
   networkAuditSynopsis,
-  summarizeSessionAudit,
+  summarizeEnvironmentAudit,
 } from "./session-audit";
 
-const events = mockSessions[0]?.audit.events ?? [];
+const events = mockEnvironmentAudit.events;
 
 test("groups phases by operation without merging signed events", () => {
-  const operations = groupSessionAuditOperations(events);
+  const operations = groupEnvironmentAuditOperations(events);
   const resume = operations.find(
     (operation) => operation.primaryEvent.action === "sandbox.resume",
   );
@@ -30,13 +30,13 @@ test("groups phases by operation without merging signed events", () => {
 });
 
 test("offers simple product views over canonical event fields", () => {
-  const operations = groupSessionAuditOperations(events);
+  const operations = groupEnvironmentAuditOperations(events);
 
-  assert.equal(filterSessionAuditOperations(operations, "all").length, 4);
-  assert.equal(filterSessionAuditOperations(operations, "attention").length, 1);
-  assert.equal(filterSessionAuditOperations(operations, "network").length, 2);
-  assert.equal(filterSessionAuditOperations(operations, "process").length, 1);
-  assert.equal(filterSessionAuditOperations(operations, "sandbox").length, 1);
+  assert.equal(filterEnvironmentAuditOperations(operations, "all").length, 4);
+  assert.equal(filterEnvironmentAuditOperations(operations, "attention").length, 1);
+  assert.equal(filterEnvironmentAuditOperations(operations, "network").length, 2);
+  assert.equal(filterEnvironmentAuditOperations(operations, "process").length, 1);
+  assert.equal(filterEnvironmentAuditOperations(operations, "sandbox").length, 1);
 });
 
 test("keeps signature status and event ID conflict as independent integrity signals", () => {
@@ -71,7 +71,7 @@ test("projects network details without changing or dropping signed attributes", 
 });
 
 test("summarizes canonical events separately from correlated operations", () => {
-  const summary = summarizeSessionAudit(events);
+  const summary = summarizeEnvironmentAudit(events);
   assert.equal(summary.events, 6);
   assert.equal(summary.operations, 4);
   assert.equal(summary.attention, 1);

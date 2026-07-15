@@ -12,15 +12,16 @@ import {
 } from "sandbox0";
 
 import type {
+  Environment,
   RuntimeMetricSeries,
-  SessionAuditFeed,
-  SessionMetrics,
+  EnvironmentAuditFeed,
+  EnvironmentMetrics,
   WorkspaceFile,
   WorkspaceGitState,
   WorkspaceIdeFile,
   WorkspaceLineChange,
 } from "@/lib/types";
-import type { SessionMetricRangeSeconds } from "@/lib/session-metrics";
+import type { EnvironmentMetricRangeSeconds } from "@/lib/environment-metrics";
 import { toUnixTimestamp } from "@/lib/time";
 import {
   repositoryForWorkspacePath,
@@ -34,18 +35,13 @@ import {
 import { HttpError } from "@/server/http-error";
 import { toSandbox0NetworkPolicy } from "./network-policy";
 import {
-  CODEX_SESSION_CREDENTIAL_PATH,
+  CODEX_ENVIRONMENT_CREDENTIAL_PATH,
   type CodexAuthRuntime,
-  type HarnessStateLayout,
-  type MigratedCodexNativeState,
+  type EnvironmentRuntimeRecord,
   type ProvisionedEnvironment,
-  type ProvisionedSession,
-  type RecoveredCodexRuntime,
+  type RecoveredCodexEnvironmentRuntime,
   type RuntimeAdapter,
-  type RuntimeForkSessionInput,
-  type RuntimeForkTurnInput,
-  type RuntimeProvisionSessionInput,
-  type RuntimeSessionRecord,
+  type RuntimeProvisionEnvironmentInput,
   type RuntimeTerminalHandle,
   type RuntimeWorkspaceWatchHandle,
 } from "./types";
@@ -66,18 +62,15 @@ import {
   terminalSessionEnvironment,
 } from "./terminal-environment";
 
-const SESSION_HARD_TTL_SECONDS = 30 * 24 * 60 * 60;
 const EVENT_RETENTION_BYTES = 256 * 1024 * 1024;
-const EVENT_RETENTION_SECONDS = SESSION_HARD_TTL_SECONDS;
+const EVENT_RETENTION_SECONDS = 30 * 24 * 60 * 60;
 // Supervisor journals retain decoded event structures in procd memory as well
 // as JSON on disk. A terminal only needs enough tail to rebuild xterm's visible
 // history, so it must not inherit the much larger coding-agent event budget.
 const TERMINAL_EVENT_RETENTION_BYTES = 4 * 1024 * 1024;
-const LEGACY_SESSION_CODEX_HOME = "/var/lib/sandpi/codex";
-const SESSION_CODEX_HOME = "/workspace/.sandpi/harnesses/codex";
-const CODEX_DELIVERY_OUTBOX = "/var/lib/sandpi/codex-delivery-outbox";
-const WORKSPACE_CODEX_LAYOUT_MARKER = `${SESSION_CODEX_HOME}/.sandpi-layout-workspace-v2`;
-const SESSION_CODEX_AUTH_FILE = CODEX_SESSION_CREDENTIAL_PATH;
+const ENVIRONMENT_CODEX_HOME = "/workspace/.sandpi/harnesses/codex";
+const WORKSPACE_CODEX_LAYOUT_MARKER = `${ENVIRONMENT_CODEX_HOME}/.sandpi-layout-environment-v1`;
+const ENVIRONMENT_CODEX_AUTH_FILE = CODEX_ENVIRONMENT_CREDENTIAL_PATH;
 const DEVICE_CODEX_HOME = "/dev/shm/sandpi-codex-device";
 const DEVICE_CODEX_AUTH_FILE = `${DEVICE_CODEX_HOME}/auth.json`;
 const CODEX_AUTH_MAX_BYTES = 4 * 1024 * 1024;
@@ -109,324 +102,101 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     });
   }
 
-  async provisionEnvironment(): Promise<ProvisionedEnvironment> {
-    const volume = await this.client.volumes.create({
-      accessMode: models.VolumeAccessMode.Rwo,
-    });
-    return { workspaceVolumeId: volume.id };
-  }
-
-  async deleteEnvironmentResources(resources: ProvisionedEnvironment) {
-    await this.client.volumes.delete(resources.workspaceVolumeId, { force: true });
-    if (resources.rootfsSnapshotId) {
-      await this.client.sandboxes.deleteRootFSSnapshot(resources.rootfsSnapshotId);
-    }
-  }
-
-  async provisionSession(
-    input: RuntimeProvisionSessionInput,
-  ): Promise<ProvisionedSession> {
-    let workspaceVolumeId: string | undefined;
-    let provisioningStarted = false;
-    try {
-      const workspace = await this.client.volumes.fork(
-        input.environment.workspaceVolumeId,
-        { accessMode: models.VolumeAccessMode.Rwo },
-      );
-      workspaceVolumeId = workspace.id;
-      await input.onResourcesAllocated?.({ workspaceVolumeId: workspace.id });
-      provisioningStarted = true;
-      return await this.provisionCodexRuntime(
-        input,
-        workspace.id,
-        input.environment.rootfsSnapshotId || undefined,
-        "fresh",
-      );
-    } catch (error) {
-      if (workspaceVolumeId && !provisioningStarted) {
-        await this.client.volumes
-          .delete(workspaceVolumeId, { force: true })
-          .catch(() => undefined);
-      }
-      throw translateSandbox0Error(error);
-    }
-  }
-
-  async forkSession(input: RuntimeForkSessionInput): Promise<ProvisionedSession> {
-    let rootfsSnapshotId: string | undefined;
-    let workspaceVolumeId: string | undefined;
-    let resumeSource = false;
-    let provisioningStarted = false;
-    try {
-      const source = await this.client.sandboxes.get(input.source.sandboxId);
-      if (!source.paused) {
-        await this.client.sandboxes.pauseAndWait(input.source.sandboxId, {
-          timeoutMs: 120_000,
-        });
-      }
-      // Product Sessions do not expose a durable Sandbox pause state yet. If a
-      // previous server stopped mid-operation, this fork owns recovery and must
-      // resume the source before releasing its reservation.
-      resumeSource = true;
-      const rootfs = await this.client.sandboxes.createRootFSSnapshot(
-        input.source.sandboxId,
-        {
-          name: `sandpi-session-fork-${input.sessionId.slice(-12)}`,
-          description: `Temporary rootfs source for Sandpi Session ${input.sessionId}`,
-          expiresAt: new Date(Date.now() + 60 * 60 * 1_000),
-        },
-      );
-      rootfsSnapshotId = rootfs.id;
-      const workspace = await retryWhileCtldUnmounts(() =>
-        this.client.volumes.fork(input.source.workspaceVolumeId, {
-          accessMode: models.VolumeAccessMode.Rwo,
-        }),
-      );
-      workspaceVolumeId = workspace.id;
-      await input.onResourcesAllocated?.({ workspaceVolumeId: workspace.id });
-      if (resumeSource) {
-        await this.client.sandboxes.resumeAndWait(input.source.sandboxId, {
-          timeoutMs: 120_000,
-        });
-        resumeSource = false;
-      }
-      provisioningStarted = true;
-      return await this.provisionCodexRuntime(
-        input,
-        workspace.id,
-        rootfsSnapshotId,
-        input.source.harnessStateLayout === "rootfs_v1"
-          ? "copy_legacy_fork"
-          : "preserve",
-      );
-    } catch (error) {
-      if (workspaceVolumeId && !provisioningStarted) {
-        await this.client.volumes
-          .delete(workspaceVolumeId, { force: true })
-          .catch(() => undefined);
-      }
-      throw translateSandbox0Error(error);
-    } finally {
-      if (resumeSource) {
-        await this.client.sandboxes
-          .resumeAndWait(input.source.sandboxId, { timeoutMs: 120_000 })
-          .catch(() => undefined);
-      }
-      if (rootfsSnapshotId) {
-        await this.client.sandboxes
-          .deleteRootFSSnapshot(rootfsSnapshotId)
-          .catch(() => undefined);
-      }
-    }
-  }
-
-  async forkTurn(input: RuntimeForkTurnInput) {
-    let workspaceVolumeId: string | undefined;
-    let resources: ProvisionedSession | undefined;
-    let provisioningStarted = false;
-    try {
-      // A workspace_v2 checkpoint already contains both the selected files and
-      // Codex's native state. A Turn fork therefore needs no second rollout
-      // transport or import path.
-      const workspace = await this.client.volumes.create({
-        accessMode: models.VolumeAccessMode.Rwo,
-        snapshotId: input.workspaceSnapshotId,
-      });
-      workspaceVolumeId = workspace.id;
-      await input.onResourcesAllocated?.({ workspaceVolumeId: workspace.id });
-      provisioningStarted = true;
-      resources = await this.provisionCodexRuntime(
-        input,
-        workspace.id,
-        undefined,
-        "preserve",
-      );
-      return resources;
-    } catch (error) {
-      if (resources) {
-        await this.deleteSessionResources(resources).catch(() => undefined);
-      } else if (workspaceVolumeId && !provisioningStarted) {
-        await this.client.volumes
-          .delete(workspaceVolumeId, { force: true })
-          .catch(() => undefined);
-      }
-      throw translateSandbox0Error(error);
-    }
-  }
-
-  async createVolumeCheckpoint(
-    runtime: RuntimeSessionRecord,
-    label: string,
-  ) {
-    try {
-      const snapshot = await this.client.volumes.createSnapshot(
-        runtime.workspaceVolumeId,
-        {
-          name: label.slice(0, 100),
-          description: `Sandpi Turn checkpoint for Session ${runtime.id}`,
-        },
-      );
-      return { snapshotId: snapshot.id };
-    } catch (error) {
-      throw translateSandbox0Error(error);
-    }
-  }
-
-  async findVolumeCheckpoint(runtime: RuntimeSessionRecord, label: string) {
-    try {
-      const expectedName = label.slice(0, 100);
-      const snapshots = await this.client.volumes.listSnapshots(
-        runtime.workspaceVolumeId,
-      );
-      const snapshot = snapshots
-        .filter((candidate) => candidate.name === expectedName)
-        .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
-      return snapshot ? { snapshotId: snapshot.id } : undefined;
-    } catch (error) {
-      throw translateSandbox0Error(error);
-    }
-  }
-
-  async deleteVolumeCheckpoint(
-    runtime: RuntimeSessionRecord,
-    snapshotId: string,
-  ) {
-    try {
-      await this.client.volumes.deleteSnapshot(
-        runtime.workspaceVolumeId,
-        snapshotId,
-      );
-    } catch (error) {
-      if (!isMissingResource(error)) throw translateSandbox0Error(error);
-    }
-  }
-
-  async restoreVolumeCheckpoint(
-    runtime: RuntimeSessionRecord,
-    snapshotId: string,
-  ) {
-    let resumeSandbox = false;
-    try {
-      const source = await this.client.sandboxes.get(runtime.sandboxId);
-      if (!source.paused) {
-        await this.client.sandboxes.pauseAndWait(runtime.sandboxId, {
-          timeoutMs: 120_000,
-        });
-      }
-      // A paused Sandbox here is an interrupted Sandpi operation, not a user
-      // preference. Always resume it after the atomic Volume restore.
-      resumeSandbox = true;
-      await retryWhileCtldUnmounts(() =>
-        this.client.volumes.restoreSnapshot(
-          runtime.workspaceVolumeId,
-          snapshotId,
-        ),
-      );
-      if (resumeSandbox) {
-        await this.client.sandboxes.resumeAndWait(runtime.sandboxId, {
-          timeoutMs: 120_000,
-        });
-        resumeSandbox = false;
-      }
-      const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
-      const supervisor = await waitForNewAttempt(
-        sandbox,
-        runtime.supervisorSessionId,
-        runtime.attemptId,
-      );
-      if (!hasLiveAttempt(supervisor)) {
-        throw new HttpError(
-          502,
-          "supervisor_not_recovered",
-          "Codex Supervisor did not recover after restoring the Workspace.",
-        );
-      }
-      const recoveredAttempt = supervisor.attempt!;
-      return {
-        attemptId: recoveredAttempt.id,
-        runtimeGeneration: supervisor.runtimeGeneration,
-      };
-    } catch (error) {
-      throw translateSandbox0Error(error);
-    } finally {
-      if (resumeSandbox) {
-        await this.client.sandboxes
-          .resumeAndWait(runtime.sandboxId, { timeoutMs: 120_000 })
-          .catch(() => undefined);
-      }
-    }
-  }
-
-  private async provisionCodexRuntime(
-    input: RuntimeProvisionSessionInput,
-    workspaceVolumeId: string,
-    rootfsSnapshotId?: string,
-    stateMode: "fresh" | "preserve" | "copy_legacy_fork" = "fresh",
-  ): Promise<ProvisionedSession> {
+  async provisionEnvironment(
+    input: RuntimeProvisionEnvironmentInput,
+  ): Promise<ProvisionedEnvironment> {
+    let workspaceVolumeId = input.environment.workspaceVolumeId || undefined;
     let sandboxId: string | undefined;
-
     try {
+      if (!workspaceVolumeId) {
+        const volume = await this.client.volumes.create({
+          accessMode: models.VolumeAccessMode.Rwo,
+        });
+        workspaceVolumeId = volume.id;
+        await input.onResourcesAllocated?.({ workspaceVolumeId });
+      }
       const sandbox = await this.client.sandboxes.claim(
         input.environment.templateId,
         {
-          snapshotId: rootfsSnapshotId,
+          snapshotId: input.environment.rootfsSnapshotId || undefined,
           mounts: [
             {
               sandboxvolumeId: workspaceVolumeId,
               mountPoint: "/workspace",
             },
           ],
+          // Environment lifecycle is a product policy, not a Session timeout.
+          // Sandpi intentionally leaves hardTtl unset until that policy exists.
           config: {
-            hardTtl: SESSION_HARD_TTL_SECONDS,
             network: toSandbox0NetworkPolicy(input.environment.networkPolicy),
           },
         },
       );
       sandboxId = sandbox.id;
-      await input.onResourcesAllocated?.({
-        sandboxId: sandbox.id,
-        workspaceVolumeId,
-      });
+      await input.onResourcesAllocated?.({ sandboxId, workspaceVolumeId });
       await this.client.sandboxes.waitForLifecycle(
         sandbox.id,
         (state) => state.status === "running",
         { timeoutMs: 120_000 },
       );
-
-      await installCodexCredential(
-        sandbox,
-        SESSION_CODEX_AUTH_FILE,
-        input.codexAuthJson,
-      );
-      await prepareWorkspaceCodexHome(sandbox, stateMode);
-
-      const supervisor = await this.createCodexSupervisor(
-        sandbox,
-        codexSupervisorIdempotencyKey(input.sessionId, "workspace_v2"),
-        SESSION_CODEX_HOME,
-      );
-      const running = hasLiveAttempt(supervisor)
-        ? supervisor
-        : await waitForAttempt(sandbox, supervisor.id);
-      if (!hasLiveAttempt(running)) {
-        throw new Error("Codex Supervisor Session did not start an attempt");
-      }
-      const runningAttempt = running.attempt!;
-
-      return {
-        sandboxId: sandbox.id,
-        workspaceVolumeId,
-        supervisorSessionId: supervisor.id,
-        attemptId: runningAttempt.id,
-        runtimeGeneration: running.runtimeGeneration,
-        nativeCredentialTargetPath: SESSION_CODEX_AUTH_FILE,
-        harnessStateLayout: "workspace_v2",
-      };
+      return { sandboxId, workspaceVolumeId };
     } catch (error) {
-      await this.deleteSessionResources({
-        sandboxId,
-        workspaceVolumeId,
-      });
+      // The allocation journal owns retry/cleanup once a resource id has been
+      // published. Only an unpublished Sandbox is safe to delete here.
+      if (sandboxId) {
+        await this.client.sandboxes.delete(sandboxId).catch(() => undefined);
+      }
+      throw translateSandbox0Error(error);
+    }
+  }
+
+  async deleteEnvironmentResources(resources: Partial<ProvisionedEnvironment>) {
+    const cleanupErrors: unknown[] = [];
+    let sandboxGone = !resources.sandboxId;
+    if (resources.sandboxId) {
+      try {
+        await this.client.sandboxes.delete(resources.sandboxId);
+        sandboxGone = true;
+      } catch (error) {
+        if (isMissingResource(error)) sandboxGone = true;
+        else cleanupErrors.push(error);
+      }
+    }
+    if (resources.workspaceVolumeId && sandboxGone) {
+      try {
+        await this.client.volumes.delete(resources.workspaceVolumeId, {
+          force: true,
+        });
+      } catch (error) {
+        if (!isMissingResource(error)) cleanupErrors.push(error);
+      }
+    }
+    if (resources.rootfsSnapshotId) {
+      try {
+        await this.client.sandboxes.deleteRootFSSnapshot(
+          resources.rootfsSnapshotId,
+        );
+      } catch (error) {
+        if (!isMissingResource(error)) cleanupErrors.push(error);
+      }
+    }
+    if (cleanupErrors.length > 0) {
+      throw new AggregateError(
+        cleanupErrors,
+        "Sandbox0 Environment cleanup failed",
+      );
+    }
+  }
+
+  async updateEnvironmentNetworkPolicy(
+    runtime: EnvironmentRuntimeRecord,
+    policy: Environment["networkPolicy"],
+  ) {
+    try {
+      await this.client.sandboxes
+        .sandbox(runtime.sandboxId)
+        .updateNetworkPolicy(toSandbox0NetworkPolicy(policy));
+    } catch (error) {
       throw translateSandbox0Error(error);
     }
   }
@@ -434,19 +204,17 @@ export class Sandbox0Runtime implements RuntimeAdapter {
   private createCodexSupervisor(
     sandbox: ReturnType<Client["sandboxes"]["sandbox"]>,
     idempotencyKey: string,
-    codexHome: string,
   ) {
     return sandbox.createSession(
       {
-        name:
-          codexHome === SESSION_CODEX_HOME ? "codex-workspace-v2" : "codex",
+        name: "codex-environment",
         command: [
           "/bin/sh",
           "-lc",
-          `install -d -m 700 ${codexHome} && rm -rf ${codexHome}/auth.json && ln -s ${SESSION_CODEX_AUTH_FILE} ${codexHome}/auth.json && while [ ! -s ${SESSION_CODEX_AUTH_FILE} ]; do sleep 0.2; done && exec codex app-server --stdio -c 'cli_auth_credentials_store="file"'`,
+          `install -d -m 700 ${ENVIRONMENT_CODEX_HOME} && rm -rf ${ENVIRONMENT_CODEX_HOME}/auth.json && ln -s ${ENVIRONMENT_CODEX_AUTH_FILE} ${ENVIRONMENT_CODEX_HOME}/auth.json && while [ ! -s ${ENVIRONMENT_CODEX_AUTH_FILE} ]; do sleep 0.2; done && exec codex app-server --stdio -c 'cli_auth_credentials_store="file"'`,
         ],
         cwd: "/workspace",
-        env: { HOME: "/workspace", CODEX_HOME: codexHome },
+        env: { HOME: "/workspace", CODEX_HOME: ENVIRONMENT_CODEX_HOME },
         io: { mode: "pipes" },
         lifecycle: {
           restart: {
@@ -466,38 +234,8 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     );
   }
 
-  async deleteSessionResources(resources: Partial<ProvisionedSession>) {
-    const cleanupErrors: unknown[] = [];
-    let sandboxGone = !resources.sandboxId;
-    if (resources.sandboxId) {
-      try {
-        await this.client.sandboxes.delete(resources.sandboxId);
-        sandboxGone = true;
-      } catch (error) {
-        if (isMissingResource(error)) {
-          sandboxGone = true;
-        } else {
-          cleanupErrors.push(error);
-        }
-      }
-    }
-    // Never force-delete a Volume while its Sandbox may still be alive. A
-    // failed Sandbox deletion is retried by the service reaper with both
-    // coordinates intact.
-    if (resources.workspaceVolumeId && sandboxGone) {
-      try {
-        await this.client.volumes.delete(resources.workspaceVolumeId, { force: true });
-      } catch (error) {
-        if (!isMissingResource(error)) cleanupErrors.push(error);
-      }
-    }
-    if (cleanupErrors.length > 0) {
-      throw new AggregateError(cleanupErrors, "Sandbox0 resource cleanup failed");
-    }
-  }
-
   async provisionCodexAuth(
-    environment: RuntimeProvisionSessionInput["environment"],
+    environment: Environment,
     flowId: string,
   ): Promise<CodexAuthRuntime> {
     let sandboxId: string | undefined;
@@ -598,41 +336,40 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     return Buffer.from(bytes).toString("utf8");
   }
 
-  async installCodexSessionCredential(
-    runtime: RuntimeSessionRecord,
+  async installCodexEnvironmentCredential(
+    runtime: EnvironmentRuntimeRecord,
     authJson: string,
   ) {
     await installCodexCredential(
       this.client.sandboxes.sandbox(runtime.sandboxId),
-      SESSION_CODEX_AUTH_FILE,
+      ENVIRONMENT_CODEX_AUTH_FILE,
       authJson,
     );
   }
 
-  async readCodexSessionCredential(runtime: RuntimeSessionRecord) {
+  async readCodexEnvironmentCredential(runtime: EnvironmentRuntimeRecord) {
     const bytes = await this.client.sandboxes
       .sandbox(runtime.sandboxId)
-      .readFile(SESSION_CODEX_AUTH_FILE);
+      .readFile(ENVIRONMENT_CODEX_AUTH_FILE);
     if (bytes.byteLength === 0 || bytes.byteLength > CODEX_AUTH_MAX_BYTES) {
-      throw new Error("Codex Session credential file is invalid");
+      throw new Error("Codex Environment credential file is invalid");
     }
     return Buffer.from(bytes).toString("utf8");
   }
 
   /**
-   * Reconciles a persisted Sandpi Session with its native Sandbox0 runtime.
+   * Reconciles one Environment with its shared native Sandbox0 runtime.
    * A Sandbox can remain control-plane `running` after its FUSE mount becomes
-   * disconnected, while a lost Supervisor must be recreated without changing
-   * the native Codex thread stored in CODEX_HOME.
+   * disconnected, while a lost Supervisor can be recreated because every
+   * native Codex Thread is persisted under the Environment Workspace Volume.
    */
-  async recoverCodexRuntime(
-    runtime: RuntimeSessionRecord,
+  async ensureCodexEnvironmentRuntime(
+    runtime: EnvironmentRuntimeRecord,
     authJson: string,
-  ): Promise<RecoveredCodexRuntime> {
+  ): Promise<RecoveredCodexEnvironmentRuntime> {
     let sandboxRestarted = false;
     try {
       const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
-      const codexHome = codexHomeForLayout(runtime.harnessStateLayout);
       let lifecycle = await this.client.sandboxes.get(runtime.sandboxId);
 
       if (lifecycle.paused || lifecycle.status === "paused") {
@@ -660,18 +397,20 @@ export class Sandbox0Runtime implements RuntimeAdapter {
       }
 
       let supervisor;
-      try {
-        supervisor = await sandbox.getSession(runtime.supervisorSessionId);
-      } catch (error) {
-        if (
-          !isMissingResource(error) &&
-          !isWorkspaceTransportDisconnected(error)
-        ) {
-          throw error;
+      if (runtime.supervisorSessionId) {
+        try {
+          supervisor = await sandbox.getSession(runtime.supervisorSessionId);
+        } catch (error) {
+          if (
+            !isMissingResource(error) &&
+            !isWorkspaceTransportDisconnected(error)
+          ) {
+            throw error;
+          }
         }
       }
 
-      if (!supervisor && !sandboxRestarted) {
+      if (runtime.supervisorSessionId && !supervisor && !sandboxRestarted) {
         // The Workspace portal and procd's Supervisor-state portal can fail
         // independently. Give the original journal one lifecycle recovery
         // before deciding that its Supervisor metadata is truly gone.
@@ -690,24 +429,18 @@ export class Sandbox0Runtime implements RuntimeAdapter {
         }
       }
 
-      // A crash retry in `migrating` may carry either the old or the newly
-      // committed Supervisor coordinates. Never reuse a process whose
-      // CODEX_HOME disagrees with the durable layout.
-      if (supervisor && supervisorCodexHome(supervisor) !== codexHome) {
-        supervisor = undefined;
-      }
-
       // /dev/shm is intentionally outside both rootfs and Volume snapshots and
       // must be re-materialized after every Sandbox runtime generation change.
-      await installCodexCredential(sandbox, SESSION_CODEX_AUTH_FILE, authJson);
-      if (codexHome === SESSION_CODEX_HOME) {
-        await prepareWorkspaceCodexHome(sandbox, "preserve");
-      }
+      await installCodexCredential(
+        sandbox,
+        ENVIRONMENT_CODEX_AUTH_FILE,
+        authJson,
+      );
+      await prepareEnvironmentCodexHome(sandbox);
 
       supervisor ??= await this.createCodexSupervisor(
         sandbox,
-        codexSupervisorIdempotencyKey(runtime.id, runtime.harnessStateLayout),
-        codexHome,
+        `sandpi-codex-environment-${runtime.id}`,
       );
 
       if (!hasLiveAttempt(supervisor)) {
@@ -740,209 +473,13 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     }
   }
 
-  /**
-   * Moves a legacy rootfs CODEX_HOME into the Workspace Volume exactly once.
-   * The destination rename and v2 Supervisor idempotency key make the operation
-   * safe to retry before or after the Store records the new coordinates.
-   */
-  async migrateCodexNativeState(
-    runtime: RuntimeSessionRecord,
-    authJson: string,
-  ): Promise<MigratedCodexNativeState> {
-    try {
-      const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
-      const lifecycle = await this.client.sandboxes.get(runtime.sandboxId);
-      if (lifecycle.paused || lifecycle.status === "paused") {
-        await this.client.sandboxes.resumeAndWait(runtime.sandboxId, {
-          timeoutMs: 120_000,
-        });
-      }
-
-      let persistedSupervisor;
-      try {
-        persistedSupervisor = await sandbox.getSession(runtime.supervisorSessionId);
-      } catch (error) {
-        if (!isMissingResource(error)) throw error;
-      }
-      if (
-        persistedSupervisor &&
-        supervisorCodexHome(persistedSupervisor) !== SESSION_CODEX_HOME
-      ) {
-        await stopSupervisor(sandbox, persistedSupervisor.id);
-      }
-
-      const sourceHadRollout = runtime.nativeSessionId
-        ? await legacyCodexThreadHasRollout(sandbox, runtime.nativeSessionId)
-        : false;
-      await installCodexCredential(sandbox, SESSION_CODEX_AUTH_FILE, authJson);
-      await migrateLegacyCodexHome(sandbox);
-
-      const supervisor =
-        persistedSupervisor &&
-        supervisorCodexHome(persistedSupervisor) === SESSION_CODEX_HOME
-          ? persistedSupervisor
-          : await this.createCodexSupervisor(
-              sandbox,
-              codexSupervisorIdempotencyKey(runtime.id, "workspace_v2"),
-              SESSION_CODEX_HOME,
-            );
-      let running = supervisor;
-      if (!hasLiveAttempt(running)) {
-        try {
-          running = await sandbox.createSessionAttempt(running.id, true);
-        } catch (error) {
-          if (!(error instanceof APIError) || error.statusCode !== 409) throw error;
-        }
-      }
-      if (!hasLiveAttempt(running)) {
-        running = await waitForAttempt(sandbox, running.id);
-      }
-      if (!running.attempt || running.attempt.finishedAt) {
-        throw new HttpError(
-          502,
-          "supervisor_not_recovered",
-          "Codex Supervisor did not start after native-state migration.",
-        );
-      }
-      return {
-        supervisorSessionId: running.id,
-        attemptId: running.attempt.id,
-        runtimeGeneration: running.runtimeGeneration,
-        sandboxRestarted: false,
-        harnessStateLayout: "workspace_v2",
-        sourceHadRollout,
-      };
-    } catch (error) {
-      throw translateSandbox0Error(error);
-    }
-  }
-
-  async cleanupLegacyCodexNativeState(runtime: RuntimeSessionRecord) {
-    try {
-      const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
-      const sessions = await sandbox.listSessions();
-      for (const session of sessions) {
-        if (!isLegacyCodexSupervisor(session)) continue;
-        await stopSupervisor(sandbox, session.id);
-        try {
-          await sandbox.deleteSession(session.id);
-        } catch (error) {
-          if (!isMissingResource(error)) throw error;
-        }
-      }
-      const cleanup = await sandbox.cmd("cleanup-legacy-codex-home", {
-        command: ["/bin/sh", "-lc", `rm -rf ${LEGACY_SESSION_CODEX_HOME}`],
-        cwd: "/workspace",
-        ttlSec: 30,
-      });
-      if (cleanup.exitCode !== undefined && cleanup.exitCode !== 0) {
-        throw new Error("Unable to clean up legacy Codex native state");
-      }
-    } catch (error) {
-      throw translateSandbox0Error(error);
-    }
-  }
-
   async writeCodexMessage(
-    runtime: RuntimeSessionRecord,
+    runtime: EnvironmentRuntimeRecord,
     message: unknown,
     stableInputId = randomUUID(),
   ) {
-    await this.writeSupervisorMessage(runtime, message, stableInputId);
-  }
-
-  async stageCodexMessage(
-    runtime: RuntimeSessionRecord,
-    message: unknown,
-    stableInputId: string,
-  ) {
-    try {
-      const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
-      const prepared = await sandbox.cmd("prepare-codex-delivery-outbox", {
-        command: ["/usr/bin/install", "-d", "-m", "700", CODEX_DELIVERY_OUTBOX],
-        cwd: "/",
-        ttlSec: 30,
-      });
-      if (prepared.exitCode !== undefined && prepared.exitCode !== 0) {
-        throw new Error("Unable to prepare the Codex delivery outbox");
-      }
-      const target = codexDeliveryOutboxPath(stableInputId);
-      const temporary = `${target}.tmp-${randomUUID()}`;
-      await sandbox.writeFile(
-        temporary,
-        Buffer.from(`${JSON.stringify(message)}\n`, "utf8"),
-      );
-      const committed = await sandbox.cmd("commit-codex-delivery-outbox", {
-        command: ["/bin/mv", "-f", temporary, target],
-        cwd: "/",
-        ttlSec: 30,
-      });
-      if (committed.exitCode !== undefined && committed.exitCode !== 0) {
-        throw new Error("Unable to commit the Codex delivery outbox frame");
-      }
-    } catch (error) {
-      throw translateSandbox0Error(error);
-    }
-  }
-
-  async hasStagedCodexMessage(
-    runtime: RuntimeSessionRecord,
-    stableInputId: string,
-  ) {
-    try {
-      await this.client.sandboxes
-        .sandbox(runtime.sandboxId)
-        .readFile(codexDeliveryOutboxPath(stableInputId));
-      return true;
-    } catch (error) {
-      if (isMissingResource(error)) return false;
-      throw translateSandbox0Error(error);
-    }
-  }
-
-  async dispatchStagedCodexMessage(
-    runtime: RuntimeSessionRecord,
-    stableInputId: string,
-  ) {
-    try {
-      const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
-      const data = await sandbox.readFile(codexDeliveryOutboxPath(stableInputId));
-      const supervisor = await this.getSupervisorSession(runtime);
-      if (!supervisor.attempt) {
-        throw new HttpError(
-          409,
-          "supervisor_not_running",
-          "The Codex Supervisor Session has no running attempt.",
-        );
-      }
-      await sandbox.writeSessionInput(runtime.supervisorSessionId, {
-        inputId: codexSupervisorInputId(stableInputId, supervisor.attempt.id),
-        expectedAttemptId: supervisor.attempt.id,
-        dataBase64: Buffer.from(data).toString("base64"),
-      });
-    } catch (error) {
-      throw translateSandbox0Error(error);
-    }
-  }
-
-  async discardStagedCodexMessage(
-    runtime: RuntimeSessionRecord,
-    stableInputId: string,
-  ) {
-    try {
-      const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
-      const removed = await sandbox.cmd("discard-codex-delivery-outbox", {
-        command: ["/bin/rm", "-f", codexDeliveryOutboxPath(stableInputId)],
-        cwd: "/",
-        ttlSec: 30,
-      });
-      if (removed.exitCode !== undefined && removed.exitCode !== 0) {
-        throw new Error("Unable to discard the Codex delivery outbox frame");
-      }
-    } catch (error) {
-      if (isMissingResource(error)) return;
-      throw translateSandbox0Error(error);
-    }
+    const coordinates = requireCodexSupervisor(runtime);
+    await this.writeSupervisorMessage(coordinates, message, stableInputId);
   }
 
   private async writeSupervisorMessage(
@@ -983,8 +520,8 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     }
   }
 
-  async listCodexEvents(runtime: RuntimeSessionRecord, after = 0) {
-    return this.listSupervisorEvents(runtime, after);
+  async listCodexEvents(runtime: EnvironmentRuntimeRecord, after = 0) {
+    return this.listSupervisorEvents(requireCodexSupervisor(runtime), after);
   }
 
   private async listSupervisorEvents(
@@ -1007,7 +544,7 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     }
   }
 
-  async listFiles(runtime: RuntimeSessionRecord, requestedPath: string) {
+  async listFiles(runtime: EnvironmentRuntimeRecord, requestedPath: string) {
     const root = safeWorkspacePath(requestedPath);
     const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
     await assertWorkspacePathHasNoSymlink(sandbox, root);
@@ -1059,7 +596,7 @@ export class Sandbox0Runtime implements RuntimeAdapter {
       : children;
   }
 
-  async readFile(runtime: RuntimeSessionRecord, requestedPath: string) {
+  async readFile(runtime: EnvironmentRuntimeRecord, requestedPath: string) {
     try {
       const filePath = safeWorkspacePath(requestedPath);
       const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
@@ -1094,7 +631,7 @@ export class Sandbox0Runtime implements RuntimeAdapter {
   }
 
   async getWorkspaceGitState(
-    runtime: RuntimeSessionRecord,
+    runtime: EnvironmentRuntimeRecord,
   ): Promise<WorkspaceGitState> {
     const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
     const discovered = await sandbox.cmd("find-git-repositories", {
@@ -1164,7 +701,7 @@ export class Sandbox0Runtime implements RuntimeAdapter {
   }
 
   async readWorkspaceIdeFile(
-    runtime: RuntimeSessionRecord,
+    runtime: EnvironmentRuntimeRecord,
     requestedPath: string,
   ): Promise<WorkspaceIdeFile> {
     const filePath = safeWorkspacePath(requestedPath);
@@ -1307,7 +844,7 @@ export class Sandbox0Runtime implements RuntimeAdapter {
   }
 
   async writeWorkspaceIdeFile(
-    runtime: RuntimeSessionRecord,
+    runtime: EnvironmentRuntimeRecord,
     requestedPath: string,
     content: Uint8Array,
     baseRevision: string,
@@ -1373,7 +910,7 @@ export class Sandbox0Runtime implements RuntimeAdapter {
   }
 
   async watchWorkspaceFiles(
-    runtime: RuntimeSessionRecord,
+    runtime: EnvironmentRuntimeRecord,
   ): Promise<RuntimeWorkspaceWatchHandle> {
     const watcher = await this.client.sandboxes
       .sandbox(runtime.sandboxId)
@@ -1410,7 +947,7 @@ export class Sandbox0Runtime implements RuntimeAdapter {
   }
 
   private async runGit(
-    runtime: RuntimeSessionRecord,
+    runtime: EnvironmentRuntimeRecord,
     root: string,
     args: string[],
   ) {
@@ -1433,7 +970,7 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     return result.stdout;
   }
 
-  async getAudit(runtime: RuntimeSessionRecord): Promise<SessionAuditFeed> {
+  async getAudit(runtime: EnvironmentRuntimeRecord): Promise<EnvironmentAuditFeed> {
     try {
       const response = await this.client.sandboxes
         .sandbox(runtime.sandboxId)
@@ -1452,9 +989,9 @@ export class Sandbox0Runtime implements RuntimeAdapter {
   }
 
   async getMetrics(
-    runtime: RuntimeSessionRecord,
-    rangeSeconds: SessionMetricRangeSeconds,
-  ): Promise<SessionMetrics> {
+    runtime: EnvironmentRuntimeRecord,
+    rangeSeconds: EnvironmentMetricRangeSeconds,
+  ): Promise<EnvironmentMetrics> {
     try {
       const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
       const endTime = new Date();
@@ -1514,7 +1051,7 @@ export class Sandbox0Runtime implements RuntimeAdapter {
   }
 
   async openTerminal(
-    runtime: RuntimeSessionRecord,
+    runtime: EnvironmentRuntimeRecord,
     after = 0,
     expectedTerminalSessionId?: string,
   ): Promise<RuntimeTerminalHandle> {
@@ -1666,30 +1203,6 @@ export class Sandbox0Runtime implements RuntimeAdapter {
   }
 }
 
-function codexHomeForLayout(layout: HarnessStateLayout) {
-  return layout === "rootfs_v1"
-    ? LEGACY_SESSION_CODEX_HOME
-    : SESSION_CODEX_HOME;
-}
-
-function codexSupervisorIdempotencyKey(
-  sessionId: string,
-  layout: HarnessStateLayout,
-) {
-  return layout === "rootfs_v1"
-    ? `sandpi-codex-${sessionId}`
-    : `sandpi-codex-workspace-v2-${sessionId}`;
-}
-
-function supervisorCodexHome(session: { spec?: { env?: Record<string, string> } }) {
-  return session.spec?.env?.CODEX_HOME;
-}
-
-function codexDeliveryOutboxPath(stableInputId: string) {
-  const digest = createHash("sha256").update(stableInputId).digest("hex");
-  return `${CODEX_DELIVERY_OUTBOX}/${digest}.jsonl`;
-}
-
 /**
  * procd input receipts bind an input id to one process attempt. Hashing both
  * coordinates keeps retries idempotent within that attempt while allowing the
@@ -1703,65 +1216,43 @@ function codexSupervisorInputId(stableInputId: string, attemptId: string) {
   return `sandpi-input-${digest}`;
 }
 
-function isLegacyCodexSupervisor(session: {
-  spec?: { name?: string; env?: Record<string, string> };
-}) {
-  const home = supervisorCodexHome(session);
-  return (
-    home === LEGACY_SESSION_CODEX_HOME ||
-    (home === undefined && session.spec?.name === "codex")
-  );
+function requireCodexSupervisor(runtime: EnvironmentRuntimeRecord) {
+  if (!runtime.supervisorSessionId) {
+    throw new HttpError(
+      409,
+      "codex_runtime_not_ready",
+      "The Environment Codex runtime is not ready.",
+    );
+  }
+  return {
+    sandboxId: runtime.sandboxId,
+    supervisorSessionId: runtime.supervisorSessionId,
+  };
 }
 
-async function prepareWorkspaceCodexHome(
+async function prepareEnvironmentCodexHome(
   sandbox: ReturnType<Client["sandboxes"]["sandbox"]>,
-  mode: "fresh" | "preserve" | "copy_legacy_fork" | "migrate_legacy",
 ) {
-  const action =
-    mode === "fresh"
-      ? `rm -rf "$home" "$stage"
-install -d -m 700 "$home"
-printf '%s\\n' workspace_v2 > "$marker"
-chmod 600 "$marker"`
-      : mode === "preserve"
-        ? `test -d "$home" && test ! -L "$home"
-test "$(cat "$marker")" = workspace_v2`
-        : mode === "copy_legacy_fork"
-          ? `test -d "$legacy" && test ! -L "$legacy"
-rm -rf "$home" "$stage"
-install -d -m 700 "$stage"
-(cd "$legacy" && tar --exclude='./auth.json' -cf - .) | (cd "$stage" && tar -xf -)
-rm -rf "$stage/auth.json"
-printf '%s\\n' workspace_v2 > "$stage/.sandpi-layout-workspace-v2"
-chmod 600 "$stage/.sandpi-layout-workspace-v2"
-mv "$stage" "$home"`
-          : `if [ ! -f "$marker" ] || [ "$(cat "$marker")" != workspace_v2 ]; then
-  test -d "$legacy" && test ! -L "$legacy"
-  rm -rf "$home" "$stage"
-  install -d -m 700 "$stage"
-  (cd "$legacy" && tar --exclude='./auth.json' -cf - .) | (cd "$stage" && tar -xf -)
-  rm -rf "$stage/auth.json"
-  printf '%s\\n' workspace_v2 > "$stage/.sandpi-layout-workspace-v2"
-  chmod 600 "$stage/.sandpi-layout-workspace-v2"
-  mv "$stage" "$home"
-fi
-test -d "$home" && test ! -L "$home"
-test "$(cat "$marker")" = workspace_v2`;
   const command = `set -eu
 internal=${WORKSPACE_INTERNAL_ROOT}
 harnesses=/workspace/.sandpi/harnesses
-home=${SESSION_CODEX_HOME}
-stage=/workspace/.sandpi/harnesses/.codex-migrating
-legacy=${LEGACY_SESSION_CODEX_HOME}
+home=${ENVIRONMENT_CODEX_HOME}
 marker=${WORKSPACE_CODEX_LAYOUT_MARKER}
 test ! -L "$internal"
 test ! -L "$harnesses"
 install -d -m 700 "$internal" "$harnesses"
-${action}
+test ! -L "$home"
+install -d -m 700 "$home"
+if [ -f "$marker" ]; then
+  test "$(cat "$marker")" = environment_v1
+else
+  printf '%s\\n' environment_v1 > "$marker"
+  chmod 600 "$marker"
+fi
 rm -rf "$home/auth.json"
-ln -s ${SESSION_CODEX_AUTH_FILE} "$home/auth.json"
+ln -s ${ENVIRONMENT_CODEX_AUTH_FILE} "$home/auth.json"
 sync -f /workspace 2>/dev/null || sync`;
-  const result = await sandbox.cmd(`prepare-codex-home-${mode}`, {
+  const result = await sandbox.cmd("prepare-environment-codex-home", {
     command: ["/bin/sh", "-lc", command],
     cwd: "/workspace",
     ttlSec: 60,
@@ -1770,80 +1261,7 @@ sync -f /workspace 2>/dev/null || sync`;
     throw new HttpError(
       502,
       "codex_home_prepare_failed",
-      `Unable to prepare Codex native state in the Workspace Volume (${mode}).`,
-    );
-  }
-}
-
-async function migrateLegacyCodexHome(
-  sandbox: ReturnType<Client["sandboxes"]["sandbox"]>,
-) {
-  await prepareWorkspaceCodexHome(sandbox, "migrate_legacy");
-}
-
-async function legacyCodexThreadHasRollout(
-  sandbox: ReturnType<Client["sandboxes"]["sandbox"]>,
-  nativeSessionId: string,
-) {
-  if (!/^[A-Za-z0-9_-]+$/.test(nativeSessionId)) {
-    throw new HttpError(
-      409,
-      "codex_thread_invalid",
-      "Codex returned an invalid native Session id.",
-    );
-  }
-  const inspected = await sandbox.cmd("inspect-legacy-codex-rollout", {
-    command: [
-      "/bin/sh",
-      "-lc",
-      `set -eu
-thread_id=$1
-if find ${LEGACY_SESSION_CODEX_HOME}/sessions -type f -name "rollout-*-$thread_id.jsonl" -print -quit 2>/dev/null | grep -q .; then
-  printf true
-else
-  printf false
-fi`,
-      "sandpi-rollout-check",
-      nativeSessionId,
-    ],
-    cwd: "/workspace",
-    ttlSec: 30,
-  });
-  if (inspected.exitCode !== undefined && inspected.exitCode !== 0) {
-    throw new Error("Unable to inspect legacy Codex native history");
-  }
-  return inspected.stdout.trim() === "true";
-}
-
-async function stopSupervisor(
-  sandbox: ReturnType<Client["sandboxes"]["sandbox"]>,
-  supervisorSessionId: string,
-) {
-  let session;
-  try {
-    session = await sandbox.setSessionDesiredState(
-      supervisorSessionId,
-      "stopped",
-    );
-  } catch (error) {
-    if (isMissingResource(error)) return;
-    throw error;
-  }
-  const deadline = Date.now() + 30_000;
-  while (hasLiveAttempt(session) && Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    try {
-      session = await sandbox.getSession(supervisorSessionId);
-    } catch (error) {
-      if (isMissingResource(error)) return;
-      throw error;
-    }
-  }
-  if (hasLiveAttempt(session)) {
-    throw new HttpError(
-      502,
-      "supervisor_stop_timeout",
-      "Codex Supervisor did not stop before native-state migration.",
+      "Unable to prepare Codex native state in the Environment Workspace.",
     );
   }
 }
@@ -2085,21 +1503,4 @@ function isWorkspaceTransportDisconnected(error: unknown) {
     error instanceof Error &&
     error.message.toLowerCase().includes("transport endpoint is not connected")
   );
-}
-
-async function retryWhileCtldUnmounts<T>(operation: () => Promise<T>): Promise<T> {
-  const deadline = Date.now() + 60_000;
-  while (true) {
-    try {
-      return await operation();
-    } catch (error) {
-      const waitingForUnmount =
-        error instanceof APIError &&
-        error.statusCode === 409 &&
-        (error.message.toLowerCase().includes("active ctld mounts") ||
-          error.message.toLowerCase().includes("must be unmounted"));
-      if (!waitingForUnmount || Date.now() >= deadline) throw error;
-      await new Promise((resolve) => setTimeout(resolve, 500));
-    }
-  }
 }

@@ -515,20 +515,16 @@ export function EnvironmentSettings({
                     code
                   />
                   <DefinitionRow
-                    label="Workspace seed"
+                    label="Workspace Volume"
                     value={draft.workspaceVolumeId}
                     code
                   />
-                </div>
-                <div className="setting-row immutable-row">
-                  <div>
-                    <strong>Session hard TTL</strong>
-                    <p>
-                      All Sandpi session Sandboxes are permanently removed after
-                      this limit.
-                    </p>
-                  </div>
-                  <span className="fixed-value">30 days · fixed</span>
+                  <DefinitionRow label="Sandbox" value={draft.sandboxId} code />
+                  <DefinitionRow
+                    label="Harness Supervisor"
+                    value={draft.supervisorSessionId || "Starts on demand"}
+                    code={Boolean(draft.supervisorSessionId)}
+                  />
                 </div>
               </SettingsSection>
             ) : null}
@@ -537,7 +533,7 @@ export function EnvironmentSettings({
               <SettingsSection
                 eyebrow="Session history"
                 title="Archived sessions"
-                description="Archived Sessions are hidden from the Environment sidebar. Restore one to make it available again without changing its Sandbox lifecycle or hard TTL."
+                description="Archived Sessions are hidden from the Environment sidebar. Restore one to make its native coding-agent Session available again."
               >
                 {archivedSessions.length > 0 ? (
                   <div
@@ -755,18 +751,18 @@ export function EnvironmentSettings({
                   </button>
                 </div>
                 <p className="settings-footnote">
-                  The encrypted credential is deployment data, not part of a
-                  Sandbox rootfs or Workspace Volume. Session and Turn forks never
-                  copy it.
+                  The encrypted credential is Environment-scoped deployment
+                  data. Native Session and Turn branches reuse this binding and
+                  never copy credential material.
                 </p>
               </SettingsSection>
             ) : null}
 
             {activeTab === "network" ? (
               <SettingsSection
-                eyebrow="Inherited by every fork"
+                eyebrow="Environment runtime"
                 title="Network policy"
-                description="The Environment policy is applied to each new Session Sandbox before the coding agent starts."
+                description="This policy is applied to the Environment's shared Sandbox and therefore covers every native coding-agent Session in it."
               >
                 <div className="network-mode-grid">
                   {(
@@ -1004,7 +1000,7 @@ export function EnvironmentSettings({
                   <Share2 size={22} />
                   <strong>No active Environment links</strong>
                   <p>
-                    Session file links will appear here with their path,
+                    Environment file links will appear here with their path,
                     permission and expiry.
                   </p>
                 </div>

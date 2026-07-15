@@ -1,97 +1,50 @@
 import type {
   Environment,
   NetworkPolicy,
-  SessionAuditFeed,
-  SessionMetrics,
+  EnvironmentAuditFeed,
+  EnvironmentMetrics,
   WorkspaceFile,
   WorkspaceGitState,
   WorkspaceIdeFile,
 } from "@/lib/types";
-import type { SessionMetricRangeSeconds } from "@/lib/session-metrics";
+import type { EnvironmentMetricRangeSeconds } from "@/lib/environment-metrics";
 import type { UnixTimestamp } from "@/lib/time";
+import type { CodexDecoderState } from "@/server/harnesses/codex/jsonl";
+
+export const CODEX_ENVIRONMENT_CREDENTIAL_PATH =
+  "/dev/shm/sandpi-codex-auth.json";
 
 export interface ProvisionedEnvironment {
+  sandboxId: string;
   workspaceVolumeId: string;
   rootfsSnapshotId?: string;
 }
 
-export type HarnessStateLayout = "rootfs_v1" | "workspace_v2" | "migrating";
-
-export interface ProvisionedSession {
-  sandboxId: string;
-  workspaceVolumeId: string;
-  supervisorSessionId: string;
-  attemptId: string;
-  runtimeGeneration: number;
-  nativeCredentialTargetPath: string;
-  /** New runtime allocations always keep native harness state in the Volume. */
-  harnessStateLayout: "workspace_v2";
-}
-
-export const CODEX_SESSION_CREDENTIAL_PATH = "/dev/shm/sandpi-codex-auth.json";
-
-export interface RuntimeSessionRecord {
+export interface EnvironmentRuntimeRecord {
+  /** Environment id; all product Sessions in it share these coordinates. */
   id: string;
   sandboxId: string;
   workspaceVolumeId: string;
-  supervisorSessionId: string;
+  supervisorSessionId?: string;
   terminalSessionId?: string;
-  supervisorCursor: number;
-  /** Opaque coding-agent native Session id; Codex names it a thread id. */
-  nativeSessionId?: string;
-  harnessStateLayout: HarnessStateLayout;
-  modelId?: string;
   attemptId?: string;
-  runtimeGeneration?: number;
+  runtimeGeneration: number;
+  decoder: CodexDecoderState;
 }
 
-export interface RuntimeProvisionSessionInput {
-  sessionId: string;
+export interface RuntimeProvisionEnvironmentInput {
   environment: Environment;
-  /**
-   * Native Codex credential file, decrypted immediately before provisioning.
-   * Runtime implementations must place it in ephemeral storage that is not part
-   * of the sandbox rootfs or workspace volume snapshot boundary.
-   */
-  codexAuthJson: string;
-  /**
-   * Durable allocation journal callback. Runtime implementations invoke it
-   * after every external resource allocation so a restarted Sandpi server can
-   * finish cleanup even when provisioning never returns.
-   */
+  /** Existing Volume is reused when reconciliation resumes after a crash. */
   onResourcesAllocated?: (
-    resources: Partial<ProvisionedSession>,
+    resources: Partial<ProvisionedEnvironment>,
   ) => Promise<void>;
 }
 
-export interface RuntimeForkSessionInput extends RuntimeProvisionSessionInput {
-  source: RuntimeSessionRecord;
-}
-
-export interface RuntimeForkTurnInput extends RuntimeProvisionSessionInput {
-  workspaceSnapshotId: string;
-}
-
-export interface VolumeCheckpoint {
-  snapshotId: string;
-}
-
-export interface RestoredWorkspaceRuntime {
-  attemptId: string;
-  runtimeGeneration: number;
-}
-
-export interface RecoveredCodexRuntime {
+export interface RecoveredCodexEnvironmentRuntime {
   supervisorSessionId: string;
   attemptId: string;
   runtimeGeneration: number;
   sandboxRestarted: boolean;
-}
-
-export interface MigratedCodexNativeState extends RecoveredCodexRuntime {
-  harnessStateLayout: "workspace_v2";
-  /** Exact rootfs evidence captured after the legacy Supervisor was stopped. */
-  sourceHadRollout: boolean;
 }
 
 export interface CodexAuthRuntime {
@@ -103,28 +56,20 @@ export interface CodexAuthRuntime {
 
 export interface RuntimeAdapter {
   readonly mode: "sandbox0" | "unconfigured";
-  provisionEnvironment(): Promise<ProvisionedEnvironment>;
-  deleteEnvironmentResources(resources: ProvisionedEnvironment): Promise<void>;
-  provisionSession(input: RuntimeProvisionSessionInput): Promise<ProvisionedSession>;
-  forkSession(input: RuntimeForkSessionInput): Promise<ProvisionedSession>;
-  forkTurn(input: RuntimeForkTurnInput): Promise<ProvisionedSession>;
-  deleteSessionResources(resources: Partial<ProvisionedSession>): Promise<void>;
-  createVolumeCheckpoint(
-    runtime: RuntimeSessionRecord,
-    label: string,
-  ): Promise<VolumeCheckpoint>;
-  findVolumeCheckpoint(
-    runtime: RuntimeSessionRecord,
-    label: string,
-  ): Promise<VolumeCheckpoint | undefined>;
-  deleteVolumeCheckpoint(
-    runtime: RuntimeSessionRecord,
-    snapshotId: string,
+  provisionEnvironment(
+    input: RuntimeProvisionEnvironmentInput,
+  ): Promise<ProvisionedEnvironment>;
+  deleteEnvironmentResources(
+    resources: Partial<ProvisionedEnvironment>,
   ): Promise<void>;
-  restoreVolumeCheckpoint(
-    runtime: RuntimeSessionRecord,
-    snapshotId: string,
-  ): Promise<RestoredWorkspaceRuntime>;
+  updateEnvironmentNetworkPolicy(
+    runtime: EnvironmentRuntimeRecord,
+    policy: NetworkPolicy,
+  ): Promise<void>;
+  ensureCodexEnvironmentRuntime(
+    runtime: EnvironmentRuntimeRecord,
+    authJson: string,
+  ): Promise<RecoveredCodexEnvironmentRuntime>;
   provisionCodexAuth(
     environment: Environment,
     flowId: string,
@@ -140,71 +85,50 @@ export interface RuntimeAdapter {
     after?: number,
   ): Promise<{ events: unknown[]; cursor: { earliest: number; latest: number } }>;
   readCodexAuthJson(runtime: CodexAuthRuntime): Promise<string>;
-  installCodexSessionCredential(
-    runtime: RuntimeSessionRecord,
+  installCodexEnvironmentCredential(
+    runtime: EnvironmentRuntimeRecord,
     authJson: string,
   ): Promise<void>;
-  readCodexSessionCredential(runtime: RuntimeSessionRecord): Promise<string>;
-  recoverCodexRuntime(
-    runtime: RuntimeSessionRecord,
-    authJson: string,
-  ): Promise<RecoveredCodexRuntime>;
-  migrateCodexNativeState(
-    runtime: RuntimeSessionRecord,
-    authJson: string,
-  ): Promise<MigratedCodexNativeState>;
-  /** Called only after the service durably commits workspace_v2 coordinates. */
-  cleanupLegacyCodexNativeState(runtime: RuntimeSessionRecord): Promise<void>;
+  readCodexEnvironmentCredential(
+    runtime: EnvironmentRuntimeRecord,
+  ): Promise<string>;
   writeCodexMessage(
-    runtime: RuntimeSessionRecord,
+    runtime: EnvironmentRuntimeRecord,
     message: unknown,
     stableInputId?: string,
   ): Promise<void>;
-  /** Stages an exact native RPC frame in the Session rootfs, outside snapshots. */
-  stageCodexMessage(
-    runtime: RuntimeSessionRecord,
-    message: unknown,
-    stableInputId: string,
-  ): Promise<void>;
-  hasStagedCodexMessage(
-    runtime: RuntimeSessionRecord,
-    stableInputId: string,
-  ): Promise<boolean>;
-  dispatchStagedCodexMessage(
-    runtime: RuntimeSessionRecord,
-    stableInputId: string,
-  ): Promise<void>;
-  discardStagedCodexMessage(
-    runtime: RuntimeSessionRecord,
-    stableInputId: string,
-  ): Promise<void>;
   listCodexEvents(
-    runtime: RuntimeSessionRecord,
+    runtime: EnvironmentRuntimeRecord,
     after?: number,
   ): Promise<{ events: unknown[]; cursor: { earliest: number; latest: number } }>;
-  listFiles(runtime: RuntimeSessionRecord, path: string): Promise<WorkspaceFile[]>;
-  readFile(runtime: RuntimeSessionRecord, path: string): Promise<Uint8Array>;
-  getWorkspaceGitState(runtime: RuntimeSessionRecord): Promise<WorkspaceGitState>;
+  listFiles(
+    runtime: EnvironmentRuntimeRecord,
+    path: string,
+  ): Promise<WorkspaceFile[]>;
+  readFile(runtime: EnvironmentRuntimeRecord, path: string): Promise<Uint8Array>;
+  getWorkspaceGitState(
+    runtime: EnvironmentRuntimeRecord,
+  ): Promise<WorkspaceGitState>;
   readWorkspaceIdeFile(
-    runtime: RuntimeSessionRecord,
+    runtime: EnvironmentRuntimeRecord,
     path: string,
   ): Promise<WorkspaceIdeFile>;
   writeWorkspaceIdeFile(
-    runtime: RuntimeSessionRecord,
+    runtime: EnvironmentRuntimeRecord,
     path: string,
     content: Uint8Array,
     baseRevision: string,
   ): Promise<WorkspaceIdeFile>;
   watchWorkspaceFiles(
-    runtime: RuntimeSessionRecord,
+    runtime: EnvironmentRuntimeRecord,
   ): Promise<RuntimeWorkspaceWatchHandle>;
-  getAudit(runtime: RuntimeSessionRecord): Promise<SessionAuditFeed>;
+  getAudit(runtime: EnvironmentRuntimeRecord): Promise<EnvironmentAuditFeed>;
   getMetrics(
-    runtime: RuntimeSessionRecord,
-    rangeSeconds: SessionMetricRangeSeconds,
-  ): Promise<SessionMetrics>;
+    runtime: EnvironmentRuntimeRecord,
+    rangeSeconds: EnvironmentMetricRangeSeconds,
+  ): Promise<EnvironmentMetrics>;
   openTerminal(
-    runtime: RuntimeSessionRecord,
+    runtime: EnvironmentRuntimeRecord,
     after?: number,
     expectedTerminalSessionId?: string,
   ): Promise<RuntimeTerminalHandle>;

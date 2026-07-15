@@ -99,7 +99,7 @@ const copy = {
       teamSettings: "Team settings",
     },
     inspector: {
-      label: "Session inspector",
+      label: "Environment inspector",
       views: "Inspector views",
       files: "Files",
       audit: "Audit",
@@ -253,7 +253,7 @@ const copy = {
       teamSettings: "团队设置",
     },
     inspector: {
-      label: "Session 检查器",
+      label: "环境检查器",
       views: "检查器视图",
       files: "文件",
       audit: "审计",

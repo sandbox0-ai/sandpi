@@ -304,8 +304,8 @@ export function CodexConversation({
           !CODEX_SESSION_STATUSES.has(snapshot.sessionStatus) ||
           !Array.isArray(snapshot.forkableTurnIds) ||
           snapshot.forkableTurnIds.some((turnId) => typeof turnId !== "string") ||
-          !Array.isArray(snapshot.rewindableTurnIds) ||
-          snapshot.rewindableTurnIds.some((turnId) => typeof turnId !== "string")
+          !Array.isArray(snapshot.mutableTurnIds) ||
+          snapshot.mutableTurnIds.some((turnId) => typeof turnId !== "string")
         ) {
           throw new Error("Invalid Codex native snapshot");
         }
@@ -464,7 +464,7 @@ export function CodexConversation({
       return;
     }
     if (editingMessageId && editingTurnId) {
-      if (!turnCapabilities.rewindableTurnIds.has(editingTurnId)) return;
+      if (!turnCapabilities.mutableTurnIds.has(editingTurnId)) return;
       setSending(true);
       setAttachmentError("");
       try {
@@ -548,7 +548,7 @@ export function CodexConversation({
         },
       );
       // Keep the stop state until the native active Turn disappears. Product
-      // Session status still converges only from the post-checkpoint snapshot.
+      // Session status converges from the shared native event stream/snapshot.
     } catch (error) {
       setAttachmentError(
         error instanceof Error ? error.message : ui.interruptTurnFailed,
@@ -560,7 +560,7 @@ export function CodexConversation({
   async function deleteTurn(message: CodexMessageView) {
     if (
       sending ||
-      !turnCapabilities.rewindableTurnIds.has(message.turnId)
+      !turnCapabilities.mutableTurnIds.has(message.turnId)
     ) {
       return;
     }
@@ -606,7 +606,7 @@ export function CodexConversation({
   }
 
   function beginEditing(message: CodexMessageView) {
-    if (!turnCapabilities.rewindableTurnIds.has(message.turnId)) return;
+    if (!turnCapabilities.mutableTurnIds.has(message.turnId)) return;
     setDeleteMessageId(null);
     setEditingMessageId(message.id);
     setEditingTurnId(message.turnId);
@@ -905,7 +905,7 @@ export function CodexConversation({
                           disabled={
                             sending ||
                             session.status !== "waiting" ||
-                            !turnCapabilities.rewindableTurnIds.has(message.turnId)
+                            !turnCapabilities.mutableTurnIds.has(message.turnId)
                           }
                           onClick={() => beginEditing(message)}
                         >
@@ -948,7 +948,7 @@ export function CodexConversation({
                           disabled={
                             sending ||
                             session.status !== "waiting" ||
-                            !turnCapabilities.rewindableTurnIds.has(message.turnId)
+                            !turnCapabilities.mutableTurnIds.has(message.turnId)
                           }
                           onClick={() => setDeleteMessageId(message.id)}
                         >

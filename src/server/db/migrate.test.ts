@@ -46,6 +46,7 @@ test("migration history contains every durable Sandpi boundary", async () => {
       "0019_session_exclusive_operations",
       "0020_native_history_materialization",
       "0021_session_operation_recovery",
+      "0022_environment_runtime",
     ],
   );
 
@@ -164,4 +165,22 @@ test("migration history contains every durable Sandpi boundary", async () => {
   assert.match(operationRecoverySql, /'runtime_recovery'/);
   assert.match(operationRecoverySql, /'native_state_migration'/);
   assert.doesNotMatch(operationRecoverySql, /message|prompt|payload JSONB/i);
+
+  const environmentRuntimeSql = migrations[21]?.sql ?? "";
+  assert.match(environmentRuntimeSql, /CREATE TABLE environment_runtime\b/);
+  assert.match(
+    environmentRuntimeSql,
+    /environment_id TEXT PRIMARY KEY REFERENCES environments\(id\)/,
+  );
+  assert.match(environmentRuntimeSql, /DROP TABLE IF EXISTS session_turn_checkpoints/);
+  assert.match(environmentRuntimeSql, /CREATE TABLE session_runtime\b/);
+  assert.match(environmentRuntimeSql, /native_session_id TEXT/);
+  assert.match(
+    environmentRuntimeSql,
+    /CREATE TABLE environment_credential_bindings\b/,
+  );
+  assert.doesNotMatch(
+    environmentRuntimeSql,
+    /prompt\s+(TEXT|JSONB)|message\s+(TEXT|JSONB)|payload\s+JSONB/i,
+  );
 });

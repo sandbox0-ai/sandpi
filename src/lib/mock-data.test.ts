@@ -5,6 +5,8 @@ import {
   createMockEnvironment,
   createMockSession,
   getMockBootstrap,
+  mockEnvironmentAudit,
+  mockEnvironmentMetrics,
   mockEnvironments,
   mockPreferences,
   mockSandpiPlans,
@@ -31,7 +33,8 @@ test("binds the coding agent to an Environment and every derived Session", () =>
   assert.equal(session.unread, false);
   assert.equal(session.pinned, false);
   assert.equal(session.archived, false);
-  assert.equal(session.workspaceRoot, "/workspace");
+  assert.equal(environment.workspaceRoot, "/workspace");
+  assert.equal("sandboxId" in session, false);
   assert.equal(session.harnessState.protocol, "codex-app-server");
   assert.equal("messages" in session, false);
   assert.equal("modelLabel" in session, false);
@@ -106,7 +109,7 @@ test("keeps every mock Session on its Environment revision", () => {
 });
 
 test("models network throughput with the sdk-js metric contract", () => {
-  const metrics = mockSessions[0]?.metrics;
+  const metrics = mockEnvironmentMetrics;
 
   assert.ok(metrics);
   assert.equal(metrics.networkReceive.metric, "sandbox.network.io");
@@ -118,27 +121,29 @@ test("models network throughput with the sdk-js metric contract", () => {
   assert.ok(metrics.networkReceive.segments.every((segment) => segment.points.length > 0));
 });
 
-test("models Session Audit as the JSON-safe sdk-js signed event feed", () => {
-  const session = mockSessions[0];
-  assert.ok(session);
-  assert.equal(session.audit.events.length, 6);
-  assert.equal(session.audit.nextCursor, "mock-history-cursor");
+test("models Environment Audit as the JSON-safe sdk-js signed event feed", () => {
+  const environment = mockEnvironments[0];
+  assert.ok(environment);
+  assert.equal(mockEnvironmentAudit.events.length, 6);
+  assert.equal(mockEnvironmentAudit.nextCursor, "mock-history-cursor");
   assert.ok(
-    session.audit.events.every(
+    mockEnvironmentAudit.events.every(
       (event) =>
         event.schemaVersion === 2 &&
-        event.sandboxId === session.sandboxId &&
+        event.sandboxId === environment.sandboxId &&
         event.integrity.signatureStatus === "verified" &&
         typeof event.occurredAt === "number" &&
         typeof event.ingestedAt === "number",
     ),
   );
   assert.equal(
-    session.audit.events.some((event) => String(event.source) === "supervisor"),
+    mockEnvironmentAudit.events.some(
+      (event) => String(event.source) === "supervisor",
+    ),
     false,
   );
 
-  const resumeEvents = session.audit.events.filter(
+  const resumeEvents = mockEnvironmentAudit.events.filter(
     (event) => event.action === "sandbox.resume",
   );
   assert.equal(new Set(resumeEvents.map((event) => event.operationId)).size, 1);
@@ -147,7 +152,7 @@ test("models Session Audit as the JSON-safe sdk-js signed event feed", () => {
     ["attempt", "result", "effect"],
   );
   assert.equal(
-    session.audit.events.find((event) => event.action === "network.deny")
+    mockEnvironmentAudit.events.find((event) => event.action === "network.deny")
       ?.attributes?.reason,
     "not_in_policy",
   );

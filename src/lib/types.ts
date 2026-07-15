@@ -178,7 +178,7 @@ export interface Environment {
   description: string;
   color: string;
   /**
-   * `updating` means the Environment Workspace Volume is still being
+   * `updating` means the Environment's one shared Sandbox/Workspace is being
    * provisioned. `error` is recoverable and is kept distinct so clients do not
    * display an endless ready spinner after Sandbox0 rejects provisioning.
    */
@@ -187,12 +187,12 @@ export interface Environment {
   templateId: string;
   rootfsSnapshotId: string;
   workspaceVolumeId: string;
+  /** Shared execution coordinates. Sessions never own separate Sandboxes. */
+  sandboxId: string;
+  supervisorSessionId: string;
+  workspaceRoot: "/workspace";
   provisioningError?: string;
-  /**
-   * Opaque revision of Environment-scoped harness authentication in the secret plane.
-   * Credential material must stay outside rootfs and Workspace Volume snapshots so a Session
-   * or Turn fork cannot copy provider credentials or restore a rotated refresh token.
-   */
+  /** Opaque revision of Environment-scoped harness authentication. */
   credentialRevision: number;
   codingAgent: HarnessAccount;
   networkPolicy: NetworkPolicy;
@@ -336,7 +336,7 @@ type SdkSandboxAuditEvent = SandboxObservabilityEvents["events"][number];
  * Supervisor and native harness events never belong in this feed. They have
  * separate replay contracts and must not be presented as signed Sandbox0 audit.
  */
-export type SessionAuditEvent = Omit<
+export type EnvironmentAuditEvent = Omit<
   SdkSandboxAuditEvent,
   "occurredAt" | "ingestedAt"
 > & {
@@ -345,8 +345,8 @@ export type SessionAuditEvent = Omit<
 };
 
 /** Pagination metadata is part of the SDK response and must survive API transport. */
-export type SessionAuditFeed = Omit<SandboxObservabilityEvents, "events"> & {
-  events: SessionAuditEvent[];
+export type EnvironmentAuditFeed = Omit<SandboxObservabilityEvents, "events"> & {
+  events: EnvironmentAuditEvent[];
 };
 
 export interface MetricPoint {
@@ -374,7 +374,7 @@ export interface RuntimeMetricSeries {
   segments: MetricSegment[];
 }
 
-export interface SessionMetrics {
+export interface EnvironmentMetrics {
   cpuUtilization: RuntimeMetricSeries;
   memoryWorkingSet: RuntimeMetricSeries;
   memoryLimitBytes: number;
@@ -414,16 +414,8 @@ export interface CodingSession<
   harnessState: THarnessState;
   createdAt: UnixTimestamp;
   updatedAt: UnixTimestamp;
-  hardExpiresAt: UnixTimestamp;
-  sandboxId: string;
-  supervisorSessionId: string;
-  workspaceRoot: string;
-  workspaceVolumeId: string;
   environmentRevision: number;
   origin?: SessionOrigin;
-  files: WorkspaceFile[];
-  audit: SessionAuditFeed;
-  metrics: SessionMetrics;
 }
 
 export interface SandpiBootstrap {

@@ -2,15 +2,15 @@ import type { CodexNativeSnapshot } from "./types";
 
 export interface CodexTurnCapabilitySets {
   forkableTurnIds: ReadonlySet<string>;
-  rewindableTurnIds: ReadonlySet<string>;
+  mutableTurnIds: ReadonlySet<string>;
 }
 
-/** Keep native Turn fork and destructive rewind capabilities independent. */
+/** Keep native Turn fork and in-place product history mutation independent. */
 export function codexTurnCapabilitySets(
   snapshot: CodexNativeSnapshot | null | undefined,
 ): CodexTurnCapabilitySets {
   return {
     forkableTurnIds: new Set(snapshot?.forkableTurnIds ?? []),
-    rewindableTurnIds: new Set(snapshot?.rewindableTurnIds ?? []),
+    mutableTurnIds: new Set(snapshot?.mutableTurnIds ?? []),
   };
 }

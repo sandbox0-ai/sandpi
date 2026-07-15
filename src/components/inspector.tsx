@@ -17,21 +17,22 @@ import {
   InteractiveMetricChart,
   type MetricChartSeries,
 } from "@/components/metric-chart";
-import { SessionAuditPanel } from "@/components/session-audit-panel";
+import { EnvironmentAuditPanel } from "@/components/session-audit-panel";
 import { WorkspaceIde } from "@/components/workspace-ide";
 import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
 import { getOperationUiCopy, type OperationLanguage } from "@/lib/operation-ui";
 import {
-  DEFAULT_SESSION_METRIC_RANGE_SECONDS,
-  isSessionMetricRangeSeconds,
-  type SessionMetricRangeSeconds,
-} from "@/lib/session-metrics";
+  DEFAULT_ENVIRONMENT_METRIC_RANGE_SECONDS,
+  isEnvironmentMetricRangeSeconds,
+  type EnvironmentMetricRangeSeconds,
+} from "@/lib/environment-metrics";
 import { formatUnixTimestamp } from "@/lib/time";
 import type {
   CodingSession,
+  Environment,
+  EnvironmentAuditFeed,
+  EnvironmentMetrics,
   RuntimeMetricSeries,
-  SessionAuditFeed,
-  SessionMetrics,
   WorkspaceIdeSnapshot,
 } from "@/lib/types";
 
@@ -40,10 +41,48 @@ export type InspectorTab = "files" | "audit" | "metrics";
 interface InspectorProps {
   language: OperationLanguage;
   timeZone: string;
-  session: CodingSession;
+  environment: Environment;
+  session?: CodingSession;
   activeTab: InspectorTab;
   onTabChange: (tab: InspectorTab) => void;
   onClose: () => void;
+}
+
+function emptyMetricSeries(
+  metric: RuntimeMetricSeries["metric"],
+  unit: RuntimeMetricSeries["unit"],
+  statistic: RuntimeMetricSeries["statistic"],
+  dimensions?: Record<string, string>,
+): RuntimeMetricSeries {
+  return { metric, unit, statistic, dimensions, segments: [] };
+}
+
+function emptyEnvironmentMetrics(): EnvironmentMetrics {
+  return {
+    cpuUtilization: emptyMetricSeries(
+      "sandbox.cpu.utilization",
+      "ratio",
+      "average",
+    ),
+    memoryWorkingSet: emptyMetricSeries(
+      "sandbox.memory.working_set",
+      "bytes",
+      "average",
+    ),
+    memoryLimitBytes: 0,
+    networkReceive: emptyMetricSeries(
+      "sandbox.network.io",
+      "bytes_per_second",
+      "rate",
+      { direction: "receive" },
+    ),
+    networkTransmit: emptyMetricSeries(
+      "sandbox.network.io",
+      "bytes_per_second",
+      "rate",
+      { direction: "transmit" },
+    ),
+  };
 }
 
 function SkeletonShape({ className = "" }: { className?: string }) {
@@ -268,6 +307,7 @@ function formatMetricTime(
 export function Inspector({
   language,
   timeZone,
+  environment,
   session,
   activeTab,
   onTabChange,
@@ -275,7 +315,9 @@ export function Inspector({
 }: InspectorProps) {
   const ui = getOperationUiCopy(language).inspector;
   const [metricsRangeSeconds, setMetricsRangeSeconds] =
-    useState<SessionMetricRangeSeconds>(DEFAULT_SESSION_METRIC_RANGE_SECONDS);
+    useState<EnvironmentMetricRangeSeconds>(
+      DEFAULT_ENVIRONMENT_METRIC_RANGE_SECONDS,
+    );
   const metricRangeOptions = [
     {
       seconds: 15 * 60,
@@ -295,7 +337,7 @@ export function Inspector({
       windowLabel: ui.last7Days,
     },
   ] satisfies Array<{
-    seconds: SessionMetricRangeSeconds;
+    seconds: EnvironmentMetricRangeSeconds;
     label: string;
     windowLabel: string;
   }>;
@@ -303,12 +345,14 @@ export function Inspector({
     metricRangeOptions.find(
       (option) => option.seconds === metricsRangeSeconds,
     ) ?? metricRangeOptions[1];
-  const requestKey = `${session.id}:${activeTab}:${
+  const requestKey = `${environment.id}:${activeTab}:${
     activeTab === "metrics" ? metricsRangeSeconds : "default"
   }`;
   const [ideSnapshot, setIdeSnapshot] = useState<WorkspaceIdeSnapshot>();
-  const [audit, setAudit] = useState(session.audit);
-  const [metrics, setMetrics] = useState(session.metrics);
+  const [audit, setAudit] = useState<EnvironmentAuditFeed>({ events: [] });
+  const [metrics, setMetrics] = useState<EnvironmentMetrics>(
+    emptyEnvironmentMetrics,
+  );
   const [resolvedRequestKey, setResolvedRequestKey] = useState("");
   const [loadError, setLoadError] = useState<{
     requestKey: string;
@@ -331,16 +375,16 @@ export function Inspector({
 
   useEffect(() => {
     setIdeSnapshot(undefined);
-    setAudit(session.audit);
-    setMetrics(session.metrics);
+    setAudit({ events: [] });
+    setMetrics(emptyEnvironmentMetrics());
     setLoadError(null);
-  }, [session.id, session.audit, session.files, session.metrics]);
+  }, [environment.id]);
 
   useEffect(() => {
     const controller = new AbortController();
     setLoadError(null);
 
-    const path = `/api/v1/sessions/${encodeURIComponent(session.id)}`;
+    const path = `/api/v1/environments/${encodeURIComponent(environment.id)}`;
     const request =
       activeTab === "files"
         ? apiFetch<ApiEnvelope<WorkspaceIdeSnapshot>>(
@@ -348,10 +392,10 @@ export function Inspector({
             { signal: controller.signal },
           ).then((response) => setIdeSnapshot(response.data))
         : activeTab === "audit"
-          ? apiFetch<ApiEnvelope<SessionAuditFeed>>(`${path}/audit`, {
+          ? apiFetch<ApiEnvelope<EnvironmentAuditFeed>>(`${path}/audit`, {
               signal: controller.signal,
             }).then((response) => setAudit(response.data))
-          : apiFetch<ApiEnvelope<SessionMetrics>>(
+          : apiFetch<ApiEnvelope<EnvironmentMetrics>>(
               `${path}/metrics?rangeSeconds=${metricsRangeSeconds}`,
               { signal: controller.signal },
             ).then((response) => setMetrics(response.data));
@@ -375,7 +419,7 @@ export function Inspector({
       });
 
     return () => controller.abort();
-  }, [activeTab, metricsRangeSeconds, requestKey, session.id]);
+  }, [activeTab, environment.id, metricsRangeSeconds, requestKey]);
 
   return (
     <aside className="inspector" aria-label={ui.label}>
@@ -432,6 +476,7 @@ export function Inspector({
           <WorkspaceIde
             language={language}
             timeZone={timeZone}
+            environment={environment}
             session={session}
             variant="embedded"
             initialSnapshot={ideSnapshot}
@@ -440,10 +485,10 @@ export function Inspector({
       ) : null}
 
       {!loading && activeTab === "audit" ? (
-        <SessionAuditPanel
+        <EnvironmentAuditPanel
           audit={audit}
+          environmentId={environment.id}
           language={language}
-          sessionId={session.id}
           timeZone={timeZone}
         />
       ) : null}
@@ -464,7 +509,7 @@ export function Inspector({
                 value={metricsRangeSeconds}
                 onChange={(event) => {
                   const value = Number(event.target.value);
-                  if (isSessionMetricRangeSeconds(value)) {
+                  if (isEnvironmentMetricRangeSeconds(value)) {
                     setMetricsRangeSeconds(value);
                   }
                 }}
@@ -597,11 +642,11 @@ export function Inspector({
           <section className="runtime-facts">
             <div>
               <span>{ui.sandbox}</span>
-              <code>{session.sandboxId}</code>
+              <code>{environment.sandboxId}</code>
             </div>
             <div>
               <span>{ui.supervisorSession}</span>
-              <code>{session.supervisorSessionId}</code>
+              <code>{environment.supervisorSessionId}</code>
             </div>
           </section>
           <p className="data-boundary-note">{ui.metricsBoundary}</p>

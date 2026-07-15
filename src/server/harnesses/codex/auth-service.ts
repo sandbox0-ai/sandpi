@@ -129,8 +129,10 @@ export class CodexEnvironmentAuthService {
     return this.materializeCredential(environmentId, stored);
   }
 
-  async credentialForRuntime(sessionId: string) {
-    const stored = await this.authStore.getCredentialForSession(sessionId);
+  async credentialForEnvironmentRuntime(environmentId: string) {
+    const stored = await this.authStore.getCredentialForEnvironmentRuntime(
+      environmentId,
+    );
     if (!stored) {
       throw new HttpError(409, "codex_not_connected", "Codex is not connected.");
     }
@@ -138,24 +140,26 @@ export class CodexEnvironmentAuthService {
   }
 
   async markCredentialMaterialized(
-    sessionId: string,
+    environmentId: string,
     credential: CodexCredentialMaterial,
   ) {
     await this.authStore.markCredentialMaterialized(
-      sessionId,
+      environmentId,
       credential.sourceId,
       credential.revision,
     );
   }
 
-  async syncCredentialFromRuntime(sessionId: string, authJson: string) {
+  async syncCredentialFromRuntime(environmentId: string, authJson: string) {
     validateCodexCredentialJson(authJson);
-    const stored = await this.authStore.getCredentialForSession(sessionId);
+    const stored = await this.authStore.getCredentialForEnvironmentRuntime(
+      environmentId,
+    );
     if (!stored) return;
     const current = this.decryptCredential(stored.environmentId, stored.encrypted);
     if (current === authJson) {
       await this.authStore.markCredentialMaterialized(
-        sessionId,
+        environmentId,
         stored.sourceId,
         stored.revision,
       );
@@ -165,8 +169,8 @@ export class CodexEnvironmentAuthService {
       authJson,
       codexCredentialAssociatedData(stored.environmentId),
     );
-    const result = await this.authStore.replaceCredentialFromSession(
-      sessionId,
+    const result = await this.authStore.replaceCredentialFromEnvironment(
+      environmentId,
       stored.bindingSourceId,
       encrypted,
     );

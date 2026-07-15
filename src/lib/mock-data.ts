@@ -1,10 +1,12 @@
-import { SESSION_WORKSPACE_ROOT } from "@/lib/environment-blueprint";
 import { createMockCodexHarnessState } from "@/harnesses/codex/events";
 import type { CodexSession } from "@/harnesses/codex/types";
 import { createId, randomToken } from "@/lib/id";
 import { toUnixTimestamp, type UnixTimestamp } from "@/lib/time";
 import type {
   Environment,
+  EnvironmentAuditEvent,
+  EnvironmentAuditFeed,
+  EnvironmentMetrics,
   MembershipPlanAssignment,
   RuntimeMetricSeries,
   SandpiPlan,
@@ -12,11 +14,8 @@ import type {
   SandpiBootstrap,
   SandpiPreferences,
   SandpiUser,
-  SessionAuditEvent,
-  SessionAuditFeed,
   Team,
   TeamMembership,
-  WorkspaceFile,
 } from "@/lib/types";
 
 function timestamp(value: string) {
@@ -55,142 +54,9 @@ function metricSeries(
   };
 }
 
-const workspaceFiles: WorkspaceFile[] = [
-  {
-    id: "workspace",
-    name: "workspace",
-    path: "/workspace",
-    kind: "folder",
-    children: [
-      {
-        id: "app",
-        name: "app",
-        path: "/workspace/app",
-        kind: "folder",
-        children: [
-          {
-            id: "api",
-            name: "api",
-            path: "/workspace/app/api",
-            kind: "folder",
-            children: [
-              {
-                id: "auth-callback",
-                name: "auth-callback.ts",
-                path: "/workspace/app/api/auth-callback.ts",
-                kind: "file",
-                language: "TypeScript",
-                size: "3.2 KB",
-                modifiedAt: timestamp("2026-07-12T09:24:00+08:00"),
-                content: [
-                  "export async function completeAuth(code: string) {",
-                  "  const attempt = await authAttempts.consume(code);",
-                  "",
-                  "  if (!attempt) {",
-                  "    throw new AuthError(\"invalid_or_expired_code\");",
-                  "  }",
-                  "",
-                  "  return sessions.create({",
-                  "    userId: attempt.userId,",
-                  "    credentialVersion: attempt.credentialVersion,",
-                  "  });",
-                  "}",
-                ].join("\n"),
-              },
-              {
-                id: "session-store",
-                name: "session-store.ts",
-                path: "/workspace/app/api/session-store.ts",
-                kind: "file",
-                language: "TypeScript",
-                size: "2.1 KB",
-                modifiedAt: timestamp("2026-07-12T09:17:00+08:00"),
-                content: [
-                  "export const sessions = {",
-                  "  async create(input: CreateSessionInput) {",
-                  "    return database.session.create({ data: input });",
-                  "  },",
-                  "};",
-                ].join("\n"),
-              },
-            ],
-          },
-          {
-            id: "layout",
-            name: "layout.tsx",
-            path: "/workspace/app/layout.tsx",
-            kind: "file",
-            language: "TypeScript React",
-            size: "1.4 KB",
-            modifiedAt: timestamp("2026-07-12T09:03:00+08:00"),
-            content: "export default function Layout({ children }: Props) {\n  return <main>{children}</main>;\n}",
-          },
-        ],
-      },
-      {
-        id: "tests",
-        name: "tests",
-        path: "/workspace/tests",
-        kind: "folder",
-        children: [
-          {
-            id: "auth-test",
-            name: "auth-callback.test.ts",
-            path: "/workspace/tests/auth-callback.test.ts",
-            kind: "file",
-            language: "TypeScript",
-            size: "4.7 KB",
-            modifiedAt: timestamp("2026-07-12T09:24:00+08:00"),
-            content: [
-              "test(\"consumes an auth code once under contention\", async () => {",
-              "  const results = await Promise.allSettled([",
-              "    completeAuth(code),",
-              "    completeAuth(code),",
-              "  ]);",
-              "",
-              "  expect(successful(results)).toHaveLength(1);",
-              "});",
-            ].join("\n"),
-          },
-        ],
-      },
-      {
-        id: "env-example",
-        name: ".env.example",
-        path: "/workspace/.env.example",
-        kind: "file",
-        language: "Environment",
-        size: "282 B",
-        modifiedAt: timestamp("2026-07-10T09:25:00+08:00"),
-        content: "DATABASE_URL=\nAUTH_CALLBACK_URL=\n",
-      },
-      {
-        id: "package-json",
-        name: "package.json",
-        path: "/workspace/package.json",
-        kind: "file",
-        language: "JSON",
-        size: "1.1 KB",
-        modifiedAt: timestamp("2026-07-10T09:25:00+08:00"),
-        content: "{\n  \"name\": \"console\",\n  \"scripts\": {\n    \"test\": \"vitest run\"\n  }\n}\n",
-      },
-      {
-        id: "readme",
-        name: "README.md",
-        path: "/workspace/README.md",
-        kind: "file",
-        language: "Markdown",
-        size: "6.8 KB",
-        modifiedAt: timestamp("2026-07-09T09:25:00+08:00"),
-        content: "# Console\n\nInternal control plane for remote agent sessions.\n",
-      },
-    ],
-  },
-];
-
 function mockAuditIntegrity(
   payloadDigit: string,
-): SessionAuditEvent["integrity"] {
+): EnvironmentAuditEvent["integrity"] {
   return {
     algorithm: "ed25519-sha256-v1",
     payloadHash: payloadDigit.repeat(64),
@@ -201,7 +67,7 @@ function mockAuditIntegrity(
   };
 }
 
-const audit: SessionAuditFeed = {
+export const mockEnvironmentAudit: EnvironmentAuditFeed = {
   events: [
     {
       eventId: "11111111-1111-4111-8111-111111111111",
@@ -688,6 +554,9 @@ export const mockEnvironments: Environment[] = [
     templateId: "coding-agent",
     rootfsSnapshotId: "rootfs-snap-default-r12",
     workspaceVolumeId: "vol-default-seed",
+    sandboxId: "sbx_7f2a91",
+    supervisorSessionId: "ses_cdx_01J2",
+    workspaceRoot: "/workspace",
     credentialRevision: 4,
     codingAgent: {
       harness: "codex",
@@ -735,6 +604,9 @@ export const mockEnvironments: Environment[] = [
     templateId: "coding-agent",
     rootfsSnapshotId: "rootfs-snap-release-r7",
     workspaceVolumeId: "vol-release-seed",
+    sandboxId: "sbx_env_release",
+    supervisorSessionId: "ses_env_release_codex",
+    workspaceRoot: "/workspace",
     credentialRevision: 2,
     codingAgent: {
       harness: "codex",
@@ -769,6 +641,9 @@ export const mockEnvironments: Environment[] = [
     templateId: "coding-agent",
     rootfsSnapshotId: "rootfs-snap-experiments-r3",
     workspaceVolumeId: "vol-experiments-seed",
+    sandboxId: "sbx_env_experiments",
+    supervisorSessionId: "ses_env_experiments_codex",
+    workspaceRoot: "/workspace",
     credentialRevision: 2,
     codingAgent: {
       harness: "codex",
@@ -800,6 +675,50 @@ export const mockPreferences: SandpiPreferences = {
     sessionCompleted: true,
     needsAttention: true,
   },
+};
+
+export const mockEnvironmentMetrics: EnvironmentMetrics = {
+  cpuUtilization: metricSeries(
+    [0.04, 0.08, 0.07, 0.12, 0.19, 0.38, 0.27, 0.21, 0.32, 0.18, 0.16, 0.14],
+    {
+      metric: "sandbox.cpu.utilization",
+      unit: "ratio",
+      statistic: "average",
+    },
+  ),
+  memoryWorkingSet: metricSeries(
+    [382, 388, 401, 418, 446, 472, 486, 492, 516, 508, 512, 508].map(
+      (value) => value * 1024 * 1024,
+    ),
+    {
+      metric: "sandbox.memory.working_set",
+      unit: "bytes",
+      statistic: "average",
+    },
+  ),
+  memoryLimitBytes: 2048 * 1024 * 1024,
+  networkReceive: metricSeries(
+    [96, 144, 208, 352, 680, 1210, 940, 520, 860, 1320, 780, 612].map(
+      (value) => value * 1024,
+    ),
+    {
+      metric: "sandbox.network.io",
+      unit: "bytes_per_second",
+      statistic: "rate",
+      dimensions: { direction: "receive" },
+    },
+  ),
+  networkTransmit: metricSeries(
+    [42, 58, 92, 134, 310, 540, 410, 248, 390, 620, 356, 284].map(
+      (value) => value * 1024,
+    ),
+    {
+      metric: "sandbox.network.io",
+      unit: "bytes_per_second",
+      statistic: "rate",
+      dimensions: { direction: "transmit" },
+    },
+  ),
 };
 
 const primarySession: CodexSession = {
@@ -851,57 +770,7 @@ const primarySession: CodexSession = {
   ),
   createdAt: timestamp("2026-07-12T09:17:41+08:00"),
   updatedAt: timestamp("2026-07-12T09:25:03+08:00"),
-  hardExpiresAt: timestamp("2026-08-11T09:17:41+08:00"),
-  sandboxId: "sbx_7f2a91",
-  supervisorSessionId: "ses_cdx_01J2",
-  workspaceRoot: SESSION_WORKSPACE_ROOT,
-  workspaceVolumeId: "vol_session_7f2a91",
   environmentRevision: 12,
-  files: workspaceFiles,
-  audit,
-  metrics: {
-    cpuUtilization: metricSeries(
-      [0.04, 0.08, 0.07, 0.12, 0.19, 0.38, 0.27, 0.21, 0.32, 0.18, 0.16, 0.14],
-      {
-        metric: "sandbox.cpu.utilization",
-        unit: "ratio",
-        statistic: "average",
-      },
-    ),
-    memoryWorkingSet: metricSeries(
-      [382, 388, 401, 418, 446, 472, 486, 492, 516, 508, 512, 508].map(
-        (value) => value * 1024 * 1024,
-      ),
-      {
-        metric: "sandbox.memory.working_set",
-        unit: "bytes",
-        statistic: "average",
-      },
-    ),
-    memoryLimitBytes: 2048 * 1024 * 1024,
-    networkReceive: metricSeries(
-      [96, 144, 208, 352, 680, 1210, 940, 520, 860, 1320, 780, 612].map(
-        (value) => value * 1024,
-      ),
-      {
-        metric: "sandbox.network.io",
-        unit: "bytes_per_second",
-        statistic: "rate",
-        dimensions: { direction: "receive" },
-      },
-    ),
-    networkTransmit: metricSeries(
-      [42, 58, 92, 134, 310, 540, 410, 248, 390, 620, 356, 284].map(
-        (value) => value * 1024,
-      ),
-      {
-        metric: "sandbox.network.io",
-        unit: "bytes_per_second",
-        statistic: "rate",
-        dimensions: { direction: "transmit" },
-      },
-    ),
-  },
 };
 
 function compactSession(
@@ -928,10 +797,6 @@ function compactSession(
     status,
     unread,
     updatedAt,
-    sandboxId: `sbx_${id.slice(-6)}`,
-    supervisorSessionId: `ses_${id.slice(-6)}`,
-    workspaceVolumeId: `vol_${id.slice(-6)}`,
-    audit: { events: [] },
     environmentRevision: environment.revision,
     harnessState: createMockCodexHarnessState(
       `thr_${id.slice(-12)}`,
@@ -1030,7 +895,6 @@ export function createMockSession(
   }
   const id = createId("session", 8);
   const now = toUnixTimestamp(new Date());
-  const expires = now + 30 * 24 * 60 * 60;
   const threadId = `thr_${randomToken(10)}`;
   const modelId = mockCodexModelId(input.modelId ?? "");
 
@@ -1045,18 +909,12 @@ export function createMockSession(
     harnessLabel: environment.codingAgent.label,
     harnessState: createMockCodexHarnessState(threadId, modelId, {
       content: input.prompt,
-      assistantText: `The Environment fork is ready. I’m connected to the new ${environment.codingAgent.label} thread and will start by inspecting the workspace.`,
+      assistantText: `I’m connected to a new ${environment.codingAgent.label} thread in the shared ${environment.name} workspace and will start by inspecting it.`,
       createdAt: now,
     }),
     createdAt: now,
     updatedAt: now,
-    hardExpiresAt: expires,
-    sandboxId: `sbx_${randomToken(6)}`,
-    supervisorSessionId: `ses_${randomToken(8)}`,
-    workspaceRoot: SESSION_WORKSPACE_ROOT,
-    workspaceVolumeId: `vol_${randomToken(8)}`,
     environmentRevision: environment.revision,
-    audit: { events: [] },
     origin: {
       kind: "environment",
       label: environment.name,

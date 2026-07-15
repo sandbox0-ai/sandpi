@@ -1,3 +1,4 @@
+import type { Environment, NetworkPolicy } from "@/lib/types";
 import type { RuntimeAdapter } from "@/server/runtime/types";
 import { SandpiStore } from "@/server/store";
 
@@ -65,21 +66,68 @@ export class EnvironmentService {
     return environment;
   }
 
+  async update(
+    userId: string,
+    environmentId: string,
+    input: {
+      name: string;
+      description: string;
+      color: string;
+      networkPolicy: NetworkPolicy;
+    },
+  ): Promise<Environment> {
+    const current = await this.store.getEnvironment(userId, environmentId);
+    if (
+      current.status === "ready" &&
+      JSON.stringify(current.networkPolicy) !== JSON.stringify(input.networkPolicy)
+    ) {
+      const runtime = await this.store.getEnvironmentRuntime(
+        userId,
+        environmentId,
+      );
+      // The Sandbox is owned by the Environment, so policy edits apply to the
+      // running runtime instead of being deferred to a future Session claim.
+      await this.runtime.updateEnvironmentNetworkPolicy(
+        runtime,
+        input.networkPolicy,
+      );
+    }
+    return this.store.updateEnvironment(userId, environmentId, input);
+  }
+
   private async provision(environmentId: string) {
+    let resources: Parameters<RuntimeAdapter["deleteEnvironmentResources"]>[0] = {};
     try {
-      const resources = await this.runtime.provisionEnvironment();
+      const environment = await this.store.getEnvironmentById(environmentId);
+      const provisioned = await this.runtime.provisionEnvironment({
+        environment,
+        onResourcesAllocated: async (allocated) => {
+          resources = { ...resources, ...allocated };
+          await this.store.recordEnvironmentAllocation(environmentId, allocated);
+        },
+      });
+      resources = provisioned;
       try {
-        const environment = await this.store.markEnvironmentReady(
+        const ready = await this.store.markEnvironmentReady(
           environmentId,
-          resources,
+          provisioned,
         );
         this.logger.info({ environmentId }, "Environment is ready");
-        return environment;
+        return ready;
       } catch (error) {
-        await this.runtime.deleteEnvironmentResources(resources);
+        await this.runtime.deleteEnvironmentResources(provisioned);
         throw error;
       }
     } catch (error) {
+      if (resources.sandboxId) {
+        await this.runtime.deleteEnvironmentResources({
+          sandboxId: resources.sandboxId,
+        }).catch(() => undefined);
+        await this.store.clearEnvironmentSandboxAllocation(
+          environmentId,
+          resources.sandboxId,
+        );
+      }
       await this.store.markEnvironmentFailed(environmentId, errorMessage(error));
       throw error;
     }

@@ -45,8 +45,8 @@ export function parseTerminalReplayState(
   }
 }
 
-export function terminalReplayStorageKey(sessionId: string) {
-  return `sandpi.terminal-replay.v1:${sessionId}`;
+export function terminalReplayStorageKey(environmentId: string) {
+  return `sandpi.terminal-replay.v2:${environmentId}`;
 }
 
 export function terminalReplayAfter(state: TerminalReplayState) {
