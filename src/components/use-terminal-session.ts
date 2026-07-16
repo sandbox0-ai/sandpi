@@ -36,6 +36,7 @@ interface TerminalEvent {
 
 interface TerminalMessage {
   type: "ack" | "error" | "event" | "ready";
+  code?: string;
   error?: string;
   sessionId?: string;
   attemptId?: string;
@@ -44,6 +45,8 @@ interface TerminalMessage {
   replayReset?: boolean;
   event?: TerminalEvent;
 }
+
+const MAX_TERMINAL_RECONNECT_ATTEMPTS = 5;
 
 function decodeBase64(data: string) {
   const raw = window.atob(data);
@@ -210,6 +213,7 @@ export function useTerminalSession(
     let fitFrame: number | undefined;
     let replayPersistTimer: number | undefined;
     let terminalExited = false;
+    let terminalFailed = false;
     let terminal: XTerm | undefined;
     let resizeObserver: ResizeObserver | undefined;
     const disposables: Array<{ dispose: () => void }> = [];
@@ -320,13 +324,13 @@ export function useTerminalSession(
       };
 
       socket.addEventListener("open", () => {
-        reconnectAttempt = 0;
         setConnectionError(null);
       });
       socket.addEventListener("message", (message) => {
         try {
           const payload = JSON.parse(String(message.data)) as TerminalMessage;
           if (payload.type === "ready") {
+            reconnectAttempt = 0;
             const priorTerminalSessionId =
               replayStateRef.current?.terminalSessionId;
             const terminalChanged = Boolean(
@@ -372,6 +376,10 @@ export function useTerminalSession(
             return;
           }
           if (payload.type === "error") {
+            // A structured server error is an operation failure, not a network
+            // interruption. Keep it visible and wait for an explicit Retry;
+            // otherwise an auth/configuration error reconnects forever.
+            terminalFailed = true;
             setConnectionState("error");
             setConnectionError(payload.error ?? "Terminal request failed.");
             return;
@@ -420,15 +428,30 @@ export function useTerminalSession(
         }
       });
       socket.addEventListener("close", () => {
-        if (disposed || terminalExited || socketRef.current !== socket) return;
+        if (
+          disposed ||
+          terminalExited ||
+          terminalFailed ||
+          socketRef.current !== socket
+        ) {
+          return;
+        }
         if (terminal) terminal.options.disableStdin = true;
+        if (reconnectAttempt >= MAX_TERMINAL_RECONNECT_ATTEMPTS) {
+          terminalFailed = true;
+          setConnectionState("error");
+          setConnectionError(
+            "Terminal connection could not be restored. Retry when the Environment is available.",
+          );
+          return;
+        }
         setConnectionState("disconnected");
         const delay = Math.min(750 * 2 ** reconnectAttempt, 10_000);
         reconnectAttempt += 1;
         reconnectTimer = window.setTimeout(connect, delay);
       });
       socket.addEventListener("error", () => {
-        if (!disposed) setConnectionState("error");
+        if (!disposed && !terminalFailed) setConnectionState("error");
       });
     };
 

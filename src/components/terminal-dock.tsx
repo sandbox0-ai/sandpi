@@ -374,10 +374,10 @@ function TerminalDockSession({
               aria-hidden="true"
             />
             <span>{connectionError ?? stateLabel}</span>
-            {connectionState === "exited" ? (
+            {connectionState === "error" || connectionState === "exited" ? (
               <button type="button" onClick={restartTerminal}>
                 <RotateCcw size={11} aria-hidden="true" />
-                Restart shell
+                {connectionState === "exited" ? "Restart shell" : "Retry"}
               </button>
             ) : null}
           </div>

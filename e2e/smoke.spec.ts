@@ -36,6 +36,15 @@ async function activeWorkspace(request: APIRequestContext) {
   return session && environment ? { environment, session } : null;
 }
 
+async function readyEnvironment(request: APIRequestContext) {
+  const response = await request.get("/api/v1/bootstrap");
+  expect(response.ok()).toBeTruthy();
+  const bootstrap = (await response.json()) as ApiEnvelope<SandpiBootstrap>;
+  return bootstrap.data.environments.find(
+    (environment) => environment.status === "ready",
+  );
+}
+
 test("loads the live workspace and Environment credential surface", async ({
   page,
 }) => {
@@ -297,14 +306,13 @@ test("reconciles agent-created files while the native volume watch is unavailabl
   expect(snapshotReads).toBeGreaterThan(1);
 });
 
-test("replays only the last three terminal commands after reopen", async ({
+test("opens the Environment terminal from New Session and replays only the last three commands", async ({
   page,
   request,
 }) => {
-  const workspace = await activeWorkspace(request);
-  test.skip(!workspace, "An active Session is required for this check.");
-  if (!workspace) return;
-  const { environment, session } = workspace;
+  const environment = await readyEnvironment(request);
+  test.skip(!environment, "A ready Environment is required for this check.");
+  if (!environment) return;
   const terminalSessionId = "ses-terminal-e2e";
   const attemptId = "attempt-terminal-e2e";
   const connectionUrls: string[] = [];
@@ -373,7 +381,7 @@ test("replays only the last three terminal commands after reopen", async ({
   );
 
   await page.goto(
-    `/?team=${encodeURIComponent(environment.teamId)}&environment=${encodeURIComponent(environment.id)}&session=${encodeURIComponent(session.id)}`,
+    `/?team=${encodeURIComponent(environment.teamId)}&environment=${encodeURIComponent(environment.id)}&new=1`,
   );
   await page.getByRole("button", { name: "Terminal" }).click();
   const terminal = page.getByRole("region", {
@@ -414,6 +422,48 @@ test("replays only the last three terminal commands after reopen", async ({
     lastSequence: 5,
     commandStartSequences: [2, 3, 4],
   });
+});
+
+test("stops retrying a structured terminal failure until the user asks", async ({
+  page,
+  request,
+}) => {
+  const environment = await readyEnvironment(request);
+  test.skip(!environment, "A ready Environment is required for this check.");
+  if (!environment) return;
+  let connections = 0;
+
+  await page.routeWebSocket(
+    (url) =>
+      url.pathname ===
+      `/api/v1/environments/${encodeURIComponent(environment.id)}/terminal`,
+    async (socket) => {
+      connections += 1;
+      socket.send(
+        JSON.stringify({
+          type: "error",
+          code: "sandbox0_unauthorized",
+          error: "Unauthorized",
+        }),
+      );
+      await socket.close({ code: 1008, reason: "Terminal connection failed" });
+    },
+  );
+
+  await page.goto(
+    `/?team=${encodeURIComponent(environment.teamId)}&environment=${encodeURIComponent(environment.id)}&new=1`,
+  );
+  await page.getByRole("button", { name: "Terminal" }).click();
+  const terminal = page.getByRole("region", {
+    name: `Terminal for ${environment.name}`,
+  });
+  await expect(terminal.getByText("Unauthorized", { exact: true })).toBeVisible();
+  await expect(terminal.getByRole("button", { name: "Retry" })).toBeVisible();
+  await page.waitForTimeout(2_000);
+  expect(connections).toBe(1);
+
+  await terminal.getByRole("button", { name: "Retry" }).click();
+  await expect.poll(() => connections).toBe(2);
 });
 
 test("does not answer historical terminal queries on the live PTY", async ({

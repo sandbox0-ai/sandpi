@@ -5,6 +5,7 @@ import type { CodexHarnessState } from "@/harnesses/codex/types";
 import type {
   CodingSession,
   Environment,
+  EnvironmentSandboxState,
   MembershipPlanAssignment,
   NetworkPolicy,
   SandpiBootstrap,
@@ -141,6 +142,7 @@ interface EnvironmentRow extends QueryResultRow {
   functions: Environment["functions"];
   provisioning_error: string | null;
   sandbox_id: string | null;
+  sandbox_state: EnvironmentSandboxState | null;
   supervisor_session_id: string | null;
 }
 
@@ -893,54 +895,6 @@ export class SandpiStore {
     );
   }
 
-  async requestEnvironmentRunning(environmentId: string) {
-    await this.pool.query(
-      `UPDATE environment_runtime
-       SET desired_state = 'running', lifecycle_error = NULL,
-           idle_pause_due_at = CASE
-             WHEN last_turn_completed_at IS NULL THEN NULL
-             ELSE GREATEST(
-               last_turn_completed_at + ($2::BIGINT * INTERVAL '1 millisecond'),
-               NOW() + ($2::BIGINT * INTERVAL '1 millisecond')
-             )
-           END,
-           version = version + 1
-       WHERE environment_id = $1`,
-      [environmentId, ENVIRONMENT_IDLE_PAUSE_DELAY_MS],
-    );
-    return this.environmentRuntime(environmentId);
-  }
-
-  async recordEnvironmentResumed(
-    environmentId: string,
-    sandboxId: string,
-    hardExpiresAt: Date,
-  ) {
-    await this.pool.query(
-      `UPDATE environment_runtime
-       SET desired_state = 'running', observed_state = 'running',
-           sandbox_hard_expires_at = $3, lifecycle_error = NULL,
-           paused_at = NULL, version = version + 1
-       WHERE environment_id = $1 AND sandbox_id = $2`,
-      [environmentId, sandboxId, hardExpiresAt],
-    );
-    return this.environmentRuntime(environmentId);
-  }
-
-  async recordEnvironmentResumeFailure(
-    environmentId: string,
-    sandboxId: string,
-    error: string,
-  ) {
-    await this.pool.query(
-      `UPDATE environment_runtime
-       SET desired_state = 'running', observed_state = 'failed',
-           lifecycle_error = $3, version = version + 1
-       WHERE environment_id = $1 AND sandbox_id = $2`,
-      [environmentId, sandboxId, error],
-    );
-  }
-
   async environmentWantsRunning(environmentId: string) {
     const result = await this.pool.query<{ desired_state: string }>(
       `SELECT desired_state FROM environment_runtime WHERE environment_id = $1`,
@@ -977,6 +931,15 @@ export class SandpiStore {
              ELSE stdout_tail
            END,
            attempt_id = $3, runtime_generation = $4,
+           idle_pause_due_at = CASE
+             WHEN last_turn_completed_at IS NOT NULL
+               AND (runtime.observed_state <> 'running' OR $5::BOOLEAN)
+             THEN GREATEST(
+               last_turn_completed_at + ($6::BIGINT * INTERVAL '1 millisecond'),
+               NOW() + ($6::BIGINT * INTERVAL '1 millisecond')
+             )
+             ELSE idle_pause_due_at
+           END,
            desired_state = 'running', observed_state = 'running',
            lifecycle_error = NULL, paused_at = NULL,
            provisioning_error = NULL,
@@ -990,6 +953,8 @@ export class SandpiStore {
         recovered.supervisorSessionId,
         recovered.attemptId,
         recovered.runtimeGeneration,
+        recovered.sandboxRestarted,
+        ENVIRONMENT_IDLE_PAUSE_DELAY_MS,
       ],
     );
     const row = result.rows[0];
@@ -1495,7 +1460,7 @@ export class SandpiStore {
           throw notFound("session_not_found", "Session not found.");
         }
         // Try instead of queueing a PostgreSQL connection behind a potentially
-        // slow Sandbox0 pause/resume. No connection is held during backoff.
+        // slow Sandbox0 pause. No connection is held during backoff.
         const lock = await client.query<{ acquired: boolean }>(
           "SELECT pg_try_advisory_xact_lock($1, hashtext($2)) AS acquired",
           [ENVIRONMENT_LIFECYCLE_LOCK_NAMESPACE, environmentId],
@@ -1766,7 +1731,8 @@ export class SandpiStore {
 }
 
 const ENVIRONMENT_SELECT = `
-  SELECT environment.*, runtime.sandbox_id, runtime.supervisor_session_id
+  SELECT environment.*, runtime.sandbox_id, runtime.supervisor_session_id,
+         runtime.observed_state AS sandbox_state
   FROM environments environment
   LEFT JOIN environment_runtime runtime
     ON runtime.environment_id = environment.id
@@ -1870,6 +1836,13 @@ function environmentFromRow(row: EnvironmentRow): EnvironmentRecord {
     rootfsSnapshotId: row.rootfs_snapshot_id ?? "",
     workspaceVolumeId: row.workspace_volume_id ?? "",
     sandboxId: row.sandbox_id ?? "",
+    sandboxState:
+      row.sandbox_state ??
+      (row.status === "error"
+        ? "failed"
+        : row.status === "updating"
+          ? "provisioning"
+          : "pending"),
     supervisorSessionId: row.supervisor_session_id ?? "",
     workspaceRoot: "/workspace",
     credentialRevision: row.credential_revision,

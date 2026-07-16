@@ -170,6 +170,14 @@ export interface EnvironmentFunction {
   lastRun?: UnixTimestamp;
 }
 
+export type EnvironmentSandboxState =
+  | "pending"
+  | "provisioning"
+  | "running"
+  | "paused"
+  | "terminated"
+  | "failed";
+
 export interface Environment {
   id: string;
   /** Immutable Sandpi tenant ownership; never inferred from the Sandbox0 API key. */
@@ -189,6 +197,11 @@ export interface Environment {
   workspaceVolumeId: string;
   /** Shared execution coordinates. Sessions never own separate Sandboxes. */
   sandboxId: string;
+  /**
+   * Read-only projection of Sandbox0 lifecycle state. It is intentionally
+   * separate from Session status, which describes native coding-agent Turns.
+   */
+  sandboxState: EnvironmentSandboxState;
   supervisorSessionId: string;
   workspaceRoot: "/workspace";
   provisioningError?: string;

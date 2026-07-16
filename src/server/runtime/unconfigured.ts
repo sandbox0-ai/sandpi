@@ -17,7 +17,6 @@ export class UnconfiguredRuntime implements RuntimeAdapter {
   updateEnvironmentNetworkPolicy = unavailable;
   configureEnvironmentLifecycle = unavailable;
   pauseEnvironment = unavailable;
-  resumeEnvironment = unavailable;
   ensureCodexEnvironmentRuntime = unavailable;
   provisionCodexAuth = unavailable;
   deleteCodexAuthResources = async () => undefined;

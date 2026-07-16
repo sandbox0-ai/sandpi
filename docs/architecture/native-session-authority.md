@@ -84,14 +84,15 @@ therefore have no effect on the native process or rollout.
 
 ## Environment lifecycle
 
-Every Environment Sandbox is claimed with a 30-day Sandbox0 hard TTL and with
-Sandbox0 auto-resume disabled. The hard TTL is an absolute destruction bound;
-pause preserves the rootfs checkpoint but does not extend that deadline. The
-Workspace Volume and native harness home have their independent durable
-lifecycle.
+Every Environment Sandbox is claimed with a 30-day Sandbox0 hard TTL,
+`auto_resume=true`, and soft `ttl=0`. The hard TTL is an absolute destruction
+bound; pause preserves the rootfs checkpoint but does not extend that deadline.
+Sandpi disables Sandbox0 soft TTL because its native Turn projection owns the
+idle-pause decision. The Workspace Volume and native harness home have their
+independent durable lifecycle.
 
 Each native `turn/completed` transition stores `last_turn_completed_at` and a
-three-minute `idle_pause_due_at` in PostgreSQL in the same transaction as the
+thirty-minute `idle_pause_due_at` in PostgreSQL in the same transaction as the
 active-Turn projection. These rows are the distributed timers: every Sandpi
 replica may scan due Environments, while a PostgreSQL advisory lock keyed by
 Environment elects the replica allowed to call Sandbox0. Under that lock it
@@ -100,19 +101,24 @@ Turn is active or pending before calling `pauseAndWait`.
 
 Turn admission takes the same advisory lock and persists pending delivery
 before touching the native harness. Therefore either pause completes first and
-the Turn explicitly resumes the Sandbox, or admission completes first and the
-pause recheck observes work. Failed pause requests retain a durable retry
-deadline. An explicit user/runtime wake grants a fresh three-minute idle window
+the following supported runtime access is serialized and auto-resumed by
+Sandbox0, or admission completes first and the pause recheck observes work.
+Failed pause requests retain a durable retry deadline. Sandpi records the new
+runtime generation after auto-resume and grants a fresh thirty-minute idle window
 to avoid an immediately repeated pause, but the next native completion remains
-the authoritative deadline source.
+the authoritative deadline source. Sandbox0 may return `sandbox is waking up`
+while that transition commits; Sandpi waits for the native running generation
+and retries the same supported runtime access. No Sandpi worker calls an
+explicit resume API. Runtime recovery and pause share the Environment advisory
+lock, so their database projections cannot commit out of order.
 
 The lifecycle policy migration stores one absolute hard-expiry target before
 updating an older Sandbox. A retry sends only the seconds remaining to that
 target, so a crash between the Sandbox0 update and the database commit cannot
 silently reset the Sandbox to another full month.
 
-Permanent Environment deletion uses the same advisory-lock namespace as pause,
-resume and Turn admission. It first marks the desired runtime state terminated,
+Permanent Environment deletion uses the same advisory-lock namespace as pause
+and Turn admission. It first marks the desired runtime state terminated,
 stops retained harness and device-login workers, and deletes Sandbox0 resources.
 Only after that succeeds does one PostgreSQL transaction remove active and
 archived Session references, credentials and Environment metadata. If Sandbox0

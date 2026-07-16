@@ -24,6 +24,7 @@ import {
 import { AppSidebar } from "@/components/app-frame";
 import { getOperationUiCopy, type OperationLanguage } from "@/lib/operation-ui";
 import { planForAssignment, quotaPercent } from "@/lib/team";
+import { sessionActivityMarker } from "@/lib/session-activity";
 import type {
   CodingSession,
   Environment,
@@ -59,26 +60,33 @@ interface SidebarProps {
   onCloseMobile: () => void;
 }
 
-/**
- * Cross-client contract: Web, iOS, Android, and HarmonyOS use this marker only
- * for unread Session activity. It must never represent runtime or Session status,
- * and its accessible name is localized as "Unread" or "未读".
- */
-function UnreadActivityDot({
-  unread,
-  label,
+function SessionActivityIndicator({
+  session,
+  unreadLabel,
+  runningLabel,
 }: {
-  unread: boolean;
-  label: "Unread" | "未读";
+  session: CodingSession;
+  unreadLabel: "Unread" | "未读";
+  runningLabel: "Running" | "运行中";
 }) {
+  const marker = sessionActivityMarker(session);
+
   return (
-    <span
-      className="session-unread-dot"
-      role={unread ? "img" : undefined}
-      aria-label={unread ? label : undefined}
-      aria-hidden={unread ? undefined : true}
-      style={{ visibility: unread ? "visible" : "hidden" }}
-    />
+    <span className="session-activity-indicator">
+      {marker === "running" ? (
+        <span
+          className="session-running-indicator"
+          role="img"
+          aria-label={runningLabel}
+        />
+      ) : marker === "unread" ? (
+        <span
+          className="session-unread-dot"
+          role="img"
+          aria-label={unreadLabel}
+        />
+      ) : null}
+    </span>
   );
 }
 
@@ -116,6 +124,7 @@ export function Sidebar({
     ? planForAssignment(plans, selectedMembership.planAssignment)
     : undefined;
   const unreadLabel = language === "zh-CN" ? "未读" : "Unread";
+  const runningLabel = language === "zh-CN" ? "运行中" : "Running";
   const [sessionSearchOpen, setSessionSearchOpen] = useState(false);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const accountMenuRef = useRef<HTMLDivElement>(null);
@@ -473,9 +482,10 @@ export function Sidebar({
                               aria-label={ui.pinned}
                             />
                           ) : null}
-                          <UnreadActivityDot
-                            unread={session.unread}
-                            label={unreadLabel}
+                          <SessionActivityIndicator
+                            session={session}
+                            unreadLabel={unreadLabel}
+                            runningLabel={runningLabel}
                           />
                           <span className="session-title">{session.title}</span>
                         </button>

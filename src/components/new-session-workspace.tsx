@@ -13,6 +13,8 @@ interface NewSessionWorkspaceProps {
   onCreated: (session: CodingSession) => void;
   onOpenSettings: () => void;
   onToggleSidebar: () => void;
+  terminalOpen: boolean;
+  onToggleTerminal: () => void;
 }
 
 /**

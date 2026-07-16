@@ -225,6 +225,43 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
     };
   }, [environments]);
 
+  const hasRunningSessions = sessions.some(
+    (session) => session.status === "running",
+  );
+
+  useEffect(() => {
+    if (!hasRunningSessions) return;
+
+    const controller = new AbortController();
+    let timer: number | undefined;
+    const refreshRunningSessions = async () => {
+      try {
+        const response = await apiFetch<ApiEnvelope<CodingSession[]>>(
+          "/api/v1/sessions",
+          { signal: controller.signal },
+        );
+        setSessions(response.data);
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          console.error("Unable to refresh running Sessions", error);
+        }
+      } finally {
+        if (!controller.signal.aborted) {
+          timer = window.setTimeout(refreshRunningSessions, 2_000);
+        }
+      }
+    };
+
+    // Conversation SSE is harness-owned and only exists for the selected
+    // Session. Poll the lightweight metadata projection while any Turn runs so
+    // background Session markers converge without opening every transcript.
+    timer = window.setTimeout(refreshRunningSessions, 2_000);
+    return () => {
+      controller.abort();
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [hasRunningSessions]);
+
   useEffect(() => {
     if (!selectedSession?.unread) return;
     setSessions((current) =>
@@ -534,6 +571,8 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
     setSelectedEnvironmentId(environment.id);
     setSelectedSessionId("");
     replaceWorkspaceUrl(selectedTeamId, environment.id);
+    setInspectorOpen(false);
+    setTerminalOpen(false);
     setNewEnvironmentOpen(false);
   }, [selectedTeamId]);
 
@@ -737,6 +776,8 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
             setSettingsEnvironmentId(selectedEnvironment.id)
           }
           onToggleSidebar={handleToggleNavigation}
+          terminalOpen={showTerminal}
+          onToggleTerminal={() => setTerminalOpen((open) => !open)}
         />
       )}
 

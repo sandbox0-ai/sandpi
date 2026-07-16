@@ -12,6 +12,7 @@ import {
   Paperclip,
   Settings2,
   Sparkles,
+  SquareTerminal,
   X,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -48,6 +49,8 @@ interface NewSessionWorkspaceProps {
   onCreated: (session: CodexSession) => void;
   onOpenSettings: () => void;
   onToggleSidebar: () => void;
+  terminalOpen: boolean;
+  onToggleTerminal: () => void;
 }
 
 export function CodexNewSessionWorkspace({
@@ -58,6 +61,8 @@ export function CodexNewSessionWorkspace({
   onCreated,
   onOpenSettings,
   onToggleSidebar,
+  terminalOpen,
+  onToggleTerminal,
 }: NewSessionWorkspaceProps) {
   const ui = getCodexUiCopy(language).newSession;
   const [prompt, setPrompt] = useState("");
@@ -221,14 +226,27 @@ export function CodexNewSessionWorkspace({
                 : ui.preparingEnvironment}
           </div>
         </div>
-        <button
-          type="button"
-          className={styles.settingsButton}
-          aria-label={ui.environmentSettings(environment.name)}
-          onClick={onOpenSettings}
-        >
-          <Settings2 size={17} aria-hidden="true" />
-        </button>
+        <div className={styles.headerActions}>
+          <button
+            type="button"
+            className={`${styles.terminalButton} ${terminalOpen ? styles.active : ""}`}
+            aria-label={ui.terminal}
+            aria-pressed={terminalOpen}
+            title={ui.terminal}
+            disabled={environment.status !== "ready"}
+            onClick={onToggleTerminal}
+          >
+            <SquareTerminal size={17} aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            className={styles.settingsButton}
+            aria-label={ui.environmentSettings(environment.name)}
+            onClick={onOpenSettings}
+          >
+            <Settings2 size={17} aria-hidden="true" />
+          </button>
+        </div>
       </header>
 
       <div className={styles.content}>

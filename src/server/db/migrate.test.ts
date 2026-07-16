@@ -48,6 +48,7 @@ test("migration history contains every durable Sandpi boundary", async () => {
       "0021_session_operation_recovery",
       "0022_environment_runtime",
       "0023_environment_lifecycle",
+      "0024_environment_idle_pause_30_minutes",
     ],
   );
 
@@ -194,4 +195,9 @@ test("migration history contains every durable Sandpi boundary", async () => {
     environmentLifecycleSql,
     /prompt\s+(TEXT|JSONB)|message\s+(TEXT|JSONB)|payload\s+JSONB/i,
   );
+
+  const idlePausePolicySql = migrations[23]?.sql ?? "";
+  assert.match(idlePausePolicySql, /INTERVAL '27 minutes'/);
+  assert.match(idlePausePolicySql, /desired_state IN \('running', 'paused'\)/);
+  assert.match(idlePausePolicySql, /observed_state = 'running'/);
 });

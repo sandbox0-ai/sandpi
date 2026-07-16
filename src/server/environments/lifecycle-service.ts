@@ -1,5 +1,5 @@
 import type { RuntimeAdapter } from "@/server/runtime/types";
-import type { SandpiStore, StoredEnvironmentRuntime } from "@/server/store";
+import type { SandpiStore } from "@/server/store";
 import {
   ENVIRONMENT_LIFECYCLE_POLICY_VERSION,
 } from "./lifecycle-policy";
@@ -10,16 +10,10 @@ interface LifecycleLogger {
   warn(fields: object, message: string): void;
 }
 
-export interface EnvironmentRuntimeLease {
-  runtime: StoredEnvironmentRuntime;
-  /** True when the native harness must reconcile a new runtime generation. */
-  resumed: boolean;
-}
-
 /**
- * Executes durable Environment lifecycle timers. PostgreSQL stores deadlines;
- * this process only scans due rows, so any Sandpi replica can take over after
- * a crash without owning a unique in-memory timer service.
+ * Executes durable Environment policy and idle-pause timers. Runtime access is
+ * resumed natively by Sandbox0; this service never owns a wake-up state machine.
+ * PostgreSQL stores deadlines so any Sandpi replica can take over after a crash.
  */
 export class EnvironmentLifecycleService {
   private timer?: NodeJS.Timeout;
@@ -28,7 +22,6 @@ export class EnvironmentLifecycleService {
   private started = false;
   private readonly controller = new AbortController();
   private beforePause?: (environmentId: string) => void;
-  private readonly wakeups = new Map<string, Promise<EnvironmentRuntimeLease>>();
 
   constructor(
     private readonly store: SandpiStore,
@@ -60,7 +53,6 @@ export class EnvironmentLifecycleService {
     this.controller.abort();
     if (this.timer) clearTimeout(this.timer);
     await this.reconciliation;
-    await Promise.allSettled(this.wakeups.values());
   }
 
   async reconcileOnce() {
@@ -71,105 +63,6 @@ export class EnvironmentLifecycleService {
     });
     this.reconciliation = run;
     return run;
-  }
-
-  async ensureEnvironmentRunning(
-    userId: string,
-    environmentId: string,
-  ): Promise<EnvironmentRuntimeLease> {
-    // Authorize before waiting on a shared advisory lock.
-    const current = await this.store.getEnvironmentRuntime(userId, environmentId);
-    if (
-      current.desiredState === "running" &&
-      current.observedState === "running"
-    ) {
-      return { runtime: current, resumed: false };
-    }
-    return this.ensureEnvironmentRunningById(environmentId);
-  }
-
-  async ensureEnvironmentRunningById(
-    environmentId: string,
-  ): Promise<EnvironmentRuntimeLease> {
-    const current = await this.store.environmentRuntime(environmentId);
-    if (
-      current.desiredState === "running" &&
-      current.observedState === "running"
-    ) {
-      return { runtime: current, resumed: false };
-    }
-    const active = this.wakeups.get(environmentId);
-    if (active) return active;
-    const wakeup = this.performEnvironmentWake(environmentId).finally(() => {
-      if (this.wakeups.get(environmentId) === wakeup) {
-        this.wakeups.delete(environmentId);
-      }
-    });
-    this.wakeups.set(environmentId, wakeup);
-    return wakeup;
-  }
-
-  private async performEnvironmentWake(
-    environmentId: string,
-  ): Promise<EnvironmentRuntimeLease> {
-    const deadline = Date.now() + 130_000;
-    while (!this.closed) {
-      const current = await this.store.environmentRuntime(environmentId);
-      if (
-        current.desiredState === "running" &&
-        current.observedState === "running"
-      ) {
-        return { runtime: current, resumed: false };
-      }
-      const result = await this.store.withEnvironmentLifecycleLock(
-        environmentId,
-        async () => {
-          const before = await this.store.environmentRuntime(environmentId);
-          if (
-            before.desiredState === "running" &&
-            before.observedState === "running"
-          ) {
-            return { runtime: before, resumed: false };
-          }
-
-          const requested = await this.store.requestEnvironmentRunning(
-            environmentId,
-          );
-          try {
-            const lifecycle = await this.runtime.resumeEnvironment(
-              requested,
-              this.controller.signal,
-            );
-            const runtime = await this.store.recordEnvironmentResumed(
-              environmentId,
-              requested.sandboxId,
-              lifecycle.hardExpiresAt,
-            );
-            this.logger.info({ environmentId }, "Environment Sandbox resumed");
-            return {
-              runtime,
-              resumed: lifecycle.resumed || before.observedState !== "running",
-            };
-          } catch (error) {
-            await this.store.recordEnvironmentResumeFailure(
-              environmentId,
-              requested.sandboxId,
-              errorMessage(error),
-            );
-            throw error;
-          }
-        },
-      );
-      if (result.acquired) return result.value;
-      if (Date.now() >= deadline) {
-        throw new Error("Timed out waiting for the Environment lifecycle lock");
-      }
-      // Do not queue PostgreSQL sessions behind a slow external resume. One
-      // short try-lock per replica keeps the connection pool available to all
-      // control-plane and bootstrap requests.
-      await delay(250);
-    }
-    throw new Error("Environment lifecycle service is closed");
   }
 
   private schedule() {
@@ -273,8 +166,4 @@ export class EnvironmentLifecycleService {
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
-}
-
-function delay(milliseconds: number) {
-  return new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 }

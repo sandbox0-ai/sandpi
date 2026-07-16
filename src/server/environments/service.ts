@@ -150,8 +150,9 @@ export class EnvironmentService {
         },
       );
       if (result.acquired) return;
-      // A pause, wake, or Turn admission already owns this Environment. Poll
-      // without pinning a PostgreSQL connection behind the external operation.
+      // A pause, runtime recovery, or Turn admission already owns this
+      // Environment. Poll without pinning a PostgreSQL connection behind the
+      // external operation.
       await delay(250);
     }
     throw new HttpError(

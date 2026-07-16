@@ -5,6 +5,7 @@ import path from "node:path";
 import {
   APIError,
   Client,
+  SandboxWaitTimeoutError,
   SandboxRuntimeMetricName,
   SandboxRuntimeMetricStatistic,
   models,
@@ -82,6 +83,9 @@ const AUTH_SANDBOX_HARD_TTL_SECONDS = 30 * 60;
 const MAX_GIT_DISCOVERY_DEPTH = 13;
 const MAX_FILE_PREVIEW_BYTES = 5 * 1024 * 1024;
 const GIT_STATUS_CONCURRENCY = 4;
+const SANDBOX_AUTO_RESUME_TIMEOUT_MS = 120_000;
+const SANDBOX_AUTO_RESUME_RETRY_DELAY_MS = 250;
+const SANDBOX0_TRANSPORT_RETRY_DELAYS_MS = [100, 250] as const;
 
 type SdkRuntimeMetricSeries = SandboxMetrics["series"][number];
 
@@ -94,6 +98,10 @@ export class Sandbox0Runtime implements RuntimeAdapter {
       token: options.apiKey,
       baseUrl: options.apiHost,
       userAgent: "sandpi/0.1.0",
+      // Reading Sandbox0 state is safe to retry and sits on every cold-start
+      // and native-session recovery path. Keep mutation retries at their
+      // semantic boundaries, where idempotency can be proven separately.
+      fetch: fetchSandbox0WithRetry,
     });
   }
 
@@ -120,12 +128,13 @@ export class Sandbox0Runtime implements RuntimeAdapter {
               mountPoint: "/workspace",
             },
           ],
-          // Environment lifecycle is a product policy, not a Session timeout.
-          // autoResume stays disabled so every wake-up is serialized with the
-          // durable Sandpi lifecycle state instead of occurring behind it.
+          // Sandpi owns idle-pause policy while Sandbox0 owns runtime wake-up.
+          // Explicitly disable soft TTL so a deployment default cannot race the
+          // durable Turn-based pause deadline maintained by Sandpi.
           config: {
+            ttl: 0,
             hardTtl: ENVIRONMENT_SANDBOX_HARD_TTL_SECONDS,
-            autoResume: false,
+            autoResume: true,
             network: toSandbox0NetworkPolicy(input.environment.networkPolicy),
           },
         },
@@ -212,13 +221,13 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     try {
       const lifecycle = await this.client.sandboxes.update(runtime.sandboxId, {
         config: {
+          ttl: 0,
           hardTtl: Math.max(1, Math.ceil(hardTtlSeconds)),
-          autoResume: false,
+          autoResume: true,
         },
       });
       return {
         hardExpiresAt: lifecycle.hardExpiresAt,
-        resumed: false,
       };
     } catch (error) {
       throw translateSandbox0Error(error);
@@ -236,26 +245,6 @@ export class Sandbox0Runtime implements RuntimeAdapter {
         timeoutMs: 120_000,
         signal,
       });
-    } catch (error) {
-      throw translateSandbox0Error(error);
-    }
-  }
-
-  async resumeEnvironment(
-    runtime: EnvironmentRuntimeRecord,
-    signal?: AbortSignal,
-  ) {
-    try {
-      let lifecycle = await this.client.sandboxes.get(runtime.sandboxId);
-      let resumed = false;
-      if (lifecycle.paused || lifecycle.status === "paused") {
-        lifecycle = await this.client.sandboxes.resumeAndWait(runtime.sandboxId, {
-          timeoutMs: 120_000,
-          signal,
-        });
-        resumed = true;
-      }
-      return { hardExpiresAt: lifecycle.hardExpiresAt, resumed };
     } catch (error) {
       throw translateSandbox0Error(error);
     }
@@ -452,29 +441,33 @@ export class Sandbox0Runtime implements RuntimeAdapter {
       const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
       let lifecycle = await this.client.sandboxes.get(runtime.sandboxId);
 
-      if (lifecycle.paused || lifecycle.status === "paused") {
-        lifecycle = await this.client.sandboxes.resumeAndWait(runtime.sandboxId, {
-          timeoutMs: 120_000,
-        });
-        sandboxRestarted = true;
-      }
-
       try {
-        await sandbox.listFiles("/workspace");
+        // This runtime API is the wake-up boundary. Sandbox0 serializes access
+        // with pause and restores a paused auto-resume Sandbox. A gateway may
+        // answer `sandbox is waking up` while that native transition commits;
+        // observe it and retry this same access instead of calling resume.
+        await this.withSandboxAutoResume(runtime.sandboxId, () =>
+          sandbox.listFiles("/workspace"),
+        );
+        lifecycle = await this.client.sandboxes.get(runtime.sandboxId);
       } catch (error) {
         if (!isWorkspaceTransportDisconnected(error)) throw error;
+        lifecycle = await this.client.sandboxes.get(runtime.sandboxId);
         if (!lifecycle.paused && lifecycle.status !== "paused") {
           await this.client.sandboxes.pauseAndWait(runtime.sandboxId, {
             timeoutMs: 120_000,
           });
         }
-        await this.client.sandboxes.resumeAndWait(runtime.sandboxId, {
-          timeoutMs: 120_000,
-        });
-        sandboxRestarted = true;
-        // Do not replace the Supervisor while the Workspace is still broken.
-        await sandbox.listFiles("/workspace");
+        // A second supported runtime access lets Sandbox0 auto-resume the
+        // checkpoint; Sandpi never owns a separate resume state machine.
+        await this.withSandboxAutoResume(runtime.sandboxId, () =>
+          sandbox.listFiles("/workspace"),
+        );
+        lifecycle = await this.client.sandboxes.get(runtime.sandboxId);
       }
+      sandboxRestarted =
+        runtime.runtimeGeneration > 0 &&
+        lifecycle.runtimeGeneration !== runtime.runtimeGeneration;
 
       let supervisor;
       if (runtime.supervisorSessionId) {
@@ -497,11 +490,11 @@ export class Sandbox0Runtime implements RuntimeAdapter {
         await this.client.sandboxes.pauseAndWait(runtime.sandboxId, {
           timeoutMs: 120_000,
         });
-        await this.client.sandboxes.resumeAndWait(runtime.sandboxId, {
-          timeoutMs: 120_000,
-        });
+        await this.withSandboxAutoResume(runtime.sandboxId, () =>
+          sandbox.listFiles("/workspace"),
+        );
+        lifecycle = await this.client.sandboxes.get(runtime.sandboxId);
         sandboxRestarted = true;
-        await sandbox.listFiles("/workspace");
         try {
           supervisor = await sandbox.getSession(runtime.supervisorSessionId);
         } catch (error) {
@@ -534,6 +527,9 @@ export class Sandbox0Runtime implements RuntimeAdapter {
       const running = hasLiveAttempt(supervisor)
         ? supervisor
         : await waitForAttempt(sandbox, supervisor.id);
+      sandboxRestarted ||=
+        runtime.runtimeGeneration > 0 &&
+        running.runtimeGeneration !== runtime.runtimeGeneration;
       if (!running.attempt || running.attempt.finishedAt) {
         throw new HttpError(
           502,
@@ -550,6 +546,53 @@ export class Sandbox0Runtime implements RuntimeAdapter {
       };
     } catch (error) {
       throw translateSandbox0Error(error);
+    }
+  }
+
+  /**
+   * Lets a supported runtime request trigger Sandbox0 auto-resume and waits for
+   * the resulting native lifecycle transition. This deliberately never calls
+   * the explicit resume endpoint; Sandpi only owns explicit pause operations.
+   */
+  private async withSandboxAutoResume<T>(
+    sandboxId: string,
+    access: () => Promise<T>,
+  ): Promise<T> {
+    const startedAt = Date.now();
+    while (true) {
+      try {
+        return await access();
+      } catch (error) {
+        if (!isSandboxWakingUp(error)) throw error;
+        const remainingMs =
+          SANDBOX_AUTO_RESUME_TIMEOUT_MS - (Date.now() - startedAt);
+        if (remainingMs <= 0) throw sandboxAutoResumeTimeout(sandboxId);
+        try {
+          await this.client.sandboxes.waitForLifecycle(
+            sandboxId,
+            (sandbox) => sandbox.status === "running" && !sandbox.paused,
+            { timeoutMs: remainingMs },
+          );
+        } catch (waitError) {
+          if (waitError instanceof SandboxWaitTimeoutError) {
+            throw sandboxAutoResumeTimeout(sandboxId);
+          }
+          throw waitError;
+        }
+        const retryRemainingMs =
+          SANDBOX_AUTO_RESUME_TIMEOUT_MS - (Date.now() - startedAt);
+        if (retryRemainingMs <= 0) throw sandboxAutoResumeTimeout(sandboxId);
+        const retryDelayMs = Math.min(
+          retryRemainingMs,
+          error.retryAfter === undefined
+            ? SANDBOX_AUTO_RESUME_RETRY_DELAY_MS
+            : Math.max(
+                SANDBOX_AUTO_RESUME_RETRY_DELAY_MS,
+                error.retryAfter * 1_000,
+              ),
+        );
+        await delay(retryDelayMs);
+      }
     }
   }
 
@@ -578,11 +621,17 @@ export class Sandbox0Runtime implements RuntimeAdapter {
         );
       }
       const data = Buffer.from(`${JSON.stringify(message)}\n`, "utf8");
-      await sandbox.writeSessionInput(runtime.supervisorSessionId, {
+      const request = {
         inputId: codexSupervisorInputId(stableInputId, supervisor.attempt.id),
         expectedAttemptId: supervisor.attempt.id,
         dataBase64: data.toString("base64"),
-      });
+      };
+      // Supervisor input receipts deduplicate the same input id and content.
+      // Retrying an ambiguous transport failure is therefore safe as long as
+      // every attempt reuses this exact request.
+      await retrySandbox0Transport(() =>
+        sandbox.writeSessionInput(runtime.supervisorSessionId, request),
+      );
     } catch (error) {
       throw translateSandbox0Error(error);
     }
@@ -1556,6 +1605,13 @@ function translateObservabilityError(error: unknown, surface: "audit" | "metrics
 
 function translateSandbox0Error(error: unknown) {
   if (error instanceof HttpError) return error;
+  if (isSandbox0TransportError(error)) {
+    return new HttpError(
+      503,
+      "sandbox0_unavailable",
+      "Sandbox0 is temporarily unreachable. Please try again.",
+    );
+  }
   if (error instanceof APIError) {
     if (isWorkspaceTransportDisconnected(error)) {
       return new HttpError(
@@ -1571,6 +1627,82 @@ function translateSandbox0Error(error: unknown) {
     );
   }
   return error;
+}
+
+async function retrySandbox0Transport<T>(operation: () => Promise<T>) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      const delayMs = SANDBOX0_TRANSPORT_RETRY_DELAYS_MS[attempt];
+      if (!isSandbox0TransportError(error) || delayMs === undefined) {
+        throw error;
+      }
+      await delay(delayMs);
+    }
+  }
+}
+
+/** Builds the SDK transport that retries only HTTP methods safe to replay. */
+export function createSandbox0FetchWithRetry(
+  fetchImplementation: typeof fetch = globalThis.fetch,
+): typeof fetch {
+  return async (input, init) => {
+    const method = (
+      init?.method ?? (input instanceof Request ? input.method : "GET")
+    ).toUpperCase();
+    if (method !== "GET" && method !== "HEAD" && method !== "OPTIONS") {
+      return fetchImplementation(input, init);
+    }
+    return retrySandbox0Transport(() => fetchImplementation(input, init));
+  };
+}
+
+const fetchSandbox0WithRetry = createSandbox0FetchWithRetry();
+
+function isSandbox0TransportError(error: unknown, seen = new Set<unknown>()): boolean {
+  if (!error || (typeof error !== "object" && typeof error !== "function")) {
+    return false;
+  }
+  if (seen.has(error)) return false;
+  seen.add(error);
+
+  const candidate = error as {
+    name?: unknown;
+    message?: unknown;
+    code?: unknown;
+    cause?: unknown;
+    errors?: unknown;
+  };
+  const name = typeof candidate.name === "string" ? candidate.name : "";
+  const message =
+    typeof candidate.message === "string" ? candidate.message.toLowerCase() : "";
+  const code = typeof candidate.code === "string" ? candidate.code : "";
+
+  if (name === "AbortError") return false;
+  if (name === "FetchError" || (name === "TypeError" && message === "fetch failed")) {
+    return true;
+  }
+  if (
+    [
+      "ECONNRESET",
+      "EHOSTUNREACH",
+      "ENETUNREACH",
+      "ETIMEDOUT",
+      "EAI_AGAIN",
+      "UND_ERR_CONNECT_TIMEOUT",
+      "UND_ERR_SOCKET",
+    ].includes(code)
+  ) {
+    return true;
+  }
+  if (
+    Array.isArray(candidate.errors) &&
+    candidate.errors.some((nested) => isSandbox0TransportError(nested, seen))
+  ) {
+    return true;
+  }
+  return isSandbox0TransportError(candidate.cause, seen);
 }
 
 function translateWorkspaceFileError(error: unknown) {
@@ -1593,6 +1725,26 @@ function isWorkspaceTransportDisconnected(error: unknown) {
     error instanceof Error &&
     error.message.toLowerCase().includes("transport endpoint is not connected")
   );
+}
+
+function isSandboxWakingUp(error: unknown): error is APIError {
+  return (
+    error instanceof APIError &&
+    error.statusCode === 503 &&
+    error.message.toLowerCase().includes("sandbox is waking up")
+  );
+}
+
+function sandboxAutoResumeTimeout(sandboxId: string) {
+  return new HttpError(
+    503,
+    "sandbox0_wakeup_timeout",
+    `Sandbox0 did not finish auto-resuming Environment Sandbox ${sandboxId}.`,
+  );
+}
+
+function delay(milliseconds: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 }
 
 function validDate(value: unknown): value is Date {

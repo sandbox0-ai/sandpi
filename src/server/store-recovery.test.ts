@@ -109,7 +109,7 @@ test("commits one shared decoder cursor and routes scalar turn state by native t
   assert.deepEqual(idleDeadline.values, [
     "environment-one",
     new Date("2026-07-16T00:01:00.000Z"),
-    180_000,
+    1_800_000,
   ]);
 });
 
@@ -207,6 +207,62 @@ test("projects Sandbox and Supervisor coordinates from Environment runtime", asy
     lifecycleError: undefined,
     pausedAt: undefined,
   });
+});
+
+test("grants a fresh idle window after Sandbox0 auto-resumes an Environment", async () => {
+  const fixture = transactionalStore((sql) => {
+    if (!sql.includes("UPDATE environment_runtime runtime")) {
+      return { rows: [], rowCount: 0 };
+    }
+    return {
+      rowCount: 1,
+      rows: [
+        {
+          environment_id: "environment-one",
+          workspace_volume_id: "volume-one",
+          sandbox_id: "sandbox-one",
+          supervisor_session_id: "supervisor-one",
+          terminal_session_id: null,
+          supervisor_cursor: "0",
+          stdout_tail: "",
+          attempt_id: "attempt-two",
+          runtime_generation: "2",
+          desired_state: "running",
+          observed_state: "running",
+          provisioning_error: null,
+          lifecycle_policy_version: "2",
+          sandbox_hard_expires_at: new Date("2026-08-15T00:00:00.000Z"),
+          last_turn_completed_at: new Date("2026-07-16T00:01:00.000Z"),
+          idle_pause_due_at: new Date("2026-07-16T00:07:00.000Z"),
+          lifecycle_error: null,
+          paused_at: null,
+          version: "6",
+        },
+      ],
+    };
+  });
+
+  await fixture.store.recordCodexEnvironmentRuntime("environment-one", {
+    supervisorSessionId: "supervisor-one",
+    attemptId: "attempt-two",
+    runtimeGeneration: 2,
+    sandboxRestarted: true,
+  });
+
+  const update = fixture.calls.find((call) =>
+    call.sql.includes("idle_pause_due_at = CASE"),
+  );
+  assert.ok(update);
+  assert.match(update.sql, /runtime\.observed_state <> 'running' OR \$5::BOOLEAN/);
+  assert.match(update.sql, /GREATEST\(/);
+  assert.deepEqual(update.values, [
+    "environment-one",
+    "supervisor-one",
+    "attempt-two",
+    2,
+    true,
+    1_800_000,
+  ]);
 });
 
 test("native thread lookup is namespaced by Environment", async () => {

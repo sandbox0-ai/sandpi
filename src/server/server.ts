@@ -97,9 +97,7 @@ export async function createSandpiServer(
   );
   const environments = new EnvironmentService(store, runtime, app.log);
   const lifecycle = new EnvironmentLifecycleService(store, runtime, app.log);
-  const codex = new CodexService(store, runtime, app.log, codexAuth, {
-    lifecycle,
-  });
+  const codex = new CodexService(store, runtime, app.log, codexAuth);
   lifecycle.setBeforePause((environmentId) =>
     codex.suspendEnvironmentWorker(environmentId),
   );
@@ -624,8 +622,8 @@ function registerApiRoutes(
     "/api/v1/sessions/:sessionId/events",
     async (request, reply) => {
       await services.store.getSession(request.principal.userId, request.params.sessionId);
-      // The initial native thread/read explicitly wakes the Environment and
-      // starts its Supervisor stream. Starting a worker before that wake would
+      // The initial native thread/read auto-resumes the Environment through
+      // Sandbox0 and starts its Supervisor stream. Starting a worker before it
       // race an intentional idle pause and trigger a duplicate recovery.
       return streamHarnessEvents(request, reply, services.codex);
     },
@@ -927,11 +925,29 @@ function registerApiRoutes(
       } catch (error) {
         inputQueue?.close();
         terminal?.close();
+        const normalized = normalizeError(error);
+        request.log.warn(
+          {
+            err: error,
+            code: normalized.code,
+            environmentId: request.params.environmentId,
+          },
+          "Environment terminal connection failed",
+        );
         if (socket.readyState === socket.OPEN) {
           socket.send(
-            JSON.stringify({ type: "error", error: normalizeError(error).message }),
+            JSON.stringify({
+              type: "error",
+              code: normalized.code,
+              error: normalized.message,
+            }),
           );
-          socket.close(1011, "Terminal connection failed");
+          socket.close(
+            normalized.statusCode === 401 || normalized.statusCode === 403
+              ? 1008
+              : 1011,
+            "Terminal connection failed",
+          );
         }
       }
     },

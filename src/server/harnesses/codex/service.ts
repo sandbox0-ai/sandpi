@@ -9,7 +9,6 @@ import {
   type CodexThread,
 } from "@/harnesses/codex/types";
 import type { Environment } from "@/lib/types";
-import type { EnvironmentLifecycleService } from "@/server/environments/lifecycle-service";
 import { toUnixTimestamp } from "@/lib/time";
 import { HttpError } from "@/server/http-error";
 import type {
@@ -36,6 +35,8 @@ const STREAM_RECONNECT_DELAY_MS = 250;
 const STREAM_BATCH_DELAY_MS = 20;
 const STREAM_BATCH_MAX_EVENTS = 128;
 const RPC_TIMEOUT_MS = 30_000;
+const RUNTIME_RECOVERY_LOCK_TIMEOUT_MS = 130_000;
+const RUNTIME_RECOVERY_LOCK_RETRY_MS = 250;
 const MAX_RPC_RESPONSES_PER_ENVIRONMENT = 512;
 const MAX_LIVE_NOTIFICATIONS_PER_SESSION = 1_000;
 const TRANSCRIPT_NOTIFICATION_METHODS = new Set<string>(
@@ -143,7 +144,6 @@ export class CodexService {
     private readonly options: {
       streamReconnectDelayMs?: number;
       streamBatchDelayMs?: number;
-      lifecycle?: EnvironmentLifecycleService;
     } = {},
   ) {
     this.events.setMaxListeners(0);
@@ -359,8 +359,8 @@ export class CodexService {
     );
     const submission = turnSubmissionCoordinates(input.sessionId);
     // Persist pending delivery while holding the same Environment advisory
-    // lock used by idle pause. If pause won first, the following ensure call
-    // resumes it; if Turn admission won first, pause observes pending work.
+    // lock used by idle pause. If pause won first, the following native runtime
+    // access auto-resumes it; if Turn admission won first, pause observes work.
     await this.store.beginSessionTurn(
       input.userId,
       input.sessionId,
@@ -793,13 +793,16 @@ export class CodexService {
   ) {
     const environment = await this.store.getEnvironment(userId, environmentId);
     let runtime = await this.ensureEnvironmentRuntimeForUser(userId, environment);
+    let result: T;
     try {
-      return await operation(runtime);
+      result = await operation(runtime);
     } catch (error) {
       if (!isRecoverableRuntimeError(error)) throw error;
       runtime = await this.recoverEnvironmentRuntime(environmentId);
-      return operation(runtime);
+      result = await operation(runtime);
     }
+    await this.reconcileEnvironmentAfterRuntimeAccess(environmentId);
+    return result;
   }
 
   ensureWorker(sessionId: string) {
@@ -968,37 +971,19 @@ export class CodexService {
     userId: string,
     environment: Environment,
   ) {
-    const lease = this.options.lifecycle
-      ? await this.options.lifecycle.ensureEnvironmentRunning(
-          userId,
-          environment.id,
-        )
-      : {
-          runtime: await this.store.getEnvironmentRuntime(userId, environment.id),
-          resumed: false,
-        };
-    const current = lease.runtime;
-    if (current.supervisorSessionId && current.attemptId && !lease.resumed) {
+    const current = await this.store.getEnvironmentRuntime(userId, environment.id);
+    if (
+      current.desiredState === "running" &&
+      current.observedState === "running" &&
+      current.supervisorSessionId &&
+      current.attemptId
+    ) {
       await this.ensureProtocolInitialized(current);
       return current;
     }
-    const credential = await this.credentials.credentialForEnvironment(
-      userId,
-      environment.id,
-    );
-    const recovered = await this.runtime.ensureCodexEnvironmentRuntime(
-      current,
-      credential.authJson,
-    );
-    const ready = await this.store.recordCodexEnvironmentRuntime(
-      environment.id,
-      recovered,
-    );
-    await this.credentials.markCredentialMaterialized(environment.id, credential);
-    this.restartEnvironmentWorker(environment.id);
-    await this.ensureProtocolInitialized(ready);
-    await this.resumeEnvironmentNativeSessions(ready);
-    return ready;
+    // A supported Sandbox0 runtime operation inside recovery is the only wake
+    // trigger. Concurrent callers share this Environment-scoped reconciliation.
+    return this.recoverEnvironmentRuntime(environment.id);
   }
 
   private async environmentRuntimeForSession(userId: string, sessionId: string) {
@@ -1023,13 +1008,30 @@ export class CodexService {
   }
 
   private async performEnvironmentRecovery(environmentId: string) {
-    const current = this.options.lifecycle
-      ? (
-          await this.options.lifecycle.ensureEnvironmentRunningById(
-            environmentId,
-          )
-        ).runtime
-      : await this.store.environmentRuntime(environmentId);
+    const deadline = Date.now() + RUNTIME_RECOVERY_LOCK_TIMEOUT_MS;
+    while (!this.closed) {
+      const locked = await this.store.withEnvironmentLifecycleLock(
+        environmentId,
+        () => this.reconcileEnvironmentRuntime(environmentId),
+      );
+      if (locked.acquired) return locked.value;
+      if (Date.now() >= deadline) {
+        throw new HttpError(
+          503,
+          "environment_lifecycle_busy",
+          "The Environment lifecycle is still changing. Try again shortly.",
+        );
+      }
+      // Pause owns the same distributed lock through checkpoint commit. Wait
+      // for it to finish, then let a supported Sandbox0 access auto-resume the
+      // runtime; Sandpi never sends a competing explicit resume request.
+      await delay(RUNTIME_RECOVERY_LOCK_RETRY_MS);
+    }
+    throw new Error("Codex service is closed");
+  }
+
+  private async reconcileEnvironmentRuntime(environmentId: string) {
+    const current = await this.store.environmentRuntime(environmentId);
     let credential = await this.credentials.credentialForEnvironmentRuntime(
       environmentId,
     );
@@ -1059,6 +1061,28 @@ export class CodexService {
     await this.ensureProtocolInitialized(ready);
     await this.resumeEnvironmentNativeSessions(ready);
     return ready;
+  }
+
+  private async reconcileEnvironmentAfterRuntimeAccess(environmentId: string) {
+    const current = await this.store.environmentRuntime(environmentId);
+    if (
+      current.desiredState === "running" &&
+      current.observedState === "running"
+    ) {
+      return;
+    }
+    if (current.desiredState === "terminated") {
+      throw new HttpError(
+        409,
+        "environment_terminated",
+        "The Environment is being deleted.",
+      );
+    }
+    // An idle pause can begin after request authorization but before the native
+    // operation. Sandbox0 serializes that operation and may auto-resume it; the
+    // shared lifecycle lock then makes Sandpi's runtime projection match the
+    // native generation before this request is considered complete.
+    await this.recoverEnvironmentRuntime(environmentId);
   }
 
   /**
@@ -1271,7 +1295,9 @@ export class CodexService {
       waiter.reject(error);
       return waiter.promise;
     }
-    return waiter.promise;
+    const response = await waiter.promise;
+    await this.reconcileEnvironmentAfterRuntimeAccess(environmentId);
+    return response;
   }
 
   private registerRpcWaiter(environmentId: string, requestId: string): RpcWaiter {

@@ -9,6 +9,7 @@ import {
   Copy,
   Files,
   GitFork,
+  LoaderCircle,
   Menu,
   PanelLeftOpen,
   PanelRight,
@@ -196,6 +197,31 @@ export function CodexConversation({
   const turnRunning = Boolean(runningTurnId);
   const nativeReady =
     Boolean(nativeSnapshot) && nativeStreamReady && !nativeHistoryError;
+  // Sandpi deliberately stores no secondary chat transcript. Until the native
+  // harness snapshot arrives, this is runtime recovery—not an empty history.
+  const nativeHistoryLoading = !nativeSnapshot && !nativeHistoryError;
+  const runtimeLoadingCopy =
+    environment.sandboxState === "paused"
+      ? {
+          title: ui.wakingSandbox(environment.name),
+          body: ui.wakingSandboxBody,
+        }
+      : environment.sandboxState === "pending" ||
+          environment.sandboxState === "provisioning"
+        ? {
+            title: ui.startingSandbox(environment.name),
+            body: ui.startingSandboxBody,
+          }
+        : environment.sandboxState === "failed" ||
+            environment.sandboxState === "terminated"
+          ? {
+              title: ui.recoveringSandbox(environment.name),
+              body: ui.recoveringSandboxBody,
+            }
+          : {
+              title: ui.loadingConversation,
+              body: ui.loadingConversationBody,
+            };
 
   useEffect(() => {
     sessionRef.current = session;
@@ -371,10 +397,12 @@ export function CodexConversation({
         setLiveNotifications((current) => [...current, envelope]);
 
         const current = sessionRef.current;
+        const started = envelope.notification.method === "turn/started";
         const completed = envelope.notification.method === "turn/completed";
         const next: CodexSession = {
           ...current,
           updatedAt: envelope.receivedAt,
+          status: started ? "running" : completed ? "waiting" : current.status,
           unread:
             completed && document.visibilityState !== "visible"
               ? true
@@ -756,7 +784,22 @@ export function CodexConversation({
         className="conversation-scroll"
         onScroll={handleConversationScroll}
       >
-        <div className="message-column">
+        <div className="message-column" aria-busy={nativeHistoryLoading}>
+          {nativeHistoryLoading ? (
+            <div
+              className="conversation-runtime-loading"
+              role="status"
+              aria-live="polite"
+            >
+              <span className="conversation-runtime-loading-icon">
+                <LoaderCircle size={18} aria-hidden="true" />
+              </span>
+              <span className="conversation-runtime-loading-copy">
+                <strong>{runtimeLoadingCopy.title}</strong>
+                <small>{runtimeLoadingCopy.body}</small>
+              </span>
+            </div>
+          ) : null}
           {nativeHistoryError ? (
             <div className="native-context-reset-notice" role="alert">
               <TriangleAlert size={16} aria-hidden="true" />
@@ -967,7 +1010,7 @@ export function CodexConversation({
               </article>
             );
           })}
-          {runningTurn ? (
+          {runningTurn && !nativeHistoryLoading ? (
             <CodexRunningTurn
               turn={runningTurn}
               language={language}
@@ -1154,9 +1197,21 @@ export function CodexConversation({
               </span>
             </div>
             <div className="composer-send-area">
-              <span className="connection-copy">
+              <span
+                className={`connection-copy ${
+                  nativeHistoryError
+                    ? "is-unavailable"
+                    : !nativeReady
+                      ? "is-loading"
+                      : ""
+                }`}
+              >
                 <span />
-                {ui.durableSession}
+                {nativeHistoryError
+                  ? ui.runtimeUnavailable
+                  : nativeReady
+                    ? ui.durableSession
+                    : ui.checkingRuntime}
               </span>
               {turnRunning ? (
                 <button

@@ -51,9 +51,8 @@ export interface RecoveredCodexEnvironmentRuntime {
   sandboxRestarted: boolean;
 }
 
-export interface EnvironmentLifecycleResult {
+export interface EnvironmentLifecyclePolicyResult {
   hardExpiresAt: Date;
-  resumed: boolean;
 }
 
 export interface CodexAuthRuntime {
@@ -78,15 +77,11 @@ export interface RuntimeAdapter {
   configureEnvironmentLifecycle(
     runtime: EnvironmentRuntimeRecord,
     hardTtlSeconds: number,
-  ): Promise<EnvironmentLifecycleResult>;
+  ): Promise<EnvironmentLifecyclePolicyResult>;
   pauseEnvironment(
     runtime: EnvironmentRuntimeRecord,
     signal?: AbortSignal,
   ): Promise<void>;
-  resumeEnvironment(
-    runtime: EnvironmentRuntimeRecord,
-    signal?: AbortSignal,
-  ): Promise<EnvironmentLifecycleResult>;
   ensureCodexEnvironmentRuntime(
     runtime: EnvironmentRuntimeRecord,
     authJson: string,

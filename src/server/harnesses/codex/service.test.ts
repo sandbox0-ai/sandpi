@@ -47,6 +47,7 @@ const environment: Environment = {
   rootfsSnapshotId: "",
   workspaceVolumeId: "volume-environment-test",
   sandboxId: "sandbox-environment-test",
+  sandboxState: "running",
   supervisorSessionId: "supervisor-environment-test",
   workspaceRoot: "/workspace",
   credentialRevision: 1,
@@ -124,6 +125,7 @@ interface Fixture {
     environmentId: string;
     message: Record<string, unknown>;
   }>;
+  lifecycleLocks: string[];
   streamStarts: number[];
   enqueue(messages: Record<string, unknown>[]): void;
   disconnectStreams(): void;
@@ -185,6 +187,7 @@ function fixture(input: {
   }>();
   const streamStarts: number[] = [];
   const writes: Fixture["writes"] = [];
+  const lifecycleLocks: string[] = [];
   let childSequence = 0;
   let lastStartedThreadId: string | undefined;
   let lastStartedTurnId: string | undefined;
@@ -302,6 +305,13 @@ function fixture(input: {
     },
     async environmentWantsRunning() {
       return environmentRuntime.desiredState === "running";
+    },
+    async withEnvironmentLifecycleLock(
+      environmentId: string,
+      operation: () => Promise<unknown>,
+    ) {
+      lifecycleLocks.push(environmentId);
+      return { acquired: true, value: await operation() };
     },
     async sessionRuntimesForEnvironment() {
       return [...sessionRuntimes.values()].filter(
@@ -555,6 +565,7 @@ function fixture(input: {
     sessions,
     sessionRuntimes,
     writes,
+    lifecycleLocks,
     streamStarts,
     enqueue,
     disconnectStreams: () => {
@@ -598,6 +609,8 @@ test("reattaches every native Session when the Environment runtime recovers", as
   const context = fixture();
   try {
     await context.service.resumeWorkers();
+
+    assert.deepEqual(context.lifecycleLocks, [environment.id]);
 
     const methods = context.writes.map((write) => write.message.method);
     assert.equal(methods.filter((method) => method === "initialize").length, 1);

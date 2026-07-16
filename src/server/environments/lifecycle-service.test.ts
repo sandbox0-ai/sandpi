@@ -3,6 +3,7 @@ import test from "node:test";
 
 import type { RuntimeAdapter } from "@/server/runtime/types";
 import type { SandpiStore, StoredEnvironmentRuntime } from "@/server/store";
+import { ENVIRONMENT_IDLE_PAUSE_DELAY_MS } from "./lifecycle-policy";
 import { EnvironmentLifecycleService } from "./lifecycle-service";
 
 const hardExpiresAt = new Date("2026-08-15T00:00:00.000Z");
@@ -26,7 +27,7 @@ function storedRuntime(
     version: 1,
     desiredState: "running",
     observedState: "running",
-    lifecyclePolicyVersion: 1,
+    lifecyclePolicyVersion: 2,
     hardExpiresAt,
     ...overrides,
   };
@@ -37,6 +38,10 @@ const logger = {
   info() {},
   warn() {},
 };
+
+test("Environment idle pause waits thirty minutes", () => {
+  assert.equal(ENVIRONMENT_IDLE_PAUSE_DELAY_MS, 30 * 60 * 1_000);
+});
 
 test("one elected worker applies policy and pauses a due idle Environment", async () => {
   const calls: string[] = [];
@@ -84,7 +89,7 @@ test("one elected worker applies policy and pauses a due idle Environment", asyn
     ) {
       assert.ok(hardTtlSeconds > 0);
       calls.push("configure-policy");
-      return { hardExpiresAt, resumed: false };
+      return { hardExpiresAt };
     },
     async pauseEnvironment() {
       calls.push("pause");
@@ -178,121 +183,4 @@ test("a failed pause remains a durable retry instead of failing the scheduler", 
   await service.close();
 
   assert.equal(recordedError, "pause timed out");
-});
-
-test("a user access explicitly resumes a paused Environment under the same lock", async () => {
-  const paused = storedRuntime({
-    desiredState: "paused",
-    observedState: "paused",
-    pausedAt: new Date("2026-07-16T00:04:00.000Z"),
-  });
-  const running = storedRuntime();
-  const calls: string[] = [];
-  const store = {
-    async getEnvironmentRuntime() {
-      calls.push("authorize");
-      return paused;
-    },
-    async withEnvironmentLifecycleLock(
-      _environmentId: string,
-      operation: () => Promise<unknown>,
-    ) {
-      calls.push("lock");
-      return { acquired: true, value: await operation() };
-    },
-    async environmentRuntime() {
-      return paused;
-    },
-    async requestEnvironmentRunning() {
-      calls.push("request-running");
-      return { ...paused, desiredState: "running" };
-    },
-    async recordEnvironmentResumed() {
-      calls.push("record-running");
-      return running;
-    },
-    async recordEnvironmentResumeFailure() {
-      assert.fail("resume must not fail");
-    },
-  } as unknown as SandpiStore;
-  const runtime = {
-    mode: "sandbox0",
-    async resumeEnvironment() {
-      calls.push("resume");
-      return { hardExpiresAt, resumed: true };
-    },
-  } as unknown as RuntimeAdapter;
-  const service = new EnvironmentLifecycleService(store, runtime, logger);
-
-  const lease = await service.ensureEnvironmentRunning(
-    "user-one",
-    paused.id,
-  );
-  await service.close();
-
-  assert.equal(lease.resumed, true);
-  assert.equal(lease.runtime.observedState, "running");
-  assert.deepEqual(calls, [
-    "authorize",
-    "lock",
-    "request-running",
-    "resume",
-    "record-running",
-  ]);
-});
-
-test("concurrent requests share one Environment wake-up", async () => {
-  const paused = storedRuntime({
-    desiredState: "paused",
-    observedState: "paused",
-  });
-  const running = storedRuntime();
-  let current = paused;
-  let lockCalls = 0;
-  let resumeCalls = 0;
-  let releaseResume!: () => void;
-  const resumeGate = new Promise<void>((resolve) => {
-    releaseResume = resolve;
-  });
-  const store = {
-    async environmentRuntime() {
-      return current;
-    },
-    async withEnvironmentLifecycleLock(
-      _environmentId: string,
-      operation: () => Promise<unknown>,
-    ) {
-      lockCalls += 1;
-      return { acquired: true, value: await operation() };
-    },
-    async requestEnvironmentRunning() {
-      current = { ...paused, desiredState: "running" };
-      return current;
-    },
-    async recordEnvironmentResumed() {
-      current = running;
-      return running;
-    },
-    async recordEnvironmentResumeFailure() {},
-  } as unknown as SandpiStore;
-  const runtime = {
-    mode: "sandbox0",
-    async resumeEnvironment() {
-      resumeCalls += 1;
-      await resumeGate;
-      return { hardExpiresAt, resumed: true };
-    },
-  } as unknown as RuntimeAdapter;
-  const service = new EnvironmentLifecycleService(store, runtime, logger);
-
-  const leases = Array.from({ length: 12 }, () =>
-    service.ensureEnvironmentRunningById(paused.id),
-  );
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  assert.equal(lockCalls, 1);
-  assert.equal(resumeCalls, 1);
-  releaseResume();
-
-  assert.equal((await Promise.all(leases)).every((lease) => lease.resumed), true);
-  await service.close();
 });
