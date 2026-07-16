@@ -224,7 +224,18 @@ export interface WorkspaceFile {
   size?: string;
   modifiedAt?: UnixTimestamp;
   content?: string;
+  /** Present only after this folder's direct children have been loaded. */
   children?: WorkspaceFile[];
+}
+
+/**
+ * One shallow directory page from the Environment Workspace. Folder entries
+ * intentionally omit `children`; every client loads them only when expanded.
+ */
+export interface WorkspaceDirectoryListing {
+  path: string;
+  entries: WorkspaceFile[];
+  refreshedAt: UnixTimestamp;
 }
 
 export type WorkspaceGitChangeKind =
@@ -273,6 +284,7 @@ export interface WorkspaceGitState {
  * clients apply the shared path policy again only as defense in depth.
  */
 export interface WorkspaceIdeSnapshot {
+  /** Initial shallow tree: `/workspace` and its direct children only. */
   files: WorkspaceFile[];
   git: WorkspaceGitState;
   refreshedAt: UnixTimestamp;

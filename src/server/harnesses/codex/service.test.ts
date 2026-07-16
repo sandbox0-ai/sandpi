@@ -4,6 +4,7 @@ import test from "node:test";
 import type { CodexThread } from "@/harnesses/codex/types";
 import type { CodingSession, Environment } from "@/lib/types";
 import type { RuntimeAdapter } from "@/server/runtime/types";
+import { HttpError } from "@/server/http-error";
 import type {
   CodexControlTransition,
   SandpiStore,
@@ -123,12 +124,23 @@ interface Fixture {
     environmentId: string;
     message: Record<string, unknown>;
   }>;
+  streamStarts: number[];
   enqueue(messages: Record<string, unknown>[]): void;
+  disconnectStreams(): void;
   close(): Promise<void>;
+}
+
+async function eventually(check: () => boolean, message: string) {
+  const deadline = Date.now() + 2_000;
+  while (!check()) {
+    if (Date.now() >= deadline) assert.fail(message);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
 }
 
 function fixture(input: {
   sessions?: Array<{ id: string; nativeSessionId: string }>;
+  streamErrors?: Error[];
   onRequest?: (
     message: Record<string, unknown>,
   ) => Record<string, unknown> | undefined;
@@ -163,8 +175,15 @@ function fixture(input: {
     version: 1,
     desiredState: "running",
     observedState: "running",
+    lifecyclePolicyVersion: 1,
   };
   const events: Array<Record<string, unknown> & { seq: number }> = [];
+  const activeStreams = new Set<{
+    closed: boolean;
+    wake?: () => void;
+    close(): void;
+  }>();
+  const streamStarts: number[] = [];
   const writes: Fixture["writes"] = [];
   let childSequence = 0;
   let lastStartedThreadId: string | undefined;
@@ -183,6 +202,7 @@ function fixture(input: {
       ).toString("base64"),
       occurredAt: "2026-07-16T00:00:00.000Z",
     });
+    for (const stream of activeStreams) stream.wake?.();
   };
 
   const defaultResponse = (message: Record<string, unknown>) => {
@@ -279,6 +299,9 @@ function fixture(input: {
     },
     async activeEnvironmentRuntimeIds() {
       return [environment.id];
+    },
+    async environmentWantsRunning() {
+      return environmentRuntime.desiredState === "running";
     },
     async sessionRuntimesForEnvironment() {
       return [...sessionRuntimes.values()].filter(
@@ -469,13 +492,53 @@ function fixture(input: {
       const response = input.onRequest?.(message) ?? defaultResponse(message);
       if (response) enqueue([response]);
     },
-    async listCodexEvents(_runtime: StoredEnvironmentRuntime, after = 0) {
-      return {
-        events: events.filter((event) => event.seq > after),
-        cursor: {
-          earliest: events[0]?.seq ?? 0,
-          latest: events.at(-1)?.seq ?? 0,
+    async watchCodexEvents(
+      _runtime: StoredEnvironmentRuntime,
+      after = 0,
+      signal?: AbortSignal,
+    ) {
+      streamStarts.push(after);
+      const streamError = input.streamErrors?.shift();
+      if (streamError) throw streamError;
+      const state = {
+        closed: false,
+        wake: undefined as (() => void) | undefined,
+        close() {
+          if (state.closed) return;
+          state.closed = true;
+          state.wake?.();
+          activeStreams.delete(state);
         },
+      };
+      activeStreams.add(state);
+      signal?.addEventListener("abort", () => state.close(), { once: true });
+      return {
+        events: {
+          async *[Symbol.asyncIterator]() {
+            let cursor = after;
+            try {
+              while (!state.closed && !signal?.aborted) {
+                const available = events.filter((event) => event.seq > cursor);
+                if (available.length > 0) {
+                  for (const event of available) {
+                    if (state.closed || signal?.aborted) return;
+                    cursor = event.seq;
+                    yield event;
+                  }
+                  continue;
+                }
+                await new Promise<void>((resolve) => {
+                  state.wake = resolve;
+                  if (state.closed || signal?.aborted) resolve();
+                });
+                state.wake = undefined;
+              }
+            } finally {
+              state.close();
+            }
+          },
+        },
+        close: () => state.close(),
       };
     },
   } as unknown as RuntimeAdapter;
@@ -485,14 +548,18 @@ function fixture(input: {
     runtime,
     logger,
     credentials,
-    { ingestIntervalMs: 5 },
+    { streamReconnectDelayMs: 5, streamBatchDelayMs: 1 },
   );
   return {
     service,
     sessions,
     sessionRuntimes,
     writes,
+    streamStarts,
     enqueue,
+    disconnectStreams: () => {
+      for (const stream of [...activeStreams]) stream.close();
+    },
     close: () => service.close(),
   };
 }
@@ -577,7 +644,13 @@ test("routes a shared Supervisor journal by native thread id", async () => {
   ]);
 
   try {
-    await context.service.ingestOnce("session-one");
+    context.service.ensureWorker("session-one");
+    await eventually(
+      () =>
+        context.service.listLiveNotifications("session-one").length > 0 &&
+        context.service.listLiveNotifications("session-two").length > 0,
+      "shared Supervisor events were not streamed",
+    );
     const one = context.service.listLiveNotifications("session-one");
     const two = context.service.listLiveNotifications("session-two");
     assert.deepEqual(
@@ -597,6 +670,152 @@ test("routes a shared Supervisor journal by native thread id", async () => {
       "turn-one-live",
     );
     assert.equal(context.sessionRuntimes.get("session-two")?.activeNativeTurnId, undefined);
+  } finally {
+    await context.close();
+  }
+});
+
+test("keeps one idle Supervisor event stream per Environment", async () => {
+  const context = fixture();
+  try {
+    context.service.ensureWorker("session-one");
+    context.service.ensureWorker("session-two");
+    await eventually(
+      () => context.streamStarts.length === 1,
+      "Environment event stream did not start",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.deepEqual(context.streamStarts, [0]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("publishes a running tool before Codex completes it", async () => {
+  const context = fixture();
+  try {
+    context.service.ensureWorker("session-one");
+    context.enqueue([
+      {
+        method: "item/started",
+        params: {
+          threadId: "thread-one",
+          turnId: "turn-tool-live",
+          item: {
+            type: "commandExecution",
+            id: "command-tool-live",
+            command: "npm install",
+            cwd: "/workspace",
+            status: "inProgress",
+          },
+        },
+      },
+    ]);
+
+    await eventually(
+      () => context.service.listLiveNotifications("session-one").length === 1,
+      "running tool notification was not published",
+    );
+    const notifications = context.service
+      .listLiveNotifications("session-one")
+      .flatMap((update) =>
+        update.kind === "notification" ? [update.event.notification] : [],
+      );
+    assert.deepEqual(
+      notifications.map((notification) => notification.method),
+      ["item/started"],
+    );
+    assert.equal(
+      notifications.some((notification) => notification.method === "item/completed"),
+      false,
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("reconnects the Supervisor stream from the committed cursor", async () => {
+  const context = fixture();
+  try {
+    context.service.ensureWorker("session-one");
+    await eventually(
+      () => context.streamStarts.length === 1,
+      "initial Environment event stream did not start",
+    );
+    context.enqueue([
+      {
+        method: "turn/started",
+        params: {
+          threadId: "thread-one",
+          turn: { ...completedTurn("turn-stream-one"), status: "inProgress" },
+        },
+      },
+    ]);
+    await eventually(
+      () => context.service.listLiveNotifications("session-one").length === 1,
+      "first streamed notification was not committed",
+    );
+
+    context.disconnectStreams();
+    context.enqueue([
+      {
+        method: "item/agentMessage/delta",
+        params: {
+          threadId: "thread-one",
+          turnId: "turn-stream-one",
+          itemId: "message-stream-one",
+          delta: "still live",
+        },
+      },
+    ]);
+    await eventually(
+      () => context.streamStarts.length >= 2,
+      "Environment event stream did not reconnect",
+    );
+    await eventually(
+      () => context.service.listLiveNotifications("session-one").length === 2,
+      "retained event was not replayed after reconnect",
+    );
+
+    assert.deepEqual(context.streamStarts.slice(0, 2), [0, 1]);
+    assert.deepEqual(
+      context.service
+        .listLiveNotifications("session-one")
+        .map((update) =>
+          update.kind === "notification" ? update.event.notification.method : "",
+        ),
+      ["turn/started", "item/agentMessage/delta"],
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("recovers an expired Supervisor cursor before reconnecting", async () => {
+  const context = fixture({
+    streamErrors: [
+      new HttpError(
+        410,
+        "sandbox0_event_cursor_expired",
+        "event cursor expired; earliest available sequence is 5",
+      ),
+    ],
+  });
+  try {
+    context.service.ensureWorker("session-one");
+    await eventually(
+      () => context.streamStarts.length >= 2,
+      "expired event stream did not reconnect",
+    );
+
+    assert.deepEqual(context.streamStarts.slice(0, 2), [0, 4]);
+    const invalidation = context.service
+      .listLiveNotifications("session-one")
+      .find((update) => update.kind === "invalidation");
+    assert.equal(
+      invalidation?.kind === "invalidation" ? invalidation.reason : undefined,
+      "supervisor-journal-gap",
+    );
   } finally {
     await context.close();
   }

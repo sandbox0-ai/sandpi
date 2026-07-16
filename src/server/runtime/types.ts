@@ -3,13 +3,16 @@ import type {
   NetworkPolicy,
   EnvironmentAuditFeed,
   EnvironmentMetrics,
-  WorkspaceFile,
+  WorkspaceDirectoryListing,
   WorkspaceGitState,
   WorkspaceIdeFile,
 } from "@/lib/types";
 import type { EnvironmentMetricRangeSeconds } from "@/lib/environment-metrics";
 import type { UnixTimestamp } from "@/lib/time";
-import type { CodexDecoderState } from "@/server/harnesses/codex/jsonl";
+import type {
+  CodexDecoderState,
+  SupervisorOutputEvent,
+} from "@/server/harnesses/codex/jsonl";
 
 export const CODEX_ENVIRONMENT_CREDENTIAL_PATH =
   "/dev/shm/sandpi-codex-auth.json";
@@ -18,6 +21,7 @@ export interface ProvisionedEnvironment {
   sandboxId: string;
   workspaceVolumeId: string;
   rootfsSnapshotId?: string;
+  hardExpiresAt?: Date;
 }
 
 export interface EnvironmentRuntimeRecord {
@@ -47,6 +51,11 @@ export interface RecoveredCodexEnvironmentRuntime {
   sandboxRestarted: boolean;
 }
 
+export interface EnvironmentLifecycleResult {
+  hardExpiresAt: Date;
+  resumed: boolean;
+}
+
 export interface CodexAuthRuntime {
   sandboxId: string;
   supervisorSessionId: string;
@@ -66,6 +75,18 @@ export interface RuntimeAdapter {
     runtime: EnvironmentRuntimeRecord,
     policy: NetworkPolicy,
   ): Promise<void>;
+  configureEnvironmentLifecycle(
+    runtime: EnvironmentRuntimeRecord,
+    hardTtlSeconds: number,
+  ): Promise<EnvironmentLifecycleResult>;
+  pauseEnvironment(
+    runtime: EnvironmentRuntimeRecord,
+    signal?: AbortSignal,
+  ): Promise<void>;
+  resumeEnvironment(
+    runtime: EnvironmentRuntimeRecord,
+    signal?: AbortSignal,
+  ): Promise<EnvironmentLifecycleResult>;
   ensureCodexEnvironmentRuntime(
     runtime: EnvironmentRuntimeRecord,
     authJson: string,
@@ -97,14 +118,15 @@ export interface RuntimeAdapter {
     message: unknown,
     stableInputId?: string,
   ): Promise<void>;
-  listCodexEvents(
+  watchCodexEvents(
     runtime: EnvironmentRuntimeRecord,
     after?: number,
-  ): Promise<{ events: unknown[]; cursor: { earliest: number; latest: number } }>;
+    signal?: AbortSignal,
+  ): Promise<RuntimeCodexEventStreamHandle>;
   listFiles(
     runtime: EnvironmentRuntimeRecord,
     path: string,
-  ): Promise<WorkspaceFile[]>;
+  ): Promise<WorkspaceDirectoryListing>;
   readFile(runtime: EnvironmentRuntimeRecord, path: string): Promise<Uint8Array>;
   getWorkspaceGitState(
     runtime: EnvironmentRuntimeRecord,
@@ -177,6 +199,12 @@ export interface RuntimeWorkspaceWatchMessage {
 export interface RuntimeWorkspaceWatchHandle {
   messages: AsyncIterable<RuntimeWorkspaceWatchMessage>;
   close(): void;
+}
+
+export interface RuntimeCodexEventStreamHandle {
+  /** Retained events after the requested cursor followed by live events. */
+  events: AsyncIterable<SupervisorOutputEvent>;
+  close(): void | Promise<void>;
 }
 
 export interface RuntimeAdapterFactoryOptions {

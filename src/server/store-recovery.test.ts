@@ -55,6 +55,7 @@ test("commits one shared decoder cursor and routes scalar turn state by native t
       nativeSessionId: "thread-two",
       nativeTurnId: "turn-two",
       status: "completed",
+      completedAt: new Date("2026-07-16T00:01:00.000Z"),
     },
   ];
 
@@ -101,6 +102,15 @@ test("commits one shared decoder cursor and routes scalar turn state by native t
     fixture.calls.some((call) => call.sql.includes("session_turn_checkpoints")),
     false,
   );
+  const idleDeadline = fixture.calls.find((call) =>
+    call.sql.includes("last_turn_completed_at"),
+  );
+  assert.ok(idleDeadline);
+  assert.deepEqual(idleDeadline.values, [
+    "environment-one",
+    new Date("2026-07-16T00:01:00.000Z"),
+    180_000,
+  ]);
 });
 
 test("switches edit/delete history with a native-thread CAS only", async () => {
@@ -159,6 +169,12 @@ test("projects Sandbox and Supervisor coordinates from Environment runtime", asy
           desired_state: "running",
           observed_state: "running",
           provisioning_error: null,
+          lifecycle_policy_version: "1",
+          sandbox_hard_expires_at: new Date("2026-08-15T00:00:00.000Z"),
+          last_turn_completed_at: new Date("2026-07-16T00:01:00.000Z"),
+          idle_pause_due_at: new Date("2026-07-16T00:04:00.000Z"),
+          lifecycle_error: null,
+          paused_at: null,
           version: "5",
         },
       ],
@@ -184,6 +200,12 @@ test("projects Sandbox and Supervisor coordinates from Environment runtime", asy
     desiredState: "running",
     observedState: "running",
     provisioningError: undefined,
+    lifecyclePolicyVersion: 1,
+    hardExpiresAt: new Date("2026-08-15T00:00:00.000Z"),
+    lastTurnCompletedAt: new Date("2026-07-16T00:01:00.000Z"),
+    idlePauseDueAt: new Date("2026-07-16T00:04:00.000Z"),
+    lifecycleError: undefined,
+    pausedAt: undefined,
   });
 });
 
@@ -202,4 +224,123 @@ test("native thread lookup is namespaced by Environment", async () => {
     ),
     "session-one",
   );
+});
+
+test("idle pause is guarded by every pending or active Turn projection", async () => {
+  const fixture = transactionalStore(() => ({ rows: [], rowCount: 0 }));
+
+  assert.equal(
+    await fixture.store.prepareEnvironmentIdlePause("environment-one"),
+    undefined,
+  );
+
+  const update = fixture.calls.find((call) =>
+    call.sql.includes("SET desired_state = 'paused'"),
+  );
+  assert.ok(update);
+  assert.match(update.sql, /idle_pause_due_at <= NOW\(\)/);
+  assert.match(update.sql, /session\.status IN \('provisioning', 'running'\)/);
+  assert.match(update.sql, /active_native_turn_id IS NOT NULL/);
+  assert.match(update.sql, /pending_turn_phase IS NOT NULL/);
+});
+
+test("Turn admission takes the Environment lifecycle lock before becoming pending", async () => {
+  const fixture = transactionalStore((sql) => {
+    if (sql.includes("SELECT environment_id FROM sessions")) {
+      return { rows: [{ environment_id: "environment-one" }], rowCount: 1 };
+    }
+    if (sql.includes("pg_try_advisory_xact_lock")) {
+      return { rows: [{ acquired: true }], rowCount: 1 };
+    }
+    if (sql.includes("UPDATE session_runtime runtime")) {
+      return { rows: [{ session_id: "session-one" }], rowCount: 1 };
+    }
+    return { rows: [], rowCount: 1 };
+  });
+  Object.defineProperty(fixture.store, "getSession", {
+    value: async () => ({ id: "session-one" }),
+  });
+
+  await fixture.store.beginSessionTurn(
+    "user-one",
+    "session-one",
+    undefined,
+    {
+      requestId: "request-one",
+      clientMessageId: "message-one",
+      stableInputId: "input-one",
+    },
+  );
+
+  const lockIndex = fixture.calls.findIndex((call) =>
+    call.sql.includes("pg_try_advisory_xact_lock"),
+  );
+  const pendingIndex = fixture.calls.findIndex((call) =>
+    call.sql.includes("pending_turn_phase = 'prepared'"),
+  );
+  assert.ok(lockIndex >= 0);
+  assert.ok(pendingIndex > lockIndex);
+  assert.equal(
+    fixture.calls.some(
+      (call) =>
+        call.sql.includes("UPDATE environment_runtime") &&
+        call.sql.includes("desired_state = 'running'"),
+    ),
+    true,
+  );
+});
+
+test("Environment deletion marks the runtime terminated and retains cleanup coordinates", async () => {
+  const fixture = transactionalStore(() => ({ rows: [], rowCount: 1 }));
+  Object.defineProperty(fixture.store, "getEnvironment", {
+    value: async () => ({
+      id: "environment-one",
+      status: "ready",
+      sandboxId: "sandbox-one",
+      workspaceVolumeId: "volume-one",
+      rootfsSnapshotId: "snapshot-one",
+    }),
+  });
+
+  assert.deepEqual(
+    await fixture.store.prepareEnvironmentDeletion(
+      "user-one",
+      "environment-one",
+    ),
+    {
+      sandboxId: "sandbox-one",
+      workspaceVolumeId: "volume-one",
+      rootfsSnapshotId: "snapshot-one",
+    },
+  );
+  const transition = fixture.calls.find((call) =>
+    call.sql.includes("desired_state = 'terminated'"),
+  );
+  assert.ok(transition);
+  assert.match(transition.sql, /idle_pause_due_at = NULL/);
+});
+
+test("Environment metadata deletion removes Sessions and credential binding first", async () => {
+  const fixture = transactionalStore((sql) => ({
+    rows: sql.includes("SELECT environment.id")
+      ? [{ id: "environment-one" }]
+      : [],
+    rowCount: 1,
+  }));
+
+  await fixture.store.deleteEnvironmentMetadata("user-one", "environment-one");
+
+  const sessionDelete = fixture.calls.findIndex((call) =>
+    call.sql.includes("DELETE FROM sessions"),
+  );
+  const bindingDelete = fixture.calls.findIndex((call) =>
+    call.sql.includes("DELETE FROM environment_credential_bindings"),
+  );
+  const environmentDelete = fixture.calls.findIndex((call) =>
+    call.sql.includes("DELETE FROM environments"),
+  );
+  assert.ok(sessionDelete >= 0);
+  assert.ok(bindingDelete > sessionDelete);
+  assert.ok(environmentDelete > bindingDelete);
+  assert.equal(fixture.calls.at(-1)?.sql, "COMMIT");
 });

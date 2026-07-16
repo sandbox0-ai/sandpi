@@ -1,5 +1,6 @@
 export const WORKSPACE_ROOT = "/workspace";
 export const WORKSPACE_INTERNAL_ROOT = `${WORKSPACE_ROOT}/.sandpi`;
+const WORKSPACE_IGNORED_DIRECTORY_NAMES = new Set(["node_modules"]);
 
 /**
  * Browser-safe POSIX normalization for paths crossing Sandpi's Workspace UI
@@ -41,4 +42,23 @@ export function userVisibleWorkspacePath(candidate: string) {
   return normalized && !isWorkspaceInternalPath(normalized)
     ? normalized
     : undefined;
+}
+
+/**
+ * Shared file-tree visibility rule. Dot-directories and generated dependency
+ * trees are hidden, while root-level dot-files such as `.env` remain visible.
+ */
+export function isWorkspaceIdePathHidden(
+  candidate: string,
+  leafIsDirectory = false,
+) {
+  const normalized = userVisibleWorkspacePath(candidate);
+  if (!normalized) return true;
+  const parts = normalized.slice(`${WORKSPACE_ROOT}/`.length).split("/");
+  const directoryParts = leafIsDirectory ? parts : parts.slice(0, -1);
+  return directoryParts.some(
+    (component) =>
+      component.startsWith(".") ||
+      WORKSPACE_IGNORED_DIRECTORY_NAMES.has(component),
+  );
 }

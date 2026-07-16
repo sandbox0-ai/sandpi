@@ -116,3 +116,108 @@ test("applies a changed network policy to the shared Environment Sandbox", async
   assert.deepEqual(applied, [nextPolicy]);
   assert.deepEqual(updated.networkPolicy, nextPolicy);
 });
+
+test("deletes Environment-owned resources before removing metadata", async () => {
+  const steps: string[] = [];
+  const store = {
+    async getEnvironment() {
+      return environment;
+    },
+    async withEnvironmentLifecycleLock(
+      _environmentId: string,
+      operation: () => Promise<void>,
+    ) {
+      steps.push("lock");
+      await operation();
+      return { acquired: true as const, value: undefined };
+    },
+    async prepareEnvironmentDeletion() {
+      steps.push("prepare");
+      return {
+        sandboxId: "sandbox-test",
+        workspaceVolumeId: "volume-test",
+        rootfsSnapshotId: "snapshot-test",
+      };
+    },
+    async deleteEnvironmentMetadata() {
+      steps.push("metadata");
+    },
+    async recordEnvironmentDeletionFailure() {
+      steps.push("failure");
+    },
+  } as unknown as SandpiStore;
+  const runtime = {
+    async deleteEnvironmentResources(resources: {
+      sandboxId?: string;
+      workspaceVolumeId?: string;
+      rootfsSnapshotId?: string;
+    }) {
+      assert.deepEqual(resources, {
+        sandboxId: "sandbox-test",
+        workspaceVolumeId: "volume-test",
+        rootfsSnapshotId: "snapshot-test",
+      });
+      steps.push("resources");
+    },
+  } as unknown as RuntimeAdapter;
+  const service = new EnvironmentService(store, runtime, {
+    info() {
+      steps.push("logged");
+    },
+    error() {},
+  });
+  service.setBeforeDelete(() => {
+    steps.push("workers");
+  });
+
+  await service.delete("user-test", environment.id);
+
+  assert.deepEqual(steps, [
+    "lock",
+    "prepare",
+    "workers",
+    "resources",
+    "metadata",
+    "logged",
+  ]);
+});
+
+test("keeps Environment metadata retryable when resource deletion fails", async () => {
+  const steps: string[] = [];
+  const store = {
+    async getEnvironment() {
+      return environment;
+    },
+    async withEnvironmentLifecycleLock(
+      _environmentId: string,
+      operation: () => Promise<void>,
+    ) {
+      await operation();
+      return { acquired: true as const, value: undefined };
+    },
+    async prepareEnvironmentDeletion() {
+      return { sandboxId: "sandbox-test", workspaceVolumeId: "volume-test" };
+    },
+    async deleteEnvironmentMetadata() {
+      steps.push("metadata");
+    },
+    async recordEnvironmentDeletionFailure(_environmentId: string, error: string) {
+      steps.push(`failure:${error}`);
+    },
+  } as unknown as SandpiStore;
+  const runtime = {
+    async deleteEnvironmentResources() {
+      throw new Error("volume cleanup failed");
+    },
+  } as unknown as RuntimeAdapter;
+  const service = new EnvironmentService(store, runtime, {
+    info() {},
+    error() {},
+  });
+
+  await assert.rejects(
+    service.delete("user-test", environment.id),
+    /volume cleanup failed/,
+  );
+  assert.deepEqual(steps, ["failure:volume cleanup failed"]);
+});

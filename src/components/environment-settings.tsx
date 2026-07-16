@@ -17,6 +17,8 @@ import {
   RotateCcw,
   Settings2,
   Share2,
+  Trash2,
+  TriangleAlert,
   Webhook,
   X,
 } from "lucide-react";
@@ -52,6 +54,7 @@ interface EnvironmentSettingsProps {
   timeZone: string;
   archivedSessions: CodingSession[];
   onChange: (environment: Environment) => void;
+  onDelete: (environmentId: string) => void;
   onRestoreSession: (sessionId: string) => void;
   onClose: () => void;
 }
@@ -133,6 +136,7 @@ export function EnvironmentSettings({
   timeZone,
   archivedSessions,
   onChange,
+  onDelete,
   onRestoreSession,
   onClose,
 }: EnvironmentSettingsProps) {
@@ -141,6 +145,10 @@ export function EnvironmentSettings({
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
+  const [deleteConfirming, setDeleteConfirming] = useState(false);
+  const [deleteName, setDeleteName] = useState("");
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
   const [newDomain, setNewDomain] = useState("");
   const [codexAuthFlow, setCodexAuthFlow] =
     useState<CodexDeviceAuthFlow | null>(null);
@@ -149,6 +157,7 @@ export function EnvironmentSettings({
   const [copiedDeviceCode, setCopiedDeviceCode] = useState(false);
   const drawerRef = useRef<HTMLElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const dangerZoneRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const previouslyFocused = document.activeElement as HTMLElement | null;
@@ -170,6 +179,14 @@ export function EnvironmentSettings({
       previouslyFocused?.focus();
     };
   }, [onClose]);
+
+  useEffect(() => {
+    if (!deleteConfirming) return;
+    const frame = window.requestAnimationFrame(() => {
+      dangerZoneRef.current?.scrollIntoView({ block: "end" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [deleteConfirming]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -348,6 +365,26 @@ export function EnvironmentSettings({
     }
   }
 
+  async function deleteEnvironment() {
+    if (deleting || deleteName !== environment.name) return;
+    setDeleting(true);
+    setDeleteError("");
+    try {
+      await apiFetch<ApiEnvelope<{ id: string }>>(
+        `/api/v1/environments/${encodeURIComponent(environment.id)}`,
+        { method: "DELETE" },
+      );
+      onDelete(environment.id);
+    } catch (error) {
+      setDeleteError(
+        error instanceof Error
+          ? error.message
+          : "The Environment could not be deleted.",
+      );
+      setDeleting(false);
+    }
+  }
+
   function addDomain() {
     const domain = newDomain.trim().toLowerCase();
     if (!domain || draft.networkPolicy.allowedDomains.includes(domain)) {
@@ -368,7 +405,7 @@ export function EnvironmentSettings({
       className="modal-layer settings-layer"
       role="presentation"
       onMouseDown={(event) => {
-        if (event.target === event.currentTarget) {
+        if (event.target === event.currentTarget && !deleting) {
           onClose();
         }
       }}
@@ -402,6 +439,7 @@ export function EnvironmentSettings({
             type="button"
             className="icon-button"
             aria-label="Close Environment settings"
+            disabled={deleting}
             onClick={onClose}
           >
             <X size={19} aria-hidden="true" />
@@ -525,6 +563,92 @@ export function EnvironmentSettings({
                     value={draft.supervisorSessionId || "Starts on demand"}
                     code={Boolean(draft.supervisorSessionId)}
                   />
+                </div>
+                <div
+                  ref={dangerZoneRef}
+                  className={`environment-danger-zone ${
+                    deleteConfirming ? "is-confirming" : ""
+                  }`}
+                >
+                  <div className="environment-danger-heading">
+                    <span aria-hidden="true">
+                      <TriangleAlert size={17} />
+                    </span>
+                    <div>
+                      <strong>Delete Environment</strong>
+                      <p>
+                        Permanently delete every Session, the shared Sandbox,
+                        Workspace Volume and stored coding-agent credential.
+                      </p>
+                    </div>
+                  </div>
+                  {deleteConfirming ? (
+                    <div className="environment-delete-confirmation">
+                      <label>
+                        <span>
+                          Type <strong>{environment.name}</strong> to confirm
+                        </span>
+                        <input
+                          autoFocus
+                          name="environment-delete-confirmation"
+                          autoComplete="off"
+                          spellCheck={false}
+                          value={deleteName}
+                          disabled={deleting}
+                          onChange={(event) => setDeleteName(event.target.value)}
+                          onKeyDown={(event) => {
+                            if (
+                              event.key === "Enter" &&
+                              deleteName === environment.name
+                            ) {
+                              event.preventDefault();
+                              void deleteEnvironment();
+                            }
+                          }}
+                        />
+                      </label>
+                      <p>
+                        This cannot be undone. Archived Sessions are deleted too.
+                      </p>
+                      {deleteError ? (
+                        <p className="settings-inline-error" role="alert">
+                          {deleteError}
+                        </p>
+                      ) : null}
+                      <div className="environment-delete-actions">
+                        <button
+                          type="button"
+                          className="button-secondary"
+                          disabled={deleting}
+                          onClick={() => {
+                            setDeleteConfirming(false);
+                            setDeleteName("");
+                            setDeleteError("");
+                          }}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          className="environment-delete-button"
+                          disabled={deleting || deleteName !== environment.name}
+                          onClick={() => void deleteEnvironment()}
+                        >
+                          <Trash2 size={14} aria-hidden="true" />
+                          {deleting ? "Deleting…" : "Delete permanently"}
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      className="environment-delete-trigger"
+                      onClick={() => setDeleteConfirming(true)}
+                    >
+                      <Trash2 size={14} aria-hidden="true" />
+                      Delete Environment
+                    </button>
+                  )}
                 </div>
               </SettingsSection>
             ) : null}
@@ -1025,7 +1149,7 @@ export function EnvironmentSettings({
             <button
               type="button"
               className="button-secondary"
-              disabled={saving}
+              disabled={saving || deleting}
               onClick={onClose}
             >
               Cancel
@@ -1033,7 +1157,9 @@ export function EnvironmentSettings({
             <button
               type="button"
               className="button-primary"
-              disabled={saving || !draft.name.trim()}
+              disabled={
+                saving || deleting || deleteConfirming || !draft.name.trim()
+              }
               onClick={() => void saveAndClose()}
             >
               {saving ? "Saving…" : "Save changes"}

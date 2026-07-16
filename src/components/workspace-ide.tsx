@@ -38,7 +38,10 @@ import {
 } from "@/lib/api-client";
 import type { OperationLanguage } from "@/lib/operation-ui";
 import { formatUnixTimestamp } from "@/lib/time";
-import { mergeWorkspaceGitFiles } from "@/lib/workspace-files";
+import {
+  mergeWorkspaceGitFiles,
+  userVisibleWorkspaceFiles,
+} from "@/lib/workspace-files";
 import {
   repositoryForWorkspacePath,
   userVisibleWorkspaceGitState,
@@ -49,6 +52,7 @@ import { userVisibleWorkspacePath } from "@/lib/workspace-path-policy";
 import type {
   CodingSession,
   Environment,
+  WorkspaceDirectoryListing,
   WorkspaceFile,
   WorkspaceGitFileChange,
   WorkspaceGitRepository,
@@ -125,6 +129,8 @@ const copy = {
     discardClose: "Discard the unsaved changes and close this file?",
     reloadDiscard: "Discard unsaved changes and reload the Workspace?",
     loading: "Loading Workspace…",
+    loadingFolder: "Loading folder…",
+    folderUnavailable: "Folder unavailable. Click to retry.",
     selectFile: "Select a file from workspace.",
     staged: "staged",
     unstaged: "working tree",
@@ -161,6 +167,8 @@ const copy = {
     discardClose: "放弃未保存修改并关闭此文件？",
     reloadDiscard: "放弃未保存修改并刷新 Workspace？",
     loading: "正在加载 Workspace…",
+    loadingFolder: "正在加载文件夹…",
+    folderUnavailable: "文件夹暂时不可用，点击重试。",
     selectFile: "从 workspace 中选择文件。",
     staged: "已暂存",
     unstaged: "工作区",
@@ -172,6 +180,54 @@ function flattenFiles(files: WorkspaceFile[]): WorkspaceFile[] {
     file,
     ...(file.children ? flattenFiles(file.children) : []),
   ]);
+}
+
+type WorkspaceDirectoryListings = Record<string, WorkspaceFile[]>;
+
+function shallowVisibleEntries(files: WorkspaceFile[]) {
+  return userVisibleWorkspaceFiles(files).map((file) => {
+    const entry = { ...file };
+    delete entry.children;
+    return entry;
+  });
+}
+
+function rootEntries(snapshot?: WorkspaceIdeSnapshot) {
+  const root = snapshot?.files.find((file) => file.path === "/workspace");
+  return shallowVisibleEntries(root?.children ?? []);
+}
+
+function workspaceTreeFromListings(
+  listings: WorkspaceDirectoryListings,
+): WorkspaceFile[] {
+  const hydrate = (
+    entries: WorkspaceFile[],
+    ancestors: ReadonlySet<string>,
+  ): WorkspaceFile[] =>
+    entries.map((entry) => {
+      const file = { ...entry };
+      delete file.children;
+      if (
+        file.kind === "folder" &&
+        Object.hasOwn(listings, file.path) &&
+        !ancestors.has(file.path)
+      ) {
+        const nextAncestors = new Set(ancestors);
+        nextAncestors.add(file.path);
+        file.children = hydrate(listings[file.path] ?? [], nextAncestors);
+      }
+      return file;
+    });
+
+  return [
+    {
+      id: "workspace",
+      name: "workspace",
+      path: "/workspace",
+      kind: "folder",
+      children: hydrate(listings["/workspace"] ?? [], new Set(["/workspace"])),
+    },
+  ];
 }
 
 function fileIcon(fileName: string, folder = false, open = false) {
@@ -306,14 +362,28 @@ function IdeFileTree({
   repositories,
   selectedPath,
   onOpen,
+  loadedDirectories,
+  loadingDirectories,
+  directoryErrors,
+  onExpand,
+  loadingFolderLabel,
+  folderUnavailableLabel,
 }: {
   files: WorkspaceFile[];
   changes: Map<string, WorkspaceGitFileChange>;
   repositories: Map<string, WorkspaceGitRepository>;
   selectedPath: string;
   onOpen: (path: string) => void;
+  loadedDirectories: ReadonlySet<string>;
+  loadingDirectories: ReadonlySet<string>;
+  directoryErrors: Readonly<Record<string, string>>;
+  onExpand: (path: string, force?: boolean) => void;
+  loadingFolderLabel: string;
+  folderUnavailableLabel: string;
 }) {
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({
+    "/workspace": true,
+  });
   const changedDescendants = useMemo(() => {
     const counts = new Map<string, number>();
     for (const changedPath of changes.keys()) {
@@ -329,7 +399,10 @@ function IdeFileTree({
   function render(items: WorkspaceFile[], depth: number) {
     return items.map((file) => {
       const folder = file.kind === "folder";
-      const isCollapsed = collapsed[file.path] ?? false;
+      const isExpanded = expanded[file.path] ?? false;
+      const isLoaded = loadedDirectories.has(file.path);
+      const isLoading = loadingDirectories.has(file.path);
+      const directoryError = directoryErrors[file.path];
       const change = changes.get(file.path);
       const repository = repositories.get(file.path);
       const descendantCount = changedDescendants.get(file.path) ?? 0;
@@ -344,10 +417,12 @@ function IdeFileTree({
             title={file.path}
             onClick={() => {
               if (folder) {
-                setCollapsed((current) => ({
+                const nextExpanded = !isExpanded;
+                setExpanded((current) => ({
                   ...current,
-                  [file.path]: !isCollapsed,
+                  [file.path]: nextExpanded,
                 }));
+                if (nextExpanded && !isLoaded) onExpand(file.path);
               } else {
                 onOpen(file.path);
               }
@@ -355,15 +430,17 @@ function IdeFileTree({
           >
             <span className={styles.disclosure}>
               {folder ? (
-                isCollapsed ? (
-                  <ChevronRight size={12} />
-                ) : (
+                isLoading ? (
+                  <RefreshCw size={11} className={styles.directorySpinner} />
+                ) : isExpanded ? (
                   <ChevronDown size={12} />
+                ) : (
+                  <ChevronRight size={12} />
                 )
               ) : null}
             </span>
             <span className={styles.fileIcon}>
-              {fileIcon(file.name, folder, !isCollapsed)}
+              {fileIcon(file.name, folder, isExpanded)}
             </span>
             <span className={styles.fileName}>{file.name}</span>
             {change ? (
@@ -384,9 +461,28 @@ function IdeFileTree({
               <span className={styles.descendantCount}>{descendantCount}</span>
             ) : null}
           </button>
-          {folder && !isCollapsed && file.children
-            ? render(file.children, depth + 1)
-            : null}
+          {folder && isExpanded ? (
+            directoryError ? (
+              <button
+                type="button"
+                className={styles.directoryStatus}
+                style={{ paddingLeft: `${20 + (depth + 1) * 13}px` }}
+                title={directoryError}
+                onClick={() => onExpand(file.path, true)}
+              >
+                <CircleAlert size={11} /> {folderUnavailableLabel}
+              </button>
+            ) : isLoading && !isLoaded ? (
+              <span
+                className={styles.directoryStatus}
+                style={{ paddingLeft: `${20 + (depth + 1) * 13}px` }}
+              >
+                {loadingFolderLabel}
+              </span>
+            ) : isLoaded && file.children ? (
+              render(file.children, depth + 1)
+            ) : null
+          ) : null}
         </div>
       );
     });
@@ -407,6 +503,19 @@ export function WorkspaceIde({
   const [snapshot, setSnapshot] = useState<WorkspaceIdeSnapshot | undefined>(
     initialSnapshot,
   );
+  const [directoryListings, setDirectoryListings] = useState<
+    WorkspaceDirectoryListings
+  >(() =>
+    initialSnapshot
+      ? { "/workspace": rootEntries(initialSnapshot) }
+      : ({} as WorkspaceDirectoryListings),
+  );
+  const [loadingDirectories, setLoadingDirectories] = useState<Set<string>>(
+    new Set(),
+  );
+  const [directoryErrors, setDirectoryErrors] = useState<Record<string, string>>(
+    {},
+  );
   const [documents, setDocuments] = useState<Record<string, DocumentState>>({});
   const [openPaths, setOpenPaths] = useState<string[]>([]);
   const [selectedPath, setSelectedPath] = useState("");
@@ -416,10 +525,15 @@ export function WorkspaceIde({
     "connecting" | "live" | "reconnecting" | "polling" | "offline"
   >("connecting");
   const documentsRef = useRef(documents);
+  const environmentIdRef = useRef(environment.id);
+  const directoryListingsRef = useRef(directoryListings);
+  const directoryRequestsRef = useRef(new Map<string, Promise<void>>());
   const openPathsRef = useRef(openPaths);
   const pendingPathsRef = useRef(new Set<string>());
   const refreshTimerRef = useRef<number | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
+
+  environmentIdRef.current = environment.id;
 
   useEffect(() => {
     documentsRef.current = documents;
@@ -428,6 +542,82 @@ export function WorkspaceIde({
   useEffect(() => {
     openPathsRef.current = openPaths;
   }, [openPaths]);
+
+  useEffect(() => {
+    directoryListingsRef.current = directoryListings;
+  }, [directoryListings]);
+
+  const loadDirectory = useCallback(
+    (requestedPath: string, force = false) => {
+      const directoryPath = userVisibleWorkspacePath(requestedPath);
+      if (!directoryPath) return Promise.resolve();
+      if (!force && Object.hasOwn(directoryListingsRef.current, directoryPath)) {
+        return Promise.resolve();
+      }
+      const inFlight = directoryRequestsRef.current.get(directoryPath);
+      if (inFlight) return inFlight;
+
+      setLoadingDirectories((current) => {
+        const next = new Set(current);
+        next.add(directoryPath);
+        return next;
+      });
+      setDirectoryErrors((current) => {
+        if (!current[directoryPath]) return current;
+        const next = { ...current };
+        delete next[directoryPath];
+        return next;
+      });
+
+      const environmentId = environment.id;
+      const task = (async () => {
+        try {
+          const query = new URLSearchParams({ path: directoryPath });
+          const response = await apiFetch<
+            ApiEnvelope<WorkspaceDirectoryListing>
+          >(
+            `/api/v1/environments/${encodeURIComponent(environmentId)}/files?${query.toString()}`,
+          );
+          if (environmentIdRef.current !== environmentId) return;
+          const responsePath = userVisibleWorkspacePath(response.data.path);
+          if (!responsePath || responsePath !== directoryPath) {
+            throw new Error(
+              "Workspace returned an internal or unexpected directory path.",
+            );
+          }
+          const next = {
+            ...directoryListingsRef.current,
+            [directoryPath]: shallowVisibleEntries(response.data.entries),
+          };
+          directoryListingsRef.current = next;
+          setDirectoryListings(next);
+        } catch (cause) {
+          if (environmentIdRef.current !== environmentId) return;
+          const next = { ...directoryListingsRef.current };
+          delete next[directoryPath];
+          directoryListingsRef.current = next;
+          setDirectoryListings(next);
+          setDirectoryErrors((current) => ({
+            ...current,
+            [directoryPath]:
+              cause instanceof Error ? cause.message : "Folder unavailable",
+          }));
+        } finally {
+          directoryRequestsRef.current.delete(directoryPath);
+          if (environmentIdRef.current === environmentId) {
+            setLoadingDirectories((current) => {
+              const next = new Set(current);
+              next.delete(directoryPath);
+              return next;
+            });
+          }
+        }
+      })();
+      directoryRequestsRef.current.set(directoryPath, task);
+      return task;
+    },
+    [environment.id],
+  );
 
   const loadDocument = useCallback(
     async (filePath: string, reason: "open" | "external" | "reload" = "open") => {
@@ -488,14 +678,28 @@ export function WorkspaceIde({
   );
 
   const refreshSnapshot = useCallback(
-    async (silent = false) => {
+    async (silent = false, refreshLoadedDirectories = false) => {
       if (!silent) setLoading(true);
       try {
         const response = await apiFetch<ApiEnvelope<WorkspaceIdeSnapshot>>(
           `/api/v1/environments/${encodeURIComponent(environment.id)}/ide`,
         );
+        if (environmentIdRef.current !== environment.id) return;
+        const nextListings = {
+          ...directoryListingsRef.current,
+          "/workspace": rootEntries(response.data),
+        };
+        directoryListingsRef.current = nextListings;
+        setDirectoryListings(nextListings);
         setSnapshot(response.data);
         setError("");
+        if (refreshLoadedDirectories) {
+          await Promise.all(
+            Object.keys(nextListings)
+              .filter((directoryPath) => directoryPath !== "/workspace")
+              .map((directoryPath) => loadDirectory(directoryPath, true)),
+          );
+        }
       } catch (cause) {
         if (!silent) {
           setError(
@@ -506,11 +710,19 @@ export function WorkspaceIde({
         if (!silent) setLoading(false);
       }
     },
-    [environment.id],
+    [environment.id, loadDirectory],
   );
 
   useEffect(() => {
     setSnapshot(initialSnapshot);
+    const nextListings: WorkspaceDirectoryListings = initialSnapshot
+      ? { "/workspace": rootEntries(initialSnapshot) }
+      : {};
+    directoryListingsRef.current = nextListings;
+    setDirectoryListings(nextListings);
+    directoryRequestsRef.current.clear();
+    setLoadingDirectories(new Set());
+    setDirectoryErrors({});
     setDocuments({});
     setOpenPaths([]);
     setSelectedPath("");
@@ -528,9 +740,13 @@ export function WorkspaceIde({
     () => workspaceGitChanges(visibleGit),
     [visibleGit],
   );
+  const nativeWorkspaceFiles = useMemo(
+    () => workspaceTreeFromListings(directoryListings),
+    [directoryListings],
+  );
   const workspaceFiles = useMemo(
-    () => mergeWorkspaceGitFiles(snapshot?.files ?? [], gitChanges),
-    [gitChanges, snapshot?.files],
+    () => mergeWorkspaceGitFiles(nativeWorkspaceFiles, gitChanges),
+    [gitChanges, nativeWorkspaceFiles],
   );
   const allFiles = useMemo(() => flattenFiles(workspaceFiles), [workspaceFiles]);
   const changesByPath = useMemo(
@@ -540,6 +756,10 @@ export function WorkspaceIde({
   const repositoriesByRoot = useMemo(
     () => new Map(repositories.map((repository) => [repository.root, repository])),
     [repositories],
+  );
+  const loadedDirectories = useMemo(
+    () => new Set(Object.keys(directoryListings)),
+    [directoryListings],
   );
 
   useEffect(() => {
@@ -654,7 +874,7 @@ export function WorkspaceIde({
       refreshTimerRef.current = window.setTimeout(() => {
         const changedPaths = [...pendingPathsRef.current];
         pendingPathsRef.current.clear();
-        void refreshSnapshot(true);
+        void refreshSnapshot(true, true);
         for (const openPath of openPathsRef.current) {
           if (
             changedPaths.some(
@@ -745,6 +965,13 @@ export function WorkspaceIde({
     };
 
     connect();
+    // Keep the shallow tree converging while the native volume watch is still
+    // negotiating. Some Sandbox0 storage backends cannot establish that watch
+    // promptly; waiting for its eventual timeout would hide files created by a
+    // running agent for many seconds. A `ready` frame stops this bounded
+    // fallback immediately, so a healthy native stream remains the steady
+    // state transport.
+    startPolling();
     return () => {
       disposed = true;
       stopPolling();
@@ -837,7 +1064,7 @@ export function WorkspaceIde({
           dirty: false,
         },
       }));
-      await refreshSnapshot(true);
+      await refreshSnapshot(true, true);
     } catch (cause) {
       if (cause instanceof ApiError && cause.code === "workspace_file_conflict") {
         await loadDocument(visiblePath, "external");
@@ -895,7 +1122,7 @@ export function WorkspaceIde({
       (candidate) => candidate.dirty,
     );
     if (dirty && !window.confirm(ui.reloadDiscard)) return;
-    await refreshSnapshot();
+    await refreshSnapshot(false, true);
     await Promise.all(
       openPathsRef.current.map((filePath) => loadDocument(filePath, "reload")),
     );
@@ -978,11 +1205,20 @@ export function WorkspaceIde({
           <div className={styles.treeRoot}>
             {workspaceFiles.length > 0 ? (
               <IdeFileTree
+                key={environment.id}
                 files={workspaceFiles}
                 changes={changesByPath}
                 repositories={repositoriesByRoot}
                 selectedPath={selectedPath}
                 onOpen={openFile}
+                loadedDirectories={loadedDirectories}
+                loadingDirectories={loadingDirectories}
+                directoryErrors={directoryErrors}
+                onExpand={(directoryPath, force) =>
+                  void loadDirectory(directoryPath, force)
+                }
+                loadingFolderLabel={ui.loadingFolder}
+                folderUnavailableLabel={ui.folderUnavailable}
               />
             ) : (
               <p className={styles.sidebarEmpty}>{ui.noFiles}</p>

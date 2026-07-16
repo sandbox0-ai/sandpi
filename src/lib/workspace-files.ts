@@ -1,9 +1,14 @@
 import type { WorkspaceFile, WorkspaceGitFileChange } from "./types";
-import { userVisibleWorkspacePath } from "./workspace-path-policy";
+import {
+  isWorkspaceIdePathHidden,
+  userVisibleWorkspacePath,
+} from "./workspace-path-policy";
 
 function cloneVisibleFile(file: WorkspaceFile): WorkspaceFile | undefined {
   const filePath = userVisibleWorkspacePath(file.path);
-  if (!filePath) return undefined;
+  if (!filePath || isWorkspaceIdePathHidden(filePath, file.kind === "folder")) {
+    return undefined;
+  }
   return {
     ...file,
     path: filePath,

@@ -31,6 +31,7 @@ import { migrateDatabase } from "@/server/db/migrate";
 import { createDatabasePool } from "@/server/db/pool";
 import { seedCommunityDefaults } from "@/server/db/seed";
 import { EnvironmentService } from "@/server/environments/service";
+import { EnvironmentLifecycleService } from "@/server/environments/lifecycle-service";
 import { CodexEnvironmentAuthService } from "@/server/harnesses/codex/auth-service";
 import { CodexAuthStore } from "@/server/harnesses/codex/auth-store";
 import { CodexService } from "@/server/harnesses/codex/service";
@@ -94,8 +95,18 @@ export async function createSandpiServer(
     secretBox,
     app.log,
   );
-  const codex = new CodexService(store, runtime, app.log, codexAuth);
   const environments = new EnvironmentService(store, runtime, app.log);
+  const lifecycle = new EnvironmentLifecycleService(store, runtime, app.log);
+  const codex = new CodexService(store, runtime, app.log, codexAuth, {
+    lifecycle,
+  });
+  lifecycle.setBeforePause((environmentId) =>
+    codex.suspendEnvironmentWorker(environmentId),
+  );
+  environments.setBeforeDelete(async (userId, environmentId) => {
+    codex.suspendEnvironmentWorker(environmentId);
+    await codexAuth.cancelEnvironmentDeviceLogin(userId, environmentId);
+  });
   const oidcIdentity =
     config.auth.mode === "oidc" && secretBox
       ? new OidcIdentityService(pool, config.auth, config.publicUrl, secretBox)
@@ -177,14 +188,21 @@ export async function createSandpiServer(
   }
 
   app.addHook("onClose", async () => {
+    await lifecycle.close();
     await codexAuth.close();
     await codex.close();
     if (ownsPool) await pool.end();
   });
 
   await environments.reconcilePending();
+  await lifecycle.start();
   await codexAuth.resumePending();
-  await codex.resumeWorkers();
+  // Runtime recovery is Environment-scoped and may wait for Sandbox0
+  // scheduling. Keep API readiness independent so one slow/failed Sandbox
+  // cannot hold the entire Sandpi server offline during startup.
+  void codex.resumeWorkers().catch((error) => {
+    app.log.warn({ err: error }, "Codex Environment recovery deferred");
+  });
 
   return {
     app,
@@ -308,6 +326,16 @@ function registerApiRoutes(
           body,
         ),
       };
+    },
+  );
+  app.delete<{ Params: { environmentId: string } }>(
+    "/api/v1/environments/:environmentId",
+    async (request) => {
+      await services.environments.delete(
+        request.principal.userId,
+        request.params.environmentId,
+      );
+      return { data: { id: request.params.environmentId } };
     },
   );
   app.put<{ Params: { environmentId: string } }>(
@@ -596,22 +624,21 @@ function registerApiRoutes(
     "/api/v1/sessions/:sessionId/events",
     async (request, reply) => {
       await services.store.getSession(request.principal.userId, request.params.sessionId);
-      services.codex.ensureWorker(request.params.sessionId);
+      // The initial native thread/read explicitly wakes the Environment and
+      // starts its Supervisor stream. Starting a worker before that wake would
+      // race an intentional idle pause and trigger a duplicate recovery.
       return streamHarnessEvents(request, reply, services.codex);
     },
   );
   app.get<{ Params: { environmentId: string } }>(
     "/api/v1/environments/:environmentId/files",
     async (request) => {
+      const requestedPath = queryString(request, "path") ?? "/workspace";
       return {
         data: await services.codex.withEnvironmentRuntimeRecovery(
           request.principal.userId,
           request.params.environmentId,
-          (runtime) =>
-            services.runtime.listFiles(
-              runtime,
-              queryString(request, "path") ?? "/workspace",
-            ),
+          (runtime) => services.runtime.listFiles(runtime, requestedPath),
         ),
       };
     },
@@ -643,11 +670,23 @@ function registerApiRoutes(
         request.principal.userId,
         request.params.environmentId,
         async (runtime) => {
-          const [files, git] = await Promise.all([
+          const [directory, git] = await Promise.all([
             services.runtime.listFiles(runtime, "/workspace"),
             services.runtime.getWorkspaceGitState(runtime),
           ]);
-          return { files, git, refreshedAt: toUnixTimestamp(new Date()) };
+          return {
+            files: [
+              {
+                id: "workspace",
+                name: "workspace",
+                path: "/workspace",
+                kind: "folder" as const,
+                children: directory.entries,
+              },
+            ],
+            git,
+            refreshedAt: toUnixTimestamp(new Date()),
+          };
         },
       );
       return { data };
@@ -680,15 +719,20 @@ function registerApiRoutes(
       const input = workspaceIdeWriteSchema.parse(request.body);
       const content = Buffer.from(input.content, "base64");
       return {
-        data: await services.store.withWorkspaceFileWrite(
+        data: await services.codex.withEnvironmentRuntimeRecovery(
           request.principal.userId,
           request.params.environmentId,
-          (runtime) =>
-            services.runtime.writeWorkspaceIdeFile(
-              runtime,
-              filePath,
-              content,
-              input.baseRevision,
+          () =>
+            services.store.withWorkspaceFileWrite(
+              request.principal.userId,
+              request.params.environmentId,
+              (runtime) =>
+                services.runtime.writeWorkspaceIdeFile(
+                  runtime,
+                  filePath,
+                  content,
+                  input.baseRevision,
+                ),
             ),
         ),
       };
@@ -779,22 +823,27 @@ function registerApiRoutes(
       let inputQueue: TerminalInputQueue<z.infer<typeof terminalInputSchema>> | undefined;
       try {
         const after = Number(queryString(request, "after") ?? 0);
-        const runtime = await services.store.getEnvironmentRuntime(
+        const opened = await services.codex.withEnvironmentRuntimeRecovery(
           request.principal.userId,
           request.params.environmentId,
+          async (runtime) => ({
+            runtime,
+            terminal: await services.store.withTerminalAccess(
+              request.principal.userId,
+              request.params.environmentId,
+              () =>
+                services.runtime.openTerminal(
+                  runtime,
+                  Number.isFinite(after) ? after : 0,
+                  queryString(request, "terminalSessionId"),
+                ),
+            ),
+          }),
         );
+        const { runtime } = opened;
         // A terminal belongs to the shared Environment runtime. Switching
         // product Sessions must not create or replay a different shell.
-        terminal = await services.store.withTerminalAccess(
-          request.principal.userId,
-          request.params.environmentId,
-          () =>
-            services.runtime.openTerminal(
-              runtime,
-              Number.isFinite(after) ? after : 0,
-              queryString(request, "terminalSessionId"),
-            ),
-        );
+        terminal = opened.terminal;
         if (runtime.terminalSessionId !== terminal.sessionId) {
           await services.store.setEnvironmentTerminalSession(
             request.params.environmentId,
@@ -968,7 +1017,13 @@ async function streamHarnessEvents(
     reply.raw.write(`data: ${JSON.stringify(initialInvalidation)}\n\n`);
   }
   const controller = new AbortController();
-  request.raw.once("close", () => controller.abort());
+  const abort = () => controller.abort();
+  // IncomingMessage `close` means the GET request body has finished and can
+  // fire while the SSE response is still healthy. Track the response socket
+  // (plus an explicitly aborted request) so live tool notifications are not
+  // cut off immediately after the initial native snapshot.
+  request.raw.once("aborted", abort);
+  reply.raw.once("close", abort);
 
   while (!controller.signal.aborted && !reply.raw.destroyed) {
     const updates = codex.listLiveNotifications(sessionId, cursor);

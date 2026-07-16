@@ -3,7 +3,10 @@ import type {
   WorkspaceGitRepository,
   WorkspaceGitState,
 } from "./types";
-import { userVisibleWorkspacePath } from "./workspace-path-policy";
+import {
+  isWorkspaceIdePathHidden,
+  userVisibleWorkspacePath,
+} from "./workspace-path-policy";
 
 function containsPath(repository: WorkspaceGitRepository, filePath: string) {
   return (
@@ -17,11 +20,13 @@ export function repositoryForWorkspacePath(
   filePath: string,
 ) {
   const visibleFilePath = userVisibleWorkspacePath(filePath);
-  if (!visibleFilePath) return undefined;
+  if (!visibleFilePath || isWorkspaceIdePathHidden(visibleFilePath)) {
+    return undefined;
+  }
   let selected: WorkspaceGitRepository | undefined;
   for (const repository of repositories) {
     const visibleRoot = userVisibleWorkspacePath(repository.root);
-    if (!visibleRoot) continue;
+    if (!visibleRoot || isWorkspaceIdePathHidden(visibleRoot, true)) continue;
     if (
       containsPath({ ...repository, root: visibleRoot }, visibleFilePath) &&
       (!selected || visibleRoot.length > selected.root.length)
@@ -39,7 +44,7 @@ export function userVisibleWorkspaceGitState(
   return {
     repositories: (state?.repositories ?? []).flatMap((repository) => {
       const root = userVisibleWorkspacePath(repository.root);
-      if (!root) return [];
+      if (!root || isWorkspaceIdePathHidden(root, true)) return [];
       const files = repository.files.flatMap((change) => {
         const filePath = userVisibleWorkspacePath(change.path);
         const originalPath = change.originalPath
@@ -47,9 +52,11 @@ export function userVisibleWorkspaceGitState(
           : undefined;
         if (
           !filePath ||
+          isWorkspaceIdePathHidden(filePath) ||
           (filePath !== root && !filePath.startsWith(`${root}/`)) ||
           (change.originalPath &&
             (!originalPath ||
+              isWorkspaceIdePathHidden(originalPath) ||
               (originalPath !== root && !originalPath.startsWith(`${root}/`))))
         ) {
           return [];

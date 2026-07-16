@@ -9,6 +9,7 @@ import {
 import type { ApiEnvelope } from "../src/lib/api-client";
 import type {
   SandpiBootstrap,
+  WorkspaceDirectoryListing,
   WorkspaceIdeFile,
   WorkspaceIdeSnapshot,
 } from "../src/lib/types";
@@ -79,6 +80,72 @@ test("loads the live workspace and Environment credential surface", async ({
   expect(browserErrors).toEqual([]);
 });
 
+test("requires an exact Environment name before permanent deletion", async ({
+  page,
+  request,
+}) => {
+  const response = await request.get("/api/v1/bootstrap");
+  expect(response.ok()).toBeTruthy();
+  const bootstrap = (await response.json()) as ApiEnvelope<SandpiBootstrap>;
+  const environment = bootstrap.data.environments[0];
+  test.skip(!environment, "An Environment is required for this check.");
+  if (!environment) return;
+
+  let deleteCalls = 0;
+  await page.route(
+    `**/api/v1/environments/${encodeURIComponent(environment.id)}`,
+    async (route) => {
+      if (route.request().method() !== "DELETE") {
+        await route.continue();
+        return;
+      }
+      deleteCalls += 1;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ data: { id: environment.id } }),
+      });
+    },
+  );
+
+  await page.goto(
+    `/?team=${encodeURIComponent(environment.teamId)}&environment=${encodeURIComponent(environment.id)}&new=1`,
+  );
+  await page
+    .getByRole("button", { name: `${environment.name} settings` })
+    .last()
+    .click();
+  await page.getByRole("button", { name: "Delete Environment" }).click();
+
+  const confirmation = page.getByLabel(
+    `Type ${environment.name} to confirm`,
+  );
+  const deletePermanently = page.getByRole("button", {
+    name: "Delete permanently",
+  });
+  await expect(deletePermanently).toBeDisabled();
+  await confirmation.fill(`${environment.name} typo`);
+  await expect(deletePermanently).toBeDisabled();
+  await confirmation.fill(environment.name);
+  await expect(deletePermanently).toBeEnabled();
+  await deletePermanently.click();
+
+  await expect(
+    page.getByRole("dialog", { name: `${environment.name} settings` }),
+  ).toBeHidden();
+  await expect
+    .poll(() => deleteCalls)
+    .toBe(1);
+  await expect(
+    page.getByRole("button", { name: `${environment.name} settings` }),
+  ).toHaveCount(0);
+  if (bootstrap.data.environments.length === 1) {
+    await expect(
+      page.getByRole("heading", { name: "Create an Environment" }),
+    ).toBeVisible();
+  }
+});
+
 test("serves shared Preferences and Team layouts", async ({ page }) => {
   await page.goto("/preferences");
   await expect(page).toHaveURL(/\/preferences\/?$/);
@@ -116,6 +183,118 @@ test("warns before unloading an open Session chat only", async ({
     page.getByRole("heading", { name: "What should Codex work on?" }),
   ).toBeVisible();
   await expect.poll(() => pageBlocksUnload(page)).toBe(false);
+});
+
+test("keeps the Codex live event response open between tool updates", async ({
+  page,
+  request,
+}) => {
+  const workspace = await activeWorkspace(request);
+  test.skip(!workspace, "An active Session is required for this check.");
+  if (!workspace) return;
+  const { environment, session } = workspace;
+  const eventPath = `/api/v1/sessions/${session.id}/events`;
+  let eventRequests = 0;
+  page.on("request", (browserRequest) => {
+    if (new URL(browserRequest.url()).pathname === eventPath) {
+      eventRequests += 1;
+    }
+  });
+
+  await page.goto(
+    `/?team=${encodeURIComponent(environment.teamId)}&environment=${encodeURIComponent(environment.id)}&session=${encodeURIComponent(session.id)}`,
+  );
+  await expect(page.locator("#conversation")).toBeVisible();
+  await expect.poll(() => eventRequests).toBeGreaterThan(0);
+  // React development mode may perform one immediate setup/cleanup probe. Let
+  // that settle, then assert the response remains open instead of reconnecting
+  // at the EventSource retry interval while Codex is between notifications.
+  await page.waitForTimeout(500);
+  const settledRequests = eventRequests;
+  await page.waitForTimeout(2_500);
+  expect(eventRequests).toBe(settledRequests);
+});
+
+test("reconciles agent-created files while the native volume watch is unavailable", async ({
+  page,
+  request,
+}) => {
+  const workspace = await activeWorkspace(request);
+  test.skip(!workspace, "An active Session is required for this check.");
+  if (!workspace) return;
+  const { environment, session } = workspace;
+  const now = Date.now() / 1_000;
+  const livePath = "/workspace/live-agent-file.ts";
+  let exposeLiveFile = false;
+  let snapshotReads = 0;
+  const liveFile: WorkspaceIdeFile = {
+    path: livePath,
+    name: "live-agent-file.ts",
+    revision: `sha256:${"d".repeat(43)}`,
+    encoding: "base64",
+    content: Buffer.from("export const createdByAgent = true;\n").toString(
+      "base64",
+    ),
+    kind: "text",
+    editable: true,
+    size: "36 B",
+    modifiedAt: now,
+    lineChanges: [],
+  };
+
+  await page.route("**/api/v1/environments/**/ide/file?*", async (route) => {
+    await route.fulfill({ json: { data: liveFile } });
+  });
+  await page.route("**/api/v1/environments/**/ide", async (route) => {
+    snapshotReads += 1;
+    const snapshot: WorkspaceIdeSnapshot = {
+      refreshedAt: now,
+      files: [
+        {
+          id: "workspace",
+          name: "workspace",
+          path: "/workspace",
+          kind: "folder",
+          children: exposeLiveFile
+            ? [
+                {
+                  id: "live-agent-file",
+                  name: liveFile.name,
+                  path: liveFile.path,
+                  kind: "file",
+                  language: "TypeScript",
+                  size: liveFile.size,
+                  modifiedAt: liveFile.modifiedAt,
+                },
+              ]
+            : [],
+        },
+      ],
+      git: { repositories: [] },
+    };
+    await route.fulfill({ json: { data: snapshot } });
+  });
+  await page.routeWebSocket(
+    (url) =>
+      url.pathname ===
+      `/api/v1/environments/${encodeURIComponent(environment.id)}/ide/events`,
+    () => {
+      // Deliberately leave the native watch open without a ready frame.
+    },
+  );
+
+  await page.goto(
+    `/?team=${encodeURIComponent(environment.teamId)}&environment=${encodeURIComponent(environment.id)}&session=${encodeURIComponent(session.id)}`,
+  );
+  await page.getByRole("button", { name: "Open inspector" }).click();
+  await expect(page.locator(".ide-panel")).toBeVisible();
+  await expect(page.locator(`button[title="${livePath}"]`)).toHaveCount(0);
+
+  exposeLiveFile = true;
+  await expect(page.locator(`button[title="${livePath}"]`)).toBeVisible({
+    timeout: 7_000,
+  });
+  expect(snapshotReads).toBeGreaterThan(1);
 });
 
 test("replays only the last three terminal commands after reopen", async ({
@@ -453,17 +632,6 @@ test("renders the dedicated live Web IDE with Git state and changed lines", asyn
             name: "src",
             path: "/workspace/src",
             kind: "folder",
-            children: [
-              {
-                id: "demo",
-                name: "demo.ts",
-                path: "/workspace/src/demo.ts",
-                kind: "file",
-                language: "TypeScript",
-                size: "83 B",
-                modifiedAt: now,
-              },
-            ],
           },
         ],
       },
@@ -532,7 +700,29 @@ test("renders the dedicated live Web IDE with Git state and changed lines", asyn
   });
   page.on("pageerror", (error) => browserErrors.push(error.message));
   let savedContent = "";
+  let directoryLoads = 0;
   let remoteFile = file;
+  await page.route("**/api/v1/environments/**/files?*", async (route) => {
+    const directoryPath = new URL(route.request().url()).searchParams.get("path");
+    expect(directoryPath).toBe("/workspace/src");
+    directoryLoads += 1;
+    const listing: WorkspaceDirectoryListing = {
+      path: "/workspace/src",
+      refreshedAt: now,
+      entries: [
+        {
+          id: "demo",
+          name: "demo.ts",
+          path: "/workspace/src/demo.ts",
+          kind: "file",
+          language: "TypeScript",
+          size: "83 B",
+          modifiedAt: now,
+        },
+      ],
+    };
+    await route.fulfill({ json: { data: listing } });
+  });
   await page.route("**/api/v1/environments/**/ide/file?*", async (route) => {
     if (route.request().method() === "PUT") {
       const body = route.request().postDataJSON() as {
@@ -582,7 +772,16 @@ test("renders the dedicated live Web IDE with Git state and changed lines", asyn
   await expect(page.getByText("workspace", { exact: true })).toBeVisible();
   await expect(
     page.locator('button[title="/workspace/src/demo.ts"]'),
+  ).toHaveCount(0);
+  const sourceFolder = page.locator('button[title="/workspace/src"]');
+  await sourceFolder.click();
+  await expect(
+    page.locator('button[title="/workspace/src/demo.ts"]'),
   ).toBeVisible();
+  await expect.poll(() => directoryLoads).toBe(1);
+  await sourceFolder.click();
+  await sourceFolder.click();
+  await expect.poll(() => directoryLoads).toBe(1);
   await expect(page.getByText('const transport = "websocket";')).toBeVisible();
   await expect(page.locator(".sandpi-line-modified")).toHaveCount(1);
   await expect(page.locator(".sandpi-line-added")).toHaveCount(1);

@@ -152,6 +152,32 @@
   color: var(--ink-faint);
 }
 
+.directorySpinner {
+  animation: spin 0.9s linear infinite;
+}
+
+.directoryStatus {
+  display: flex;
+  width: 100%;
+  min-height: 24px;
+  align-items: center;
+  gap: 5px;
+  border: 0;
+  background: transparent;
+  color: var(--ink-faint);
+  font-size: 9px;
+  text-align: left;
+}
+
+button.directoryStatus {
+  cursor: pointer;
+}
+
+button.directoryStatus:hover {
+  background: var(--hover);
+  color: var(--ink-soft);
+}
+
 .fileIcon {
   display: inline-flex;
   flex: 0 0 auto;

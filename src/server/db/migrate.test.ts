@@ -47,6 +47,7 @@ test("migration history contains every durable Sandpi boundary", async () => {
       "0020_native_history_materialization",
       "0021_session_operation_recovery",
       "0022_environment_runtime",
+      "0023_environment_lifecycle",
     ],
   );
 
@@ -181,6 +182,16 @@ test("migration history contains every durable Sandpi boundary", async () => {
   );
   assert.doesNotMatch(
     environmentRuntimeSql,
+    /prompt\s+(TEXT|JSONB)|message\s+(TEXT|JSONB)|payload\s+JSONB/i,
+  );
+
+  const environmentLifecycleSql = migrations[22]?.sql ?? "";
+  assert.match(environmentLifecycleSql, /lifecycle_policy_version INTEGER/);
+  assert.match(environmentLifecycleSql, /sandbox_hard_expires_at TIMESTAMPTZ/);
+  assert.match(environmentLifecycleSql, /last_turn_completed_at TIMESTAMPTZ/);
+  assert.match(environmentLifecycleSql, /idle_pause_due_at TIMESTAMPTZ/);
+  assert.doesNotMatch(
+    environmentLifecycleSql,
     /prompt\s+(TEXT|JSONB)|message\s+(TEXT|JSONB)|payload\s+JSONB/i,
   );
 });

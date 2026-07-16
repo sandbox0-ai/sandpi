@@ -39,6 +39,7 @@ function runtimeWithClient(client: unknown) {
 }
 
 test("claims exactly one Environment Sandbox around its shared Workspace Volume", async () => {
+  const hardExpiresAt = new Date("2026-08-15T00:00:00.000Z");
   const allocations: Array<Record<string, string>> = [];
   let volumeCreates = 0;
   let claimInput: Record<string, unknown> | undefined;
@@ -57,6 +58,7 @@ test("claims exactly one Environment Sandbox around its shared Workspace Volume"
       },
       async waitForLifecycle(sandboxId: string) {
         assert.equal(sandboxId, "sandbox-environment");
+        return { status: "running", hardExpiresAt };
       },
     },
   });
@@ -71,6 +73,7 @@ test("claims exactly one Environment Sandbox around its shared Workspace Volume"
   assert.deepEqual(provisioned, {
     sandboxId: "sandbox-environment",
     workspaceVolumeId: "volume-environment",
+    hardExpiresAt,
   });
   assert.equal(volumeCreates, 0);
   assert.deepEqual(
@@ -81,7 +84,11 @@ test("claims exactly one Environment Sandbox around its shared Workspace Volume"
     },
   );
   assert.equal(
-    "hardTtl" in ((claimInput?.config ?? {}) as Record<string, unknown>),
+    ((claimInput?.config ?? {}) as Record<string, unknown>).hardTtl,
+    30 * 24 * 60 * 60,
+  );
+  assert.equal(
+    ((claimInput?.config ?? {}) as Record<string, unknown>).autoResume,
     false,
   );
   assert.deepEqual(allocations, [
@@ -93,6 +100,7 @@ test("claims exactly one Environment Sandbox around its shared Workspace Volume"
 });
 
 test("creates one Workspace Volume when provisioning a new Environment", async () => {
+  const hardExpiresAt = new Date("2026-08-15T00:00:00.000Z");
   const allocations: Array<Record<string, string>> = [];
   const runtime = runtimeWithClient({
     volumes: {
@@ -105,7 +113,9 @@ test("creates one Workspace Volume when provisioning a new Environment", async (
         assert.equal(input.mounts[0]?.sandboxvolumeId, "volume-new");
         return { id: "sandbox-new" };
       },
-      async waitForLifecycle() {},
+      async waitForLifecycle() {
+        return { status: "running", hardExpiresAt };
+      },
     },
   });
 
@@ -119,11 +129,68 @@ test("creates one Workspace Volume when provisioning a new Environment", async (
   assert.deepEqual(provisioned, {
     sandboxId: "sandbox-new",
     workspaceVolumeId: "volume-new",
+    hardExpiresAt,
   });
   assert.deepEqual(allocations, [
     { workspaceVolumeId: "volume-new" },
     { sandboxId: "sandbox-new", workspaceVolumeId: "volume-new" },
   ]);
+});
+
+test("applies and executes the Environment lifecycle through Sandbox0", async () => {
+  const hardExpiresAt = new Date("2026-08-15T00:00:00.000Z");
+  const updates: unknown[] = [];
+  let paused = false;
+  let resumed = false;
+  const runtime = runtimeWithClient({
+    sandboxes: {
+      async update(sandboxId: string, request: unknown) {
+        assert.equal(sandboxId, "sandbox-environment");
+        updates.push(request);
+        return { hardExpiresAt };
+      },
+      async get() {
+        return paused
+          ? { status: "paused", paused: true, hardExpiresAt }
+          : { status: "running", paused: false, hardExpiresAt };
+      },
+      async pauseAndWait() {
+        paused = true;
+        return { status: "paused", paused: true, hardExpiresAt };
+      },
+      async resumeAndWait() {
+        paused = false;
+        resumed = true;
+        return { status: "running", paused: false, hardExpiresAt };
+      },
+    },
+  });
+  const coordinates: EnvironmentRuntimeRecord = {
+    id: environment.id,
+    sandboxId: environment.sandboxId,
+    workspaceVolumeId: environment.workspaceVolumeId,
+    runtimeGeneration: 1,
+    decoder: {
+      supervisorCursor: 0,
+      tailBase64: "",
+      runtimeGeneration: 1,
+    },
+  };
+
+  assert.deepEqual(
+    await runtime.configureEnvironmentLifecycle(coordinates, 900),
+    { hardExpiresAt, resumed: false },
+  );
+  assert.deepEqual(updates, [
+    { config: { hardTtl: 900, autoResume: false } },
+  ]);
+  await runtime.pauseEnvironment(coordinates);
+  assert.equal(paused, true);
+  assert.deepEqual(await runtime.resumeEnvironment(coordinates), {
+    hardExpiresAt,
+    resumed: true,
+  });
+  assert.equal(resumed, true);
 });
 
 test("starts one Environment-scoped Codex app-server with native state on the Volume", async () => {
@@ -247,4 +314,151 @@ test("all Environment file access resolves through the shared Sandbox", async ()
   const content = await runtime.readFile(coordinates, "/workspace/README.md");
   assert.equal(Buffer.from(content).toString("utf8"), "hello");
   assert.deepEqual(sandboxIds, ["sandbox-environment"]);
+});
+
+test("streams retained and live Codex events from the Supervisor cursor", async () => {
+  const watches: Array<{
+    sessionId: string;
+    after?: number;
+    signal?: AbortSignal;
+  }> = [];
+  let closes = 0;
+  const runtime = runtimeWithClient({
+    sandboxes: {
+      sandbox(sandboxId: string) {
+        assert.equal(sandboxId, "sandbox-environment");
+        return {
+          async watchSessionEvents(
+            sessionId: string,
+            options: { after?: number; signal?: AbortSignal },
+          ) {
+            watches.push({ sessionId, ...options });
+            return {
+              async *[Symbol.asyncIterator]() {
+                yield {
+                  seq: 8,
+                  runtimeGeneration: 2,
+                  attemptId: "attempt-stream",
+                  type: "output",
+                  stream: "stdout",
+                  dataBase64: Buffer.from("{}\n").toString("base64"),
+                  occurredAt: new Date("2026-07-16T01:02:03.000Z"),
+                };
+              },
+              async close() {
+                closes += 1;
+              },
+            };
+          },
+        };
+      },
+    },
+  });
+  const coordinates: EnvironmentRuntimeRecord = {
+    id: environment.id,
+    sandboxId: environment.sandboxId,
+    workspaceVolumeId: environment.workspaceVolumeId,
+    supervisorSessionId: "supervisor-environment-test",
+    attemptId: "attempt-stream",
+    runtimeGeneration: 2,
+    decoder: {
+      supervisorCursor: 7,
+      tailBase64: "",
+      attemptId: "attempt-stream",
+      runtimeGeneration: 2,
+    },
+  };
+  const controller = new AbortController();
+
+  const stream = await runtime.watchCodexEvents(
+    coordinates,
+    7,
+    controller.signal,
+  );
+  const events = [];
+  for await (const event of stream.events) events.push(event);
+  await stream.close();
+
+  assert.deepEqual(watches, [
+    {
+      sessionId: "supervisor-environment-test",
+      after: 7,
+      signal: controller.signal,
+    },
+  ]);
+  assert.equal(events[0]?.occurredAt, "2026-07-16T01:02:03.000Z");
+  assert.equal(closes, 1);
+});
+
+test("lists one Workspace directory without recursively expanding folders", async () => {
+  const listedPaths: string[] = [];
+  const runtime = runtimeWithClient({
+    sandboxes: {
+      sandbox(sandboxId: string) {
+        assert.equal(sandboxId, "sandbox-environment");
+        return {
+          async listFiles(directoryPath: string) {
+            listedPaths.push(directoryPath);
+            return [
+              {
+                name: "src",
+                path: "/workspace/src",
+                type: "dir",
+                size: 0,
+              },
+              {
+                name: ".codex",
+                path: "/workspace/.codex",
+                type: "dir",
+                size: 0,
+              },
+              {
+                name: "node_modules",
+                path: "/workspace/node_modules",
+                type: "dir",
+                size: 0,
+              },
+              {
+                name: ".env",
+                path: "/workspace/.env",
+                type: "file",
+                size: 12,
+              },
+              {
+                name: "README.md",
+                path: "/workspace/README.md",
+                type: "file",
+                size: 5,
+              },
+            ];
+          },
+        };
+      },
+    },
+  });
+  const coordinates: EnvironmentRuntimeRecord = {
+    id: environment.id,
+    sandboxId: environment.sandboxId,
+    workspaceVolumeId: environment.workspaceVolumeId,
+    runtimeGeneration: 1,
+    decoder: { supervisorCursor: 0, tailBase64: "", runtimeGeneration: 1 },
+  };
+
+  const listing = await runtime.listFiles(coordinates, "/workspace");
+
+  assert.deepEqual(listedPaths, ["/workspace"]);
+  assert.equal(listing.path, "/workspace");
+  assert.equal(typeof listing.refreshedAt, "number");
+  assert.deepEqual(
+    listing.entries.map((entry) => ({
+      name: entry.name,
+      kind: entry.kind,
+      children: entry.children,
+    })),
+    [
+      { name: "src", kind: "folder", children: undefined },
+      { name: ".env", kind: "file", children: undefined },
+      { name: "README.md", kind: "file", children: undefined },
+    ],
+  );
 });

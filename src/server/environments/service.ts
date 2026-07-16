@@ -1,4 +1,7 @@
+import { setTimeout as delay } from "node:timers/promises";
+
 import type { Environment, NetworkPolicy } from "@/lib/types";
+import { conflict, HttpError } from "@/server/http-error";
 import type { RuntimeAdapter } from "@/server/runtime/types";
 import { SandpiStore } from "@/server/store";
 
@@ -10,12 +13,22 @@ interface ServiceLogger {
 export class EnvironmentService {
   private reconciliation?: Promise<void>;
   private reconciliationRequested = false;
+  private beforeDelete?: (
+    userId: string,
+    environmentId: string,
+  ) => Promise<void> | void;
 
   constructor(
     private readonly store: SandpiStore,
     private readonly runtime: RuntimeAdapter,
     private readonly logger: ServiceLogger,
   ) {}
+
+  setBeforeDelete(
+    handler: (userId: string, environmentId: string) => Promise<void> | void,
+  ) {
+    this.beforeDelete = handler;
+  }
 
   reconcilePending() {
     this.reconciliationRequested = true;
@@ -93,6 +106,59 @@ export class EnvironmentService {
       );
     }
     return this.store.updateEnvironment(userId, environmentId, input);
+  }
+
+  /**
+   * Permanently deletes one Environment and every resource it owns. External
+   * resources are removed before PostgreSQL metadata so a partial failure can
+   * be retried without losing the Sandbox0 coordinates needed for cleanup.
+   */
+  async delete(userId: string, environmentId: string) {
+    let environment = await this.store.getEnvironment(userId, environmentId);
+    if (environment.status === "updating" && this.reconciliation) {
+      await this.reconciliation;
+      environment = await this.store.getEnvironment(userId, environmentId);
+    }
+    if (environment.status === "updating") {
+      throw conflict(
+        "environment_provisioning_in_progress",
+        "Wait for Environment provisioning to finish before deleting it.",
+      );
+    }
+
+    const deadline = Date.now() + 130_000;
+    while (Date.now() < deadline) {
+      const result = await this.store.withEnvironmentLifecycleLock(
+        environmentId,
+        async () => {
+          const resources = await this.store.prepareEnvironmentDeletion(
+            userId,
+            environmentId,
+          );
+          try {
+            await this.beforeDelete?.(userId, environmentId);
+            await this.runtime.deleteEnvironmentResources(resources);
+            await this.store.deleteEnvironmentMetadata(userId, environmentId);
+            this.logger.info({ environmentId }, "Environment deleted");
+          } catch (error) {
+            await this.store.recordEnvironmentDeletionFailure(
+              environmentId,
+              errorMessage(error),
+            );
+            throw error;
+          }
+        },
+      );
+      if (result.acquired) return;
+      // A pause, wake, or Turn admission already owns this Environment. Poll
+      // without pinning a PostgreSQL connection behind the external operation.
+      await delay(250);
+    }
+    throw new HttpError(
+      503,
+      "environment_lifecycle_busy",
+      "Timed out waiting to delete the Environment.",
+    );
   }
 
   private async provision(environmentId: string) {

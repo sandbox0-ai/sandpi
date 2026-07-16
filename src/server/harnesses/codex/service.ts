@@ -9,6 +9,7 @@ import {
   type CodexThread,
 } from "@/harnesses/codex/types";
 import type { Environment } from "@/lib/types";
+import type { EnvironmentLifecycleService } from "@/server/environments/lifecycle-service";
 import { toUnixTimestamp } from "@/lib/time";
 import { HttpError } from "@/server/http-error";
 import type {
@@ -31,8 +32,9 @@ import {
   type EncodedCodexInputImage,
 } from "./input-images";
 
-const INGEST_INTERVAL_MS = 400;
-const RPC_INGEST_INTERVAL_MS = 80;
+const STREAM_RECONNECT_DELAY_MS = 250;
+const STREAM_BATCH_DELAY_MS = 20;
+const STREAM_BATCH_MAX_EVENTS = 128;
 const RPC_TIMEOUT_MS = 30_000;
 const MAX_RPC_RESPONSES_PER_ENVIRONMENT = 512;
 const MAX_LIVE_NOTIFICATIONS_PER_SESSION = 1_000;
@@ -114,10 +116,6 @@ export interface CodexNativeSnapshotRead {
 export class CodexService {
   private readonly workers = new Map<string, AbortController>();
   private readonly workerTasks = new Map<string, Promise<void>>();
-  private readonly ingesting = new Map<
-    string,
-    Promise<DecodedCodexRecord[]>
-  >();
   private readonly recovering = new Map<
     string,
     Promise<StoredEnvironmentRuntime>
@@ -130,7 +128,6 @@ export class CodexService {
   >();
   private readonly rpcAnchors = new Map<string, Map<string, RpcAnchor>>();
   private readonly rpcWaiters = new Map<string, Set<RpcWaiter>>();
-  private readonly rpcPumps = new Map<string, Promise<void>>();
   private readonly requestOwners = new Map<string, string>();
   private readonly nativeOwners = new Map<string, string>();
   private readonly live = new Map<string, LiveNotificationState>();
@@ -143,7 +140,11 @@ export class CodexService {
     private readonly runtime: RuntimeAdapter,
     private readonly logger: ServiceLogger,
     private readonly credentials: CodexCredentialProvider,
-    private readonly options: { ingestIntervalMs?: number } = {},
+    private readonly options: {
+      streamReconnectDelayMs?: number;
+      streamBatchDelayMs?: number;
+      lifecycle?: EnvironmentLifecycleService;
+    } = {},
   ) {
     this.events.setMaxListeners(0);
   }
@@ -356,11 +357,10 @@ export class CodexService {
       input.userId,
       input.sessionId,
     );
-    const environmentRuntime = await this.environmentRuntimeForSession(
-      input.userId,
-      input.sessionId,
-    );
     const submission = turnSubmissionCoordinates(input.sessionId);
+    // Persist pending delivery while holding the same Environment advisory
+    // lock used by idle pause. If pause won first, the following ensure call
+    // resumes it; if Turn admission won first, pause observes pending work.
     await this.store.beginSessionTurn(
       input.userId,
       input.sessionId,
@@ -368,6 +368,10 @@ export class CodexService {
       submission,
     );
     try {
+      const environmentRuntime = await this.environmentRuntimeForSession(
+        input.userId,
+        input.sessionId,
+      );
       await this.store.markTurnSubmitted(
         input.sessionId,
         submission.requestId,
@@ -787,11 +791,8 @@ export class CodexService {
     environmentId: string,
     operation: (runtime: StoredEnvironmentRuntime) => Promise<T>,
   ) {
-    let runtime = await this.store.getEnvironmentRuntime(userId, environmentId);
-    if (!runtime.supervisorSessionId) {
-      const environment = await this.store.getEnvironment(userId, environmentId);
-      runtime = await this.ensureEnvironmentRuntimeForUser(userId, environment);
-    }
+    const environment = await this.store.getEnvironment(userId, environmentId);
+    let runtime = await this.ensureEnvironmentRuntimeForUser(userId, environment);
     try {
       return await operation(runtime);
     } catch (error) {
@@ -808,80 +809,80 @@ export class CodexService {
       .catch(() => undefined);
   }
 
+  suspendEnvironmentWorker(environmentId: string) {
+    this.workers.get(environmentId)?.abort();
+  }
+
   private ensureEnvironmentWorker(environmentId: string) {
-    if (this.closed || this.workers.has(environmentId)) return;
+    this.startEnvironmentWorker(environmentId, false);
+  }
+
+  private restartEnvironmentWorker(environmentId: string) {
+    this.startEnvironmentWorker(environmentId, true);
+  }
+
+  private startEnvironmentWorker(environmentId: string, replace: boolean) {
+    if (this.closed) return;
+    const active = this.workers.get(environmentId);
+    if (active && !replace) return;
+    active?.abort();
     const controller = new AbortController();
     this.workers.set(environmentId, controller);
     const task = this.runWorker(environmentId, controller.signal).finally(() => {
       if (this.workers.get(environmentId) === controller) {
         this.workers.delete(environmentId);
       }
-      this.workerTasks.delete(environmentId);
+      if (this.workerTasks.get(environmentId) === task) {
+        this.workerTasks.delete(environmentId);
+      }
     });
     this.workerTasks.set(environmentId, task);
   }
 
-  async ingestOnce(sessionId: string) {
-    const session = await this.store.sessionRuntime(sessionId);
-    return this.ingestEnvironmentOnce(session.environmentId);
-  }
-
-  private async ingestEnvironmentOnce(environmentId: string) {
-    const active = this.ingesting.get(environmentId);
-    if (active) return active;
-    const ingest = this.performIngestOnce(environmentId).finally(() => {
-      if (this.ingesting.get(environmentId) === ingest) {
-        this.ingesting.delete(environmentId);
-      }
-    });
-    this.ingesting.set(environmentId, ingest);
-    return ingest;
-  }
-
-  private async performIngestOnce(environmentId: string) {
-    const stored = await this.store.environmentRuntime(environmentId);
-    if (!stored.supervisorSessionId) return [];
-    const page = await this.runtime.listCodexEvents(
-      stored,
-      stored.decoder.supervisorCursor,
-    );
-    if (
-      page.cursor.earliest > 0 &&
-      page.cursor.earliest > stored.decoder.supervisorCursor + 1
-    ) {
-      await this.store.resetEnvironmentDecoder(
-        environmentId,
-        page.cursor.earliest - 1,
+  private async commitEnvironmentEvents(
+    stored: StoredEnvironmentRuntime,
+    values: readonly SupervisorOutputEvent[],
+  ) {
+    if (!stored.supervisorSessionId) {
+      throw new HttpError(
+        409,
+        "codex_runtime_not_ready",
+        "The Environment Codex runtime is not ready.",
       );
-      await this.invalidateEnvironmentSessions(
-        environmentId,
-        "supervisor-journal-gap",
-        "Live execution events expired; the next reconnect reloads each native Codex Session.",
-      );
-      return [];
     }
-    const events = page.events
-      .map(supervisorOutputEvent)
-      .filter((event): event is SupervisorOutputEvent => event !== undefined);
-    if (events.length === 0) return [];
+    const events = values.filter(
+      (event) => event.seq > stored.decoder.supervisorCursor,
+    );
+    if (events.length === 0) return stored;
     const decoded = decodeCodexSupervisorEvents(stored.decoder, events);
+    if (decoded.state.supervisorCursor === stored.decoder.supervisorCursor) {
+      return stored;
+    }
     const transitions = controlTransitions(decoded.records);
     const committed = await this.store.commitEnvironmentTransport(
-      environmentId,
+      stored.id,
       stored.supervisorSessionId,
       stored.decoder,
       decoded.state,
       transitions,
     );
-    if (!committed) return [];
+    if (!committed) throw new EnvironmentEventStreamSupersededError();
+
+    const next = {
+      ...stored,
+      decoder: decoded.state,
+      attemptId: decoded.state.attemptId,
+      runtimeGeneration: decoded.state.runtimeGeneration,
+      version: stored.version + 1,
+    };
 
     for (const record of decoded.records) {
-      this.cacheRpcRecord(environmentId, record.message);
+      this.cacheRpcRecord(stored.id, record.message);
       if (!isTranscriptNotification(record.message)) continue;
       const nativeSessionId = notificationThreadId(record.message);
       if (!nativeSessionId) continue;
       const sessionId = await this.ownerForNativeThread(
-        environmentId,
+        stored.id,
         nativeSessionId,
       );
       if (sessionId) this.publishLiveNotification(sessionId, record);
@@ -889,21 +890,21 @@ export class CodexService {
     for (const transition of transitions) {
       if (transition.type !== "turnCompleted") continue;
       const sessionId = await this.ownerForNativeThread(
-        environmentId,
+        stored.id,
         transition.nativeSessionId,
       );
       if (sessionId) this.events.emit(sessionId);
     }
     if (transitions.some((transition) => transition.type === "turnCompleted")) {
-      await this.captureEnvironmentCredential(stored);
+      await this.captureEnvironmentCredential(next);
     }
     if (decoded.invalidRecords.length > 0) {
       this.logger.warn(
-        { environmentId, count: decoded.invalidRecords.length },
+        { environmentId: stored.id, count: decoded.invalidRecords.length },
         "Codex emitted invalid JSONL records",
       );
     }
-    return decoded.records;
+    return next;
   }
 
   liveCursor(sessionId: string) {
@@ -952,16 +953,13 @@ export class CodexService {
     await Promise.allSettled(this.workerTasks.values());
     await Promise.allSettled(this.startupRecoveries);
     await Promise.allSettled(this.recovering.values());
-    await Promise.allSettled(this.ingesting.values());
     await Promise.allSettled(this.credentialSyncs.values());
     for (const waiters of this.rpcWaiters.values()) {
       for (const waiter of waiters) waiter.reject(new Error("Codex service closed"));
     }
-    await Promise.allSettled(this.rpcPumps.values());
     this.workers.clear();
     this.workerTasks.clear();
     this.rpcWaiters.clear();
-    this.rpcPumps.clear();
     this.rpcResponses.clear();
     this.rpcAnchors.clear();
   }
@@ -970,8 +968,17 @@ export class CodexService {
     userId: string,
     environment: Environment,
   ) {
-    const current = await this.store.getEnvironmentRuntime(userId, environment.id);
-    if (current.supervisorSessionId && current.attemptId) {
+    const lease = this.options.lifecycle
+      ? await this.options.lifecycle.ensureEnvironmentRunning(
+          userId,
+          environment.id,
+        )
+      : {
+          runtime: await this.store.getEnvironmentRuntime(userId, environment.id),
+          resumed: false,
+        };
+    const current = lease.runtime;
+    if (current.supervisorSessionId && current.attemptId && !lease.resumed) {
       await this.ensureProtocolInitialized(current);
       return current;
     }
@@ -988,31 +995,19 @@ export class CodexService {
       recovered,
     );
     await this.credentials.markCredentialMaterialized(environment.id, credential);
+    this.restartEnvironmentWorker(environment.id);
     await this.ensureProtocolInitialized(ready);
     await this.resumeEnvironmentNativeSessions(ready);
-    this.ensureEnvironmentWorker(environment.id);
     return ready;
   }
 
   private async environmentRuntimeForSession(userId: string, sessionId: string) {
     const session = await this.store.getSession(userId, sessionId);
-    let environmentRuntime = await this.store.getEnvironmentRuntime(
+    const environment = await this.store.getEnvironment(
       userId,
       session.environmentId,
     );
-    if (!environmentRuntime.supervisorSessionId || !environmentRuntime.attemptId) {
-      const environment = await this.store.getEnvironment(
-        userId,
-        session.environmentId,
-      );
-      environmentRuntime = await this.ensureEnvironmentRuntimeForUser(
-        userId,
-        environment,
-      );
-    } else {
-      await this.ensureProtocolInitialized(environmentRuntime);
-    }
-    return environmentRuntime;
+    return this.ensureEnvironmentRuntimeForUser(userId, environment);
   }
 
   private recoverEnvironmentRuntime(environmentId: string) {
@@ -1028,7 +1023,13 @@ export class CodexService {
   }
 
   private async performEnvironmentRecovery(environmentId: string) {
-    const current = await this.store.environmentRuntime(environmentId);
+    const current = this.options.lifecycle
+      ? (
+          await this.options.lifecycle.ensureEnvironmentRunningById(
+            environmentId,
+          )
+        ).runtime
+      : await this.store.environmentRuntime(environmentId);
     let credential = await this.credentials.credentialForEnvironmentRuntime(
       environmentId,
     );
@@ -1051,6 +1052,10 @@ export class CodexService {
       recovered,
     );
     await this.credentials.markCredentialMaterialized(environmentId, credential);
+    // A recovered Supervisor can have a new Session journal or process
+    // attempt. Replace the upstream stream before issuing native RPCs so their
+    // retained responses are consumed by the new coordinates.
+    this.restartEnvironmentWorker(environmentId);
     await this.ensureProtocolInitialized(ready);
     await this.resumeEnvironmentNativeSessions(ready);
     return ready;
@@ -1247,6 +1252,10 @@ export class CodexService {
     if (typeof requestId !== "string") {
       throw new Error("A Codex RPC request must have a string id");
     }
+    // The Supervisor journal retains a response written before the SSE
+    // subscription finishes connecting, so starting the Environment worker is
+    // sufficient; no request-specific polling loop is needed.
+    this.ensureEnvironmentWorker(environmentId);
     this.takeRpcResponse(environmentId, requestId);
     if (ownerSessionId) {
       this.requestOwners.set(rpcKey(environmentId, requestId), ownerSessionId);
@@ -1262,7 +1271,6 @@ export class CodexService {
       waiter.reject(error);
       return waiter.promise;
     }
-    this.ensureRpcPump(environmentId, requestId);
     return waiter.promise;
   }
 
@@ -1314,27 +1322,6 @@ export class CodexService {
     waiters.add(waiter);
     this.rpcWaiters.set(key, waiters);
     return waiter;
-  }
-
-  private ensureRpcPump(environmentId: string, requestId: string) {
-    const key = rpcKey(environmentId, requestId);
-    if (this.rpcPumps.has(key)) return;
-    const pump = (async () => {
-      while (this.rpcWaiters.has(key)) {
-        await this.ingestEnvironmentOnce(environmentId);
-        if (this.rpcWaiters.has(key)) await delay(RPC_INGEST_INTERVAL_MS);
-      }
-    })()
-      .catch((error) => {
-        for (const waiter of this.rpcWaiters.get(key) ?? []) waiter.reject(error);
-      })
-      .finally(() => {
-        if (this.rpcPumps.get(key) === pump) this.rpcPumps.delete(key);
-        if (this.rpcWaiters.has(key)) {
-          this.ensureRpcPump(environmentId, requestId);
-        }
-      });
-    this.rpcPumps.set(key, pump);
   }
 
   private cacheRpcRecord(
@@ -1480,16 +1467,68 @@ export class CodexService {
   private async runWorker(environmentId: string, signal: AbortSignal) {
     let consecutiveFailures = 0;
     while (!signal.aborted) {
+      let stream:
+        | Awaited<ReturnType<RuntimeAdapter["watchCodexEvents"]>>
+        | undefined;
       try {
-        await this.ingestEnvironmentOnce(environmentId);
+        let stored = await this.store.environmentRuntime(environmentId);
+        if (stored.desiredState !== "running") break;
+        if (!stored.supervisorSessionId) {
+          throw new HttpError(
+            409,
+            "codex_runtime_not_ready",
+            "The Environment Codex runtime is not ready.",
+          );
+        }
+        stream = await this.runtime.watchCodexEvents(
+          stored,
+          stored.decoder.supervisorCursor,
+          signal,
+        );
         consecutiveFailures = 0;
+        for await (const batch of batchSupervisorEvents(
+          stream.events,
+          this.options.streamBatchDelayMs ?? STREAM_BATCH_DELAY_MS,
+          STREAM_BATCH_MAX_EVENTS,
+          signal,
+        )) {
+          if (signal.aborted) break;
+          stored = await this.commitEnvironmentEvents(stored, batch);
+        }
+        if (!signal.aborted) {
+          consecutiveFailures = 1;
+          this.logger.debug(
+            { environmentId },
+            "Codex Environment event stream ended; reconnecting",
+          );
+        }
       } catch (error) {
+        if (signal.aborted || isAbortError(error)) break;
+        if (error instanceof EnvironmentEventStreamSupersededError) {
+          consecutiveFailures = 0;
+          continue;
+        }
+        const earliest = expiredEventCursorEarliest(error);
+        if (earliest !== undefined) {
+          await this.store.resetEnvironmentDecoder(
+            environmentId,
+            Math.max(0, earliest - 1),
+          );
+          await this.invalidateEnvironmentSessions(
+            environmentId,
+            "supervisor-journal-gap",
+            "Live execution events expired; the next reconnect reloads each native Codex Session.",
+          );
+          consecutiveFailures = 0;
+          continue;
+        }
         consecutiveFailures += 1;
         this.logger.warn(
           { environmentId, error: errorMessage(error) },
-          "Codex Environment event ingest failed",
+          "Codex Environment event stream failed",
         );
         if (isRecoverableRuntimeError(error)) {
+          if (!(await this.store.environmentWantsRunning(environmentId))) break;
           try {
             await this.recoverEnvironmentRuntime(environmentId);
             await this.invalidateEnvironmentSessions(
@@ -1505,29 +1544,23 @@ export class CodexService {
             );
           }
         }
+      } finally {
+        try {
+          await stream?.close();
+        } catch {
+          // The stream is already disconnected or aborted.
+        }
       }
+      if (signal.aborted) break;
+      if (!(await this.store.environmentWantsRunning(environmentId))) break;
       const backoff = Math.min(
         30_000,
-        (this.options.ingestIntervalMs ?? INGEST_INTERVAL_MS) *
-          2 ** Math.min(consecutiveFailures, 6),
+        (this.options.streamReconnectDelayMs ?? STREAM_RECONNECT_DELAY_MS) *
+          2 ** Math.min(Math.max(0, consecutiveFailures - 1), 6),
       );
       await delay(backoff, signal);
     }
   }
-}
-
-function supervisorOutputEvent(value: unknown): SupervisorOutputEvent | undefined {
-  if (!value || typeof value !== "object") return undefined;
-  const event = value as Record<string, unknown>;
-  if (
-    typeof event.seq !== "number" ||
-    typeof event.runtimeGeneration !== "number" ||
-    typeof event.type !== "string" ||
-    typeof event.occurredAt !== "string"
-  ) {
-    return undefined;
-  }
-  return event as unknown as SupervisorOutputEvent;
 }
 
 function controlTransitions(
@@ -1557,11 +1590,16 @@ function controlTransitions(
     }
     const status = objectString(turn, "status");
     if (status === "completed" || status === "failed" || status === "interrupted") {
+      const completedAt = objectNumber(turn, "completedAt");
       transitions.push({
         type: "turnCompleted",
         nativeSessionId,
         nativeTurnId,
         status,
+        completedAt:
+          completedAt === undefined
+            ? new Date(record.receivedAt)
+            : new Date(completedAt * 1_000),
       });
     }
   }
@@ -1720,6 +1758,71 @@ function trimMap<K, V>(map: Map<K, V>, maximum: number) {
     if (oldest === undefined) break;
     map.delete(oldest);
   }
+}
+
+class EnvironmentEventStreamSupersededError extends Error {
+  constructor() {
+    super("Environment event stream coordinates were superseded.");
+    this.name = "EnvironmentEventStreamSupersededError";
+  }
+}
+
+/**
+ * Preserve low live latency without committing one PostgreSQL transaction per
+ * stdout chunk. The pending iterator read is retained when the batch deadline
+ * wins, so no event is cancelled or requested twice.
+ */
+async function* batchSupervisorEvents(
+  source: AsyncIterable<SupervisorOutputEvent>,
+  maximumDelayMs: number,
+  maximumEvents: number,
+  signal: AbortSignal,
+) {
+  const iterator = source[Symbol.asyncIterator]();
+  let pending = iterator.next();
+  while (!signal.aborted) {
+    const first = await pending;
+    if (first.done) return;
+    const batch = [first.value];
+    pending = iterator.next();
+    const deadline = delay(maximumDelayMs, signal).then(() => ({
+      kind: "deadline" as const,
+    }));
+
+    while (batch.length < maximumEvents && !signal.aborted) {
+      const outcome = await Promise.race([
+        pending.then((next) => ({ kind: "event" as const, next })),
+        deadline,
+      ]);
+      if (outcome.kind === "deadline") break;
+      if (outcome.next.done) {
+        yield batch;
+        return;
+      }
+      batch.push(outcome.next.value);
+      pending = iterator.next();
+    }
+    yield batch;
+  }
+}
+
+function expiredEventCursorEarliest(error: unknown) {
+  if (
+    !(error instanceof HttpError) ||
+    !error.code.endsWith("event_cursor_expired")
+  ) {
+    return undefined;
+  }
+  const match = error.message.match(/earliest available sequence is (\d+)/i);
+  if (!match) return undefined;
+  const earliest = Number(match[1]);
+  return Number.isSafeInteger(earliest) && earliest > 0
+    ? earliest
+    : undefined;
+}
+
+function isAbortError(error: unknown) {
+  return error instanceof Error && error.name === "AbortError";
 }
 
 function delay(milliseconds: number, signal?: AbortSignal) {

@@ -16,6 +16,7 @@ import type {
   RuntimeMetricSeries,
   EnvironmentAuditFeed,
   EnvironmentMetrics,
+  WorkspaceDirectoryListing,
   WorkspaceFile,
   WorkspaceGitState,
   WorkspaceIdeFile,
@@ -28,11 +29,13 @@ import {
   userVisibleWorkspaceGitState,
 } from "@/lib/workspace-git";
 import {
+  isWorkspaceIdePathHidden,
   isWorkspaceInternalPath,
   userVisibleWorkspacePath,
   WORKSPACE_INTERNAL_ROOT,
 } from "@/lib/workspace-path-policy";
 import { HttpError } from "@/server/http-error";
+import { ENVIRONMENT_SANDBOX_HARD_TTL_SECONDS } from "@/server/environments/lifecycle-policy";
 import { toSandbox0NetworkPolicy } from "./network-policy";
 import {
   CODEX_ENVIRONMENT_CREDENTIAL_PATH,
@@ -41,6 +44,7 @@ import {
   type ProvisionedEnvironment,
   type RecoveredCodexEnvironmentRuntime,
   type RuntimeAdapter,
+  type RuntimeCodexEventStreamHandle,
   type RuntimeProvisionEnvironmentInput,
   type RuntimeTerminalHandle,
   type RuntimeWorkspaceWatchHandle,
@@ -75,18 +79,9 @@ const DEVICE_CODEX_HOME = "/dev/shm/sandpi-codex-device";
 const DEVICE_CODEX_AUTH_FILE = `${DEVICE_CODEX_HOME}/auth.json`;
 const CODEX_AUTH_MAX_BYTES = 4 * 1024 * 1024;
 const AUTH_SANDBOX_HARD_TTL_SECONDS = 30 * 60;
-const MAX_FILE_TREE_DEPTH = 12;
-const MAX_FILE_TREE_ENTRIES = 5_000;
+const MAX_GIT_DISCOVERY_DEPTH = 13;
 const MAX_FILE_PREVIEW_BYTES = 5 * 1024 * 1024;
 const GIT_STATUS_CONCURRENCY = 4;
-// The coding-agent template uses /workspace as HOME, so package-manager caches
-// are runtime data rather than source files and must not be eagerly traversed.
-const HIDDEN_IDE_DIRECTORIES = new Set([
-  ".git",
-  ".next",
-  ".npm",
-  "node_modules",
-]);
 
 type SdkRuntimeMetricSeries = SandboxMetrics["series"][number];
 
@@ -126,20 +121,29 @@ export class Sandbox0Runtime implements RuntimeAdapter {
             },
           ],
           // Environment lifecycle is a product policy, not a Session timeout.
-          // Sandpi intentionally leaves hardTtl unset until that policy exists.
+          // autoResume stays disabled so every wake-up is serialized with the
+          // durable Sandpi lifecycle state instead of occurring behind it.
           config: {
+            hardTtl: ENVIRONMENT_SANDBOX_HARD_TTL_SECONDS,
+            autoResume: false,
             network: toSandbox0NetworkPolicy(input.environment.networkPolicy),
           },
         },
       );
       sandboxId = sandbox.id;
       await input.onResourcesAllocated?.({ sandboxId, workspaceVolumeId });
-      await this.client.sandboxes.waitForLifecycle(
+      const lifecycle = await this.client.sandboxes.waitForLifecycle(
         sandbox.id,
         (state) => state.status === "running",
         { timeoutMs: 120_000 },
       );
-      return { sandboxId, workspaceVolumeId };
+      return {
+        sandboxId,
+        workspaceVolumeId,
+        hardExpiresAt: validDate(lifecycle?.hardExpiresAt)
+          ? lifecycle.hardExpiresAt
+          : new Date(Date.now() + ENVIRONMENT_SANDBOX_HARD_TTL_SECONDS * 1_000),
+      };
     } catch (error) {
       // The allocation journal owns retry/cleanup once a resource id has been
       // published. Only an unpublished Sandbox is safe to delete here.
@@ -196,6 +200,62 @@ export class Sandbox0Runtime implements RuntimeAdapter {
       await this.client.sandboxes
         .sandbox(runtime.sandboxId)
         .updateNetworkPolicy(toSandbox0NetworkPolicy(policy));
+    } catch (error) {
+      throw translateSandbox0Error(error);
+    }
+  }
+
+  async configureEnvironmentLifecycle(
+    runtime: EnvironmentRuntimeRecord,
+    hardTtlSeconds: number,
+  ) {
+    try {
+      const lifecycle = await this.client.sandboxes.update(runtime.sandboxId, {
+        config: {
+          hardTtl: Math.max(1, Math.ceil(hardTtlSeconds)),
+          autoResume: false,
+        },
+      });
+      return {
+        hardExpiresAt: lifecycle.hardExpiresAt,
+        resumed: false,
+      };
+    } catch (error) {
+      throw translateSandbox0Error(error);
+    }
+  }
+
+  async pauseEnvironment(
+    runtime: EnvironmentRuntimeRecord,
+    signal?: AbortSignal,
+  ) {
+    try {
+      const current = await this.client.sandboxes.get(runtime.sandboxId);
+      if (current.paused || current.status === "paused") return;
+      await this.client.sandboxes.pauseAndWait(runtime.sandboxId, {
+        timeoutMs: 120_000,
+        signal,
+      });
+    } catch (error) {
+      throw translateSandbox0Error(error);
+    }
+  }
+
+  async resumeEnvironment(
+    runtime: EnvironmentRuntimeRecord,
+    signal?: AbortSignal,
+  ) {
+    try {
+      let lifecycle = await this.client.sandboxes.get(runtime.sandboxId);
+      let resumed = false;
+      if (lifecycle.paused || lifecycle.status === "paused") {
+        lifecycle = await this.client.sandboxes.resumeAndWait(runtime.sandboxId, {
+          timeoutMs: 120_000,
+          signal,
+        });
+        resumed = true;
+      }
+      return { hardExpiresAt: lifecycle.hardExpiresAt, resumed };
     } catch (error) {
       throw translateSandbox0Error(error);
     }
@@ -320,6 +380,26 @@ export class Sandbox0Runtime implements RuntimeAdapter {
 
   async listCodexAuthEvents(runtime: CodexAuthRuntime, after = 0) {
     return this.listSupervisorEvents(runtime, after);
+  }
+
+  private async listSupervisorEvents(
+    runtime: Pick<CodexAuthRuntime, "sandboxId" | "supervisorSessionId">,
+    after = 0,
+  ) {
+    try {
+      const page = await this.client.sandboxes
+        .sandbox(runtime.sandboxId)
+        .listSessionEvents(runtime.supervisorSessionId, { after, limit: 1_000 });
+      return {
+        events: page.events.map((event) => ({
+          ...event,
+          occurredAt: event.occurredAt.toISOString(),
+        })),
+        cursor: page.cursor,
+      };
+    } catch (error) {
+      throw translateSandbox0Error(error);
+    }
   }
 
   async readCodexAuthJson(runtime: CodexAuthRuntime) {
@@ -520,80 +600,77 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     }
   }
 
-  async listCodexEvents(runtime: EnvironmentRuntimeRecord, after = 0) {
-    return this.listSupervisorEvents(requireCodexSupervisor(runtime), after);
-  }
-
-  private async listSupervisorEvents(
-    runtime: Pick<CodexAuthRuntime, "sandboxId" | "supervisorSessionId">,
+  async watchCodexEvents(
+    runtime: EnvironmentRuntimeRecord,
     after = 0,
-  ) {
+    signal?: AbortSignal,
+  ): Promise<RuntimeCodexEventStreamHandle> {
+    const coordinates = requireCodexSupervisor(runtime);
     try {
-      const page = await this.client.sandboxes
-        .sandbox(runtime.sandboxId)
-        .listSessionEvents(runtime.supervisorSessionId, { after, limit: 1_000 });
+      const stream = await this.client.sandboxes
+        .sandbox(coordinates.sandboxId)
+        .watchSessionEvents(coordinates.supervisorSessionId, { after, signal });
       return {
-        events: page.events.map((event) => ({
-          ...event,
-          occurredAt: event.occurredAt.toISOString(),
-        })),
-        cursor: page.cursor,
+        events: {
+          async *[Symbol.asyncIterator]() {
+            try {
+              for await (const event of stream) {
+                yield {
+                  ...event,
+                  occurredAt: event.occurredAt.toISOString(),
+                };
+              }
+            } catch (error) {
+              throw translateSandbox0Error(error);
+            }
+          },
+        },
+        close: () => stream.close(),
       };
     } catch (error) {
       throw translateSandbox0Error(error);
     }
   }
 
-  async listFiles(runtime: EnvironmentRuntimeRecord, requestedPath: string) {
+  async listFiles(
+    runtime: EnvironmentRuntimeRecord,
+    requestedPath: string,
+  ): Promise<WorkspaceDirectoryListing> {
     const root = safeWorkspacePath(requestedPath);
     const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
     await assertWorkspacePathHasNoSymlink(sandbox, root);
-    let count = 0;
-
-    const visit = async (directory: string, depth: number): Promise<WorkspaceFile[]> => {
-      if (depth > MAX_FILE_TREE_DEPTH || count >= MAX_FILE_TREE_ENTRIES) {
-        return [];
-      }
-      const entries = await sandbox.listFiles(directory);
-      const files: WorkspaceFile[] = [];
-      const sorted = [...entries].sort((left, right) => {
+    const nativeEntries = await sandbox.listFiles(root);
+    const entries: WorkspaceFile[] = [...nativeEntries]
+      .sort((left, right) => {
         const leftFolder = left.type === "dir";
         const rightFolder = right.type === "dir";
         if (leftFolder !== rightFolder) return leftFolder ? -1 : 1;
         return (left.name ?? "").localeCompare(right.name ?? "");
-      });
-      for (const entry of sorted) {
-        if (count++ >= MAX_FILE_TREE_ENTRIES) break;
-        const entryPath = entry.path ?? path.posix.join(directory, entry.name ?? "unknown");
+      })
+      .flatMap((entry) => {
+        const entryPath =
+          entry.path ?? path.posix.join(root, entry.name ?? "unknown");
         const visibleEntryPath = userVisibleWorkspacePath(entryPath);
-        if (!visibleEntryPath) continue;
+        if (!visibleEntryPath) return [];
         const folder = entry.type === "dir";
-        if (folder && HIDDEN_IDE_DIRECTORIES.has(entry.name ?? "")) continue;
-        files.push({
-          id: Buffer.from(visibleEntryPath).toString("base64url"),
-          name: entry.name ?? path.posix.basename(visibleEntryPath),
-          path: visibleEntryPath,
-          kind: folder ? "folder" : "file",
-          size: entry.size === undefined ? undefined : formatFileSize(entry.size),
-          modifiedAt: entry.modTime ? toUnixTimestamp(entry.modTime) : undefined,
-          children: folder ? await visit(visibleEntryPath, depth + 1) : undefined,
-        });
-      }
-      return files;
-    };
-
-    const children = await visit(root, 0);
-    return root === "/workspace"
-      ? [
+        if (isWorkspaceIdePathHidden(visibleEntryPath, folder)) {
+          return [];
+        }
+        return [
           {
-            id: "workspace",
-            name: "workspace",
-            path: "/workspace",
-            kind: "folder" as const,
-            children,
+            id: Buffer.from(visibleEntryPath).toString("base64url"),
+            name: entry.name ?? path.posix.basename(visibleEntryPath),
+            path: visibleEntryPath,
+            kind: folder ? ("folder" as const) : ("file" as const),
+            size:
+              entry.size === undefined ? undefined : formatFileSize(entry.size),
+            modifiedAt: entry.modTime
+              ? toUnixTimestamp(entry.modTime)
+              : undefined,
           },
-        ]
-      : children;
+        ];
+      });
+    return { path: root, entries, refreshedAt: toUnixTimestamp(new Date()) };
   }
 
   async readFile(runtime: EnvironmentRuntimeRecord, requestedPath: string) {
@@ -641,7 +718,7 @@ export class Sandbox0Runtime implements RuntimeAdapter {
         "-mindepth",
         "1",
         "-maxdepth",
-        String(MAX_FILE_TREE_DEPTH + 1),
+        String(MAX_GIT_DISCOVERY_DEPTH),
         "(",
         "-path",
         WORKSPACE_INTERNAL_ROOT,
@@ -649,6 +726,12 @@ export class Sandbox0Runtime implements RuntimeAdapter {
         "-type",
         "d",
         "(",
+        "-name",
+        ".*",
+        "!",
+        "-name",
+        ".git",
+        "-o",
         "-name",
         "node_modules",
         "-o",
@@ -671,7 +754,9 @@ export class Sandbox0Runtime implements RuntimeAdapter {
       return { repositories: [] };
     }
     const roots = gitRepositoryRootsFromMarkers(discovered.stdout).filter(
-      (root) => userVisibleWorkspacePath(root) === root,
+      (root) =>
+        userVisibleWorkspacePath(root) === root &&
+        !isWorkspaceIdePathHidden(root, true),
     );
     const repositories: WorkspaceGitState["repositories"] = [];
     for (let offset = 0; offset < roots.length; offset += GIT_STATUS_CONCURRENCY) {
@@ -936,6 +1021,11 @@ export class Sandbox0Runtime implements RuntimeAdapter {
               // (for example `git add` and `git commit`). Emit one opaque sentinel so
               // clients refresh source control state without exposing `.git` contents.
               yield { event: `git:${message.event}`, path: "/workspace" };
+              continue;
+            }
+            if (isWorkspaceIdePathHidden(eventPath)) {
+              // Hidden directories are absent from the Workspace tree. Ignore
+              // their descendants without suppressing root-level hidden files.
               continue;
             }
             yield { event: message.event, path: eventPath };
@@ -1503,4 +1593,8 @@ function isWorkspaceTransportDisconnected(error: unknown) {
     error instanceof Error &&
     error.message.toLowerCase().includes("transport endpoint is not connected")
   );
+}
+
+function validDate(value: unknown): value is Date {
+  return value instanceof Date && Number.isFinite(value.getTime());
 }

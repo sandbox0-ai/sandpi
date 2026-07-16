@@ -76,7 +76,7 @@ test("formats repository roots relative to the Workspace mount", () => {
   assert.equal(workspaceRepositoryLabel("/workspace/apps/web"), "apps/web");
 });
 
-test("filters Sandpi-owned repositories and changes from client Git state", () => {
+test("filters internal and hidden repositories and changes from client Git state", () => {
   const rootRepository = repository("/workspace", [
     {
       path: "/workspace/.sandpi/codex/rollout.jsonl",
@@ -106,6 +106,15 @@ test("filters Sandpi-owned repositories and changes from client Git state", () =
       staged: true,
       unstaged: false,
     },
+    {
+      path: "/workspace/notes.md",
+      relativePath: "notes.md",
+      kind: "modified",
+      indexStatus: ".",
+      worktreeStatus: "M",
+      staged: false,
+      unstaged: true,
+    },
   ]);
   const state = userVisibleWorkspaceGitState({
     repositories: [
@@ -117,13 +126,13 @@ test("filters Sandpi-owned repositories and changes from client Git state", () =
   assert.deepEqual(state.repositories.map((item) => item.root), ["/workspace"]);
   assert.deepEqual(
     state.repositories[0]?.files.map((file) => file.path),
-    ["/workspace/.sandpi-other/notes.md"],
+    ["/workspace/notes.md"],
   );
   assert.deepEqual(
     workspaceGitChanges({ repositories: [rootRepository] }).map(
       (file) => file.path,
     ),
-    ["/workspace/.sandpi-other/notes.md"],
+    ["/workspace/notes.md"],
   );
   assert.equal(
     repositoryForWorkspacePath(

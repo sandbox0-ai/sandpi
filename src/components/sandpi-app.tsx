@@ -1,5 +1,6 @@
 "use client";
 
+import { Box, PanelLeftOpen, Plus } from "lucide-react";
 import {
   type CSSProperties,
   useCallback,
@@ -50,6 +51,15 @@ function replaceWorkspaceUrl(
     url.searchParams.delete("session");
     url.searchParams.set("new", "1");
   }
+  window.history.replaceState(window.history.state, "", url);
+}
+
+function replaceTeamUrl(teamId: string) {
+  const url = new URL(window.location.href);
+  url.searchParams.set("team", teamId);
+  url.searchParams.delete("environment");
+  url.searchParams.delete("session");
+  url.searchParams.delete("new");
   window.history.replaceState(window.history.state, "", url);
 }
 
@@ -258,6 +268,8 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
       setSidebarOpen(false);
       if (nextEnvironment) {
         replaceWorkspaceUrl(nextTeam.id, nextEnvironment.id, nextSession?.id);
+      } else {
+        replaceTeamUrl(nextTeam.id);
       }
     },
     [environments, hydrateSession, initialData.teams, selectedTeamId, sessions],
@@ -339,6 +351,59 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
       );
     },
     [],
+  );
+
+  const handleEnvironmentDeleted = useCallback(
+    (environmentId: string) => {
+      const remainingEnvironments = environments.filter(
+        (environment) => environment.id !== environmentId,
+      );
+      const remainingSessions = sessions.filter(
+        (session) => session.environmentId !== environmentId,
+      );
+      const nextEnvironment = environmentsForTeam(
+        remainingEnvironments,
+        selectedTeamId,
+      )[0];
+      const nextSession = nextEnvironment
+        ? visibleSessionsForEnvironment(
+            remainingSessions,
+            nextEnvironment.id,
+          )[0]
+        : undefined;
+
+      setEnvironments((current) =>
+        current.filter((environment) => environment.id !== environmentId),
+      );
+      setSessions((current) =>
+        current.filter((session) => session.environmentId !== environmentId),
+      );
+      setSettingsEnvironmentId(null);
+      setInspectorOpen(false);
+      setTerminalOpen(false);
+
+      if (selectedEnvironmentId === environmentId) {
+        setSelectedEnvironmentId(nextEnvironment?.id ?? "");
+        setSelectedSessionId(nextSession?.id ?? "");
+        if (nextEnvironment) {
+          replaceWorkspaceUrl(
+            selectedTeamId,
+            nextEnvironment.id,
+            nextSession?.id,
+          );
+          if (nextSession) void hydrateSession(nextSession.id);
+        } else {
+          replaceTeamUrl(selectedTeamId);
+        }
+      }
+    },
+    [
+      environments,
+      hydrateSession,
+      selectedEnvironmentId,
+      selectedTeamId,
+      sessions,
+    ],
   );
 
   const handleSessionCreated = useCallback(
@@ -496,12 +561,117 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
     setTerminalMaximized(true);
   }, [terminalHeight, terminalMaximized, terminalRestoreHeight]);
 
-  if (!selectedTeam || !selectedEnvironment) {
-    return <div className="empty-app">No Team Environment is available.</div>;
+  if (!selectedTeam) {
+    return <div className="empty-app">No Team is available.</div>;
   }
 
   const showInspector = inspectorOpen;
   const showTerminal = terminalOpen;
+  const sidebar = (
+    <Sidebar
+      language={preferences.general.language}
+      viewer={initialData.viewer}
+      teams={initialData.teams}
+      viewerMemberships={initialData.viewerMemberships}
+      plans={initialData.plans}
+      selectedTeamId={selectedTeam.id}
+      environments={teamEnvironments}
+      sessions={teamSessions}
+      selectedEnvironmentId={selectedEnvironment?.id ?? ""}
+      selectedSessionId={selectedSession?.id ?? ""}
+      onSelectEnvironment={handleSelectEnvironment}
+      onSelectSession={handleSelectSession}
+      onSelectTeam={handleSelectTeam}
+      onNewEnvironment={() => setNewEnvironmentOpen(true)}
+      onNewSession={(environmentId) => {
+        setSelectedEnvironmentId(environmentId);
+        setSelectedSessionId("");
+        replaceWorkspaceUrl(selectedTeam.id, environmentId);
+        setSidebarOpen(false);
+      }}
+      onEnvironmentSettings={(environmentId) => {
+        handleSelectEnvironment(environmentId);
+        setSettingsEnvironmentId(environmentId);
+      }}
+      onRenameSession={handleRenameSession}
+      onForkSession={handleForkSession}
+      onArchiveSession={handleArchiveSession}
+      onTogglePinSession={handleTogglePinSession}
+      onCollapse={() => {
+        setSidebarCollapsed(true);
+        setSidebarOpen(false);
+      }}
+      onCloseMobile={() => setSidebarOpen(false)}
+    />
+  );
+
+  if (!selectedEnvironment) {
+    return (
+      <AppFrame
+        as="main"
+        className={`app-shell environment-empty-shell ${
+          sidebarOpen ? "sidebar-is-open" : ""
+        } ${sidebarCollapsed ? "sidebar-is-collapsed" : ""}`}
+      >
+        {sidebar}
+        {sidebarOpen ? (
+          <button
+            type="button"
+            className="mobile-scrim"
+            aria-label="Close navigation"
+            onClick={() => setSidebarOpen(false)}
+          />
+        ) : null}
+        <section className="environment-empty-pane">
+          <header>
+            <button
+              type="button"
+              className="icon-button sidebar-expand-button"
+              aria-label="Expand sidebar"
+              onClick={() => setSidebarCollapsed(false)}
+            >
+              <PanelLeftOpen size={17} aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              className="icon-button mobile-menu-button"
+              aria-label="Open navigation"
+              onClick={() => setSidebarOpen(true)}
+            >
+              <PanelLeftOpen size={17} aria-hidden="true" />
+            </button>
+          </header>
+          <div className="environment-empty-card">
+            <span aria-hidden="true">
+              <Box size={25} />
+            </span>
+            <h1>Create an Environment</h1>
+            <p>
+              Environments own the Sandbox, Workspace and coding-agent account
+              shared by their Sessions.
+            </p>
+            <button
+              type="button"
+              className="button-primary"
+              onClick={() => setNewEnvironmentOpen(true)}
+            >
+              <Plus size={15} aria-hidden="true" />
+              New Environment
+            </button>
+          </div>
+        </section>
+        {newEnvironmentOpen ? (
+          <NewEnvironmentDialog
+            teamId={selectedTeam.id}
+            teamName={selectedTeam.name}
+            environments={teamEnvironments}
+            onCreated={handleEnvironmentCreated}
+            onClose={() => setNewEnvironmentOpen(false)}
+          />
+        ) : null}
+      </AppFrame>
+    );
+  }
 
   return (
     <AppFrame
@@ -520,41 +690,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
       <a className="skip-link" href="#conversation">
         Skip to conversation
       </a>
-      <Sidebar
-        language={preferences.general.language}
-        viewer={initialData.viewer}
-        teams={initialData.teams}
-        viewerMemberships={initialData.viewerMemberships}
-        plans={initialData.plans}
-        selectedTeamId={selectedTeam.id}
-        environments={teamEnvironments}
-        sessions={teamSessions}
-        selectedEnvironmentId={selectedEnvironment.id}
-        selectedSessionId={selectedSession?.id ?? ""}
-        onSelectEnvironment={handleSelectEnvironment}
-        onSelectSession={handleSelectSession}
-        onSelectTeam={handleSelectTeam}
-        onNewEnvironment={() => setNewEnvironmentOpen(true)}
-        onNewSession={(environmentId) => {
-          setSelectedEnvironmentId(environmentId);
-          setSelectedSessionId("");
-          replaceWorkspaceUrl(selectedTeam.id, environmentId);
-          setSidebarOpen(false);
-        }}
-        onEnvironmentSettings={(environmentId) => {
-          handleSelectEnvironment(environmentId);
-          setSettingsEnvironmentId(environmentId);
-        }}
-        onRenameSession={handleRenameSession}
-        onForkSession={handleForkSession}
-        onArchiveSession={handleArchiveSession}
-        onTogglePinSession={handleTogglePinSession}
-        onCollapse={() => {
-          setSidebarCollapsed(true);
-          setSidebarOpen(false);
-        }}
-        onCloseMobile={() => setSidebarOpen(false)}
-      />
+      {sidebar}
 
       {sidebarOpen ? (
         <button
@@ -644,6 +780,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
                 right.updatedAt - left.updatedAt,
             )}
           onChange={handleEnvironmentChange}
+          onDelete={handleEnvironmentDeleted}
           onRestoreSession={handleRestoreSession}
           onClose={() => setSettingsEnvironmentId(null)}
         />

@@ -69,11 +69,17 @@ Web today; iOS / Android / HarmonyOS later
   through the user's global time-zone preference; its default `auto` value uses
   the current client/browser time zone.
 - **Live workspace contract:** the embedded file view and dedicated `/ide/`
-  workbench consume the same Sandpi API. Sandpi proxies Sandbox0's recursive
-  `/workspace` file stream, discovers zero or more Git working trees beneath
-  that mount, parses porcelain v2 per repository, and projects zero-context
-  staged and working-tree diffs onto current line numbers. Sandpi never creates
-  or chooses a repository for the user or agent. Text
+  workbench consume the same Sandpi API. The initial snapshot contains only the
+  direct children of `/workspace`; clients request one shallow directory page
+  when the user expands a folder and cache already loaded pages. Hidden
+  directories and known generated dependency trees are omitted, while the
+  recursive Sandbox0 stream is used only for invalidation. Loaded shallow pages
+  are reconciled while that native watch is connecting or unavailable, so files
+  created by a running agent do not remain hidden until Turn completion. Sandpi discovers
+  zero or more Git working trees beneath the visible tree, parses porcelain v2
+  per repository, and projects zero-context staged and working-tree diffs onto
+  current line numbers. Sandpi never creates or chooses a repository for the
+  user or agent. Text
   saves carry the revision that was opened; stale writes return a conflict
   instead of silently replacing a newer file. The internal
   `/workspace/.sandpi` subtree is excluded and rejected by the server, not just
@@ -85,6 +91,18 @@ Web today; iOS / Android / HarmonyOS later
   native harness Sessions inside that runtime and cannot switch harnesses.
   Network-policy edits are applied to that running Environment Sandbox rather
   than deferred to a future product Session.
+- **Durable lifecycle:** every Environment Sandbox has a 30-day Sandbox0 hard
+  TTL. A native `turn/completed` event writes a PostgreSQL pause deadline three
+  minutes later; any Sandpi replica may scan it, but a per-Environment advisory
+  lock elects exactly one replica to pause after it rechecks that no Turn is
+  active or pending. Browser disconnection is irrelevant. Sandbox auto-resume
+  is disabled, so Sandpi serializes an explicit wake-up through that same lock.
+- **Explicit deletion:** Environment settings require the persisted Environment
+  name before permanent deletion. Sandpi serializes deletion with Turn admission,
+  stops retained harness and login workers, deletes the Sandbox, Workspace Volume
+  and owned rootfs snapshot, then transactionally removes every active or archived
+  Session, credential and Environment row. Failed external cleanup retains its
+  resource coordinates so the operation can be retried safely.
 - **Private execution by default:** in the OSS MVP an Environment and its
   Sessions are accessible only to their creator. Team membership supplies the
   tenant and billing boundary, not implicit access to another member's Codex
@@ -372,9 +390,14 @@ Sandbox0 implementation details.
   and one native harness process; all product Sessions in it share them.
 - Every Environment is provisioned from the fixed Sandbox0 `coding-agent`
   template; product Sessions allocate only native harness Sessions.
+- The Environment Sandbox has a 30-day hard TTL and is checkpoint-paused after
+  three minutes without a running Turn following the latest completed Turn.
+  Deadlines and retries are PostgreSQL state, not process-local timers.
 - Supervisor output is the durable native transport. PostgreSQL stores replay
   identity, cursors and scalar recovery coordinates, never a parallel Codex
-  transcript; the browser may disconnect at any time without stopping Codex.
+  transcript. One cursor-resumable Sandbox0 event stream per Environment
+  carries retained replay and live tool/file notifications without idle
+  polling; the browser may disconnect at any time without stopping Codex.
 - The Web terminal is resumable through a Supervisor Session. Its client stores
   Supervisor sequence bookmarks for the last three submitted commands, so a
   reopened renderer restores only that recent output. Historical bytes are

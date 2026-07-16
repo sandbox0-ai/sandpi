@@ -116,6 +116,12 @@ export class CodexEnvironmentAuthService {
     return publicCodexDeviceAuthFlow(flow);
   }
 
+  async cancelEnvironmentDeviceLogin(userId: string, environmentId: string) {
+    const active = await this.authStore.findActiveFlow(userId, environmentId);
+    if (!active) return;
+    await this.cancelDeviceLogin(userId, environmentId, active.id);
+  }
+
   async credentialForEnvironment(userId: string, environmentId: string) {
     this.requireEncryption();
     const stored = await this.authStore.getCredential(userId, environmentId);

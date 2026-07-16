@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  isWorkspaceIdePathHidden,
   isWorkspaceInternalPath,
   normalizeWorkspacePath,
   userVisibleWorkspacePath,
@@ -17,6 +18,15 @@ test("protects only the Sandpi-owned Workspace root and its descendants", () => 
   assert.equal(isWorkspaceInternalPath("/workspace/.sandpi-other/state"), false);
   assert.equal(isWorkspaceInternalPath("/workspace/project/.sandpi/state"), false);
   assert.equal(isWorkspaceInternalPath("/workspace/src/index.ts"), false);
+});
+
+test("hides directories without hiding root-level dot-files", () => {
+  assert.equal(isWorkspaceIdePathHidden("/workspace/.codex", true), true);
+  assert.equal(isWorkspaceIdePathHidden("/workspace/.codex/state.sqlite"), true);
+  assert.equal(isWorkspaceIdePathHidden("/workspace/node_modules/pkg/index.js"), true);
+  assert.equal(isWorkspaceIdePathHidden("/workspace/.env"), false);
+  assert.equal(isWorkspaceIdePathHidden("/workspace/src/.env"), false);
+  assert.equal(isWorkspaceIdePathHidden("/workspace/src/index.ts"), false);
 });
 
 test("normalizes user-facing Workspace paths without admitting paths outside Workspace", () => {

@@ -15,6 +15,9 @@ export class UnconfiguredRuntime implements RuntimeAdapter {
   provisionEnvironment = unavailable;
   deleteEnvironmentResources = async () => undefined;
   updateEnvironmentNetworkPolicy = unavailable;
+  configureEnvironmentLifecycle = unavailable;
+  pauseEnvironment = unavailable;
+  resumeEnvironment = unavailable;
   ensureCodexEnvironmentRuntime = unavailable;
   provisionCodexAuth = unavailable;
   deleteCodexAuthResources = async () => undefined;
@@ -24,7 +27,7 @@ export class UnconfiguredRuntime implements RuntimeAdapter {
   installCodexEnvironmentCredential = unavailable;
   readCodexEnvironmentCredential = unavailable;
   writeCodexMessage = unavailable;
-  listCodexEvents = unavailable;
+  watchCodexEvents = unavailable;
   listFiles = unavailable;
   readFile = unavailable;
   getWorkspaceGitState = unavailable;

@@ -16,7 +16,13 @@ import type {
   TeamMembership,
 } from "@/lib/types";
 import { parseUnixTimestamp, toUnixTimestamp } from "@/lib/time";
-import { HttpError, notFound } from "@/server/http-error";
+import { conflict, HttpError, notFound } from "@/server/http-error";
+import {
+  ENVIRONMENT_IDLE_PAUSE_DELAY_MS,
+  ENVIRONMENT_LIFECYCLE_POLICY_VERSION,
+  ENVIRONMENT_PAUSE_RETRY_DELAY_MS,
+  ENVIRONMENT_SANDBOX_HARD_TTL_SECONDS,
+} from "@/server/environments/lifecycle-policy";
 import type { CodexDecoderState } from "@/server/harnesses/codex/jsonl";
 import type {
   EnvironmentRuntimeRecord,
@@ -68,6 +74,12 @@ export interface StoredEnvironmentRuntime extends EnvironmentRuntimeRecord {
     | "terminated"
     | "failed";
   provisioningError?: string;
+  lifecyclePolicyVersion: number;
+  hardExpiresAt?: Date;
+  lastTurnCompletedAt?: Date;
+  idlePauseDueAt?: Date;
+  lifecycleError?: string;
+  pausedAt?: Date;
 }
 
 export interface StoredSessionRuntime {
@@ -101,6 +113,7 @@ export type CodexControlTransition =
       nativeSessionId: string;
       nativeTurnId: string;
       status: "completed" | "failed" | "interrupted";
+      completedAt: Date;
     };
 
 interface UserRow extends QueryResultRow {
@@ -166,6 +179,12 @@ interface EnvironmentRuntimeRow extends QueryResultRow {
   desired_state: StoredEnvironmentRuntime["desiredState"];
   observed_state: StoredEnvironmentRuntime["observedState"];
   provisioning_error: string | null;
+  lifecycle_policy_version: string | number;
+  sandbox_hard_expires_at: Date | null;
+  last_turn_completed_at: Date | null;
+  idle_pause_due_at: Date | null;
+  lifecycle_error: string | null;
+  paused_at: Date | null;
   version: string | number;
 }
 
@@ -224,6 +243,10 @@ interface MembershipRow extends QueryResultRow {
   };
   joined_at: Date;
 }
+
+// Shared with transaction-scoped Turn admission and session-scoped lifecycle
+// workers. The second advisory-lock key is hashtext(Environment.id).
+const ENVIRONMENT_LIFECYCLE_LOCK_NAMESPACE = 1_907_424_101;
 
 export class SandpiStore {
   constructor(private readonly pool: Pool) {}
@@ -455,7 +478,9 @@ export class SandpiStore {
       `UPDATE environment_runtime
        SET sandbox_id = NULL, supervisor_session_id = NULL,
            terminal_session_id = NULL, attempt_id = NULL,
-           supervisor_cursor = 0, stdout_tail = '', runtime_generation = 0
+           supervisor_cursor = 0, stdout_tail = '', runtime_generation = 0,
+           lifecycle_policy_version = 0, sandbox_hard_expires_at = NULL,
+           idle_pause_due_at = NULL, lifecycle_error = NULL, paused_at = NULL
        WHERE environment_id = $1 AND sandbox_id = $2`,
       [environmentId, sandboxId],
     );
@@ -483,13 +508,24 @@ export class SandpiStore {
       );
       await client.query(
         `INSERT INTO environment_runtime (
-           environment_id, sandbox_id, desired_state, observed_state
-         ) VALUES ($1, $2, 'running', 'running')
+           environment_id, sandbox_id, desired_state, observed_state,
+           lifecycle_policy_version, sandbox_hard_expires_at
+         ) VALUES ($1, $2, 'running', 'running', $3, $4)
          ON CONFLICT (environment_id) DO UPDATE
          SET sandbox_id = EXCLUDED.sandbox_id,
              desired_state = 'running', observed_state = 'running',
+             lifecycle_policy_version = EXCLUDED.lifecycle_policy_version,
+             sandbox_hard_expires_at = EXCLUDED.sandbox_hard_expires_at,
+             lifecycle_error = NULL, paused_at = NULL,
              provisioning_error = NULL`,
-        [environmentId, resources.sandboxId],
+        [
+          environmentId,
+          resources.sandboxId,
+          resources.hardExpiresAt
+            ? ENVIRONMENT_LIFECYCLE_POLICY_VERSION
+            : 0,
+          resources.hardExpiresAt ?? null,
+        ],
       );
       await client.query("COMMIT");
     } catch (error) {
@@ -581,6 +617,83 @@ export class SandpiStore {
     return this.getEnvironment(userId, environmentId);
   }
 
+  async prepareEnvironmentDeletion(userId: string, environmentId: string) {
+    const environment = await this.getEnvironment(userId, environmentId);
+    if (environment.status === "updating") {
+      throw conflict(
+        "environment_provisioning_in_progress",
+        "Wait for Environment provisioning to finish before deleting it.",
+      );
+    }
+    await this.pool.query(
+      `UPDATE environment_runtime
+       SET desired_state = 'terminated', idle_pause_due_at = NULL,
+           lifecycle_error = NULL, version = version + 1
+       WHERE environment_id = $1`,
+      [environmentId],
+    );
+    return {
+      sandboxId: environment.sandboxId || undefined,
+      workspaceVolumeId: environment.workspaceVolumeId || undefined,
+      rootfsSnapshotId: environment.rootfsSnapshotId || undefined,
+    } satisfies Partial<ProvisionedEnvironment>;
+  }
+
+  async recordEnvironmentDeletionFailure(environmentId: string, error: string) {
+    await this.pool.query(
+      `UPDATE environment_runtime
+       SET desired_state = 'terminated', observed_state = 'failed',
+           lifecycle_error = $2, version = version + 1
+       WHERE environment_id = $1`,
+      [environmentId, error],
+    );
+  }
+
+  async deleteEnvironmentMetadata(userId: string, environmentId: string) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const authorized = await client.query(
+        `SELECT environment.id
+         FROM environments environment
+         JOIN team_memberships membership
+           ON membership.team_id = environment.team_id
+          AND membership.user_id = $1
+          AND membership.status = 'active'
+         WHERE environment.id = $2
+           AND environment.created_by_user_id = $1
+           AND environment.status <> 'archived'
+         FOR UPDATE`,
+        [userId, environmentId],
+      );
+      if (!authorized.rowCount) {
+        throw notFound("environment_not_found", "Environment not found.");
+      }
+      // Sessions are product references to harness-native Sessions in the
+      // Environment Sandbox. Deleting the Environment intentionally removes
+      // every active and archived reference before the parent row.
+      await client.query("DELETE FROM sessions WHERE environment_id = $1", [
+        environmentId,
+      ]);
+      // Remove the credential binding before its source credential. Both are
+      // Environment-owned, but the binding deliberately RESTRICTs direct
+      // credential deletion while a live Sandbox still references it.
+      await client.query(
+        "DELETE FROM environment_credential_bindings WHERE environment_id = $1",
+        [environmentId],
+      );
+      await client.query("DELETE FROM environments WHERE id = $1", [
+        environmentId,
+      ]);
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async getEnvironmentRuntime(userId: string, environmentId: string) {
     await this.getEnvironment(userId, environmentId);
     return this.environmentRuntime(environmentId);
@@ -599,6 +712,241 @@ export class SandpiStore {
       );
     }
     return environmentRuntimeFromRow(row);
+  }
+
+  /**
+   * Elects one Sandpi server for an Environment lifecycle transition. The
+   * session-scoped lock survives ordinary transactions and is automatically
+   * released by PostgreSQL if the worker process or connection disappears.
+   */
+  async withEnvironmentLifecycleLock<T>(
+    environmentId: string,
+    operation: () => Promise<T>,
+  ): Promise<{ acquired: false } | { acquired: true; value: T }> {
+    const client = await this.pool.connect();
+    let acquired = false;
+    try {
+      const result = await client.query<{ acquired: boolean }>(
+        "SELECT pg_try_advisory_lock($1, hashtext($2)) AS acquired",
+        [ENVIRONMENT_LIFECYCLE_LOCK_NAMESPACE, environmentId],
+      );
+      acquired = result.rows[0]?.acquired === true;
+      if (!acquired) return { acquired: false };
+      return { acquired: true, value: await operation() };
+    } finally {
+      if (acquired) {
+        await client
+          .query("SELECT pg_advisory_unlock($1, hashtext($2))", [
+            ENVIRONMENT_LIFECYCLE_LOCK_NAMESPACE,
+            environmentId,
+          ])
+          .catch(() => undefined);
+      }
+      client.release();
+    }
+  }
+
+  async environmentLifecyclePolicyCandidateIds(limit = 50) {
+    const result = await this.pool.query<{ environment_id: string }>(
+      `SELECT runtime.environment_id
+       FROM environment_runtime runtime
+       JOIN environments environment ON environment.id = runtime.environment_id
+       WHERE environment.status = 'ready'
+         AND runtime.sandbox_id IS NOT NULL
+         AND runtime.lifecycle_policy_version < $1
+         AND (
+           runtime.lifecycle_error IS NULL
+           OR runtime.updated_at <= NOW() - INTERVAL '1 minute'
+         )
+       ORDER BY runtime.created_at, runtime.environment_id
+       LIMIT $2`,
+      [ENVIRONMENT_LIFECYCLE_POLICY_VERSION, limit],
+    );
+    return result.rows.map((row) => row.environment_id);
+  }
+
+  async prepareEnvironmentLifecyclePolicy(environmentId: string) {
+    const target = new Date(
+      Date.now() + ENVIRONMENT_SANDBOX_HARD_TTL_SECONDS * 1_000,
+    );
+    const result = await this.pool.query<{ environment_id: string }>(
+      `UPDATE environment_runtime
+       SET sandbox_hard_expires_at = COALESCE(sandbox_hard_expires_at, $2),
+           lifecycle_error = NULL
+       WHERE environment_id = $1 AND sandbox_id IS NOT NULL
+         AND lifecycle_policy_version < $3
+       RETURNING environment_id`,
+      [environmentId, target, ENVIRONMENT_LIFECYCLE_POLICY_VERSION],
+    );
+    if (!result.rowCount) return undefined;
+    return this.environmentRuntime(environmentId);
+  }
+
+  async recordEnvironmentLifecyclePolicy(
+    environmentId: string,
+    sandboxId: string,
+    hardExpiresAt: Date,
+  ) {
+    await this.pool.query(
+      `UPDATE environment_runtime
+       SET lifecycle_policy_version = $3,
+           sandbox_hard_expires_at = $4,
+           lifecycle_error = NULL, version = version + 1
+       WHERE environment_id = $1 AND sandbox_id = $2`,
+      [
+        environmentId,
+        sandboxId,
+        ENVIRONMENT_LIFECYCLE_POLICY_VERSION,
+        hardExpiresAt,
+      ],
+    );
+  }
+
+  async recordEnvironmentLifecycleError(
+    environmentId: string,
+    sandboxId: string,
+    error: string,
+  ) {
+    await this.pool.query(
+      `UPDATE environment_runtime
+       SET lifecycle_error = $3, version = version + 1
+       WHERE environment_id = $1 AND sandbox_id = $2`,
+      [environmentId, sandboxId, error],
+    );
+  }
+
+  async environmentIdlePauseCandidateIds(limit = 50) {
+    const result = await this.pool.query<{ environment_id: string }>(
+      `SELECT runtime.environment_id
+       FROM environment_runtime runtime
+       JOIN environments environment ON environment.id = runtime.environment_id
+       WHERE environment.status = 'ready'
+         AND runtime.sandbox_id IS NOT NULL
+         AND runtime.idle_pause_due_at <= NOW()
+         AND runtime.desired_state IN ('running', 'paused')
+         AND runtime.observed_state <> 'paused'
+       ORDER BY runtime.idle_pause_due_at, runtime.environment_id
+       LIMIT $1`,
+      [limit],
+    );
+    return result.rows.map((row) => row.environment_id);
+  }
+
+  /** Rechecks the native Turn projection while holding the advisory lock. */
+  async prepareEnvironmentIdlePause(environmentId: string) {
+    const result = await this.pool.query<{ environment_id: string }>(
+      `UPDATE environment_runtime runtime
+       SET desired_state = 'paused', lifecycle_error = NULL,
+           version = version + 1
+       WHERE runtime.environment_id = $1
+         AND runtime.sandbox_id IS NOT NULL
+         AND runtime.idle_pause_due_at <= NOW()
+         AND runtime.desired_state IN ('running', 'paused')
+         AND runtime.observed_state <> 'paused'
+         AND NOT EXISTS (
+           SELECT 1
+           FROM sessions session
+           JOIN session_runtime session_state
+             ON session_state.session_id = session.id
+           WHERE session.environment_id = runtime.environment_id
+             AND (
+               session.status IN ('provisioning', 'running')
+               OR session_state.active_native_turn_id IS NOT NULL
+               OR session_state.pending_turn_phase IS NOT NULL
+             )
+         )
+       RETURNING runtime.environment_id`,
+      [environmentId],
+    );
+    if (!result.rowCount) return undefined;
+    return this.environmentRuntime(environmentId);
+  }
+
+  async recordEnvironmentPaused(environmentId: string, sandboxId: string) {
+    await this.pool.query(
+      `UPDATE environment_runtime
+       SET desired_state = 'paused', observed_state = 'paused',
+           idle_pause_due_at = NULL, lifecycle_error = NULL,
+           paused_at = NOW(), version = version + 1
+       WHERE environment_id = $1 AND sandbox_id = $2`,
+      [environmentId, sandboxId],
+    );
+  }
+
+  async recordEnvironmentPauseFailure(
+    environmentId: string,
+    sandboxId: string,
+    error: string,
+  ) {
+    await this.pool.query(
+      `UPDATE environment_runtime
+       SET desired_state = 'paused', observed_state = 'failed',
+           idle_pause_due_at = $3, lifecycle_error = $4,
+           version = version + 1
+       WHERE environment_id = $1 AND sandbox_id = $2`,
+      [
+        environmentId,
+        sandboxId,
+        new Date(Date.now() + ENVIRONMENT_PAUSE_RETRY_DELAY_MS),
+        error,
+      ],
+    );
+  }
+
+  async requestEnvironmentRunning(environmentId: string) {
+    await this.pool.query(
+      `UPDATE environment_runtime
+       SET desired_state = 'running', lifecycle_error = NULL,
+           idle_pause_due_at = CASE
+             WHEN last_turn_completed_at IS NULL THEN NULL
+             ELSE GREATEST(
+               last_turn_completed_at + ($2::BIGINT * INTERVAL '1 millisecond'),
+               NOW() + ($2::BIGINT * INTERVAL '1 millisecond')
+             )
+           END,
+           version = version + 1
+       WHERE environment_id = $1`,
+      [environmentId, ENVIRONMENT_IDLE_PAUSE_DELAY_MS],
+    );
+    return this.environmentRuntime(environmentId);
+  }
+
+  async recordEnvironmentResumed(
+    environmentId: string,
+    sandboxId: string,
+    hardExpiresAt: Date,
+  ) {
+    await this.pool.query(
+      `UPDATE environment_runtime
+       SET desired_state = 'running', observed_state = 'running',
+           sandbox_hard_expires_at = $3, lifecycle_error = NULL,
+           paused_at = NULL, version = version + 1
+       WHERE environment_id = $1 AND sandbox_id = $2`,
+      [environmentId, sandboxId, hardExpiresAt],
+    );
+    return this.environmentRuntime(environmentId);
+  }
+
+  async recordEnvironmentResumeFailure(
+    environmentId: string,
+    sandboxId: string,
+    error: string,
+  ) {
+    await this.pool.query(
+      `UPDATE environment_runtime
+       SET desired_state = 'running', observed_state = 'failed',
+           lifecycle_error = $3, version = version + 1
+       WHERE environment_id = $1 AND sandbox_id = $2`,
+      [environmentId, sandboxId, error],
+    );
+  }
+
+  async environmentWantsRunning(environmentId: string) {
+    const result = await this.pool.query<{ desired_state: string }>(
+      `SELECT desired_state FROM environment_runtime WHERE environment_id = $1`,
+      [environmentId],
+    );
+    return result.rows[0]?.desired_state === "running";
   }
 
   async activeEnvironmentRuntimeIds() {
@@ -629,7 +977,9 @@ export class SandpiStore {
              ELSE stdout_tail
            END,
            attempt_id = $3, runtime_generation = $4,
-           observed_state = 'running', provisioning_error = NULL,
+           desired_state = 'running', observed_state = 'running',
+           lifecycle_error = NULL, paused_at = NULL,
+           provisioning_error = NULL,
            version = version + 1
        FROM environments environment
        WHERE runtime.environment_id = $1
@@ -735,6 +1085,38 @@ export class SandpiStore {
              AND session.environment_id = $1
              AND runtime.native_session_id = $2`,
           [environmentId, transition.nativeSessionId],
+        );
+      }
+      const latestCompletedAt = transitions.reduce<Date | undefined>(
+        (latest, transition) =>
+          transition.type === "turnCompleted" &&
+          (!latest || transition.completedAt > latest)
+            ? transition.completedAt
+            : latest,
+        undefined,
+      );
+      if (latestCompletedAt) {
+        await client.query(
+          `UPDATE environment_runtime
+           SET last_turn_completed_at = CASE
+                 WHEN last_turn_completed_at IS NULL
+                   OR last_turn_completed_at < $2 THEN $2
+                 ELSE last_turn_completed_at
+               END,
+               idle_pause_due_at = (
+                 CASE
+                   WHEN last_turn_completed_at IS NULL
+                     OR last_turn_completed_at < $2 THEN $2
+                   ELSE last_turn_completed_at
+                 END
+               ) + ($3::BIGINT * INTERVAL '1 millisecond'),
+               version = version + 1
+           WHERE environment_id = $1`,
+          [
+            environmentId,
+            latestCompletedAt,
+            ENVIRONMENT_IDLE_PAUSE_DELAY_MS,
+          ],
         );
       }
       await client.query("COMMIT");
@@ -1098,40 +1480,92 @@ export class SandpiStore {
     submission: TurnSubmissionCoordinates,
   ) {
     await this.getSession(userId, sessionId);
-    const result = await this.pool.query(
-      `UPDATE session_runtime runtime
-       SET model_id = COALESCE($2, model_id),
-           pending_turn_request_id = $3,
-           pending_turn_client_message_id = $4,
-           pending_turn_stable_input_id = $5,
-           pending_turn_phase = 'prepared',
-           pending_turn_started_at = NOW(),
-           version = version + 1
-       FROM sessions session
-       WHERE runtime.session_id = $1 AND session.id = runtime.session_id
-         AND session.status = 'waiting'
-         AND runtime.native_session_id IS NOT NULL
-         AND runtime.active_native_turn_id IS NULL
-         AND runtime.pending_turn_phase IS NULL
-       RETURNING runtime.session_id`,
-      [
-        sessionId,
-        modelId ?? null,
-        submission.requestId,
-        submission.clientMessageId,
-        submission.stableInputId,
-      ],
-    );
-    if (!result.rowCount) {
-      throw new HttpError(
-        409,
-        "session_turn_in_progress",
-        "Wait for the current Codex Turn to finish.",
-      );
+    const deadline = Date.now() + 130_000;
+    while (true) {
+      const client = await this.pool.connect();
+      let retry = false;
+      try {
+        await client.query("BEGIN");
+        const session = await client.query<{ environment_id: string }>(
+          "SELECT environment_id FROM sessions WHERE id = $1",
+          [sessionId],
+        );
+        const environmentId = session.rows[0]?.environment_id;
+        if (!environmentId) {
+          throw notFound("session_not_found", "Session not found.");
+        }
+        // Try instead of queueing a PostgreSQL connection behind a potentially
+        // slow Sandbox0 pause/resume. No connection is held during backoff.
+        const lock = await client.query<{ acquired: boolean }>(
+          "SELECT pg_try_advisory_xact_lock($1, hashtext($2)) AS acquired",
+          [ENVIRONMENT_LIFECYCLE_LOCK_NAMESPACE, environmentId],
+        );
+        if (lock.rows[0]?.acquired !== true) {
+          await client.query("ROLLBACK");
+          retry = true;
+        } else {
+          // Once pending delivery is durable, an idle worker must observe it
+          // and defer pause before any native harness write occurs.
+          const result = await client.query(
+            `UPDATE session_runtime runtime
+             SET model_id = COALESCE($2, model_id),
+                 pending_turn_request_id = $3,
+                 pending_turn_client_message_id = $4,
+                 pending_turn_stable_input_id = $5,
+                 pending_turn_phase = 'prepared',
+                 pending_turn_started_at = NOW(),
+                 version = version + 1
+             FROM sessions session
+             WHERE runtime.session_id = $1 AND session.id = runtime.session_id
+               AND session.status = 'waiting'
+               AND runtime.native_session_id IS NOT NULL
+               AND runtime.active_native_turn_id IS NULL
+               AND runtime.pending_turn_phase IS NULL
+             RETURNING runtime.session_id`,
+            [
+              sessionId,
+              modelId ?? null,
+              submission.requestId,
+              submission.clientMessageId,
+              submission.stableInputId,
+            ],
+          );
+          if (!result.rowCount) {
+            throw new HttpError(
+              409,
+              "session_turn_in_progress",
+              "Wait for the current Codex Turn to finish.",
+            );
+          }
+          await client.query(
+            "UPDATE sessions SET status = 'running' WHERE id = $1",
+            [sessionId],
+          );
+          await client.query(
+            `UPDATE environment_runtime
+             SET desired_state = 'running', lifecycle_error = NULL,
+                 version = version + 1
+             WHERE environment_id = $1`,
+            [environmentId],
+          );
+          await client.query("COMMIT");
+        }
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+      if (!retry) return;
+      if (Date.now() >= deadline) {
+        throw new HttpError(
+          503,
+          "environment_lifecycle_busy",
+          "The Environment is still changing lifecycle state. Try again.",
+        );
+      }
+      await delayWithoutDatabaseConnection(250);
     }
-    await this.pool.query("UPDATE sessions SET status = 'running' WHERE id = $1", [
-      sessionId,
-    ]);
   }
 
   async markTurnSubmitted(sessionId: string, requestId: string) {
@@ -1473,6 +1907,12 @@ function environmentRuntimeFromRow(
     desiredState: row.desired_state,
     observedState: row.observed_state,
     provisioningError: row.provisioning_error ?? undefined,
+    lifecyclePolicyVersion: Number(row.lifecycle_policy_version),
+    hardExpiresAt: row.sandbox_hard_expires_at ?? undefined,
+    lastTurnCompletedAt: row.last_turn_completed_at ?? undefined,
+    idlePauseDueAt: row.idle_pause_due_at ?? undefined,
+    lifecycleError: row.lifecycle_error ?? undefined,
+    pausedAt: row.paused_at ?? undefined,
   };
 }
 
@@ -1532,6 +1972,10 @@ function sessionRuntimeFromRow(row: SessionRuntimeRow): StoredSessionRuntime {
         ? "provisioning"
         : publicSessionStatus(row.status),
   };
+}
+
+function delayWithoutDatabaseConnection(milliseconds: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 }
 
 function publicSessionStatus(value: string): CodingSession["status"] {

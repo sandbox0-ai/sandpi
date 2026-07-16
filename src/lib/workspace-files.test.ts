@@ -77,7 +77,7 @@ test("does not duplicate a changed file already returned by Sandbox0", () => {
   assert.equal(merged[0]?.children?.[0]?.children?.length, 1);
 });
 
-test("removes Sandpi state from both native trees and Git-only placeholders", () => {
+test("removes internal and hidden directories from native and Git-only trees", () => {
   const files: WorkspaceFile[] = [
     {
       id: "workspace",
@@ -105,6 +105,12 @@ test("removes Sandpi state from both native trees and Git-only placeholders", ()
           path: "/workspace/.sandpi-other",
           kind: "folder",
         },
+        {
+          id: "notes",
+          name: "notes.md",
+          path: "/workspace/notes.md",
+          kind: "file",
+        },
       ],
     },
   ];
@@ -124,7 +130,7 @@ test("removes Sandpi state from both native trees and Git-only placeholders", ()
   const visible = userVisibleWorkspaceFiles(files);
   assert.deepEqual(
     visible[0]?.children?.map((file) => file.path),
-    ["/workspace/.sandpi-other"],
+    ["/workspace/notes.md"],
   );
   const merged = mergeWorkspaceGitFiles(files, [
     internalChange,
@@ -132,6 +138,6 @@ test("removes Sandpi state from both native trees and Git-only placeholders", ()
   ]);
   assert.deepEqual(
     merged[0]?.children?.map((file) => file.path),
-    ["/workspace/.sandpi-other"],
+    ["/workspace/notes.md"],
   );
 });
