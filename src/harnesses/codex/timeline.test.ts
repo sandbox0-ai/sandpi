@@ -11,7 +11,10 @@ import {
   projectCodexTimeline,
   shouldRefreshCodexNativeSnapshot,
 } from "./events";
-import { visibleCodexTimelineWhileEditing } from "./timeline";
+import {
+  groupCodexTimelineByTurn,
+  visibleCodexTimelineWhileEditing,
+} from "./timeline";
 import { CODEX_TRANSCRIPT_NOTIFICATION_METHODS } from "./types";
 import type {
   CodexEventEnvelope,
@@ -99,7 +102,73 @@ test("editing hides the selected native Turn and every descendant", () => {
       .map((entry) => entry.content),
     ["first", "first reply"],
   );
+  assert.deepEqual(visible.turns.map((turn) => turn.turnId), [firstTurn.id]);
   assert.equal(visible.activeTurn, undefined);
+});
+
+test("groups completed Codex work behind its prompt and final answer", () => {
+  const completedTurn: CodexTurn = {
+    id: "turn-with-activity",
+    itemsView: "full",
+    status: "completed",
+    error: null,
+    startedAt: timestamp("2026-07-12T02:00:00Z"),
+    completedAt: timestamp("2026-07-12T02:00:12Z"),
+    durationMs: 12_000,
+    items: [
+      {
+        type: "userMessage",
+        id: "activity-user",
+        clientId: null,
+        content: [{ type: "text", text: "Inspect the project", text_elements: [] }],
+      },
+      {
+        type: "agentMessage",
+        id: "activity-commentary",
+        text: "I am checking the files.",
+        phase: "commentary",
+        memoryCitation: null,
+      },
+      {
+        type: "commandExecution",
+        id: "activity-command",
+        command: "rg --files",
+        cwd: "/workspace",
+        processId: null,
+        source: "agent",
+        status: "completed",
+        commandActions: [
+          { type: "listFiles", command: "rg --files", path: "/workspace" },
+        ],
+        aggregatedOutput: "app/page.tsx\n",
+        exitCode: 0,
+        durationMs: 80,
+      },
+      {
+        type: "agentMessage",
+        id: "activity-final",
+        text: "The project is ready.",
+        phase: "final_answer",
+        memoryCitation: null,
+      },
+    ],
+  };
+
+  const [group] = groupCodexTimelineByTurn(
+    projectCodexTimeline(
+      createMockCodexThread("thread-with-activity", [completedTurn]),
+    ),
+  );
+  assert.ok(group);
+  assert.deepEqual(group.userMessages.map((message) => message.content), [
+    "Inspect the project",
+  ]);
+  assert.equal(group.finalMessage?.content, "The project is ready.");
+  assert.deepEqual(
+    group.activityEntries.map((entry) => entry.kind),
+    ["message", "command"],
+  );
+  assert.equal(group.turn?.durationMs, 12_000);
 });
 
 test("a replacement snapshot does not inherit a prior live suffix", () => {

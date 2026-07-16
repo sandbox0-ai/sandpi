@@ -1,4 +1,5 @@
-import { Braces, Check, FilePenLine, X } from "lucide-react";
+import { Braces, Check, ChevronRight, FilePenLine, X } from "lucide-react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import type {
   CodexActivityStatus,
@@ -7,6 +8,7 @@ import type {
   CodexFileChangeActivityView,
   CodexNativeItemActivityView,
   CodexTurnResultView,
+  CodexTurnView,
 } from "./events";
 import { getCodexUiCopy } from "./ui";
 import type { OperationLanguage } from "@/lib/operation-ui";
@@ -223,30 +225,84 @@ export function CodexTurnResult({
   );
 }
 
-export function CodexRunningTurn({
+export function CodexTurnActivity({
+  activeTurn,
   turn,
   language,
   now,
+  children,
 }: {
-  turn: CodexActiveTurnView;
+  activeTurn?: CodexActiveTurnView;
+  turn?: CodexTurnView;
   language: OperationLanguage;
   now: number;
+  children?: ReactNode;
 }) {
   const ui = getCodexUiCopy(language).conversation;
-  const elapsed = formatElapsed(now - turn.startedAt * 1_000);
+  const running = Boolean(activeTurn);
+  const [open, setOpen] = useState(running);
+  const wasRunningRef = useRef(running);
+
+  useEffect(() => {
+    if (running) {
+      setOpen(true);
+    } else if (wasRunningRef.current) {
+      // A live Turn folds as soon as Codex reports turn/completed. Keep the
+      // prompt and final answer outside this disclosure in every client.
+      setOpen(false);
+    }
+    wasRunningRef.current = running;
+  }, [running]);
+
+  const durationMs = activeTurn
+    ? Math.max(0, now - activeTurn.startedAt * 1_000)
+    : turn?.durationMs ??
+      (turn?.completedAt === null || turn?.completedAt === undefined
+        ? null
+        : Math.max(0, (turn.completedAt - turn.startedAt) * 1_000));
+  const summary = activeTurn
+    ? ui.turnActivity(activeTurn.state)
+    : durationMs === null
+      ? ui.viewTurnActivity
+      : ui.workedFor(formatDuration(durationMs));
+
   return (
-    <article
-      className="message message-codex-activity codex-running-turn"
-      aria-live="polite"
-    >
-      <div className="codex-turn-running">
-        <span className="activity-spinner" aria-hidden="true" />
-        <div>
-          <strong>{ui.turnActivity(turn.state)}</strong>
-          {turn.detail ? <small>{turn.detail}</small> : null}
-        </div>
-        <span>{ui.runningFor(elapsed)}</span>
-      </div>
+    <article className="message message-codex-turn-activity">
+      <details
+        className={`codex-turn-activity${running ? " is-running" : ""}`}
+        open={open}
+        onToggle={(event) => setOpen(event.currentTarget.open)}
+      >
+        <summary
+          aria-label={open ? ui.collapseTurnActivity : ui.expandTurnActivity}
+          aria-live={running ? "polite" : undefined}
+        >
+          <ChevronRight
+            className="codex-turn-activity-chevron"
+            size={14}
+            aria-hidden="true"
+          />
+          {running ? (
+            <span className="activity-spinner" aria-hidden="true" />
+          ) : (
+            <span className="codex-turn-activity-dot" aria-hidden="true" />
+          )}
+          <strong>{summary}</strong>
+          {activeTurn?.detail ? (
+            <small className="codex-turn-activity-detail">
+              {activeTurn.detail}
+            </small>
+          ) : null}
+          {activeTurn && durationMs !== null ? (
+            <span className="codex-turn-running-duration">
+              {ui.runningFor(formatElapsed(durationMs))}
+            </span>
+          ) : null}
+        </summary>
+        {children ? (
+          <div className="codex-turn-activity-content">{children}</div>
+        ) : null}
+      </details>
     </article>
   );
 }

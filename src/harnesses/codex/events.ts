@@ -110,8 +110,17 @@ export interface CodexActiveTurnView {
   detail?: string;
 }
 
+export interface CodexTurnView {
+  turnId: string;
+  status: CodexTurn["status"];
+  startedAt: UnixTimestamp;
+  completedAt: UnixTimestamp | null;
+  durationMs: number | null;
+}
+
 export interface CodexConversationProjection {
   entries: CodexTimelineEntry[];
+  turns: CodexTurnView[];
   activeTurn?: CodexActiveTurnView;
 }
 
@@ -151,6 +160,8 @@ interface TurnState {
   id: string;
   status: CodexTurn["status"];
   startedAt: UnixTimestamp;
+  completedAt: UnixTimestamp | null;
+  durationMs: number | null;
   sequence: number;
   activeItems: Map<string, ActiveItem>;
 }
@@ -357,6 +368,8 @@ export function projectCodexTimeline(
       id: turnId,
       status,
       startedAt,
+      completedAt: null,
+      durationMs: null,
       sequence,
       activeItems: new Map(),
     };
@@ -487,6 +500,8 @@ export function projectCodexTimeline(
     const state = ensureTurn(turn.id, startedAt, turn.status);
     state.status = turn.status;
     state.startedAt = startedAt;
+    state.completedAt = turn.completedAt;
+    state.durationMs = turn.durationMs;
     state.sequence = ++projectionSequence;
     const lastItem = turn.items.at(-1);
     turn.items.forEach((item) => {
@@ -559,6 +574,8 @@ export function projectCodexTimeline(
       );
       state.status = "inProgress";
       state.startedAt = turn.startedAt ?? event.receivedAt;
+      state.completedAt = null;
+      state.durationMs = null;
       state.sequence = projectionSequence;
       for (const item of turn.items) {
         upsertItem(item, turn.id, state.startedAt, "inProgress", true);
@@ -804,7 +821,17 @@ export function projectCodexTimeline(
     };
   }
 
-  return { entries, activeTurn };
+  return {
+    entries,
+    turns: [...turns.values()].map((turn) => ({
+      turnId: turn.id,
+      status: turn.status,
+      startedAt: turn.startedAt,
+      completedAt: turn.completedAt,
+      durationMs: turn.durationMs,
+    })),
+    activeTurn,
+  };
 }
 
 export function projectCodexConversation(

@@ -22,9 +22,17 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type UIEvent } from "react";
+import {
+  Fragment,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type UIEvent,
+} from "react";
 
 import type { InspectorTab } from "@/components/inspector";
+import { MarkdownContent } from "@/components/markdown-content";
 import { SessionActionsMenu } from "@/components/session-actions-menu";
 import {
   codexModelOptionsFromNativeResult,
@@ -43,10 +51,11 @@ import {
   CodexCommandActivity,
   CodexFileChangeActivity,
   CodexNativeItemActivity,
-  CodexRunningTurn,
+  CodexTurnActivity,
   CodexTurnResult,
 } from "@/harnesses/codex/activity";
 import {
+  groupCodexTimelineByTurn,
   visibleCodexTimelineWhileEditing,
 } from "@/harnesses/codex/timeline";
 import type {
@@ -60,6 +69,7 @@ import {
   projectCodexTimeline,
   shouldRefreshCodexNativeSnapshot,
   type CodexMessageView,
+  type CodexTimelineEntry,
 } from "@/harnesses/codex/events";
 import {
   apiFetch,
@@ -67,6 +77,7 @@ import {
   type ApiEnvelope,
 } from "@/lib/api-client";
 import { copyTextToClipboard } from "@/lib/clipboard";
+import { useConversationAutoScroll } from "@/lib/use-conversation-auto-scroll";
 import {
   shouldSubmitComposer,
   type OperationLanguage,
@@ -161,8 +172,6 @@ export function CodexConversation({
   const [activityClock, setActivityClock] = useState(() => Date.now());
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
-  const conversationScrollRef = useRef<HTMLDivElement>(null);
-  const stickToConversationEndRef = useRef(true);
   const scrollbarHideTimerRef = useRef<number | null>(null);
   const pendingTurnStartedAtRef = useRef<number | null>(null);
   const hasNativeSnapshotRef = useRef(false);
@@ -179,6 +188,10 @@ export function CodexConversation({
     );
     return visibleCodexTimelineWhileEditing(projected, editingMessageId);
   }, [editingMessageId, liveNotifications, nativeSnapshot?.thread]);
+  const timelineTurns = useMemo(
+    () => groupCodexTimelineByTurn(visibleTimeline),
+    [visibleTimeline],
+  );
   const turnCapabilities = useMemo(
     () => codexTurnCapabilitySets(nativeSnapshot),
     [nativeSnapshot],
@@ -202,13 +215,17 @@ export function CodexConversation({
   // Do not infer a cold start from persisted Sandbox state here: bootstrap may
   // still say paused while an ordinary refresh is already loading the runtime.
   const nativeHistoryLoading = !nativeSnapshot && !nativeHistoryError;
+  const {
+    scrollRef: conversationScrollRef,
+    contentRef: conversationContentRef,
+    onScroll: handleAutoScroll,
+  } = useConversationAutoScroll({ resetKey: session.id });
 
   useEffect(() => {
     sessionRef.current = session;
   }, [session]);
 
   useEffect(() => {
-    stickToConversationEndRef.current = true;
     pendingTurnStartedAtRef.current = null;
     setDraft("");
     setDeleteMessageId(null);
@@ -229,16 +246,6 @@ export function CodexConversation({
     liveNotificationCountRef.current = 0;
     nativeSnapshotRefreshRequestedRef.current = false;
   }, [session.id]);
-
-  const latestEventSequence = liveNotifications.at(-1)?.sequence ?? 0;
-  useEffect(() => {
-    if (!stickToConversationEndRef.current) return;
-    const frame = window.requestAnimationFrame(() => {
-      const scrollRegion = conversationScrollRef.current;
-      if (scrollRegion) scrollRegion.scrollTop = scrollRegion.scrollHeight;
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [latestEventSequence, nativeSnapshot?.historyRevision, session.id]);
 
   useEffect(() => {
     if (!runningTurnId) return;
@@ -663,8 +670,7 @@ export function CodexConversation({
 
   function handleConversationScroll(event: UIEvent<HTMLDivElement>) {
     const scrollRegion = event.currentTarget;
-    stickToConversationEndRef.current =
-      scrollRegion.scrollHeight - scrollRegion.scrollTop - scrollRegion.clientHeight < 96;
+    handleAutoScroll(event);
     scrollRegion.classList.add("is-scrolling");
     if (scrollbarHideTimerRef.current !== null) {
       window.clearTimeout(scrollbarHideTimerRef.current);
@@ -673,6 +679,215 @@ export function CodexConversation({
       scrollRegion.classList.remove("is-scrolling");
       scrollbarHideTimerRef.current = null;
     }, 700);
+  }
+
+  function openMarkdownWorkspacePath(path: string) {
+    const url = new URL(window.location.href);
+    url.searchParams.set("path", path);
+    window.history.replaceState(window.history.state, "", url);
+    onOpenInspector("files");
+  }
+
+  function renderTimelineEntry(entry: CodexTimelineEntry) {
+    if (entry.kind === "command") {
+      return (
+        <CodexCommandActivity
+          key={entry.id}
+          activity={entry}
+          language={language}
+        />
+      );
+    }
+    if (entry.kind === "fileChange") {
+      return (
+        <CodexFileChangeActivity
+          key={entry.id}
+          activity={entry}
+          language={language}
+          onOpenFiles={() => onOpenInspector("files")}
+        />
+      );
+    }
+    if (entry.kind === "nativeItem") {
+      return (
+        <CodexNativeItemActivity
+          key={entry.id}
+          activity={entry}
+          language={language}
+        />
+      );
+    }
+    if (entry.kind === "turnResult") {
+      return (
+        <CodexTurnResult key={entry.id} result={entry} language={language} />
+      );
+    }
+
+    const message = entry;
+    return (
+      <article
+        className={`message message-${message.role}`}
+        key={message.id}
+      >
+        {message.role === "assistant" ? (
+          <div className="assistant-avatar" aria-label="Codex">
+            <span />
+          </div>
+        ) : null}
+        <div className="message-body">
+          <div className="message-author">
+            {message.role === "user" ? ui.you : session.harnessLabel}
+          </div>
+          {message.attachments?.length ? (
+            <div
+              className={`message-image-attachments ${
+                message.attachments.length === 1 ? "is-single" : ""
+              }`}
+              aria-label={ui.attachedImages}
+            >
+              {message.attachments.map((attachment) => (
+                <Image
+                  key={attachment.id}
+                  src={attachment.previewUrl}
+                  alt={attachment.name}
+                  width={440}
+                  height={300}
+                  sizes="(max-width: 680px) 72vw, 320px"
+                  unoptimized
+                />
+              ))}
+            </div>
+          ) : null}
+          {message.content ? (
+            <MarkdownContent
+              content={message.content}
+              onOpenWorkspacePath={openMarkdownWorkspacePath}
+            />
+          ) : message.streaming ? (
+            <div
+              className="assistant-streaming"
+              aria-label={ui.turnActivity("responding")}
+            >
+              <span />
+              <span />
+              <span />
+            </div>
+          ) : null}
+
+          {message.role === "assistant" ? (
+            <div className="message-actions message-actions-assistant">
+              <button
+                type="button"
+                aria-label={ui.copyResponse}
+                title={ui.copy}
+                onClick={() => void copyMessage(message)}
+              >
+                {copiedMessageId === message.id ? (
+                  <Check size={14} aria-hidden="true" />
+                ) : (
+                  <Copy size={14} aria-hidden="true" />
+                )}
+              </button>
+            </div>
+          ) : (
+            <div
+              className={`message-actions message-actions-user ${
+                deleteMessageId === message.id ? "is-confirming" : ""
+              }`}
+            >
+              {deleteMessageId === message.id ? (
+                <div
+                  className="message-delete-confirm"
+                  role="group"
+                  aria-label={ui.confirmDelete}
+                >
+                  <span>{ui.deleteFromHere}</span>
+                  <button
+                    type="button"
+                    className="message-confirm-button"
+                    onClick={() => void deleteTurn(message)}
+                  >
+                    {ui.delete}
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={ui.cancelDelete}
+                    title={ui.cancel}
+                    onClick={() => setDeleteMessageId(null)}
+                  >
+                    <X size={13} aria-hidden="true" />
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    aria-label={ui.editMessage}
+                    title={ui.editFromHere}
+                    disabled={
+                      sending ||
+                      session.status !== "waiting" ||
+                      !turnCapabilities.mutableTurnIds.has(message.turnId)
+                    }
+                    onClick={() => beginEditing(message)}
+                  >
+                    <Pencil size={14} aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={ui.forkTurnMessage}
+                    title={ui.forkTurnHere}
+                    aria-busy={forkingMessageId === message.id}
+                    disabled={
+                      sending ||
+                      session.status !== "waiting" ||
+                      !turnCapabilities.forkableTurnIds.has(message.turnId)
+                    }
+                    onClick={() => void forkTurn(message)}
+                  >
+                    {forkingMessageId === message.id ? (
+                      <span className="activity-spinner" aria-hidden="true" />
+                    ) : (
+                      <GitFork size={14} aria-hidden="true" />
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={ui.copyMessage}
+                    title={ui.copy}
+                    onClick={() => void copyMessage(message)}
+                  >
+                    {copiedMessageId === message.id ? (
+                      <Check size={14} aria-hidden="true" />
+                    ) : (
+                      <Copy size={14} aria-hidden="true" />
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={ui.deleteMessage}
+                    title={ui.deleteFromHere}
+                    disabled={
+                      sending ||
+                      session.status !== "waiting" ||
+                      !turnCapabilities.mutableTurnIds.has(message.turnId)
+                    }
+                    onClick={() => setDeleteMessageId(message.id)}
+                  >
+                    <Trash2 size={14} aria-hidden="true" />
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+        {message.role === "user" ? (
+          <div className="user-avatar" role="img" aria-label={ui.you}>
+            YA
+          </div>
+        ) : null}
+      </article>
+    );
   }
 
   return (
@@ -764,7 +979,11 @@ export function CodexConversation({
         className="conversation-scroll"
         onScroll={handleConversationScroll}
       >
-        <div className="message-column" aria-busy={nativeHistoryLoading}>
+        <div
+          ref={conversationContentRef}
+          className="message-column"
+          aria-busy={nativeHistoryLoading}
+        >
           {nativeHistoryLoading ? (
             <div
               className="conversation-runtime-loading"
@@ -789,210 +1008,38 @@ export function CodexConversation({
               </span>
             </div>
           ) : null}
-          {visibleTimeline.entries.map((entry) => {
-            if (entry.kind === "command") {
-              return (
-                <CodexCommandActivity
-                  key={entry.id}
-                  activity={entry}
-                  language={language}
-                />
-              );
-            }
-            if (entry.kind === "fileChange") {
-              return (
-                <CodexFileChangeActivity
-                  key={entry.id}
-                  activity={entry}
-                  language={language}
-                  onOpenFiles={() => onOpenInspector("files")}
-                />
-              );
-            }
-            if (entry.kind === "nativeItem") {
-              return (
-                <CodexNativeItemActivity
-                  key={entry.id}
-                  activity={entry}
-                  language={language}
-                />
-              );
-            }
-            if (entry.kind === "turnResult") {
-              return (
-                <CodexTurnResult
-                  key={entry.id}
-                  result={entry}
-                  language={language}
-                />
-              );
-            }
-            const message = entry;
+          {timelineTurns.map((timelineTurn) => {
+            const activeTurn =
+              runningTurn?.turnId === timelineTurn.turnId
+                ? runningTurn
+                : undefined;
+            const hasActivity =
+              timelineTurn.activityEntries.length > 0 || Boolean(activeTurn);
             return (
-              <article
-                className={`message message-${message.role}`}
-                key={message.id}
-              >
-              {message.role === "assistant" ? (
-                <div className="assistant-avatar" aria-label="Codex">
-                  <span />
-                </div>
-              ) : null}
-              <div className="message-body">
-                <div className="message-author">
-                  {message.role === "user" ? ui.you : session.harnessLabel}
-                </div>
-                {message.attachments?.length ? (
-                  <div
-                    className={`message-image-attachments ${
-                      message.attachments.length === 1 ? "is-single" : ""
-                    }`}
-                    aria-label={ui.attachedImages}
+              <Fragment key={timelineTurn.turnId}>
+                {timelineTurn.userMessages.map(renderTimelineEntry)}
+                {hasActivity ? (
+                  <CodexTurnActivity
+                    activeTurn={activeTurn}
+                    turn={timelineTurn.turn}
+                    language={language}
+                    now={activityClock}
                   >
-                    {message.attachments.map((attachment) => (
-                      <Image
-                        key={attachment.id}
-                        src={attachment.previewUrl}
-                        alt={attachment.name}
-                        width={440}
-                        height={300}
-                        sizes="(max-width: 680px) 72vw, 320px"
-                        unoptimized
-                      />
-                    ))}
-                  </div>
+                    {timelineTurn.activityEntries.map(renderTimelineEntry)}
+                  </CodexTurnActivity>
                 ) : null}
-                {message.content ? (
-                  <p>{message.content}</p>
-                ) : message.streaming ? (
-                  <div
-                    className="assistant-streaming"
-                    aria-label={ui.turnActivity("responding")}
-                  >
-                    <span />
-                    <span />
-                    <span />
-                  </div>
-                ) : null}
-
-                {message.role === "assistant" ? (
-                  <div className="message-actions message-actions-assistant">
-                    <button
-                      type="button"
-                      aria-label={ui.copyResponse}
-                      title={ui.copy}
-                      onClick={() => void copyMessage(message)}
-                    >
-                      {copiedMessageId === message.id ? (
-                        <Check size={14} aria-hidden="true" />
-                      ) : (
-                        <Copy size={14} aria-hidden="true" />
-                      )}
-                    </button>
-                  </div>
-                ) : (
-                  <div
-                    className={`message-actions message-actions-user ${
-                      deleteMessageId === message.id ? "is-confirming" : ""
-                    }`}
-                  >
-                    {deleteMessageId === message.id ? (
-                      <div
-                        className="message-delete-confirm"
-                        role="group"
-                        aria-label={ui.confirmDelete}
-                      >
-                        <span>{ui.deleteFromHere}</span>
-                        <button
-                          type="button"
-                          className="message-confirm-button"
-                          onClick={() => void deleteTurn(message)}
-                        >
-                          {ui.delete}
-                        </button>
-                        <button
-                          type="button"
-                          aria-label={ui.cancelDelete}
-                          title={ui.cancel}
-                          onClick={() => setDeleteMessageId(null)}
-                        >
-                          <X size={13} aria-hidden="true" />
-                        </button>
-                      </div>
-                    ) : (
-                      <>
-                        <button
-                          type="button"
-                          aria-label={ui.editMessage}
-                          title={ui.editFromHere}
-                          disabled={
-                            sending ||
-                            session.status !== "waiting" ||
-                            !turnCapabilities.mutableTurnIds.has(message.turnId)
-                          }
-                          onClick={() => beginEditing(message)}
-                        >
-                          <Pencil size={14} aria-hidden="true" />
-                        </button>
-                        <button
-                          type="button"
-                          aria-label={ui.forkTurnMessage}
-                          title={ui.forkTurnHere}
-                          aria-busy={forkingMessageId === message.id}
-                          disabled={
-                            sending ||
-                            session.status !== "waiting" ||
-                            !turnCapabilities.forkableTurnIds.has(message.turnId)
-                          }
-                          onClick={() => void forkTurn(message)}
-                        >
-                          {forkingMessageId === message.id ? (
-                            <span className="activity-spinner" aria-hidden="true" />
-                          ) : (
-                            <GitFork size={14} aria-hidden="true" />
-                          )}
-                        </button>
-                        <button
-                          type="button"
-                          aria-label={ui.copyMessage}
-                          title={ui.copy}
-                          onClick={() => void copyMessage(message)}
-                        >
-                          {copiedMessageId === message.id ? (
-                            <Check size={14} aria-hidden="true" />
-                          ) : (
-                            <Copy size={14} aria-hidden="true" />
-                          )}
-                        </button>
-                        <button
-                          type="button"
-                          aria-label={ui.deleteMessage}
-                          title={ui.deleteFromHere}
-                          disabled={
-                            sending ||
-                            session.status !== "waiting" ||
-                            !turnCapabilities.mutableTurnIds.has(message.turnId)
-                          }
-                          onClick={() => setDeleteMessageId(message.id)}
-                        >
-                          <Trash2 size={14} aria-hidden="true" />
-                        </button>
-                      </>
-                    )}
-                  </div>
-                )}
-              </div>
-              {message.role === "user" ? (
-                <div className="user-avatar" role="img" aria-label={ui.you}>
-                  YA
-                </div>
-              ) : null}
-              </article>
+                {timelineTurn.finalMessage
+                  ? renderTimelineEntry(timelineTurn.finalMessage)
+                  : null}
+                {timelineTurn.results.map(renderTimelineEntry)}
+              </Fragment>
             );
           })}
-          {runningTurn && !nativeHistoryLoading ? (
-            <CodexRunningTurn
-              turn={runningTurn}
+          {runningTurn &&
+          !nativeHistoryLoading &&
+          !timelineTurns.some((turn) => turn.turnId === runningTurn.turnId) ? (
+            <CodexTurnActivity
+              activeTurn={runningTurn}
               language={language}
               now={activityClock}
             />

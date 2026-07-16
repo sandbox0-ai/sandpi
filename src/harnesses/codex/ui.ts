@@ -160,6 +160,10 @@ const copy = {
                   ? "Editing files"
                   : "Working",
       runningFor: (duration: string) => `Running for ${duration}`,
+      workedFor: (duration: string) => `Worked for ${duration}`,
+      viewTurnActivity: "View work",
+      expandTurnActivity: "Expand turn activity",
+      collapseTurnActivity: "Collapse turn activity",
       turnFailed: "Turn failed",
       turnInterrupted: "Turn interrupted",
       outputTruncated: "Output preview truncated",
@@ -357,6 +361,10 @@ const copy = {
                   ? "正在编辑文件"
                   : "正在工作",
       runningFor: (duration: string) => `已运行 ${duration}`,
+      workedFor: (duration: string) => `工作了 ${duration}`,
+      viewTurnActivity: "查看工作过程",
+      expandTurnActivity: "展开 Turn 过程",
+      collapseTurnActivity: "折叠 Turn 过程",
       turnFailed: "Turn 执行失败",
       turnInterrupted: "Turn 已中断",
       outputTruncated: "输出预览已截断",
