@@ -30,7 +30,7 @@ export interface CodexDiffView {
 export interface CodexMessageView {
   kind: "message";
   id: string;
-  /** Native Codex Turn ID used by edit, delete, and fork actions. */
+  /** Native Codex Turn ID used by Turn-level actions such as fork. */
   turnId: string;
   role: "user" | "assistant";
   content: string;

@@ -251,6 +251,11 @@ export class CodexService {
     });
   }
 
+  /**
+   * A native fork always becomes a child product Session. Do not replace the
+   * source Session's Thread to emulate edit/delete: Codex history can branch,
+   * but the Environment's shared Workspace cannot be rolled back with it.
+   */
   private async createNativeFork(input: {
     userId: string;
     sessionId: string;
@@ -422,200 +427,6 @@ export class CodexService {
     }
   }
 
-  async editTurn(input: {
-    userId: string;
-    sessionId: string;
-    nativeTurnId: string;
-    text: string;
-    images: EncodedCodexInputImage[];
-    modelId?: string;
-  }) {
-    return this.mutateNativeHistory({ ...input, kind: "edit" });
-  }
-
-  async deleteTurn(
-    userId: string,
-    sessionId: string,
-    nativeTurnId: string,
-  ) {
-    return this.mutateNativeHistory({
-      userId,
-      sessionId,
-      nativeTurnId,
-      kind: "delete",
-      text: "",
-      images: [],
-    });
-  }
-
-  private async mutateNativeHistory(input: {
-    userId: string;
-    sessionId: string;
-    nativeTurnId: string;
-    kind: "edit" | "delete";
-    text: string;
-    images: EncodedCodexInputImage[];
-    modelId?: string;
-  }) {
-    const session = await this.store.getSession(input.userId, input.sessionId);
-    const source = await this.requireNativeSessionRuntime(
-      input.userId,
-      input.sessionId,
-    );
-    if (session.status !== "waiting" || source.activeNativeTurnId) {
-      throw new HttpError(
-        409,
-        "turn_mutation_not_ready",
-        "Wait for the current Codex Turn to finish.",
-      );
-    }
-    const environmentRuntime = await this.environmentRuntimeForSession(
-      input.userId,
-      input.sessionId,
-    );
-    const thread = await this.readNativeThread(
-      environmentRuntime,
-      source,
-      input.sessionId,
-    );
-    const selectedIndex = thread.turns.findIndex(
-      (turn) => turn.id === input.nativeTurnId,
-    );
-    if (selectedIndex < 0 || thread.turns[selectedIndex]?.status === "inProgress") {
-      throw new HttpError(
-        409,
-        "turn_mutation_not_ready",
-        "The selected native Turn cannot be changed.",
-      );
-    }
-    const predecessor = thread.turns[selectedIndex - 1];
-    const branchResponse = await this.requestCodex(
-      source.environmentId,
-      environmentRuntime,
-      predecessor
-        ? {
-            method: "thread/fork",
-            id: rpcId("history-fork", input.sessionId),
-            params: {
-              threadId: source.nativeSessionId,
-              lastTurnId: predecessor.id,
-              ...threadConfiguration(input.modelId ?? source.modelId),
-            },
-          }
-        : {
-            method: "thread/start",
-            id: rpcId("history-start", input.sessionId),
-            params: threadConfiguration(input.modelId ?? source.modelId),
-          },
-      input.sessionId,
-    );
-    if (branchResponse.error) {
-      throw new HttpError(
-        502,
-        "codex_history_branch_failed",
-        rpcErrorMessage(branchResponse.error),
-      );
-    }
-    const candidateNativeSessionId = threadIdFromRpcResponse(branchResponse);
-    if (!candidateNativeSessionId) {
-      throw new HttpError(
-        502,
-        "codex_history_branch_failed",
-        "Codex did not return the candidate native Session.",
-      );
-    }
-
-    let candidateNativeTurnId: string | undefined;
-    if (input.kind === "edit") {
-      const replacement = await this.requestCodex(
-        source.environmentId,
-        environmentRuntime,
-        {
-          method: "turn/start",
-          id: rpcId("history-replacement", input.sessionId),
-          params: {
-            threadId: candidateNativeSessionId,
-            clientUserMessageId: `user-message:${randomUUID()}`,
-            input: nativeCodexTurnInput(input.text, input.images),
-            ...(input.modelId ? { model: input.modelId } : {}),
-          },
-        },
-        input.sessionId,
-      );
-      if (replacement.error) {
-        throw new HttpError(
-          502,
-          "codex_history_replacement_failed",
-          rpcErrorMessage(replacement.error),
-        );
-      }
-      candidateNativeTurnId = turnIdFromRpcResponse(replacement);
-      if (!candidateNativeTurnId) {
-        throw new HttpError(
-          502,
-          "codex_history_replacement_failed",
-          "Codex did not return the replacement native Turn.",
-        );
-      }
-    }
-
-    const switched = await this.store.commitNativeBranch({
-      sessionId: input.sessionId,
-      expectedNativeSessionId: source.nativeSessionId,
-      expectedHistoryRevision: source.historyRevision,
-      candidateNativeSessionId,
-      candidateNativeTurnId,
-      modelId: input.modelId,
-    });
-    if (!switched) {
-      throw new HttpError(
-        409,
-        "codex_history_changed",
-        "The native Session changed before the history branch was committed.",
-      );
-    }
-    this.forgetNativeOwner(source.environmentId, source.nativeSessionId);
-    this.rememberNativeOwner(
-      source.environmentId,
-      candidateNativeSessionId,
-      input.sessionId,
-    );
-    const candidateThread = await this.readNativeThread(
-      environmentRuntime,
-      {
-        ...source,
-        nativeSessionId: candidateNativeSessionId,
-        historyRevision: source.historyRevision + 1,
-      },
-      input.sessionId,
-    );
-    const activeCandidateTurnId = candidateThread.turns.find(
-      (turn) => turn.status === "inProgress",
-    )?.id;
-    const reconciled = await this.store.reconcileNativeSessionState({
-      sessionId: input.sessionId,
-      nativeSessionId: candidateNativeSessionId,
-      historyRevision: source.historyRevision + 1,
-      activeNativeTurnId: activeCandidateTurnId,
-    });
-    if (!reconciled) {
-      throw new HttpError(
-        409,
-        "codex_history_changed",
-        "The native Session changed while its branch state was reconciled.",
-      );
-    }
-    this.publishInvalidation(input.sessionId, "native-history-branched", {
-      message:
-        "Conversation history changed. The Environment Workspace was intentionally left unchanged.",
-    });
-    return {
-      nativeSessionId: candidateNativeSessionId,
-      nativeTurnId: activeCandidateTurnId,
-      historyRevision: source.historyRevision + 1,
-    };
-  }
-
   async listModels(userId: string, sessionId: string) {
     const sessionRuntime = await this.store.getSessionRuntime(userId, sessionId);
     const environmentRuntime = await this.environmentRuntimeForSession(
@@ -698,7 +509,7 @@ export class CodexService {
       );
     }
     const latest = await this.store.sessionRuntime(sessionId);
-    const branchableTurnIds = thread.turns
+    const forkableTurnIds = thread.turns
       .filter((turn) => turn.status !== "inProgress")
       .map((turn) => turn.id);
     const anchor = this.takeRpcAnchor(
@@ -717,11 +528,7 @@ export class CodexService {
             ? "waiting"
             : latest.sessionStatus,
         thread,
-        // Keep the two product capabilities separate even though Codex
-        // currently implements both with native branching. No Workspace
-        // checkpoint or restore is implied.
-        forkableTurnIds: branchableTurnIds,
-        mutableTurnIds: branchableTurnIds,
+        forkableTurnIds,
       },
       liveCursor: anchor ?? this.liveCursor(sessionId),
     };

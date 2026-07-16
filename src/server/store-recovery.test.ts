@@ -113,41 +113,6 @@ test("commits one shared decoder cursor and routes scalar turn state by native t
   ]);
 });
 
-test("switches edit/delete history with a native-thread CAS only", async () => {
-  const fixture = transactionalStore((sql) => ({
-    rows: sql.includes("RETURNING session_id") ? [{ session_id: "session-one" }] : [],
-    rowCount: 1,
-  }));
-
-  assert.equal(
-    await fixture.store.commitNativeBranch({
-      sessionId: "session-one",
-      expectedNativeSessionId: "thread-old",
-      expectedHistoryRevision: 2,
-      candidateNativeSessionId: "thread-new",
-      candidateNativeTurnId: "turn-replacement",
-      modelId: "gpt-test",
-    }),
-    true,
-  );
-
-  const switchQuery = fixture.calls.find((call) =>
-    call.sql.includes("SET native_session_id = $4"),
-  );
-  assert.ok(switchQuery);
-  assert.match(switchQuery.sql, /native_session_id = \$2/);
-  assert.match(switchQuery.sql, /history_revision = \$3/);
-  assert.doesNotMatch(switchQuery.sql, /sandbox|workspace|volume|snapshot/i);
-  assert.deepEqual(switchQuery.values, [
-    "session-one",
-    "thread-old",
-    2,
-    "thread-new",
-    "turn-replacement",
-    "gpt-test",
-  ]);
-});
-
 test("projects Sandbox and Supervisor coordinates from Environment runtime", async () => {
   const fixture = transactionalStore((sql) => {
     if (!sql.includes("FROM environment_runtime runtime")) {

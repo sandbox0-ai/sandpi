@@ -14,12 +14,10 @@ import {
   PanelLeftOpen,
   PanelRight,
   Paperclip,
-  Pencil,
   Settings2,
   Square,
   SquareTerminal,
   TriangleAlert,
-  Trash2,
   X,
 } from "lucide-react";
 import {
@@ -54,10 +52,7 @@ import {
   CodexTurnActivity,
   CodexTurnResult,
 } from "@/harnesses/codex/activity";
-import {
-  groupCodexTimelineByTurn,
-  visibleCodexTimelineWhileEditing,
-} from "@/harnesses/codex/timeline";
+import { groupCodexTimelineByTurn } from "@/harnesses/codex/timeline";
 import type {
   CodexComposerImage,
   CodexEventEnvelope,
@@ -152,9 +147,6 @@ export function CodexConversation({
   };
   const [draft, setDraft] = useState("");
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
-  const [deleteMessageId, setDeleteMessageId] = useState<string | null>(null);
-  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
-  const [editingTurnId, setEditingTurnId] = useState<string | null>(null);
   const [pastedImages, setPastedImages] = useState<CodexComposerImage[]>([]);
   const [attachmentError, setAttachmentError] = useState("");
   const [sending, setSending] = useState(false);
@@ -179,15 +171,9 @@ export function CodexConversation({
   const liveNotificationCountRef = useRef(0);
   const nativeSnapshotRefreshRequestedRef = useRef(false);
   const sessionRef = useRef(session);
-  // This operates on Codex-native Turn/item boundaries. Other clients must implement the same
-  // editing UX in their own harness reducer instead of consuming a shared message timeline.
   const visibleTimeline = useMemo(() => {
-    const projected = projectCodexTimeline(
-      nativeSnapshot?.thread,
-      liveNotifications,
-    );
-    return visibleCodexTimelineWhileEditing(projected, editingMessageId);
-  }, [editingMessageId, liveNotifications, nativeSnapshot?.thread]);
+    return projectCodexTimeline(nativeSnapshot?.thread, liveNotifications);
+  }, [liveNotifications, nativeSnapshot?.thread]);
   const timelineTurns = useMemo(
     () => groupCodexTimelineByTurn(visibleTimeline),
     [visibleTimeline],
@@ -198,7 +184,7 @@ export function CodexConversation({
   );
   const runningTurn =
     visibleTimeline.activeTurn ??
-    (session.status === "running" && !editingMessageId
+    (session.status === "running"
       ? {
           turnId: `pending:${session.id}`,
           startedAt: pendingTurnStartedAtRef.current ?? session.updatedAt,
@@ -228,9 +214,6 @@ export function CodexConversation({
   useEffect(() => {
     pendingTurnStartedAtRef.current = null;
     setDraft("");
-    setDeleteMessageId(null);
-    setEditingMessageId(null);
-    setEditingTurnId(null);
     setPastedImages([]);
     setAttachmentError("");
     setSending(false);
@@ -316,9 +299,7 @@ export function CodexConversation({
           snapshot.historyRevision < 0 ||
           !CODEX_SESSION_STATUSES.has(snapshot.sessionStatus) ||
           !Array.isArray(snapshot.forkableTurnIds) ||
-          snapshot.forkableTurnIds.some((turnId) => typeof turnId !== "string") ||
-          !Array.isArray(snapshot.mutableTurnIds) ||
-          snapshot.mutableTurnIds.some((turnId) => typeof turnId !== "string")
+          snapshot.forkableTurnIds.some((turnId) => typeof turnId !== "string")
         ) {
           throw new Error("Invalid Codex native snapshot");
         }
@@ -428,9 +409,6 @@ export function CodexConversation({
       setNativeSnapshot(null);
       setLiveNotifications([]);
       setNativeStreamReady(false);
-      setDeleteMessageId(null);
-      setEditingMessageId(null);
-      setEditingTurnId(null);
       const reason = invalidation.reason?.toLowerCase() ?? "";
       const unrecoverable =
         invalidation.unrecoverable === true ||
@@ -478,69 +456,40 @@ export function CodexConversation({
     if (sending || turnRunning || session.status !== "waiting" || !nativeReady) {
       return;
     }
-    if (editingMessageId && editingTurnId) {
-      if (!turnCapabilities.mutableTurnIds.has(editingTurnId)) return;
-      setSending(true);
-      setAttachmentError("");
-      try {
-        await apiFetch<ApiEnvelope<{ requestId: string }>>(
-          `/api/v1/sessions/${encodeURIComponent(session.id)}/turns/${encodeURIComponent(editingTurnId)}`,
-          {
-            method: "PUT",
-            body: JSON.stringify({
-              text: content,
-              images: pastedImages.map(encodeCodexComposerImage),
-              ...(selectedModel.id !== "default"
-                ? { modelId: selectedModel.id }
-                : {}),
-            }),
-          },
-        );
-        // Keep the edited Turn and its descendants hidden until the server
-        // invalidates this native branch and sends the replacement snapshot.
-      } catch (error) {
-        setAttachmentError(
-          error instanceof Error ? error.message : "Could not edit the Codex Turn.",
-        );
-        setSending(false);
-        return;
-      }
-    } else {
-      setSending(true);
-      setAttachmentError("");
-      try {
-        await apiFetch<ApiEnvelope<{ requestId: string }>>(
-          `/api/v1/sessions/${encodeURIComponent(session.id)}/turns`,
-          {
-            method: "POST",
-            body: JSON.stringify({
-              text: content,
-              images: pastedImages.map(encodeCodexComposerImage),
-              ...(selectedModel.id !== "default"
-                ? { modelId: selectedModel.id }
-                : {}),
-            }),
-          },
-        );
-        const next = {
-          ...sessionRef.current,
-          status: "running" as const,
-          unread: false,
-          harnessState: {
-            ...sessionRef.current.harnessState,
-            modelId: selectedModel.id,
-          },
-        };
-        pendingTurnStartedAtRef.current = Date.now() / 1_000;
-        sessionRef.current = next;
-        onSessionChange(next);
-      } catch (error) {
-        setAttachmentError(
-          error instanceof Error ? error.message : "Could not start the Codex Turn.",
-        );
-        setSending(false);
-        return;
-      }
+    setSending(true);
+    setAttachmentError("");
+    try {
+      await apiFetch<ApiEnvelope<{ requestId: string }>>(
+        `/api/v1/sessions/${encodeURIComponent(session.id)}/turns`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            text: content,
+            images: pastedImages.map(encodeCodexComposerImage),
+            ...(selectedModel.id !== "default"
+              ? { modelId: selectedModel.id }
+              : {}),
+          }),
+        },
+      );
+      const next = {
+        ...sessionRef.current,
+        status: "running" as const,
+        unread: false,
+        harnessState: {
+          ...sessionRef.current.harnessState,
+          modelId: selectedModel.id,
+        },
+      };
+      pendingTurnStartedAtRef.current = Date.now() / 1_000;
+      sessionRef.current = next;
+      onSessionChange(next);
+    } catch (error) {
+      setAttachmentError(
+        error instanceof Error ? error.message : "Could not start the Codex Turn.",
+      );
+      setSending(false);
+      return;
     }
     setDraft("");
     setPastedImages([]);
@@ -572,37 +521,12 @@ export function CodexConversation({
     }
   }
 
-  async function deleteTurn(message: CodexMessageView) {
-    if (
-      sending ||
-      !turnCapabilities.mutableTurnIds.has(message.turnId)
-    ) {
-      return;
-    }
-    setSending(true);
-    setDeleteMessageId(null);
-    setAttachmentError("");
-    try {
-      await apiFetch<ApiEnvelope<{ requestId: string }>>(
-        `/api/v1/sessions/${encodeURIComponent(session.id)}/turns/${encodeURIComponent(message.turnId)}`,
-        { method: "DELETE" },
-      );
-    } catch (error) {
-      setAttachmentError(
-        error instanceof Error ? error.message : "Could not delete the Codex Turn.",
-      );
-    } finally {
-      setSending(false);
-    }
-  }
-
   async function forkTurn(message: CodexMessageView) {
     if (sending || !turnCapabilities.forkableTurnIds.has(message.turnId)) {
       return;
     }
     setSending(true);
     setForkingMessageId(message.id);
-    setDeleteMessageId(null);
     setAttachmentError("");
     try {
       const response = await apiFetch<ApiEnvelope<CodexSession>>(
@@ -618,23 +542,6 @@ export function CodexConversation({
       setForkingMessageId(null);
       setSending(false);
     }
-  }
-
-  function beginEditing(message: CodexMessageView) {
-    if (!turnCapabilities.mutableTurnIds.has(message.turnId)) return;
-    setDeleteMessageId(null);
-    setEditingMessageId(message.id);
-    setEditingTurnId(message.turnId);
-    setDraft(message.content);
-    setPastedImages(message.attachments ?? []);
-    setAttachmentError("");
-    requestAnimationFrame(() => {
-      composerRef.current?.focus();
-      composerRef.current?.setSelectionRange(
-        message.content.length,
-        message.content.length,
-      );
-    });
   }
 
   async function copyMessage(message: CodexMessageView) {
@@ -790,94 +697,37 @@ export function CodexConversation({
               </button>
             </div>
           ) : (
-            <div
-              className={`message-actions message-actions-user ${
-                deleteMessageId === message.id ? "is-confirming" : ""
-              }`}
-            >
-              {deleteMessageId === message.id ? (
-                <div
-                  className="message-delete-confirm"
-                  role="group"
-                  aria-label={ui.confirmDelete}
-                >
-                  <span>{ui.deleteFromHere}</span>
-                  <button
-                    type="button"
-                    className="message-confirm-button"
-                    onClick={() => void deleteTurn(message)}
-                  >
-                    {ui.delete}
-                  </button>
-                  <button
-                    type="button"
-                    aria-label={ui.cancelDelete}
-                    title={ui.cancel}
-                    onClick={() => setDeleteMessageId(null)}
-                  >
-                    <X size={13} aria-hidden="true" />
-                  </button>
-                </div>
-              ) : (
-                <>
-                  <button
-                    type="button"
-                    aria-label={ui.editMessage}
-                    title={ui.editFromHere}
-                    disabled={
-                      sending ||
-                      session.status !== "waiting" ||
-                      !turnCapabilities.mutableTurnIds.has(message.turnId)
-                    }
-                    onClick={() => beginEditing(message)}
-                  >
-                    <Pencil size={14} aria-hidden="true" />
-                  </button>
-                  <button
-                    type="button"
-                    aria-label={ui.forkTurnMessage}
-                    title={ui.forkTurnHere}
-                    aria-busy={forkingMessageId === message.id}
-                    disabled={
-                      sending ||
-                      session.status !== "waiting" ||
-                      !turnCapabilities.forkableTurnIds.has(message.turnId)
-                    }
-                    onClick={() => void forkTurn(message)}
-                  >
-                    {forkingMessageId === message.id ? (
-                      <span className="activity-spinner" aria-hidden="true" />
-                    ) : (
-                      <GitFork size={14} aria-hidden="true" />
-                    )}
-                  </button>
-                  <button
-                    type="button"
-                    aria-label={ui.copyMessage}
-                    title={ui.copy}
-                    onClick={() => void copyMessage(message)}
-                  >
-                    {copiedMessageId === message.id ? (
-                      <Check size={14} aria-hidden="true" />
-                    ) : (
-                      <Copy size={14} aria-hidden="true" />
-                    )}
-                  </button>
-                  <button
-                    type="button"
-                    aria-label={ui.deleteMessage}
-                    title={ui.deleteFromHere}
-                    disabled={
-                      sending ||
-                      session.status !== "waiting" ||
-                      !turnCapabilities.mutableTurnIds.has(message.turnId)
-                    }
-                    onClick={() => setDeleteMessageId(message.id)}
-                  >
-                    <Trash2 size={14} aria-hidden="true" />
-                  </button>
-                </>
-              )}
+            <div className="message-actions message-actions-user">
+              <button
+                type="button"
+                aria-label={ui.forkTurnMessage}
+                title={ui.forkTurnHere}
+                aria-busy={forkingMessageId === message.id}
+                disabled={
+                  sending ||
+                  session.status !== "waiting" ||
+                  !turnCapabilities.forkableTurnIds.has(message.turnId)
+                }
+                onClick={() => void forkTurn(message)}
+              >
+                {forkingMessageId === message.id ? (
+                  <span className="activity-spinner" aria-hidden="true" />
+                ) : (
+                  <GitFork size={14} aria-hidden="true" />
+                )}
+              </button>
+              <button
+                type="button"
+                aria-label={ui.copyMessage}
+                title={ui.copy}
+                onClick={() => void copyMessage(message)}
+              >
+                {copiedMessageId === message.id ? (
+                  <Check size={14} aria-hidden="true" />
+                ) : (
+                  <Copy size={14} aria-hidden="true" />
+                )}
+              </button>
             </div>
           )}
         </div>
@@ -1049,28 +899,6 @@ export function CodexConversation({
 
       <div className="composer-region">
         <div className="composer-shell">
-          {editingMessageId ? (
-            <div className="composer-editing-notice" aria-live="polite">
-              <span>
-                <Pencil size={13} aria-hidden="true" /> {ui.editing}
-              </span>
-              <small>{ui.descendantsHidden}</small>
-              <button
-                type="button"
-                aria-label={ui.cancelEditing}
-                title={ui.cancelEditing}
-                onClick={() => {
-                  setEditingMessageId(null);
-                  setEditingTurnId(null);
-                  setDraft("");
-                  setPastedImages([]);
-                  setAttachmentError("");
-                }}
-              >
-                <X size={14} aria-hidden="true" />
-              </button>
-            </div>
-          ) : null}
           {pastedImages.length ? (
             <div
               className="composer-image-previews"
@@ -1146,11 +974,7 @@ export function CodexConversation({
               }
             }}
             aria-label={ui.messageAgent(environment.codingAgent.label)}
-            placeholder={
-              editingMessageId
-                ? ui.editPlaceholder
-                : ui.askPlaceholder(environment.codingAgent.label)
-            }
+            placeholder={ui.askPlaceholder(environment.codingAgent.label)}
             rows={1}
           />
           <div className="composer-toolbar">

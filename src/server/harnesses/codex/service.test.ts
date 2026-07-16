@@ -424,35 +424,6 @@ function fixture(input: {
     async markSessionFailed(sessionId: string) {
       sessions.set(sessionId, { ...sessions.get(sessionId)!, status: "failed" });
     },
-    async commitNativeBranch(options: {
-      sessionId: string;
-      expectedNativeSessionId: string;
-      expectedHistoryRevision: number;
-      candidateNativeSessionId: string;
-      candidateNativeTurnId?: string;
-      modelId?: string;
-    }) {
-      const current = sessionRuntimes.get(options.sessionId)!;
-      if (
-        current.nativeSessionId !== options.expectedNativeSessionId ||
-        current.historyRevision !== options.expectedHistoryRevision
-      ) {
-        return false;
-      }
-      sessionRuntimes.set(options.sessionId, {
-        ...current,
-        nativeSessionId: options.candidateNativeSessionId,
-        activeNativeTurnId: options.candidateNativeTurnId,
-        historyRevision: current.historyRevision + 1,
-        modelId: options.modelId ?? current.modelId,
-        sessionStatus: options.candidateNativeTurnId ? "running" : "waiting",
-      });
-      sessions.set(options.sessionId, {
-        ...sessions.get(options.sessionId)!,
-        status: options.candidateNativeTurnId ? "running" : "waiting",
-      });
-      return true;
-    },
     async reconcileNativeSessionState(options: {
       sessionId: string;
       nativeSessionId: string;
@@ -856,43 +827,6 @@ test("forks a product Session only through Codex thread/fork", async () => {
       context.writes.every(
         (write) => !String(write.message.method).includes("snapshot"),
       ),
-    );
-  } finally {
-    await context.close();
-  }
-});
-
-test("editing branches native history without restoring the shared Workspace", async () => {
-  const context = fixture();
-  try {
-    const result = await context.service.editTurn({
-      userId: "user",
-      sessionId: "session-one",
-      nativeTurnId: "turn-two",
-      text: "replacement",
-      images: [],
-      modelId: "gpt-test",
-    });
-
-    assert.match(result.nativeSessionId, /^thread-child-/);
-    assert.match(result.nativeTurnId ?? "", /^turn-new-/);
-    assert.equal(result.historyRevision, 1);
-    assert.deepEqual(
-      context.writes
-        .map((write) => write.message.method)
-        .filter((method) => method !== "initialize" && method !== "initialized"),
-      ["thread/read", "thread/fork", "turn/start", "thread/read"],
-    );
-    assert.equal(
-      context.sessionRuntimes.get("session-one")?.nativeSessionId,
-      result.nativeSessionId,
-    );
-    const invalidation = context.service
-      .listLiveNotifications("session-one")
-      .find((update) => update.kind === "invalidation");
-    assert.equal(
-      invalidation?.kind === "invalidation" ? invalidation.reason : undefined,
-      "native-history-branched",
     );
   } finally {
     await context.close();

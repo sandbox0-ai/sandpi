@@ -553,41 +553,6 @@ function registerApiRoutes(
       });
     },
   );
-  app.put<{ Params: { sessionId: string; nativeTurnId: string } }>(
-    "/api/v1/sessions/:sessionId/turns/:nativeTurnId",
-    { bodyLimit: CODEX_IMAGE_BODY_LIMIT_BYTES },
-    async (request, reply) => {
-      const body = z
-        .object({
-          text: z.string().trim().max(100_000).default(""),
-          images: codexInputImagesSchema,
-          modelId: z.string().trim().min(1).max(200).optional(),
-        })
-        .refine((value) => value.text.length > 0 || value.images.length > 0, {
-          message: "An edited Turn requires text or at least one image.",
-        })
-        .parse(request.body);
-      const result = await services.codex.editTurn({
-        userId: request.principal.userId,
-        sessionId: request.params.sessionId,
-        nativeTurnId: request.params.nativeTurnId,
-        text: body.text,
-        images: body.images,
-        modelId: body.modelId,
-      });
-      return reply.status(202).send({ data: result });
-    },
-  );
-  app.delete<{ Params: { sessionId: string; nativeTurnId: string } }>(
-    "/api/v1/sessions/:sessionId/turns/:nativeTurnId",
-    async (request) => ({
-      data: await services.codex.deleteTurn(
-        request.principal.userId,
-        request.params.sessionId,
-        request.params.nativeTurnId,
-      ),
-    }),
-  );
   app.get<{ Params: { sessionId: string } }>(
     "/api/v1/sessions/:sessionId/models",
     async (request) => {

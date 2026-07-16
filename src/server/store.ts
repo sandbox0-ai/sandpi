@@ -1270,61 +1270,6 @@ export class SandpiStore {
     }
   }
 
-  async commitNativeBranch(input: {
-    sessionId: string;
-    expectedNativeSessionId: string;
-    expectedHistoryRevision: number;
-    candidateNativeSessionId: string;
-    candidateNativeTurnId?: string;
-    modelId?: string;
-  }) {
-    const client = await this.pool.connect();
-    try {
-      await client.query("BEGIN");
-      const switched = await client.query(
-        `UPDATE session_runtime
-         SET native_session_id = $4,
-             model_id = COALESCE($6, model_id),
-             history_revision = history_revision + 1,
-             active_native_turn_id = $5,
-             pending_turn_request_id = NULL,
-             pending_turn_client_message_id = NULL,
-             pending_turn_stable_input_id = NULL,
-             pending_turn_phase = NULL,
-             pending_turn_native_turn_id = NULL,
-             pending_turn_started_at = NULL,
-             runtime_error_code = NULL,
-             version = version + 1
-         WHERE session_id = $1 AND native_session_id = $2
-           AND history_revision = $3
-         RETURNING session_id`,
-        [
-          input.sessionId,
-          input.expectedNativeSessionId,
-          input.expectedHistoryRevision,
-          input.candidateNativeSessionId,
-          input.candidateNativeTurnId ?? null,
-          input.modelId ?? null,
-        ],
-      );
-      if (!switched.rowCount) {
-        await client.query("ROLLBACK");
-        return false;
-      }
-      await client.query(
-        `UPDATE sessions SET status = $2 WHERE id = $1`,
-        [input.sessionId, input.candidateNativeTurnId ? "running" : "waiting"],
-      );
-      await client.query("COMMIT");
-      return true;
-    } catch (error) {
-      await client.query("ROLLBACK");
-      throw error;
-    } finally {
-      client.release();
-    }
-  }
-
   /**
    * Reconciles the scalar active-Turn projection from one authoritative native
    * Thread response. This repairs both branch-switch races and app-server

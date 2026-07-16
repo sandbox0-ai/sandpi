@@ -1833,8 +1833,7 @@ pre,
 }
 
 .message:hover .message-actions,
-.message:focus-within .message-actions,
-.message-actions.is-confirming {
+.message:focus-within .message-actions {
   opacity: 1;
 }
 
@@ -1864,37 +1863,6 @@ pre,
   color: var(--ink-faint);
   cursor: not-allowed;
   opacity: 0.38;
-}
-
-.message-actions-user > button:last-child:hover {
-  background: #f8e9e7;
-  color: #a53d34;
-}
-
-.message-delete-confirm {
-  display: inline-flex;
-  min-height: 28px;
-  align-items: center;
-  gap: 3px;
-  padding: 2px 3px 2px 9px;
-  border: 1px solid #dfc8c4;
-  border-radius: 7px;
-  background: #fff9f8;
-  color: #77443f;
-  font-size: 9.5px;
-  box-shadow: 0 3px 12px rgb(75 35 30 / 7%);
-}
-
-.message-delete-confirm .message-confirm-button {
-  width: auto;
-  padding: 0 7px;
-  background: #a8443a;
-  color: #fff;
-}
-
-.message-delete-confirm .message-confirm-button:hover {
-  background: #92382f;
-  color: #fff;
 }
 
 .composer-region {
@@ -2026,49 +1994,6 @@ pre,
   color: var(--ink-soft);
   font-size: 11px;
   line-height: 1.45;
-}
-
-.composer-editing-notice {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto 26px;
-  align-items: center;
-  gap: 8px;
-  margin: -2px -2px 7px;
-  padding: 5px 5px 6px 8px;
-  border-bottom: 1px solid var(--line-soft);
-  color: var(--ink-soft);
-}
-
-.composer-editing-notice > span {
-  display: inline-flex;
-  min-width: 0;
-  align-items: center;
-  gap: 6px;
-  font-size: 10px;
-  font-weight: 650;
-}
-
-.composer-editing-notice small {
-  color: var(--ink-faint);
-  font-size: 9px;
-}
-
-.composer-editing-notice button {
-  display: inline-flex;
-  width: 26px;
-  height: 26px;
-  align-items: center;
-  justify-content: center;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--ink-faint);
-  cursor: pointer;
-}
-
-.composer-editing-notice button:hover {
-  background: var(--hover);
-  color: var(--ink);
 }
 
 .composer-image-previews {
@@ -5307,13 +5232,6 @@ html[data-resolved-theme="dark"] .share-dialog,
 html[data-resolved-theme="dark"] .share-form-grid select,
 html[data-resolved-theme="dark"] .share-link-row input {
   border-color: var(--line);
-}
-
-html[data-resolved-theme="dark"] .message-actions-user > button:last-child:hover,
-html[data-resolved-theme="dark"] .message-delete-confirm {
-  border-color: var(--red);
-  background: var(--red-soft);
-  color: var(--red);
 }
 
 html[data-resolved-theme="dark"] .composer-shell textarea::placeholder {

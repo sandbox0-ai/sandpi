@@ -11,10 +11,7 @@ import {
   projectCodexTimeline,
   shouldRefreshCodexNativeSnapshot,
 } from "./events";
-import {
-  groupCodexTimelineByTurn,
-  visibleCodexTimelineWhileEditing,
-} from "./timeline";
+import { groupCodexTimelineByTurn } from "./timeline";
 import { CODEX_TRANSCRIPT_NOTIFICATION_METHODS } from "./types";
 import type {
   CodexEventEnvelope,
@@ -83,27 +80,6 @@ test("projects a native thread/read snapshot without DTO event history", () => {
   );
   assert.equal("events" in state, false);
   assert.equal(state.historyRevision, 0);
-});
-
-test("editing hides the selected native Turn and every descendant", () => {
-  const projection = projectCodexTimeline(nativeThread);
-  const secondUser = projection.entries.find(
-    (entry) => entry.kind === "message" && entry.content === "second",
-  );
-  assert.ok(secondUser?.kind === "message");
-
-  const visible = visibleCodexTimelineWhileEditing(
-    projection,
-    secondUser.id,
-  );
-  assert.deepEqual(
-    visible.entries
-      .filter((entry) => entry.kind === "message")
-      .map((entry) => entry.content),
-    ["first", "first reply"],
-  );
-  assert.deepEqual(visible.turns.map((turn) => turn.turnId), [firstTurn.id]);
-  assert.equal(visible.activeTurn, undefined);
 });
 
 test("groups completed Codex work behind its prompt and final answer", () => {

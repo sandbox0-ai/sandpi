@@ -246,8 +246,6 @@ export interface CodexNativeSnapshot {
   thread: CodexThread;
   /** Completed native Turns through which Codex can fork a child Thread. */
   forkableTurnIds: string[];
-  /** Completed native Turns that can be replaced or removed through branching. */
-  mutableTurnIds: string[];
 }
 
 /**
