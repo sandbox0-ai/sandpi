@@ -49,21 +49,9 @@ const copy = {
       nativeRolloutUnavailableTitle: "Codex history unavailable",
       nativeRolloutUnavailableBody:
         "The native Codex rollout is no longer recoverable. Sandpi cannot safely reconstruct this conversation from a secondary transcript.",
-      wakingSandbox: (environment: string) =>
-        `Waking ${environment} Sandbox…`,
-      wakingSandboxBody:
-        "This Environment was paused while idle. Sandpi is restoring its native Codex session.",
-      startingSandbox: (environment: string) =>
-        `Starting ${environment} Sandbox…`,
-      startingSandboxBody:
-        "Sandpi is preparing the Environment runtime before Codex resumes this Session.",
-      recoveringSandbox: (environment: string) =>
-        `Recovering ${environment} Sandbox…`,
-      recoveringSandboxBody:
-        "Sandpi is reconnecting to the Environment runtime before loading the native Codex session.",
-      loadingConversation: "Loading Codex conversation…",
+      loadingConversation: "Loading conversation…",
       loadingConversationBody:
-        "Reading this Session from the native Codex harness in the Environment Sandbox.",
+        "Restoring the latest native Codex session state.",
       attachFile: "Attach file",
       mentionFile: "Mention file",
       attachedImages: "Attached images",
@@ -258,21 +246,9 @@ const copy = {
       nativeRolloutUnavailableTitle: "Codex 历史不可用",
       nativeRolloutUnavailableBody:
         "Codex 原生 rollout 已无法恢复。Sandpi 不会使用次级转录记录伪造或重建这段对话。",
-      wakingSandbox: (environment: string) =>
-        `正在唤醒 ${environment} Sandbox…`,
-      wakingSandboxBody:
-        "此环境空闲后已暂停。Sandpi 正在恢复 Sandbox 和 Codex 原生会话。",
-      startingSandbox: (environment: string) =>
-        `正在启动 ${environment} Sandbox…`,
-      startingSandboxBody:
-        "Sandpi 正在准备 Environment 运行时，随后 Codex 会恢复此会话。",
-      recoveringSandbox: (environment: string) =>
-        `正在恢复 ${environment} Sandbox…`,
-      recoveringSandboxBody:
-        "Sandpi 正在重新连接 Environment 运行时，随后加载 Codex 原生会话。",
-      loadingConversation: "正在加载 Codex 对话…",
+      loadingConversation: "正在加载对话…",
       loadingConversationBody:
-        "正在从 Environment Sandbox 中的 Codex 原生 harness 读取此会话。",
+        "正在恢复最新的 Codex 原生会话状态。",
       attachFile: "附加文件",
       mentionFile: "引用文件",
       attachedImages: "已附加图片",

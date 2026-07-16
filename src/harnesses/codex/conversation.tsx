@@ -199,29 +199,9 @@ export function CodexConversation({
     Boolean(nativeSnapshot) && nativeStreamReady && !nativeHistoryError;
   // Sandpi deliberately stores no secondary chat transcript. Until the native
   // harness snapshot arrives, this is runtime recovery—not an empty history.
+  // Do not infer a cold start from persisted Sandbox state here: bootstrap may
+  // still say paused while an ordinary refresh is already loading the runtime.
   const nativeHistoryLoading = !nativeSnapshot && !nativeHistoryError;
-  const runtimeLoadingCopy =
-    environment.sandboxState === "paused"
-      ? {
-          title: ui.wakingSandbox(environment.name),
-          body: ui.wakingSandboxBody,
-        }
-      : environment.sandboxState === "pending" ||
-          environment.sandboxState === "provisioning"
-        ? {
-            title: ui.startingSandbox(environment.name),
-            body: ui.startingSandboxBody,
-          }
-        : environment.sandboxState === "failed" ||
-            environment.sandboxState === "terminated"
-          ? {
-              title: ui.recoveringSandbox(environment.name),
-              body: ui.recoveringSandboxBody,
-            }
-          : {
-              title: ui.loadingConversation,
-              body: ui.loadingConversationBody,
-            };
 
   useEffect(() => {
     sessionRef.current = session;
@@ -795,8 +775,8 @@ export function CodexConversation({
                 <LoaderCircle size={18} aria-hidden="true" />
               </span>
               <span className="conversation-runtime-loading-copy">
-                <strong>{runtimeLoadingCopy.title}</strong>
-                <small>{runtimeLoadingCopy.body}</small>
+                <strong>{ui.loadingConversation}</strong>
+                <small>{ui.loadingConversationBody}</small>
               </span>
             </div>
           ) : null}

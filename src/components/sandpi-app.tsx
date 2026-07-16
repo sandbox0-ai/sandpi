@@ -187,23 +187,6 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
   );
 
   useEffect(() => {
-    if (!selectedSession) {
-      return;
-    }
-
-    const warnBeforeClosingSession = (event: BeforeUnloadEvent) => {
-      event.preventDefault();
-      // Browsers intentionally replace custom text with their native warning.
-      event.returnValue = "";
-    };
-
-    window.addEventListener("beforeunload", warnBeforeClosingSession);
-    return () => {
-      window.removeEventListener("beforeunload", warnBeforeClosingSession);
-    };
-  }, [selectedSession]);
-
-  useEffect(() => {
     if (!environments.some((environment) => environment.status === "updating")) {
       return;
     }

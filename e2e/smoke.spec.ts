@@ -169,31 +169,6 @@ test("serves shared Preferences and Team layouts", async ({ page }) => {
   await expect(page.getByText("Sandpi control plane", { exact: true })).toBeVisible();
 });
 
-test("warns before unloading an open Session chat only", async ({
-  page,
-  request,
-}) => {
-  const workspace = await activeWorkspace(request);
-
-  test.skip(!workspace, "An active Session is required for this check.");
-  if (!workspace) return;
-  const { environment, session } = workspace;
-
-  await page.goto(
-    `/?team=${encodeURIComponent(environment.teamId)}&environment=${encodeURIComponent(environment.id)}&session=${encodeURIComponent(session.id)}`,
-  );
-  await expect(page.locator("#conversation")).toBeVisible();
-  await expect.poll(() => pageBlocksUnload(page)).toBe(true);
-
-  await page
-    .getByRole("button", { name: `New session in ${environment.name}` })
-    .click();
-  await expect(
-    page.getByRole("heading", { name: "What should Codex work on?" }),
-  ).toBeVisible();
-  await expect.poll(() => pageBlocksUnload(page)).toBe(false);
-});
-
 test("keeps the Codex live event response open between tool updates", async ({
   page,
   request,
