@@ -517,6 +517,62 @@ test("reports exhausted Sandbox0 transport failures as retryable unavailability"
   assert.equal(inputWrites, 3);
 });
 
+test("reports Sandbox0 deployment credential failures with operator guidance", async () => {
+  const coordinates: EnvironmentRuntimeRecord = {
+    id: environment.id,
+    sandboxId: environment.sandboxId,
+    workspaceVolumeId: environment.workspaceVolumeId,
+    supervisorSessionId: "supervisor-environment",
+    runtimeGeneration: 1,
+    decoder: {
+      supervisorCursor: 0,
+      tailBase64: "",
+      runtimeGeneration: 1,
+    },
+  };
+  const cases = [
+    {
+      statusCode: 401,
+      upstreamCode: "unauthorized",
+      code: "sandbox0_invalid_api_key",
+      message: /SANDBOX0_API_KEY/,
+    },
+    {
+      statusCode: 403,
+      upstreamCode: "forbidden",
+      code: "sandbox0_permission_denied",
+      message: /required team role and permissions/,
+    },
+  ] as const;
+
+  for (const expected of cases) {
+    const runtime = runtimeWithClient({
+      sandboxes: {
+        async get() {
+          throw new APIError({
+            statusCode: expected.statusCode,
+            code: expected.upstreamCode,
+            message: expected.upstreamCode,
+          });
+        },
+      },
+    });
+
+    await assert.rejects(
+      runtime.pauseEnvironment(coordinates),
+      (error: unknown) => {
+        assert.equal(
+          (error as { statusCode?: number }).statusCode,
+          expected.statusCode,
+        );
+        assert.equal((error as { code?: string }).code, expected.code);
+        assert.match((error as Error).message, expected.message);
+        return true;
+      },
+    );
+  }
+});
+
 test("all Environment file access resolves through the shared Sandbox", async () => {
   const sandboxIds: string[] = [];
   const runtime = runtimeWithClient({

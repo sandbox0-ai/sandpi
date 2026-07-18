@@ -1,4 +1,15 @@
-import { Braces, Check, ChevronRight, FilePenLine, X } from "lucide-react";
+import {
+  Braces,
+  Check,
+  ChevronRight,
+  FilePenLine,
+  ImageIcon,
+  Plug,
+  Search,
+  UsersRound,
+  Wrench,
+  X,
+} from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import type {
@@ -7,6 +18,7 @@ import type {
   CodexCommandActivityView,
   CodexFileChangeActivityView,
   CodexNativeItemActivityView,
+  CodexNativeToolActivityView,
   CodexTurnResultView,
   CodexTurnView,
 } from "./events";
@@ -196,6 +208,264 @@ export function CodexNativeItemActivity({
         </div>
         {activity.detail ? (
           <p className="codex-native-item-detail">{activity.detail}</p>
+        ) : null}
+      </div>
+    </article>
+  );
+}
+
+const MAX_NATIVE_TOOL_PAYLOAD_CHARS = 16 * 1024;
+const MAX_NATIVE_TOOL_PREVIEW_DEPTH = 5;
+const MAX_NATIVE_TOOL_PREVIEW_ENTRIES = 40;
+const MAX_NATIVE_TOOL_PREVIEW_NODES = 320;
+const MAX_NATIVE_TOOL_PREVIEW_STRING_CHARS = 2_048;
+
+function boundedNativeToolValue(
+  value: unknown,
+  state: { nodes: number },
+  seen: WeakSet<object>,
+  depth = 0,
+): unknown {
+  if (typeof value === "string") {
+    return value.length <= MAX_NATIVE_TOOL_PREVIEW_STRING_CHARS
+      ? value
+      : `${value.slice(0, MAX_NATIVE_TOOL_PREVIEW_STRING_CHARS)}…`;
+  }
+  if (
+    value === null ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return value;
+  }
+  if (typeof value === "bigint") return String(value);
+  if (typeof value !== "object") return String(value);
+  if (seen.has(value)) return "[circular]";
+  if (depth >= MAX_NATIVE_TOOL_PREVIEW_DEPTH) return "[depth limit]";
+  if (state.nodes >= MAX_NATIVE_TOOL_PREVIEW_NODES) return "[entry limit]";
+
+  seen.add(value);
+  if (Array.isArray(value)) {
+    const preview: unknown[] = [];
+    for (
+      let index = 0;
+      index < value.length &&
+      index < MAX_NATIVE_TOOL_PREVIEW_ENTRIES &&
+      state.nodes < MAX_NATIVE_TOOL_PREVIEW_NODES;
+      index += 1
+    ) {
+      state.nodes += 1;
+      preview.push(boundedNativeToolValue(value[index], state, seen, depth + 1));
+    }
+    if (value.length > preview.length) {
+      preview.push(`[${value.length - preview.length} more items]`);
+    }
+    return preview;
+  }
+
+  const preview: Record<string, unknown> = {};
+  const keys = Object.keys(value);
+  for (
+    let index = 0;
+    index < keys.length &&
+    index < MAX_NATIVE_TOOL_PREVIEW_ENTRIES &&
+    state.nodes < MAX_NATIVE_TOOL_PREVIEW_NODES;
+    index += 1
+  ) {
+    const key = keys[index]!;
+    state.nodes += 1;
+    preview[key] = boundedNativeToolValue(
+      (value as Record<string, unknown>)[key],
+      state,
+      seen,
+      depth + 1,
+    );
+  }
+  if (keys.length > Object.keys(preview).length) {
+    preview["…"] = `${keys.length - Object.keys(preview).length} more fields`;
+  }
+  return preview;
+}
+
+function boundedNativeToolPayload(value: unknown) {
+  // Keep native arguments/results inspectable without walking or serializing an
+  // unbounded integration response into the browser DOM.
+  let encoded: string;
+  try {
+    encoded =
+      JSON.stringify(
+        boundedNativeToolValue(value, { nodes: 0 }, new WeakSet()),
+        null,
+        2,
+      ) ?? String(value);
+  } catch {
+    encoded = String(value);
+  }
+  if (encoded.length <= MAX_NATIVE_TOOL_PAYLOAD_CHARS) return encoded;
+  return `${encoded.slice(0, MAX_NATIVE_TOOL_PAYLOAD_CHARS)}\n… payload truncated …`;
+}
+
+function nativeToolIcon(activity: CodexNativeToolActivityView) {
+  if (activity.kind === "mcpToolCall") return <Plug size={13} />;
+  if (activity.kind === "dynamicToolCall") return <Wrench size={13} />;
+  if (activity.kind === "webSearch") return <Search size={13} />;
+  if (
+    activity.kind === "collabAgentToolCall" ||
+    activity.kind === "subAgentActivity"
+  ) {
+    return <UsersRound size={13} />;
+  }
+  return <ImageIcon size={13} />;
+}
+
+function nativeToolSubject(activity: CodexNativeToolActivityView) {
+  if (activity.kind === "mcpToolCall") {
+    return [activity.appName ?? activity.server, activity.tool]
+      .filter(Boolean)
+      .join(" · ");
+  }
+  if (activity.kind === "dynamicToolCall") {
+    return [activity.namespace, activity.tool].filter(Boolean).join(" · ");
+  }
+  if (activity.kind === "webSearch") return activity.query;
+  if (activity.kind === "collabAgentToolCall") {
+    const receivers = activity.receiverThreadIds.length;
+    return receivers > 0
+      ? `${activity.tool} · ${receivers} ${receivers === 1 ? "thread" : "threads"}`
+      : activity.tool;
+  }
+  if (activity.kind === "subAgentActivity") {
+    return activity.agentPath || activity.agentThreadId;
+  }
+  return activity.savedPath ?? activity.revisedPrompt ?? "";
+}
+
+function nativeToolPayloads(
+  activity: CodexNativeToolActivityView,
+): Array<{ label: string; value: unknown }> {
+  if (activity.kind === "mcpToolCall") {
+    return [
+      { label: "arguments", value: activity.arguments },
+      ...(activity.result === null
+        ? []
+        : [{ label: "result", value: activity.result }]),
+      ...(activity.error ? [{ label: "error", value: activity.error }] : []),
+    ];
+  }
+  if (activity.kind === "dynamicToolCall") {
+    return [
+      { label: "arguments", value: activity.arguments },
+      ...(activity.contentItems === null
+        ? []
+        : [{ label: "contentItems", value: activity.contentItems }]),
+      ...(activity.success === null
+        ? []
+        : [{ label: "success", value: activity.success }]),
+    ];
+  }
+  if (activity.kind === "webSearch") {
+    return activity.action === null
+      ? []
+      : [{ label: "action", value: activity.action }];
+  }
+  if (activity.kind === "collabAgentToolCall") {
+    return [
+      ...(activity.prompt ? [{ label: "prompt", value: activity.prompt }] : []),
+      {
+        label: "threadIds",
+        value: {
+          sender: activity.senderThreadId,
+          receivers: activity.receiverThreadIds,
+        },
+      },
+    ];
+  }
+  if (activity.kind === "subAgentActivity") {
+    return [
+      {
+        label: "agent",
+        value: {
+          kind: activity.activityKind,
+          threadId: activity.agentThreadId,
+          path: activity.agentPath,
+        },
+      },
+    ];
+  }
+  return [
+    ...(activity.revisedPrompt
+      ? [{ label: "revisedPrompt", value: activity.revisedPrompt }]
+      : []),
+    ...(activity.savedPath
+      ? [{ label: "savedPath", value: activity.savedPath }]
+      : []),
+  ];
+}
+
+export function CodexNativeToolActivity({
+  activity,
+  language,
+}: {
+  activity: CodexNativeToolActivityView;
+  language: OperationLanguage;
+}) {
+  const ui = getCodexUiCopy(language).conversation;
+  const payloads = nativeToolPayloads(activity);
+  const external =
+    activity.kind === "mcpToolCall" ||
+    activity.kind === "dynamicToolCall" ||
+    activity.kind === "webSearch" ||
+    activity.kind === "imageGeneration";
+
+  return (
+    <article className="message message-codex-activity">
+      <div
+        className={`codex-activity codex-native-tool status-${activity.status}`}
+      >
+        <div className="codex-activity-heading">
+          <span
+            className={`activity-status status-${activity.status}`}
+            aria-hidden="true"
+          >
+            {activity.status === "running"
+              ? activityIcon(activity.status)
+              : nativeToolIcon(activity)}
+          </span>
+          <strong>{ui.nativeItemStatus(activity.kind, activity.status)}</strong>
+          <span
+            className={`codex-activity-boundary ${
+              external ? "is-external" : "is-agent"
+            }`}
+          >
+            {external ? ui.externalInteraction : ui.agentInteraction}
+          </span>
+          {"durationMs" in activity && activity.durationMs !== null ? (
+            <span className="activity-duration">
+              {formatDuration(activity.durationMs)}
+            </span>
+          ) : null}
+          <code className="codex-native-item-type">{activity.kind}</code>
+        </div>
+        {nativeToolSubject(activity) ? (
+          <p className="codex-native-item-detail">
+            {nativeToolSubject(activity)}
+          </p>
+        ) : null}
+        {payloads.length > 0 ? (
+          <details className="codex-native-tool-details">
+            <summary>
+              <Braces size={12} aria-hidden="true" />
+              {ui.nativePayload}
+            </summary>
+            <div>
+              {payloads.map((payload) => (
+                <section key={payload.label}>
+                  <strong>{payload.label}</strong>
+                  <pre>{boundedNativeToolPayload(payload.value)}</pre>
+                </section>
+              ))}
+            </div>
+          </details>
         ) : null}
       </div>
     </article>

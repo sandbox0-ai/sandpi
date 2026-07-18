@@ -13,6 +13,7 @@ import type {
   WorkspaceIdeFile,
   WorkspaceIdeSnapshot,
 } from "../src/lib/types";
+import type { CodexNativeSnapshot } from "../src/harnesses/codex/types";
 import {
   mockEnvironmentAudit,
   mockEnvironmentMetrics,
@@ -197,6 +198,267 @@ test("keeps the Codex live event response open between tool updates", async ({
   const settledRequests = eventRequests;
   await page.waitForTimeout(2_500);
   expect(eventRequests).toBe(settledRequests);
+});
+
+test("shows a Sandbox0 credential failure instead of loading forever", async ({
+  page,
+  request,
+}) => {
+  const workspace = await activeWorkspace(request);
+  test.skip(!workspace, "An active Session is required for this check.");
+  if (!workspace) return;
+  const { environment, session } = workspace;
+  const message =
+    "Sandbox0 rejected the deployment API key. Update SANDBOX0_API_KEY and restart Sandpi.";
+
+  await page.route("**/api/v1/sessions/**/events", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "text/event-stream",
+      headers: { "Cache-Control": "no-cache" },
+      body: [
+        "retry: 15000",
+        "",
+        "event: stream-error",
+        `data: ${JSON.stringify({
+          status: 401,
+          code: "sandbox0_invalid_api_key",
+          message,
+          retryable: true,
+        })}`,
+        "",
+        "",
+      ].join("\n"),
+    });
+  });
+
+  await page.goto(
+    `/?team=${encodeURIComponent(environment.teamId)}&environment=${encodeURIComponent(environment.id)}&session=${encodeURIComponent(session.id)}`,
+  );
+
+  await expect(page.getByRole("alert").getByText(message)).toBeVisible();
+  await expect(page.getByText("Loading conversation…")).toBeHidden();
+  await expect(page.getByText("Codex runtime unavailable")).toBeVisible();
+
+  await page
+    .getByRole("button", { name: "Codex Session Activity" })
+    .click();
+  await expect(page.getByRole("alert").getByText(message)).toBeVisible();
+  await expect(page.getByText("Loading Codex activity…")).toBeHidden();
+});
+
+test("shows a fallback when the Codex EventSource handshake fails", async ({
+  page,
+  request,
+}) => {
+  const workspace = await activeWorkspace(request);
+  test.skip(!workspace, "An active Session is required for this check.");
+  if (!workspace) return;
+  const { environment, session } = workspace;
+
+  await page.route("**/api/v1/sessions/**/events", async (route) => {
+    await route.fulfill({
+      status: 401,
+      contentType: "application/json",
+      body: JSON.stringify({
+        error: {
+          code: "authentication_required",
+          message: "Sign in required.",
+        },
+      }),
+    });
+  });
+
+  await page.goto(
+    `/?team=${encodeURIComponent(environment.teamId)}&environment=${encodeURIComponent(environment.id)}&session=${encodeURIComponent(session.id)}`,
+  );
+
+  await expect(
+    page.getByRole("alert").getByText(
+      "The Codex event stream could not be opened. Check the Sandpi server connection and deployment configuration.",
+    ),
+  ).toBeVisible();
+  await expect(page.getByText("Loading conversation…")).toBeHidden();
+});
+
+test("keeps Codex Session Activity native and Environment Audit separate", async ({
+  page,
+  request,
+}) => {
+  const workspace = await activeWorkspace(request);
+  test.skip(!workspace, "An active Session is required for this check.");
+  if (!workspace) return;
+  const { environment, session } = workspace;
+  const startedAt = Date.now() / 1_000 - 10;
+  const nativeThreadId = "thread-e2e-native-activity";
+  const nativeTurnId = "turn-e2e-native-activity";
+  const snapshot: CodexNativeSnapshot = {
+    protocol: "codex-app-server",
+    nativeSessionId: nativeThreadId,
+    historyRevision: 7,
+    modelId: "e2e-native-codex-model",
+    sessionStatus: "waiting",
+    forkableTurnIds: [nativeTurnId],
+    thread: {
+      id: nativeThreadId,
+      createdAt: startedAt,
+      updatedAt: startedAt + 5,
+      status: { type: "idle" },
+      turns: [
+        {
+          id: nativeTurnId,
+          itemsView: "full",
+          status: "completed",
+          error: null,
+          startedAt,
+          completedAt: startedAt + 5,
+          durationMs: 5_000,
+          items: [
+            {
+              type: "userMessage",
+              id: "activity-e2e-user",
+              clientId: null,
+              content: [
+                {
+                  type: "text",
+                  text: "Check the release and repository.",
+                  text_elements: [],
+                },
+              ],
+            },
+            {
+              type: "commandExecution",
+              id: "activity-e2e-command",
+              command: "git status --short",
+              cwd: "/workspace",
+              processId: null,
+              source: "agent",
+              status: "completed",
+              commandActions: [
+                { type: "unknown", command: "git status --short" },
+              ],
+              aggregatedOutput: "",
+              exitCode: 0,
+              durationMs: 40,
+            },
+            {
+              type: "mcpToolCall",
+              id: "activity-e2e-mcp",
+              server: "github",
+              tool: "get_release",
+              status: "completed",
+              arguments: { owner: "sandbox0-ai", repo: "sandpi" },
+              appContext: {
+                connectorId: "github",
+                linkId: null,
+                resourceUri: null,
+                appName: "GitHub",
+                templateId: null,
+                actionName: "Get release",
+              },
+              pluginId: null,
+              result: {
+                content: [{ type: "text", text: "v1.2.3" }],
+                structuredContent: { tag: "v1.2.3" },
+                _meta: null,
+              },
+              error: null,
+              durationMs: 180,
+            },
+            {
+              type: "webSearch",
+              id: "activity-e2e-web",
+              query: "sandpi v1.2.3",
+              action: {
+                type: "openPage",
+                url: "https://example.com/releases/v1.2.3",
+              },
+            },
+            {
+              type: "agentMessage",
+              id: "activity-e2e-final",
+              text: "The release is valid.",
+              phase: "final_answer",
+              memoryCitation: null,
+            },
+          ],
+        },
+      ],
+    },
+  };
+  const browserErrors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") browserErrors.push(message.text());
+  });
+  page.on("pageerror", (error) => browserErrors.push(error.message));
+
+  await page.route("**/api/v1/sessions/**/events", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "text/event-stream",
+      headers: { "Cache-Control": "no-cache" },
+      body: `event: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`,
+    });
+  });
+  await page.route("**/api/v1/sessions/**/models", async (route) => {
+    await route.fulfill({
+      json: {
+        data: {
+          data: [
+            {
+              id: snapshot.modelId,
+              displayName: "E2E native Codex model",
+              isDefault: true,
+            },
+          ],
+        },
+        meta: { availability: "available", source: "codex" },
+      },
+    });
+  });
+  await page.route("**/api/v1/environments/**/audit", async (route) => {
+    await route.fulfill({ json: { data: mockEnvironmentAudit } });
+  });
+
+  await page.goto(
+    `/?team=${encodeURIComponent(environment.teamId)}&environment=${encodeURIComponent(environment.id)}&session=${encodeURIComponent(session.id)}`,
+  );
+  await expect(page.getByText("The release is valid.")).toBeVisible();
+  await page
+    .getByRole("button", { name: "Codex Session Activity" })
+    .click();
+
+  await expect(
+    page.getByRole("heading", { name: "Codex Session Activity" }),
+  ).toBeVisible();
+  await expect(page.getByText(nativeThreadId, { exact: false })).toBeVisible();
+  await expect(page.getByText(nativeTurnId, { exact: true })).toBeVisible();
+  await expect(page.getByText("git status --short")).toBeVisible();
+  const mcpActivity = page
+    .locator(".codex-native-tool")
+    .filter({ hasText: "GitHub · get_release" });
+  await expect(mcpActivity).toBeVisible();
+  await mcpActivity.locator("summary").click();
+  await expect(mcpActivity).toContainText('"repo": "sandpi"');
+
+  await page
+    .getByRole("combobox", { name: "Filter Codex Session Activity" })
+    .selectOption("external");
+  await expect(page.getByText("git status --short")).toBeHidden();
+  await expect(mcpActivity).toBeVisible();
+  await expect(page.getByText("sandpi v1.2.3")).toBeVisible();
+
+  await page
+    .getByRole("button", { name: "Open Environment Audit" })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Environment audit" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Codex Session Activity" }),
+  ).toBeVisible();
+  await expect(page.getByText("Session audit")).toHaveCount(0);
+  expect(browserErrors).toEqual([]);
 });
 
 test("reconciles agent-created files while the native volume watch is unavailable", async ({
@@ -545,6 +807,17 @@ test("shows a matching skeleton while each Inspector tab loads", async ({
   page.on("pageerror", (error) => browserErrors.push(error.message));
   await page.route("**/api/v1/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
+    if (/\/sessions\/[^/]+\/events$/.test(path)) {
+      // This test exercises Environment Inspector loading, not native history
+      // authorization. Keep the unrelated EventSource healthy and let the
+      // dedicated Codex streaming tests own its behavior.
+      await route.fulfill({
+        status: 200,
+        contentType: "text/event-stream",
+        body: ": inspector fixture\n\n",
+      });
+      return;
+    }
     if (/\/(ide|audit|metrics)$/.test(path)) {
       await new Promise((resolve) => setTimeout(resolve, 700));
     }

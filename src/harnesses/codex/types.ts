@@ -30,6 +30,26 @@ export type CodexCommandAction =
   | { type: "search"; command: string; query: string | null; path: string | null }
   | { type: "unknown"; command: string };
 
+export type CodexNativeToolStatus =
+  | "inProgress"
+  | "completed"
+  | "failed";
+
+export interface CodexMcpToolCallAppContext {
+  connectorId: string;
+  linkId: string | null;
+  resourceUri: string | null;
+  appName: string | null;
+  templateId: string | null;
+  actionName: string | null;
+}
+
+export type CodexWebSearchAction =
+  | { type: "search"; query: string | null; queries: string[] | null }
+  | { type: "openPage"; url: string | null }
+  | { type: "findInPage"; url: string | null; pattern: string | null }
+  | { type: "other" };
+
 export type CodexThreadItem =
   | {
       type: "userMessage";
@@ -73,6 +93,69 @@ export type CodexThreadItem =
       id: string;
       changes: CodexFileUpdateChange[];
       status: "inProgress" | "completed" | "failed" | "declined";
+    }
+  | {
+      type: "mcpToolCall";
+      id: string;
+      server: string;
+      tool: string;
+      status: CodexNativeToolStatus;
+      arguments: unknown;
+      appContext: CodexMcpToolCallAppContext | null;
+      mcpAppResourceUri?: string;
+      pluginId: string | null;
+      result: unknown | null;
+      error: { message: string } | null;
+      durationMs: number | null;
+    }
+  | {
+      type: "dynamicToolCall";
+      id: string;
+      namespace: string | null;
+      tool: string;
+      arguments: unknown;
+      status: CodexNativeToolStatus;
+      contentItems: unknown[] | null;
+      success: boolean | null;
+      durationMs: number | null;
+    }
+  | {
+      type: "collabAgentToolCall";
+      id: string;
+      tool:
+        | "spawnAgent"
+        | "sendInput"
+        | "resumeAgent"
+        | "wait"
+        | "closeAgent";
+      status: CodexNativeToolStatus;
+      senderThreadId: string;
+      receiverThreadIds: string[];
+      prompt: string | null;
+      model: string | null;
+      reasoningEffort: string | null;
+      agentsStates: Record<string, unknown>;
+    }
+  | {
+      type: "subAgentActivity";
+      id: string;
+      kind: "started" | "interacted" | "interrupted";
+      agentThreadId: string;
+      agentPath: string;
+    }
+  | {
+      type: "webSearch";
+      id: string;
+      query: string;
+      action: CodexWebSearchAction | null;
+    }
+  | {
+      type: "imageGeneration";
+      id: string;
+      status: string;
+      revisedPrompt: string | null;
+      result: string;
+      savedPath?: string;
     };
 
 export interface CodexTurn {
@@ -257,6 +340,18 @@ export interface CodexNativeInvalidation {
   reason?: string;
   message?: string;
   unrecoverable?: boolean;
+}
+
+/**
+ * A Codex-native event stream could not complete its initial Sandbox0
+ * handshake. This remains a harness transport error rather than a normalized
+ * cross-harness activity or audit record.
+ */
+export interface CodexNativeStreamFailure {
+  status: number;
+  code: string;
+  message: string;
+  retryable: boolean;
 }
 
 export type CodexSession = CodingSession<"codex", CodexHarnessState>;

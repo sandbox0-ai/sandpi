@@ -139,7 +139,9 @@ export interface RuntimeAdapter {
   watchWorkspaceFiles(
     runtime: EnvironmentRuntimeRecord,
   ): Promise<RuntimeWorkspaceWatchHandle>;
-  getAudit(runtime: EnvironmentRuntimeRecord): Promise<EnvironmentAuditFeed>;
+  getEnvironmentAudit(
+    runtime: EnvironmentRuntimeRecord,
+  ): Promise<EnvironmentAuditFeed>;
   getMetrics(
     runtime: EnvironmentRuntimeRecord,
     rangeSeconds: EnvironmentMetricRangeSeconds,

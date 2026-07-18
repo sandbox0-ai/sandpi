@@ -331,8 +331,8 @@ export function PreferencesPage({
               <PreferenceRow
                 title={text("Time zone", "时区")}
                 description={text(
-                  "Used for Session activity, audit events and scheduled features.",
-                  "用于 Session 活动、审计事件和定时功能。",
+                  "Used for Session activity, Environment audit events and scheduled features.",
+                  "用于 Session 活动、Environment 审计事件和定时功能。",
                 )}
                 control={
                   <select

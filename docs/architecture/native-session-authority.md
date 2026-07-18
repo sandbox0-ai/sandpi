@@ -18,8 +18,8 @@ Environment
 ```
 
 - An Environment owns the Sandbox0 resource allocation. Its Sandbox, Workspace
-  Volume, Supervisor decoder cursor, Terminal, audit and metrics are shared by
-  every product Session in that Environment.
+  Volume, Supervisor decoder cursor, Terminal, signed Environment Audit and
+  metrics are shared by every product Session in that Environment.
 - A Sandpi Session stores product metadata and one opaque harness-native Session
   id. It owns no Sandbox, Volume, Terminal or transcript.
 - PostgreSQL stores scalar recovery state: native Session id, selected model,
@@ -81,6 +81,30 @@ file patch and completion is forwarded immediately; rendering is never delayed
 until `turn/completed`. The browser SSE follows the lifetime of its streaming
 response rather than the already-finished GET request body. Browser disconnects
 therefore have no effect on the native process or rollout.
+
+## Environment Audit and native Session Activity
+
+Environment Audit is harness-agnostic, signed Sandbox0 evidence. It belongs to
+the Environment because all product Sessions use the same Sandbox; it must not
+be presented as if a Sandbox-level event were attributable to one product
+Session.
+
+Session Activity is instead a harness-native execution record. Each harness
+defines and renders its own tool kinds, statuses and payloads rather than
+projecting them into a shared Sandpi activity schema. For Codex, Activity comes
+from the native Thread snapshot and its bounded notification suffix, and
+`threadId` is the exact product-Session attribution key. The shared Sandbox0
+Supervisor Session and journal identify transport provenance only; they do not
+identify which Codex Thread owns an item. A restored Codex Thread snapshot
+retains Turn timestamps but not per-item occurrence timestamps, so the Activity
+view shows Turn time and does not manufacture precise tool timestamps.
+
+External interactions preserve the same separation. Codex-native MCP, dynamic
+tool and web-search activity describes the semantic tool execution in Session
+Activity, while Sandbox0 network events remain signed Environment Audit
+evidence. The network audit feed has no native Thread correlation key, so
+Sandpi displays the two views separately and never infers a join from nearby
+timestamps.
 
 ## Environment lifecycle
 

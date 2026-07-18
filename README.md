@@ -58,12 +58,14 @@ Web today; iOS / Android / HarmonyOS later
   then resumes from a bounded Supervisor/live notification transport; Sandpi
   does not persist a parallel chat transcript.
 - **Native harness boundary:** shared code owns Sandbox lifecycle, durable
-  transport, files, terminal, audit and metrics. Each harness owns its native
-  message/tool rendering, approvals, slash commands and model list. Sandpi does
-  not normalize different coding agents into a lowest-common-denominator chat
-  protocol. The Codex adapter reads `model/list` from the authenticated native
-  app-server and passes the selected model back through `turn/start`; Sandpi
-  does not publish or maintain a separate Codex model catalog.
+  transport, files, terminal, signed Environment Audit and metrics. Environment
+  Audit is harness-agnostic Sandbox evidence. Each harness owns its native
+  Session Activity, message/tool rendering, approvals, slash commands and model
+  list; Sandpi does not normalize different coding agents into a
+  lowest-common-denominator activity or chat protocol. The Codex adapter reads
+  `model/list` from the authenticated native app-server and passes the selected
+  model back through `turn/start`; Sandpi does not publish or maintain a
+  separate Codex model catalog.
 - **Time contract:** public API timestamps use Unix seconds, with fractional
   seconds when the source has millisecond precision. Clients render all times
   through the user's global time-zone preference; its default `auto` value uses
@@ -91,6 +93,13 @@ Web today; iOS / Android / HarmonyOS later
   native harness Sessions inside that runtime and cannot switch harnesses.
   Network-policy edits are applied to that running Environment Sandbox rather
   than deferred to a future product Session.
+- **Audit and activity boundary:** signed Sandbox audit is displayed as common
+  Environment evidence. Session Activity is a harness-native execution record.
+  Codex attributes native tool activity by Thread id; the shared Supervisor
+  Session identifies only its transport provenance. Native external-tool
+  semantics and Environment network audit remain separate views because the
+  audit feed has no Thread correlation key, so Sandpi does not join them by
+  timestamp.
 - **Durable lifecycle:** every Environment Sandbox has a 30-day Sandbox0 hard
   TTL. A native `turn/completed` event writes a PostgreSQL pause deadline thirty
   minutes later; any Sandpi replica may scan it, but a per-Environment advisory
@@ -143,11 +152,12 @@ Environment
 
 Creating or forking a product Session does not allocate Sandbox0 resources.
 Sandpi asks the Environment's native harness to start or fork a Session and
-stores only its opaque id. File APIs, Web IDE, Terminal, audit and metrics are
-Environment resources, so switching between Sessions in one Environment does
-not switch shells or workspaces. Native agent Turns may therefore observe the
-same mutable files; clients must not present a Session as an isolated checkout.
-The Web IDE can also be addressed by Environment without an active Session.
+stores only its opaque id. File APIs, Web IDE, Terminal, signed Environment
+Audit and metrics are Environment resources, so switching between Sessions in
+one Environment does not switch shells or workspaces. Native agent Turns may
+therefore observe the same mutable files; clients must not present a Session as
+an isolated checkout. The Web IDE can also be addressed by Environment without
+an active Session.
 
 For edit/delete Sandpi creates a candidate native branch immediately before the
 selected Turn, optionally starts the replacement Turn, then atomically switches

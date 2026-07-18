@@ -8,7 +8,6 @@ import {
   Globe2,
   RotateCcw,
   ShieldCheck,
-  SquareTerminal,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
@@ -28,7 +27,7 @@ import {
   summarizeEnvironmentAudit,
   type EnvironmentAuditOperation,
   type EnvironmentAuditView,
-} from "@/lib/session-audit";
+} from "@/lib/environment-audit";
 import { unixTimestampToIso } from "@/lib/time";
 import type {
   EnvironmentAuditEvent,
@@ -45,22 +44,12 @@ interface EnvironmentAuditPanelProps {
 type ActivityKind =
   | "network-allowed"
   | "network-blocked"
-  | "command-completed"
-  | "command-failed"
   | "sandbox-resumed"
   | "generic";
 
 interface ActivityDescriptor {
   kind: ActivityKind;
   subject: string;
-}
-
-function eventAttributes(event: EnvironmentAuditEvent) {
-  return event.attributes &&
-    typeof event.attributes === "object" &&
-    !Array.isArray(event.attributes)
-    ? (event.attributes as Record<string, unknown>)
-    : {};
 }
 
 function describeActivity(operation: EnvironmentAuditOperation): ActivityDescriptor {
@@ -70,24 +59,6 @@ function describeActivity(operation: EnvironmentAuditOperation): ActivityDescrip
     return {
       kind: operation.outcome === "denied" ? "network-blocked" : "network-allowed",
       subject: network.endpoint,
-    };
-  }
-
-  if (event.action === "process.exit") {
-    const attributes = eventAttributes(event);
-    const command =
-      typeof attributes.command === "string"
-        ? attributes.command
-        : event.resource.id;
-    const exitCode = attributes.exit_code;
-    return {
-      kind:
-        operation.outcome === "failed" ||
-        operation.outcome === "error" ||
-        (typeof exitCode === "number" && exitCode !== 0)
-          ? "command-failed"
-          : "command-completed",
-      subject: command,
     };
   }
 
@@ -104,9 +75,6 @@ function describeActivity(operation: EnvironmentAuditOperation): ActivityDescrip
 function ActivityGlyph({ kind }: { kind: ActivityKind }) {
   if (kind === "network-allowed" || kind === "network-blocked") {
     return <Globe2 size={15} aria-hidden="true" />;
-  }
-  if (kind === "command-completed" || kind === "command-failed") {
-    return <SquareTerminal size={15} aria-hidden="true" />;
   }
   if (kind === "sandbox-resumed") {
     return <RotateCcw size={15} aria-hidden="true" />;
@@ -227,14 +195,6 @@ function AuditActivity({
       title: ui.blockedConnection(descriptor.subject),
       description: ui.connectionBlocked,
     },
-    "command-completed": {
-      title: ui.commandCompleted,
-      description: descriptor.subject,
-    },
-    "command-failed": {
-      title: ui.commandFailed,
-      description: descriptor.subject,
-    },
     "sandbox-resumed": {
       title: ui.sandboxResumed,
       description: ui.sandboxReady,
@@ -335,7 +295,7 @@ export function EnvironmentAuditPanel({
               {ui.attentionOnly} ({summary.attention})
             </option>
             <option value="network">{ui.networkActivity}</option>
-            <option value="process">{ui.processActivity}</option>
+            <option value="runtime">{ui.runtimeActivity}</option>
             <option value="sandbox">{ui.sandboxLifecycle}</option>
           </select>
         </label>

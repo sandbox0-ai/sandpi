@@ -9,6 +9,7 @@ import {
   Copy,
   Files,
   GitFork,
+  ListTree,
   LoaderCircle,
   Menu,
   PanelLeftOpen,
@@ -49,15 +50,18 @@ import {
   CodexCommandActivity,
   CodexFileChangeActivity,
   CodexNativeItemActivity,
+  CodexNativeToolActivity,
   CodexTurnActivity,
   CodexTurnResult,
 } from "@/harnesses/codex/activity";
+import { CodexSessionActivityView } from "@/harnesses/codex/session-activity-view";
 import { groupCodexTimelineByTurn } from "@/harnesses/codex/timeline";
 import type {
   CodexComposerImage,
   CodexEventEnvelope,
   CodexNativeInvalidation,
   CodexNativeSnapshot,
+  CodexNativeStreamFailure,
   CodexSession,
 } from "@/harnesses/codex/types";
 import {
@@ -83,6 +87,7 @@ import type { Environment } from "@/lib/types";
 
 interface ConversationProps {
   language: OperationLanguage;
+  timeZone: string;
   sendShortcut: SendShortcut;
   environment: Environment;
   session: CodexSession;
@@ -116,6 +121,7 @@ const CODEX_SESSION_STATUSES = new Set<CodexNativeSnapshot["sessionStatus"]>([
 
 export function CodexConversation({
   language,
+  timeZone,
   sendShortcut,
   environment,
   session,
@@ -161,12 +167,16 @@ export function CodexConversation({
   const [nativeStreamEpoch, setNativeStreamEpoch] = useState(0);
   const [nativeStreamReady, setNativeStreamReady] = useState(false);
   const [nativeHistoryError, setNativeHistoryError] = useState("");
+  const [activeSurface, setActiveSurface] = useState<
+    "conversation" | "activity"
+  >("conversation");
   const [activityClock, setActivityClock] = useState(() => Date.now());
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const scrollbarHideTimerRef = useRef<number | null>(null);
   const pendingTurnStartedAtRef = useRef<number | null>(null);
   const hasNativeSnapshotRef = useRef(false);
+  const hasNativeStreamFailureRef = useRef(false);
   const liveNotificationSequencesRef = useRef(new Set<number>());
   const liveNotificationCountRef = useRef(0);
   const nativeSnapshotRefreshRequestedRef = useRef(false);
@@ -224,7 +234,9 @@ export function CodexConversation({
     setLiveNotifications([]);
     setNativeStreamReady(false);
     setNativeHistoryError("");
+    setActiveSurface("conversation");
     hasNativeSnapshotRef.current = false;
+    hasNativeStreamFailureRef.current = false;
     liveNotificationSequencesRef.current.clear();
     liveNotificationCountRef.current = 0;
     nativeSnapshotRefreshRequestedRef.current = false;
@@ -304,6 +316,7 @@ export function CodexConversation({
           throw new Error("Invalid Codex native snapshot");
         }
         hasNativeSnapshotRef.current = true;
+        hasNativeStreamFailureRef.current = false;
         nativeSnapshotRefreshRequestedRef.current = false;
         liveNotificationSequencesRef.current.clear();
         liveNotificationCountRef.current = 0;
@@ -330,6 +343,7 @@ export function CodexConversation({
         onSessionChange(next);
       } catch (error) {
         hasNativeSnapshotRef.current = false;
+        hasNativeStreamFailureRef.current = true;
         liveNotificationSequencesRef.current.clear();
         liveNotificationCountRef.current = 0;
         setNativeSnapshot(null);
@@ -420,17 +434,56 @@ export function CodexConversation({
           ? invalidation.message || ui.nativeRolloutUnavailableBody
           : "",
       );
+      hasNativeStreamFailureRef.current = unrecoverable;
+    };
+
+    const handleStreamFailure = (event: MessageEvent<string>) => {
+      try {
+        const failure = JSON.parse(event.data) as CodexNativeStreamFailure;
+        if (
+          !Number.isInteger(failure.status) ||
+          typeof failure.code !== "string" ||
+          typeof failure.message !== "string" ||
+          typeof failure.retryable !== "boolean"
+        ) {
+          throw new Error("Invalid Codex native stream failure");
+        }
+        hasNativeStreamFailureRef.current = true;
+        setNativeStreamReady(false);
+        setNativeHistoryError(failure.message || ui.nativeStreamUnavailableBody);
+        if (!failure.retryable) source.close();
+      } catch (error) {
+        hasNativeStreamFailureRef.current = true;
+        setNativeStreamReady(false);
+        setNativeHistoryError(ui.nativeStreamUnavailableBody);
+        console.error("Unable to decode Codex native stream failure", error);
+      }
+    };
+
+    const handleStreamError = () => {
+      setNativeStreamReady(false);
+      if (
+        !hasNativeSnapshotRef.current &&
+        !hasNativeStreamFailureRef.current
+      ) {
+        setNativeHistoryError(
+          (current) => current || ui.nativeStreamUnavailableBody,
+        );
+      }
     };
 
     source.addEventListener("snapshot", handleSnapshot as EventListener);
     source.addEventListener("notification", handleNotification as EventListener);
     source.addEventListener("invalidation", handleInvalidation as EventListener);
+    source.addEventListener("stream-error", handleStreamFailure as EventListener);
+    source.addEventListener("error", handleStreamError);
     return () => source.close();
   }, [
     nativeStreamEpoch,
     onSessionChange,
     session.id,
     ui.nativeRolloutUnavailableBody,
+    ui.nativeStreamUnavailableBody,
   ]);
 
   useEffect(() => {
@@ -624,6 +677,22 @@ export function CodexConversation({
         />
       );
     }
+    if (
+      entry.kind === "mcpToolCall" ||
+      entry.kind === "dynamicToolCall" ||
+      entry.kind === "webSearch" ||
+      entry.kind === "collabAgentToolCall" ||
+      entry.kind === "subAgentActivity" ||
+      entry.kind === "imageGeneration"
+    ) {
+      return (
+        <CodexNativeToolActivity
+          key={entry.id}
+          activity={entry}
+          language={language}
+        />
+      );
+    }
     if (entry.kind === "turnResult") {
       return (
         <CodexTurnResult key={entry.id} result={entry} language={language} />
@@ -792,6 +861,35 @@ export function CodexConversation({
         <div className="conversation-header-actions">
           <button
             type="button"
+            className={`header-action-button ${
+              activeSurface === "activity" ? "is-active" : ""
+            }`}
+            aria-label={
+              activeSurface === "activity"
+                ? ui.returnToConversation
+                : ui.sessionActivity
+            }
+            aria-pressed={activeSurface === "activity"}
+            title={
+              activeSurface === "activity"
+                ? ui.returnToConversation
+                : ui.sessionActivity
+            }
+            onClick={() =>
+              setActiveSurface((current) =>
+                current === "activity" ? "conversation" : "activity",
+              )
+            }
+          >
+            <ListTree size={15} aria-hidden="true" />
+            <span>
+              {activeSurface === "activity"
+                ? ui.returnToConversation
+                : ui.activity}
+            </span>
+          </button>
+          <button
+            type="button"
             className={`header-action-button ${terminalOpen ? "is-active" : ""}`}
             aria-label={ui.terminal}
             aria-pressed={terminalOpen}
@@ -824,81 +922,104 @@ export function CodexConversation({
         </div>
       </header>
 
-      <div
-        ref={conversationScrollRef}
-        className="conversation-scroll"
-        onScroll={handleConversationScroll}
-      >
-        <div
-          ref={conversationContentRef}
-          className="message-column"
-          aria-busy={nativeHistoryLoading}
-        >
-          {nativeHistoryLoading ? (
+      {activeSurface === "activity" ? (
+        <CodexSessionActivityView
+          key={nativeSnapshot?.thread.id ?? session.harnessState.threadId}
+          language={language}
+          timeZone={timeZone}
+          projection={visibleTimeline}
+          nativeThreadId={
+            nativeSnapshot?.thread.id ?? session.harnessState.threadId
+          }
+          historyRevision={
+            nativeSnapshot?.historyRevision ??
+            session.harnessState.historyRevision
+          }
+          loading={nativeHistoryLoading}
+          error={nativeHistoryError}
+          onOpenEnvironmentAudit={() => onOpenInspector("audit")}
+          onOpenFiles={() => onOpenInspector("files")}
+        />
+      ) : (
+        <>
+          <div
+            ref={conversationScrollRef}
+            className="conversation-scroll"
+            onScroll={handleConversationScroll}
+          >
             <div
-              className="conversation-runtime-loading"
-              role="status"
-              aria-live="polite"
+              ref={conversationContentRef}
+              className="message-column"
+              aria-busy={nativeHistoryLoading}
             >
-              <span className="conversation-runtime-loading-icon">
-                <LoaderCircle size={18} aria-hidden="true" />
-              </span>
-              <span className="conversation-runtime-loading-copy">
-                <strong>{ui.loadingConversation}</strong>
-                <small>{ui.loadingConversationBody}</small>
-              </span>
+              {nativeHistoryLoading ? (
+                <div
+                  className="conversation-runtime-loading"
+                  role="status"
+                  aria-live="polite"
+                >
+                  <span className="conversation-runtime-loading-icon">
+                    <LoaderCircle size={18} aria-hidden="true" />
+                  </span>
+                  <span className="conversation-runtime-loading-copy">
+                    <strong>{ui.loadingConversation}</strong>
+                    <small>{ui.loadingConversationBody}</small>
+                  </span>
+                </div>
+              ) : null}
+              {nativeHistoryError ? (
+                <div className="native-context-reset-notice" role="alert">
+                  <TriangleAlert size={16} aria-hidden="true" />
+                  <span>
+                    <strong>{ui.nativeRolloutUnavailableTitle}</strong>
+                    <small>{nativeHistoryError}</small>
+                  </span>
+                </div>
+              ) : null}
+              {timelineTurns.map((timelineTurn) => {
+                const activeTurn =
+                  runningTurn?.turnId === timelineTurn.turnId
+                    ? runningTurn
+                    : undefined;
+                const hasActivity =
+                  timelineTurn.activityEntries.length > 0 ||
+                  Boolean(activeTurn);
+                return (
+                  <Fragment key={timelineTurn.turnId}>
+                    {timelineTurn.userMessages.map(renderTimelineEntry)}
+                    {hasActivity ? (
+                      <CodexTurnActivity
+                        activeTurn={activeTurn}
+                        turn={timelineTurn.turn}
+                        language={language}
+                        now={activityClock}
+                      >
+                        {timelineTurn.activityEntries.map(renderTimelineEntry)}
+                      </CodexTurnActivity>
+                    ) : null}
+                    {timelineTurn.finalMessage
+                      ? renderTimelineEntry(timelineTurn.finalMessage)
+                      : null}
+                    {timelineTurn.results.map(renderTimelineEntry)}
+                  </Fragment>
+                );
+              })}
+              {runningTurn &&
+              !nativeHistoryLoading &&
+              !timelineTurns.some(
+                (turn) => turn.turnId === runningTurn.turnId,
+              ) ? (
+                <CodexTurnActivity
+                  activeTurn={runningTurn}
+                  language={language}
+                  now={activityClock}
+                />
+              ) : null}
             </div>
-          ) : null}
-          {nativeHistoryError ? (
-            <div className="native-context-reset-notice" role="alert">
-              <TriangleAlert size={16} aria-hidden="true" />
-              <span>
-                <strong>{ui.nativeRolloutUnavailableTitle}</strong>
-                <small>{nativeHistoryError}</small>
-              </span>
-            </div>
-          ) : null}
-          {timelineTurns.map((timelineTurn) => {
-            const activeTurn =
-              runningTurn?.turnId === timelineTurn.turnId
-                ? runningTurn
-                : undefined;
-            const hasActivity =
-              timelineTurn.activityEntries.length > 0 || Boolean(activeTurn);
-            return (
-              <Fragment key={timelineTurn.turnId}>
-                {timelineTurn.userMessages.map(renderTimelineEntry)}
-                {hasActivity ? (
-                  <CodexTurnActivity
-                    activeTurn={activeTurn}
-                    turn={timelineTurn.turn}
-                    language={language}
-                    now={activityClock}
-                  >
-                    {timelineTurn.activityEntries.map(renderTimelineEntry)}
-                  </CodexTurnActivity>
-                ) : null}
-                {timelineTurn.finalMessage
-                  ? renderTimelineEntry(timelineTurn.finalMessage)
-                  : null}
-                {timelineTurn.results.map(renderTimelineEntry)}
-              </Fragment>
-            );
-          })}
-          {runningTurn &&
-          !nativeHistoryLoading &&
-          !timelineTurns.some((turn) => turn.turnId === runningTurn.turnId) ? (
-            <CodexTurnActivity
-              activeTurn={runningTurn}
-              language={language}
-              now={activityClock}
-            />
-          ) : null}
-        </div>
-      </div>
+          </div>
 
-      <div className="composer-region">
-        <div className="composer-shell">
+          <div className="composer-region">
+            <div className="composer-shell">
           {pastedImages.length ? (
             <div
               className="composer-image-previews"
@@ -1106,13 +1227,15 @@ export function CodexConversation({
               )}
             </div>
           </div>
-        </div>
-        <p className="composer-footnote">
-          <Files size={12} /> {ui.workingInWorkspace}
-          <span>·</span>
-          <Settings2 size={12} /> {ui.networkInherited(environment.name)}
-        </p>
-      </div>
+            </div>
+            <p className="composer-footnote">
+              <Files size={12} /> {ui.workingInWorkspace}
+              <span>·</span>
+              <Settings2 size={12} /> {ui.networkInherited(environment.name)}
+            </p>
+          </div>
+        </>
+      )}
     </section>
   );
 }

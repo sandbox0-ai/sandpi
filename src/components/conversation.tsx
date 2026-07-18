@@ -8,6 +8,7 @@ import type { CodingSession, Environment } from "@/lib/types";
 
 interface ConversationProps {
   language: OperationLanguage;
+  timeZone: string;
   sendShortcut: SendShortcut;
   environment: Environment;
   session: CodingSession;

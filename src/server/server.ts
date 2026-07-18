@@ -34,6 +34,10 @@ import { EnvironmentService } from "@/server/environments/service";
 import { EnvironmentLifecycleService } from "@/server/environments/lifecycle-service";
 import { CodexEnvironmentAuthService } from "@/server/harnesses/codex/auth-service";
 import { CodexAuthStore } from "@/server/harnesses/codex/auth-store";
+import {
+  CODEX_NATIVE_STREAM_AUTH_RETRY_MS,
+  codexNativeStreamFailure,
+} from "@/server/harnesses/codex/native-stream";
 import { CodexService } from "@/server/harnesses/codex/service";
 import {
   MAX_CODEX_INPUT_BASE64_LENGTH,
@@ -877,7 +881,7 @@ function registerApiRoutes(
         request.principal.userId,
         request.params.environmentId,
       );
-      return { data: await services.runtime.getAudit(runtime) };
+      return { data: await services.runtime.getEnvironmentAudit(runtime) };
     },
   );
   app.get<{ Params: { environmentId: string } }>(
@@ -1083,6 +1087,7 @@ async function streamHarnessEvents(
     | undefined;
   let initialInvalidation: { reason: string; message: string; unrecoverable: true }
     | undefined;
+  let initialStreamFailure: ReturnType<typeof codexNativeStreamFailure>;
   try {
     initial = await codex.readNativeSnapshotWithCursor(
       request.principal.userId,
@@ -1094,16 +1099,18 @@ async function streamHarnessEvents(
       normalized.code !== "codex_native_session_unrecoverable" &&
       normalized.code !== "session_allocation_unrecoverable"
     ) {
-      throw error;
+      initialStreamFailure = codexNativeStreamFailure(normalized);
+      if (!initialStreamFailure) throw error;
+    } else {
+      initialInvalidation = {
+        reason:
+          normalized.code === "session_allocation_unrecoverable"
+            ? "session-allocation-unrecoverable"
+            : "native-session-unrecoverable",
+        message: normalized.message,
+        unrecoverable: true,
+      };
     }
-    initialInvalidation = {
-      reason:
-        normalized.code === "session_allocation_unrecoverable"
-          ? "session-allocation-unrecoverable"
-          : "native-session-unrecoverable",
-      message: normalized.message,
-      unrecoverable: true,
-    };
   }
   let cursor = initial?.liveCursor ?? codex.liveCursor(sessionId);
   reply.hijack();
@@ -1113,10 +1120,17 @@ async function streamHarnessEvents(
     Connection: "keep-alive",
     "X-Accel-Buffering": "no",
   });
-  reply.raw.write("retry: 1000\n\n");
+  reply.raw.write(
+    `retry: ${initialStreamFailure ? CODEX_NATIVE_STREAM_AUTH_RETRY_MS : 1_000}\n\n`,
+  );
   if (initial) {
     reply.raw.write("event: snapshot\n");
     reply.raw.write(`data: ${JSON.stringify(initial.snapshot)}\n\n`);
+  } else if (initialStreamFailure) {
+    reply.raw.write("event: stream-error\n");
+    reply.raw.write(`data: ${JSON.stringify(initialStreamFailure)}\n\n`);
+    reply.raw.end();
+    return;
   } else {
     reply.raw.write(`id: ${cursor}\n`);
     reply.raw.write("event: invalidation\n");

@@ -294,7 +294,9 @@ export function NewEnvironmentDialog({
           </div>
 
           <footer className={styles.footer}>
-            <span className={styles.footerNote}>Each Session gets an isolated Sandbox.</span>
+            <span className={styles.footerNote}>
+              Sessions share this Environment&apos;s Sandbox and Workspace.
+            </span>
             <div className={styles.actions}>
               <button
                 type="button"

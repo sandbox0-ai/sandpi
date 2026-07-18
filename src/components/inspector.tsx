@@ -17,7 +17,7 @@ import {
   InteractiveMetricChart,
   type MetricChartSeries,
 } from "@/components/metric-chart";
-import { EnvironmentAuditPanel } from "@/components/session-audit-panel";
+import { EnvironmentAuditPanel } from "@/components/environment-audit-panel";
 import { WorkspaceIde } from "@/components/workspace-ide";
 import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
 import { getOperationUiCopy, type OperationLanguage } from "@/lib/operation-ui";

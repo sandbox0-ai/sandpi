@@ -124,7 +124,7 @@ test("models network throughput with the sdk-js metric contract", () => {
 test("models Environment Audit as the JSON-safe sdk-js signed event feed", () => {
   const environment = mockEnvironments[0];
   assert.ok(environment);
-  assert.equal(mockEnvironmentAudit.events.length, 6);
+  assert.equal(mockEnvironmentAudit.events.length, 8);
   assert.equal(mockEnvironmentAudit.nextCursor, "mock-history-cursor");
   assert.ok(
     mockEnvironmentAudit.events.every(
@@ -142,6 +142,10 @@ test("models Environment Audit as the JSON-safe sdk-js signed event feed", () =>
     ),
     false,
   );
+  assert.deepEqual(
+    [...new Set(mockEnvironmentAudit.events.map((event) => event.source))].sort(),
+    ["cluster_gateway", "netd"],
+  );
 
   const resumeEvents = mockEnvironmentAudit.events.filter(
     (event) => event.action === "sandbox.resume",
@@ -149,11 +153,24 @@ test("models Environment Audit as the JSON-safe sdk-js signed event feed", () =>
   assert.equal(new Set(resumeEvents.map((event) => event.operationId)).size, 1);
   assert.deepEqual(
     resumeEvents.map((event) => event.phase),
-    ["attempt", "result", "effect"],
+    ["attempt", "result"],
   );
+  assert.equal(resumeEvents.at(-1)?.outcome, "succeeded");
+  const networkOperations = new Map<string, string[]>();
+  for (const event of mockEnvironmentAudit.events.filter(
+    (candidate) => candidate.eventType === "network_audit",
+  )) {
+    const phases = networkOperations.get(event.operationId) ?? [];
+    phases.push(event.phase);
+    networkOperations.set(event.operationId, phases);
+  }
+  assert.deepEqual([...networkOperations.values()], [
+    ["attempt", "result"],
+    ["attempt", "result"],
+  ]);
   assert.equal(
     mockEnvironmentAudit.events.find((event) => event.action === "network.deny")
       ?.attributes?.reason,
-    "not_in_policy",
+    "l7_denied",
   );
 });

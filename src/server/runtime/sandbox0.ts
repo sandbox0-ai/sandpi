@@ -1109,7 +1109,9 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     return result.stdout;
   }
 
-  async getAudit(runtime: EnvironmentRuntimeRecord): Promise<EnvironmentAuditFeed> {
+  async getEnvironmentAudit(
+    runtime: EnvironmentRuntimeRecord,
+  ): Promise<EnvironmentAuditFeed> {
     try {
       const response = await this.client.sandboxes
         .sandbox(runtime.sandboxId)
@@ -1618,6 +1620,20 @@ function translateSandbox0Error(error: unknown) {
         503,
         "sandbox0_workspace_unavailable",
         "The Workspace storage connection was lost and could not be recovered.",
+      );
+    }
+    if (error.statusCode === 401) {
+      return new HttpError(
+        401,
+        "sandbox0_invalid_api_key",
+        "Sandbox0 rejected the deployment API key. Update SANDBOX0_API_KEY and restart Sandpi.",
+      );
+    }
+    if (error.statusCode === 403) {
+      return new HttpError(
+        403,
+        "sandbox0_permission_denied",
+        "Sandbox0 denied the deployment API key. Check that it has the required team role and permissions.",
       );
     }
     return new HttpError(

@@ -19,6 +19,34 @@ const copy = {
                 : "Completed",
       environmentRevision: (revision: number) => `Environment r${revision}`,
       terminal: "Terminal",
+      activity: "Activity",
+      returnToConversation: "Return to conversation",
+      sessionActivity: "Codex Session Activity",
+      codexNativeActivity: "Harness-native record",
+      sessionActivitySummary: (count: number, external: number) =>
+        `${count} ${count === 1 ? "record" : "records"} · ${external} external or integration ${external === 1 ? "interaction" : "interactions"}`,
+      sessionActivityFilter: "Filter Codex Session Activity",
+      allSessionActivity: "All Codex activity",
+      externalActivity: "External & integrations",
+      commandActivity: "Commands",
+      fileActivity: "File changes",
+      agentActivity: "Agent collaboration",
+      systemActivity: "Codex system",
+      nativeActivityBoundary: "Native Codex Thread activity",
+      nativeActivityBoundaryBody:
+        "Attributed by native Thread and Turn IDs. This is an execution record, not signed audit. Native snapshots retain Turn time, not per-item occurrence time. Environment network evidence stays separate and is not joined by timestamp.",
+      openEnvironmentAudit: "Open Environment Audit",
+      loadingSessionActivity: "Loading Codex activity…",
+      noSessionActivity: "No Codex activity yet",
+      noMatchingSessionActivity: "No Codex activity matches this filter",
+      sessionActivityEmptyBody:
+        "Tool execution appears here when it is present in the native Codex Thread.",
+      activityTurn: (index: number) => `Turn ${index}`,
+      activityRecords: (count: number) =>
+        `${count} ${count === 1 ? "record" : "records"}`,
+      externalInteraction: "External",
+      agentInteraction: "Agent",
+      nativePayload: "Native details",
       closeInspector: "Close inspector",
       openInspector: "Open inspector",
       moreSessionActions: "More session actions",
@@ -37,6 +65,8 @@ const copy = {
       nativeRolloutUnavailableTitle: "Codex history unavailable",
       nativeRolloutUnavailableBody:
         "The native Codex rollout is no longer recoverable. Sandpi cannot safely reconstruct this conversation from a secondary transcript.",
+      nativeStreamUnavailableBody:
+        "The Codex event stream could not be opened. Check the Sandpi server connection and deployment configuration.",
       loadingConversation: "Loading conversation…",
       loadingConversationBody:
         "Restoring the latest native Codex session state.",
@@ -208,6 +238,33 @@ const copy = {
                 : "已完成",
       environmentRevision: (revision: number) => `环境 r${revision}`,
       terminal: "终端",
+      activity: "活动记录",
+      returnToConversation: "返回对话",
+      sessionActivity: "Codex Session 活动",
+      codexNativeActivity: "Harness 原生记录",
+      sessionActivitySummary: (count: number, external: number) =>
+        `${count} 条记录 · ${external} 条外部或集成交互`,
+      sessionActivityFilter: "筛选 Codex Session 活动",
+      allSessionActivity: "全部 Codex 活动",
+      externalActivity: "外部与集成",
+      commandActivity: "命令",
+      fileActivity: "文件修改",
+      agentActivity: "Agent 协作",
+      systemActivity: "Codex 系统",
+      nativeActivityBoundary: "Codex 原生 Thread 活动",
+      nativeActivityBoundaryBody:
+        "通过原生 Thread 与 Turn ID 归属。这是执行记录，不是签名审计。原生快照仅保留 Turn 时间，不提供每项活动的发生时间；Environment 网络证据单独展示，不按时间戳关联。",
+      openEnvironmentAudit: "打开 Environment 审计",
+      loadingSessionActivity: "正在加载 Codex 活动…",
+      noSessionActivity: "暂无 Codex 活动",
+      noMatchingSessionActivity: "没有符合筛选条件的 Codex 活动",
+      sessionActivityEmptyBody:
+        "原生 Codex Thread 中出现工具执行后，会在这里显示。",
+      activityTurn: (index: number) => `Turn ${index}`,
+      activityRecords: (count: number) => `${count} 条记录`,
+      externalInteraction: "外部",
+      agentInteraction: "Agent",
+      nativePayload: "原生详情",
       closeInspector: "关闭检查器",
       openInspector: "打开检查器",
       moreSessionActions: "更多会话操作",
@@ -226,6 +283,8 @@ const copy = {
       nativeRolloutUnavailableTitle: "Codex 历史不可用",
       nativeRolloutUnavailableBody:
         "Codex 原生 rollout 已无法恢复。Sandpi 不会使用次级转录记录伪造或重建这段对话。",
+      nativeStreamUnavailableBody:
+        "无法打开 Codex 事件流。请检查 Sandpi 服务连接和部署配置。",
       loadingConversation: "正在加载对话…",
       loadingConversationBody:
         "正在恢复最新的 Codex 原生会话状态。",

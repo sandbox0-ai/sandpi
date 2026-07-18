@@ -24,7 +24,7 @@ import {
 import { AppSidebar } from "@/components/app-frame";
 import { getOperationUiCopy, type OperationLanguage } from "@/lib/operation-ui";
 import { planForAssignment, quotaPercent } from "@/lib/team";
-import { sessionActivityMarker } from "@/lib/session-activity";
+import { sessionStateMarker } from "@/lib/session-state-marker";
 import type {
   CodingSession,
   Environment,
@@ -60,7 +60,7 @@ interface SidebarProps {
   onCloseMobile: () => void;
 }
 
-function SessionActivityIndicator({
+function SessionStateIndicator({
   session,
   unreadLabel,
   runningLabel,
@@ -69,10 +69,10 @@ function SessionActivityIndicator({
   unreadLabel: "Unread" | "未读";
   runningLabel: "Running" | "运行中";
 }) {
-  const marker = sessionActivityMarker(session);
+  const marker = sessionStateMarker(session);
 
   return (
-    <span className="session-activity-indicator">
+    <span className="session-state-indicator">
       {marker === "running" ? (
         <span
           className="session-running-indicator"
@@ -482,7 +482,7 @@ export function Sidebar({
                               aria-label={ui.pinned}
                             />
                           ) : null}
-                          <SessionActivityIndicator
+                          <SessionStateIndicator
                             session={session}
                             unreadLabel={unreadLabel}
                             runningLabel={runningLabel}

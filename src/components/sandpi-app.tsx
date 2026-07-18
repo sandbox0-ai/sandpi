@@ -726,6 +726,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
       {selectedSession ? (
         <Conversation
           language={preferences.general.language}
+          timeZone={preferences.general.timeZone}
           sendShortcut={preferences.general.sendShortcut}
           environment={selectedEnvironment}
           session={selectedSession}

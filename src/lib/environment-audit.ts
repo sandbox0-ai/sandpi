@@ -12,7 +12,7 @@ export type EnvironmentAuditView =
   | "all"
   | "attention"
   | "network"
-  | "process"
+  | "runtime"
   | "sandbox";
 
 const outcomeSeverity: Record<EnvironmentAuditEvent["outcome"], number> = {
@@ -77,8 +77,8 @@ export function groupEnvironmentAuditOperations(
         operationId,
         events: sortedEvents,
         primaryEvent,
-        // Accepted is an intermediate result. Once a later effect exists, the
-        // activity should read as completed unless any signed event failed.
+        // Accepted is an intermediate result. Once a later fact exists, the
+        // operation should read from that fact unless any signed event failed.
         outcome: negativeOutcome ?? primaryEvent.outcome,
         integrityIssueCount: sortedEvents.filter(hasAuditIntegrityIssue).length,
       };
@@ -114,9 +114,14 @@ export function filterEnvironmentAuditOperations(
       operation.events.some((event) => event.eventType === "network_audit"),
     );
   }
-  if (view === "process") {
+  if (view === "runtime") {
     return operations.filter((operation) =>
-      operation.events.some((event) => event.eventType === "process"),
+      operation.events.some(
+        (event) =>
+          event.eventType === "process" ||
+          event.resource.type === "sandbox_process" ||
+          event.resource.type === "sandbox_session",
+      ),
     );
   }
   return operations.filter((operation) =>

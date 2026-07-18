@@ -54,6 +54,39 @@ function nativeEvent(
   };
 }
 
+function mcpToolCall(
+  id: string,
+  status: Extract<CodexThreadItem, { type: "mcpToolCall" }>["status"],
+): Extract<CodexThreadItem, { type: "mcpToolCall" }> {
+  return {
+    type: "mcpToolCall",
+    id,
+    server: "github",
+    tool: "search_code",
+    status,
+    arguments: { query: "projectCodexTimeline" },
+    appContext: {
+      connectorId: "github",
+      linkId: null,
+      resourceUri: null,
+      appName: "GitHub",
+      templateId: null,
+      actionName: "Search code",
+    },
+    pluginId: null,
+    result:
+      status === "completed"
+        ? {
+            content: [{ type: "text", text: "1 match" }],
+            structuredContent: null,
+            _meta: null,
+          }
+        : null,
+    error: status === "failed" ? { message: "Search failed" } : null,
+    durationMs: status === "inProgress" ? null : 420,
+  };
+}
+
 const firstTurn = createMockCodexTurn({
   content: "first",
   assistantText: "first reply",
@@ -341,6 +374,58 @@ test("shows live file patches and lets the completed native item replace them", 
   );
 });
 
+test("keeps a live MCP call native while its completion replaces the same row", () => {
+  const turnId = "turn-mcp";
+  const started = mcpToolCall("mcp-live", "inProgress");
+  const events = [
+    nativeEvent(20, {
+      method: "turn/started",
+      params: { threadId: nativeThread.id, turn: liveTurn(turnId) },
+    }),
+    nativeEvent(21, {
+      method: "item/started",
+      params: {
+        threadId: nativeThread.id,
+        turnId,
+        item: started,
+        startedAtMs: Date.parse("2026-07-12T01:00:20Z"),
+      },
+    }),
+  ];
+  const running = projectCodexTimeline(nativeThread, events);
+  const runningMcp = running.entries.find((entry) => entry.id === started.id);
+  assert.ok(runningMcp?.kind === "mcpToolCall");
+  assert.equal(runningMcp.status, "running");
+  assert.deepEqual(runningMcp.arguments, {
+    query: "projectCodexTimeline",
+  });
+
+  const completedItem = mcpToolCall(started.id, "completed");
+  const completed = projectCodexTimeline(nativeThread, [
+    ...events,
+    nativeEvent(22, {
+      method: "item/completed",
+      params: {
+        threadId: nativeThread.id,
+        turnId,
+        item: completedItem,
+        completedAtMs: Date.parse("2026-07-12T01:00:22Z"),
+      },
+    }),
+  ]);
+  const completedMcp = completed.entries.find(
+    (entry) => entry.id === started.id,
+  );
+  assert.ok(completedMcp?.kind === "mcpToolCall");
+  assert.equal(completedMcp.status, "completed");
+  assert.equal(completedMcp.durationMs, 420);
+  assert.deepEqual(completedMcp.result, completedItem.result);
+  assert.equal(
+    completed.entries.filter((entry) => entry.id === started.id).length,
+    1,
+  );
+});
+
 test("renders interruption from native thread/read without a synthetic recovery", () => {
   const interrupted = liveTurn("turn-interrupted", "interrupted", [
     {
@@ -371,13 +456,13 @@ test("renders interruption from native thread/read without a synthetic recovery"
   assert.equal(projected.entries[1]?.kind, "turnResult");
 });
 
-test("renders unmodeled Codex ThreadItems as Codex-native fallback activities", () => {
-  const nativeTool = {
-    type: "mcpToolCall",
-    id: "mcp-tool-1",
-    server: "github",
-    tool: "search_code",
+test("renders modeled tools natively and unknown ThreadItems as Codex fallbacks", () => {
+  const nativeTool = mcpToolCall("mcp-tool-1", "completed");
+  const futureTool = {
+    type: "futureToolCall",
+    id: "future-tool-1",
     status: "completed",
+    description: "A future Codex-native tool",
   } as unknown as CodexThreadItem;
   const reasoning: Extract<CodexThreadItem, { type: "reasoning" }> = {
     type: "reasoning",
@@ -387,17 +472,28 @@ test("renders unmodeled Codex ThreadItems as Codex-native fallback activities", 
   };
   const projected = projectCodexTimeline(
     createMockCodexThread("thread-native-fallback", [
-      liveTurn("turn-native-fallback", "completed", [nativeTool, reasoning]),
+      liveTurn("turn-native-fallback", "completed", [
+        nativeTool,
+        futureTool,
+        reasoning,
+      ]),
     ]),
   );
 
   const toolActivity = projected.entries.find(
     (entry) => entry.id === "mcp-tool-1",
   );
-  assert.ok(toolActivity?.kind === "nativeItem");
-  assert.equal(toolActivity.itemType, "mcpToolCall");
+  assert.ok(toolActivity?.kind === "mcpToolCall");
   assert.equal(toolActivity.status, "completed");
-  assert.equal(toolActivity.detail, "github · search_code");
+  assert.equal(toolActivity.appName, "GitHub");
+  assert.deepEqual(toolActivity.result, nativeTool.result);
+
+  const futureActivity = projected.entries.find(
+    (entry) => entry.id === "future-tool-1",
+  );
+  assert.ok(futureActivity?.kind === "nativeItem");
+  assert.equal(futureActivity.itemType, "futureToolCall");
+  assert.equal(futureActivity.detail, "A future Codex-native tool");
 
   const reasoningActivity = projected.entries.find(
     (entry) => entry.id === "reasoning-1",
@@ -405,6 +501,59 @@ test("renders unmodeled Codex ThreadItems as Codex-native fallback activities", 
   assert.ok(reasoningActivity?.kind === "nativeItem");
   assert.equal(reasoningActivity.detail, "Checked the repository structure");
   assert.equal(reasoningActivity.detail?.includes("private chain"), false);
+});
+
+test("never projects private live reasoning text into Codex activity", () => {
+  const turnId = "turn-live-reasoning";
+  const reasoning: Extract<CodexThreadItem, { type: "reasoning" }> = {
+    type: "reasoning",
+    id: "reasoning-live",
+    summary: [],
+    content: [],
+  };
+  const projected = projectCodexTimeline(nativeThread, [
+    nativeEvent(30, {
+      method: "turn/started",
+      params: { threadId: nativeThread.id, turn: liveTurn(turnId) },
+    }),
+    nativeEvent(31, {
+      method: "item/started",
+      params: {
+        threadId: nativeThread.id,
+        turnId,
+        item: reasoning,
+        startedAtMs: Date.parse("2026-07-12T01:00:30Z"),
+      },
+    }),
+    nativeEvent(32, {
+      method: "item/reasoning/textDelta",
+      params: {
+        threadId: nativeThread.id,
+        turnId,
+        itemId: reasoning.id,
+        delta: "private chain of thought",
+        contentIndex: 0,
+      },
+    }),
+    nativeEvent(33, {
+      method: "item/reasoning/summaryTextDelta",
+      params: {
+        threadId: nativeThread.id,
+        turnId,
+        itemId: reasoning.id,
+        delta: "Checked the public API",
+        summaryIndex: 0,
+      },
+    }),
+  ]);
+
+  const activity = projected.entries.find(
+    (entry) => entry.id === reasoning.id,
+  );
+  assert.ok(activity?.kind === "nativeItem");
+  assert.equal(activity.detail, "Checked the public API");
+  assert.equal(activity.detail.includes("private chain"), false);
+  assert.equal(projected.activeTurn?.detail, "Checked the public API");
 });
 
 test("keeps every modeled plan and reasoning notification in the live suffix", () => {

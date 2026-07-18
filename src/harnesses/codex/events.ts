@@ -81,6 +81,81 @@ export interface CodexNativeItemActivityView {
   detail?: string;
 }
 
+interface CodexNativeToolActivityBase {
+  id: string;
+  turnId: string;
+  createdAt: UnixTimestamp;
+  status: CodexActivityStatus;
+}
+
+export interface CodexMcpToolCallActivityView
+  extends CodexNativeToolActivityBase {
+  kind: "mcpToolCall";
+  server: string;
+  tool: string;
+  appName: string | null;
+  arguments: unknown;
+  result: unknown | null;
+  error: string | null;
+  durationMs: number | null;
+}
+
+export interface CodexDynamicToolCallActivityView
+  extends CodexNativeToolActivityBase {
+  kind: "dynamicToolCall";
+  namespace: string | null;
+  tool: string;
+  arguments: unknown;
+  contentItems: unknown[] | null;
+  success: boolean | null;
+  durationMs: number | null;
+}
+
+export interface CodexWebSearchActivityView
+  extends CodexNativeToolActivityBase {
+  kind: "webSearch";
+  query: string;
+  action: Extract<CodexThreadItem, { type: "webSearch" }>["action"];
+}
+
+export interface CodexCollabAgentToolCallActivityView
+  extends CodexNativeToolActivityBase {
+  kind: "collabAgentToolCall";
+  tool: Extract<
+    CodexThreadItem,
+    { type: "collabAgentToolCall" }
+  >["tool"];
+  senderThreadId: string;
+  receiverThreadIds: string[];
+  prompt: string | null;
+}
+
+export interface CodexSubAgentActivityView
+  extends CodexNativeToolActivityBase {
+  kind: "subAgentActivity";
+  activityKind: Extract<
+    CodexThreadItem,
+    { type: "subAgentActivity" }
+  >["kind"];
+  agentThreadId: string;
+  agentPath: string;
+}
+
+export interface CodexImageGenerationActivityView
+  extends CodexNativeToolActivityBase {
+  kind: "imageGeneration";
+  revisedPrompt: string | null;
+  savedPath?: string;
+}
+
+export type CodexNativeToolActivityView =
+  | CodexMcpToolCallActivityView
+  | CodexDynamicToolCallActivityView
+  | CodexWebSearchActivityView
+  | CodexCollabAgentToolCallActivityView
+  | CodexSubAgentActivityView
+  | CodexImageGenerationActivityView;
+
 export interface CodexTurnResultView {
   kind: "turnResult";
   id: string;
@@ -94,6 +169,7 @@ export type CodexTimelineEntry =
   | CodexMessageView
   | CodexCommandActivityView
   | CodexFileChangeActivityView
+  | CodexNativeToolActivityView
   | CodexNativeItemActivityView
   | CodexTurnResultView;
 
@@ -255,6 +331,36 @@ function nativeItemStatus(
   if (turnStatus === "interrupted") return "interrupted";
   if (turnStatus === "failed") return "failed";
   return streaming && turnStatus === "inProgress" ? "running" : "completed";
+}
+
+function activeItemDetail(item: CodexThreadItem) {
+  if (item.type === "reasoning") {
+    return item.summary.join("\n").trim().slice(0, 2_000) || undefined;
+  }
+  if (item.type === "plan") {
+    return item.text.trim().slice(0, 2_000) || undefined;
+  }
+  if (item.type === "mcpToolCall") {
+    return [item.appContext?.appName ?? item.server, item.tool]
+      .filter(Boolean)
+      .join(" · ");
+  }
+  if (item.type === "dynamicToolCall") {
+    return [item.namespace, item.tool].filter(Boolean).join(" · ");
+  }
+  if (item.type === "webSearch") {
+    return item.query;
+  }
+  if (item.type === "collabAgentToolCall") {
+    return item.tool;
+  }
+  if (item.type === "subAgentActivity") {
+    return item.agentPath;
+  }
+  if (item.type === "imageGeneration") {
+    return item.revisedPrompt ?? undefined;
+  }
+  return undefined;
 }
 
 function boundedCommandOutput(output: string | null | undefined) {
@@ -472,6 +578,137 @@ export function projectCodexTimeline(
       });
       return;
     }
+    if (item.type === "mcpToolCall") {
+      const existingIndex = entryIndex.get(item.id);
+      const existing =
+        existingIndex === undefined ? undefined : entries[existingIndex];
+      upsert({
+        kind: "mcpToolCall",
+        id: item.id,
+        turnId,
+        createdAt:
+          existing?.kind === "mcpToolCall" ? existing.createdAt : createdAt,
+        status: activityStatus(item.status, turnStatus),
+        server: item.server,
+        tool: item.tool,
+        appName: item.appContext?.appName ?? null,
+        arguments: item.arguments,
+        result: item.result,
+        error: item.error?.message ?? null,
+        durationMs: item.durationMs,
+      });
+      return;
+    }
+    if (item.type === "dynamicToolCall") {
+      const existingIndex = entryIndex.get(item.id);
+      const existing =
+        existingIndex === undefined ? undefined : entries[existingIndex];
+      upsert({
+        kind: "dynamicToolCall",
+        id: item.id,
+        turnId,
+        createdAt:
+          existing?.kind === "dynamicToolCall"
+            ? existing.createdAt
+            : createdAt,
+        status: activityStatus(item.status, turnStatus),
+        namespace: item.namespace,
+        tool: item.tool,
+        arguments: item.arguments,
+        contentItems: item.contentItems,
+        success: item.success,
+        durationMs: item.durationMs,
+      });
+      return;
+    }
+    if (item.type === "webSearch") {
+      const existingIndex = entryIndex.get(item.id);
+      const existing =
+        existingIndex === undefined ? undefined : entries[existingIndex];
+      upsert({
+        kind: "webSearch",
+        id: item.id,
+        turnId,
+        createdAt:
+          existing?.kind === "webSearch" ? existing.createdAt : createdAt,
+        status: nativeItemStatus(
+          item as unknown as Record<string, unknown>,
+          turnStatus,
+          streaming,
+        ),
+        query: item.query,
+        action: item.action,
+      });
+      return;
+    }
+    if (item.type === "collabAgentToolCall") {
+      const existingIndex = entryIndex.get(item.id);
+      const existing =
+        existingIndex === undefined ? undefined : entries[existingIndex];
+      upsert({
+        kind: "collabAgentToolCall",
+        id: item.id,
+        turnId,
+        createdAt:
+          existing?.kind === "collabAgentToolCall"
+            ? existing.createdAt
+            : createdAt,
+        status: activityStatus(item.status, turnStatus),
+        tool: item.tool,
+        senderThreadId: item.senderThreadId,
+        receiverThreadIds: item.receiverThreadIds,
+        prompt: item.prompt,
+      });
+      return;
+    }
+    if (item.type === "subAgentActivity") {
+      const existingIndex = entryIndex.get(item.id);
+      const existing =
+        existingIndex === undefined ? undefined : entries[existingIndex];
+      upsert({
+        kind: "subAgentActivity",
+        id: item.id,
+        turnId,
+        createdAt:
+          existing?.kind === "subAgentActivity"
+            ? existing.createdAt
+            : createdAt,
+        status:
+          item.kind === "interrupted"
+            ? "interrupted"
+            : nativeItemStatus(
+                item as unknown as Record<string, unknown>,
+                turnStatus,
+                streaming,
+              ),
+        activityKind: item.kind,
+        agentThreadId: item.agentThreadId,
+        agentPath: item.agentPath,
+      });
+      return;
+    }
+    if (item.type === "imageGeneration") {
+      const existingIndex = entryIndex.get(item.id);
+      const existing =
+        existingIndex === undefined ? undefined : entries[existingIndex];
+      upsert({
+        kind: "imageGeneration",
+        id: item.id,
+        turnId,
+        createdAt:
+          existing?.kind === "imageGeneration"
+            ? existing.createdAt
+            : createdAt,
+        status: nativeItemStatus(
+          item as unknown as Record<string, unknown>,
+          turnStatus,
+          streaming,
+        ),
+        revisedPrompt: item.revisedPrompt,
+        ...(item.savedPath ? { savedPath: item.savedPath } : {}),
+      });
+      return;
+    }
 
     // JSON received from app-server can contain newer ThreadItem variants than
     // the schema pinned in this client. Render a compact Codex-native row so a
@@ -516,12 +753,7 @@ export function projectCodexTimeline(
           id: item.id,
           type: item.type,
           sequence,
-          detail:
-            item.type === "reasoning"
-              ? item.summary.join("\n") || item.content.join("\n")
-              : item.type === "plan"
-                ? item.text
-                : undefined,
+          detail: activeItemDetail(item),
         });
       }
       upsertItem(item, turn.id, startedAt, turn.status, isLiveTail);
@@ -597,12 +829,7 @@ export function projectCodexTimeline(
           id: item.id,
           type: item.type,
           sequence: projectionSequence,
-          detail:
-            item.type === "reasoning"
-              ? item.summary.join("\n") || item.content.join("\n")
-              : item.type === "plan"
-                ? item.text
-                : undefined,
+          detail: activeItemDetail(item),
         });
       }
       upsertItem(item, turnId, createdAt, "inProgress", true);
@@ -634,10 +861,29 @@ export function projectCodexTimeline(
       continue;
     }
 
+    if (notification.method === "item/reasoning/textDelta") {
+      const { itemId, turnId } = notification.params;
+      const state = ensureTurn(
+        turnId,
+        event.receivedAt,
+        "inProgress",
+        projectionSequence,
+      );
+      const active = state.activeItems.get(itemId) ?? {
+        id: itemId,
+        type: "reasoning" as const,
+        sequence: projectionSequence,
+      };
+      // Native reasoning text is private model state. Keep the item active
+      // without projecting the delta into either conversation or Activity UI.
+      active.sequence = projectionSequence;
+      state.activeItems.set(itemId, active);
+      continue;
+    }
+
     if (
       notification.method === "item/plan/delta" ||
-      notification.method === "item/reasoning/summaryTextDelta" ||
-      notification.method === "item/reasoning/textDelta"
+      notification.method === "item/reasoning/summaryTextDelta"
     ) {
       const { itemId, turnId, delta } = notification.params;
       const state = ensureTurn(
