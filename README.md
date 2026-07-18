@@ -54,9 +54,15 @@ Web today; iOS / Android / HarmonyOS later
   coding agent runs through its native harness in a Sandbox0 Supervisor Session.
 - **Recoverable sessions:** every harness-native Session and rollout remains in
   the Environment Workspace Volume, so closing the browser or losing the client
-  network does not terminate the coding agent. A reconnect reads a native harness snapshot,
-  then resumes from a bounded Supervisor/live notification transport; Sandpi
-  does not persist a parallel chat transcript.
+  network does not terminate the coding agent. A reconnect reads a native
+  harness snapshot, then resumes from a bounded Supervisor/live notification
+  transport; Sandpi does not persist a parallel chat transcript. For Codex,
+  `thread/read(includeTurns: true)` is the conversation authority, while the
+  same native Thread's rollout JSONL supplies a sibling Activity read model
+  because historical `ThreadItem`s do not retain every tool execution. The
+  conversation snapshot is sent first; persisted Activity arrives in a
+  separate, revision-scoped SSE event so a slow Volume read cannot leave the
+  conversation loading.
 - **Native harness boundary:** shared code owns Sandbox lifecycle, durable
   transport, files, terminal, signed Environment Audit and metrics. Environment
   Audit is harness-agnostic Sandbox evidence. Each harness owns its native
@@ -97,11 +103,15 @@ Web today; iOS / Android / HarmonyOS later
   Environment evidence in **Environment Settings → Audit**. The current
   Session's Inspector exposes **Activity** as a harness-native execution record;
   each harness supplies its own renderer instead of a normalized shared event
-  model. Codex attributes native tool activity by Thread id, while the shared
-  Supervisor Session identifies only its transport provenance. Native
+  model. Codex attributes native tool activity by Thread id and reconstructs
+  durable calls and every recorded output from that Thread's bounded rollout
+  JSONL (or its compressed sibling); it does not use diagnostic logs SQLite.
+  The shared Supervisor Session identifies only transport provenance. Native
   external-tool semantics and Environment network audit remain separate views
   because the audit feed has no Thread correlation key, so Sandpi neither
-  normalizes their timestamps nor infers a correlation from temporal proximity.
+  normalizes their timestamps nor infers a correlation from temporal
+  proximity. An unavailable or partially parseable rollout is reported in
+  Activity without blocking the app-server conversation.
 - **Durable lifecycle:** every Environment Sandbox has a 30-day Sandbox0 hard
   TTL. A native `turn/completed` event writes a PostgreSQL pause deadline thirty
   minutes later; any Sandpi replica may scan it, but a per-Environment advisory

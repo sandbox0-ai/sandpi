@@ -1658,6 +1658,23 @@ pre,
   white-space: pre-wrap;
 }
 
+.codex-rollout-call-id {
+  display: block;
+  margin: -1px 0 5px 22px;
+  overflow: hidden;
+  color: var(--ink-faint);
+  font-size: 8.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.codex-rollout-time {
+  flex: 0 0 auto;
+  color: var(--ink-faint);
+  font-size: 8.5px;
+  font-variant-numeric: tabular-nums;
+}
+
 .codex-activity-boundary {
   flex: 0 0 auto;
   padding: 2px 5px;
@@ -1972,6 +1989,60 @@ pre,
 .codex-session-activity-boundary button:hover {
   background: var(--panel-strong);
   color: var(--ink);
+}
+
+.codex-session-activity-source-error {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  margin: -10px 0 18px;
+  padding: 9px 11px;
+  border: 1px solid color-mix(in srgb, var(--red) 30%, var(--line));
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--red-soft) 35%, transparent);
+  color: var(--red);
+}
+
+.codex-session-activity-source-error > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.codex-session-activity-source-error strong {
+  color: var(--ink-soft);
+  font-size: 10px;
+  font-weight: 640;
+}
+
+.codex-session-activity-source-error p {
+  margin: 0;
+  color: var(--ink-faint);
+  font-size: 9.5px;
+  line-height: 1.45;
+}
+
+.codex-session-activity-source-error code {
+  width: fit-content;
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--red);
+  font-size: 8.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.codex-session-activity-source-loading {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: -10px 0 18px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--ink-faint);
+  font-size: 9.5px;
 }
 
 .codex-session-activity-turns {

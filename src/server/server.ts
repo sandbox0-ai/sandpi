@@ -43,6 +43,7 @@ import {
   MAX_CODEX_INPUT_BASE64_LENGTH,
   MAX_CODEX_INPUT_IMAGES,
 } from "@/server/harnesses/codex/input-images";
+import type { CodexRolloutActivityFeed } from "@/harnesses/codex/rollout-activity";
 import { HttpError } from "@/server/http-error";
 import { createRuntime } from "@/server/runtime";
 import type { RuntimeAdapter } from "@/server/runtime/types";
@@ -1080,6 +1081,9 @@ async function streamHarnessEvents(
   codex: CodexService,
 ) {
   const sessionId = request.params.sessionId;
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  request.raw.once("aborted", abort);
   // Codex captures the live cursor at the exact thread/read response record.
   // Notifications before that boundary belong to the native snapshot; only
   // the suffix after it is streamed to the client.
@@ -1092,6 +1096,7 @@ async function streamHarnessEvents(
     initial = await codex.readNativeSnapshotWithCursor(
       request.principal.userId,
       sessionId,
+      controller.signal,
     );
   } catch (error) {
     const normalized = normalizeError(error);
@@ -1123,9 +1128,100 @@ async function streamHarnessEvents(
   reply.raw.write(
     `retry: ${initialStreamFailure ? CODEX_NATIVE_STREAM_AUTH_RETRY_MS : 1_000}\n\n`,
   );
+  type NativeSnapshotRead = Awaited<
+    ReturnType<CodexService["readNativeSnapshotWithCursor"]>
+  >;
+  type ActivityIdentity = {
+    nativeSessionId: string;
+    historyRevision: number;
+  };
+  let activityGeneration = 0;
+  let activityIdentity: ActivityIdentity | undefined = initial
+    ? {
+        nativeSessionId: initial.snapshot.nativeSessionId,
+        historyRevision: initial.snapshot.historyRevision,
+      }
+    : undefined;
+  let latestActivity: CodexRolloutActivityFeed | undefined;
+  const writeActivity = (
+    identity: ActivityIdentity,
+    activity: CodexRolloutActivityFeed,
+    generation: number,
+  ) => {
+    if (
+      generation !== activityGeneration ||
+      controller.signal.aborted ||
+      reply.raw.destroyed
+    ) {
+      return;
+    }
+    activityIdentity = identity;
+    latestActivity = activity;
+    reply.raw.write(
+      `event: activity\ndata: ${JSON.stringify({
+        ...identity,
+        activity,
+      })}\n\n`,
+    );
+  };
+  const writeActivityFailure = (error: unknown, generation: number) => {
+    if (!activityIdentity || generation !== activityGeneration) return;
+    const normalized = normalizeError(error);
+    const records = latestActivity?.records ?? [];
+    writeActivity(
+      activityIdentity,
+      {
+        source: "codex-rollout",
+        availability: records.length > 0 ? "partial" : "unavailable",
+        records,
+        error: {
+          code: "codex_rollout_activity_refresh_failed",
+          message: `Codex persisted Session Activity could not be refreshed: ${normalized.message}`,
+        },
+      },
+      generation,
+    );
+  };
+  const deliverActivity = (read: NativeSnapshotRead, generation: number) => {
+    if (generation !== activityGeneration) return;
+    const identity = {
+      nativeSessionId: read.snapshot.nativeSessionId,
+      historyRevision: read.snapshot.historyRevision,
+    };
+    if (
+      activityIdentity?.nativeSessionId !== identity.nativeSessionId ||
+      activityIdentity.historyRevision !== identity.historyRevision
+    ) {
+      latestActivity = undefined;
+    }
+    activityIdentity = identity;
+    void read.activity
+      .then((activity) => {
+        if (generation === activityGeneration) {
+          writeActivity(identity, activity, generation);
+        }
+      })
+      .catch((error: unknown) => writeActivityFailure(error, generation));
+  };
+  const scheduleActivity = (read: NativeSnapshotRead) => {
+    const generation = ++activityGeneration;
+    deliverActivity(read, generation);
+  };
+  const refreshActivity = () => {
+    const generation = ++activityGeneration;
+    void codex
+      .readNativeSnapshotWithCursor(
+        request.principal.userId,
+        sessionId,
+        controller.signal,
+      )
+      .then((read) => deliverActivity(read, generation))
+      .catch((error: unknown) => writeActivityFailure(error, generation));
+  };
   if (initial) {
     reply.raw.write("event: snapshot\n");
     reply.raw.write(`data: ${JSON.stringify(initial.snapshot)}\n\n`);
+    scheduleActivity(initial);
   } else if (initialStreamFailure) {
     reply.raw.write("event: stream-error\n");
     reply.raw.write(`data: ${JSON.stringify(initialStreamFailure)}\n\n`);
@@ -1136,13 +1232,10 @@ async function streamHarnessEvents(
     reply.raw.write("event: invalidation\n");
     reply.raw.write(`data: ${JSON.stringify(initialInvalidation)}\n\n`);
   }
-  const controller = new AbortController();
-  const abort = () => controller.abort();
   // IncomingMessage `close` means the GET request body has finished and can
   // fire while the SSE response is still healthy. Track the response socket
   // (plus an explicitly aborted request) so live tool notifications are not
   // cut off immediately after the initial native snapshot.
-  request.raw.once("aborted", abort);
   reply.raw.once("close", abort);
 
   while (!controller.signal.aborted && !reply.raw.destroyed) {
@@ -1154,6 +1247,7 @@ async function streamHarnessEvents(
         if (update.kind === "notification") {
           reply.raw.write("event: notification\n");
           reply.raw.write(`data: ${JSON.stringify(update.event)}\n\n`);
+          if (update.refreshPersistedActivity) refreshActivity();
         } else {
           reply.raw.write("event: invalidation\n");
           reply.raw.write(
@@ -1168,6 +1262,7 @@ async function streamHarnessEvents(
               const refreshed = await codex.readNativeSnapshotWithCursor(
                 request.principal.userId,
                 sessionId,
+                controller.signal,
               );
               reply.raw.write("event: snapshot\n");
               reply.raw.write(
@@ -1176,6 +1271,7 @@ async function streamHarnessEvents(
               // Discard the old drain batch and continue strictly after the
               // response boundary returned with the replacement snapshot.
               cursor = refreshed.liveCursor;
+              scheduleActivity(refreshed);
               snapshotReplacedSuffix = true;
             } catch (error) {
               reply.raw.write("event: invalidation\n");

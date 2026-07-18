@@ -33,19 +33,22 @@ const copy = {
       systemActivity: "Codex system",
       nativeActivityBoundary: "Native Codex Thread activity",
       nativeActivityBoundaryBody:
-        "Attributed by native Thread and Turn IDs. This is an execution record, not signed audit. Native snapshots retain Turn time, not per-item occurrence time. Environment network evidence stays separate and is not joined by timestamp.",
+        "Attributed by native Thread and Turn IDs. Conversation items come from app-server; durable tool calls are paired from the same Thread rollout with native timestamps. This is an execution record, not signed audit. Environment network evidence stays separate and is not joined by timestamp.",
       openEnvironmentAudit: "Open Environment Audit",
       loadingSessionActivity: "Loading Codex activity…",
       noSessionActivity: "No Codex activity yet",
       noMatchingSessionActivity: "No Codex activity matches this filter",
       sessionActivityEmptyBody:
-        "Tool execution appears here when it is present in the native Codex Thread.",
+        "Tool execution appears here when it is present in the native Codex Thread or its rollout.",
       activityTurn: (index: number) => `Turn ${index}`,
       activityRecords: (count: number) =>
         `${count} ${count === 1 ? "record" : "records"}`,
       externalInteraction: "External",
       agentInteraction: "Agent",
+      persistedRollout: "Durable rollout",
       nativePayload: "Native details",
+      loadingPersistedActivity: "Loading durable Codex tool activity…",
+      rolloutActivityIssue: "Persisted tool activity is incomplete",
       closeInspector: "Close inspector",
       openInspector: "Open inspector",
       moreSessionActions: "More session actions",
@@ -143,6 +146,7 @@ const copy = {
             enteredReviewMode: "Review mode",
             exitedReviewMode: "Review mode",
             contextCompaction: "Context compaction",
+            rolloutToolCall: "Tool call",
           } as Record<string, string>)[itemType] ?? `Codex ${itemType}`;
         return status === "running"
           ? label
@@ -251,18 +255,21 @@ const copy = {
       systemActivity: "Codex 系统",
       nativeActivityBoundary: "Codex 原生 Thread 活动",
       nativeActivityBoundaryBody:
-        "通过原生 Thread 与 Turn ID 归属。这是执行记录，不是签名审计。原生快照仅保留 Turn 时间，不提供每项活动的发生时间；Environment 网络证据单独展示，不按时间戳关联。",
+        "通过原生 Thread 与 Turn ID 归属。对话内容来自 app-server；持久工具调用从同一 Thread 的 rollout 按原生时间戳配对。这是执行记录，不是签名审计；Environment 网络证据单独展示，不按时间戳关联。",
       openEnvironmentAudit: "打开 Environment 审计",
       loadingSessionActivity: "正在加载 Codex 活动…",
       noSessionActivity: "暂无 Codex 活动",
       noMatchingSessionActivity: "没有符合筛选条件的 Codex 活动",
       sessionActivityEmptyBody:
-        "原生 Codex Thread 中出现工具执行后，会在这里显示。",
+        "原生 Codex Thread 或其 rollout 中出现工具执行后，会在这里显示。",
       activityTurn: (index: number) => `Turn ${index}`,
       activityRecords: (count: number) => `${count} 条记录`,
       externalInteraction: "外部",
       agentInteraction: "Agent",
+      persistedRollout: "持久 Rollout",
       nativePayload: "原生详情",
+      loadingPersistedActivity: "正在加载持久 Codex 工具活动…",
+      rolloutActivityIssue: "持久工具活动记录不完整",
       closeInspector: "关闭检查器",
       openInspector: "打开检查器",
       moreSessionActions: "更多会话操作",
@@ -360,6 +367,7 @@ const copy = {
             enteredReviewMode: "审查模式",
             exitedReviewMode: "审查模式",
             contextCompaction: "上下文压缩",
+            rolloutToolCall: "工具调用",
           } as Record<string, string>)[itemType] ?? `Codex ${itemType}`;
         return status === "running"
           ? label

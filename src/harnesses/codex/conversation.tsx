@@ -54,10 +54,12 @@ import {
   CodexTurnResult,
 } from "@/harnesses/codex/activity";
 import { CodexSessionActivityView } from "@/harnesses/codex/session-activity-view";
+import { normalizeCodexRolloutActivityFeed } from "@/harnesses/codex/rollout-activity";
 import { groupCodexTimelineByTurn } from "@/harnesses/codex/timeline";
 import type {
   CodexComposerImage,
   CodexEventEnvelope,
+  CodexNativeActivityUpdate,
   CodexNativeInvalidation,
   CodexNativeSnapshot,
   CodexNativeStreamFailure,
@@ -314,6 +316,7 @@ export function CodexConversation({
         ) {
           throw new Error("Invalid Codex native snapshot");
         }
+        snapshot.activity = normalizeCodexRolloutActivityFeed(snapshot.activity);
         hasNativeSnapshotRef.current = true;
         hasNativeStreamFailureRef.current = false;
         nativeSnapshotRefreshRequestedRef.current = false;
@@ -407,6 +410,37 @@ export function CodexConversation({
       }
     };
 
+    const handleActivity = (event: MessageEvent<string>) => {
+      try {
+        const update = JSON.parse(event.data) as CodexNativeActivityUpdate;
+        if (
+          typeof update.nativeSessionId !== "string" ||
+          !Number.isSafeInteger(update.historyRevision) ||
+          update.historyRevision < 0
+        ) {
+          throw new Error("Invalid Codex Activity update");
+        }
+        const activity = normalizeCodexRolloutActivityFeed(update.activity);
+        setNativeSnapshot((current) =>
+          current &&
+          current.nativeSessionId === update.nativeSessionId &&
+          current.historyRevision === update.historyRevision
+            ? { ...current, activity }
+            : current,
+        );
+      } catch (error) {
+        setNativeSnapshot((current) =>
+          current
+            ? {
+                ...current,
+                activity: normalizeCodexRolloutActivityFeed(null),
+              }
+            : current,
+        );
+        console.error("Unable to decode Codex Activity update", error);
+      }
+    };
+
     const handleInvalidation = (event: MessageEvent<string>) => {
       let invalidation: CodexNativeInvalidation = {};
       try {
@@ -472,6 +506,7 @@ export function CodexConversation({
     };
 
     source.addEventListener("snapshot", handleSnapshot as EventListener);
+    source.addEventListener("activity", handleActivity as EventListener);
     source.addEventListener("notification", handleNotification as EventListener);
     source.addEventListener("invalidation", handleInvalidation as EventListener);
     source.addEventListener("stream-error", handleStreamFailure as EventListener);
@@ -1205,6 +1240,7 @@ export function CodexConversation({
                 language={language}
                 timeZone={timeZone}
                 projection={visibleTimeline}
+                rolloutActivity={nativeSnapshot?.activity}
                 nativeThreadId={
                   nativeSnapshot?.thread.id ?? session.harnessState.threadId
                 }

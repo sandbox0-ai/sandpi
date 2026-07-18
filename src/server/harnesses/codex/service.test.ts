@@ -127,6 +127,10 @@ interface Fixture {
   }>;
   lifecycleLocks: string[];
   streamStarts: number[];
+  rolloutReads: Array<{
+    path: string;
+    nativeSessionId: string;
+  }>;
   enqueue(messages: Record<string, unknown>[]): void;
   disconnectStreams(): void;
   close(): Promise<void>;
@@ -146,6 +150,7 @@ function fixture(input: {
   onRequest?: (
     message: Record<string, unknown>,
   ) => Record<string, unknown> | undefined;
+  rollouts?: Record<string, string | Error | Promise<string>>;
 } = {}): Fixture {
   const initial = input.sessions ?? [
     { id: "session-one", nativeSessionId: "thread-one" },
@@ -188,6 +193,7 @@ function fixture(input: {
   const streamStarts: number[] = [];
   const writes: Fixture["writes"] = [];
   const lifecycleLocks: string[] = [];
+  const rolloutReads: Fixture["rolloutReads"] = [];
   let childSequence = 0;
   let lastStartedThreadId: string | undefined;
   let lastStartedTurnId: string | undefined;
@@ -266,6 +272,9 @@ function fixture(input: {
         result: {
           thread: {
             id: params.threadId,
+            path:
+              `/workspace/.sandpi/harnesses/codex/sessions/2026/07/18/` +
+              `rollout-test-${params.threadId}.jsonl`,
             status: { type: "idle" },
             turns,
           },
@@ -522,6 +531,23 @@ function fixture(input: {
         close: () => state.close(),
       };
     },
+    async readCodexRollout(
+      _runtime: StoredEnvironmentRuntime,
+      path: string,
+      nativeSessionId: string,
+    ) {
+      rolloutReads.push({ path, nativeSessionId });
+      const configured = await input.rollouts?.[nativeSessionId];
+      if (configured instanceof Error) throw configured;
+      return Buffer.from(
+        configured ??
+          `${JSON.stringify({
+            timestamp: "2026-07-18T00:00:00.000Z",
+            type: "session_meta",
+            payload: { id: nativeSessionId, session_id: nativeSessionId },
+          })}\n`,
+      );
+    },
   } as unknown as RuntimeAdapter;
 
   const service = new CodexService(
@@ -538,6 +564,7 @@ function fixture(input: {
     writes,
     lifecycleLocks,
     streamStarts,
+    rolloutReads,
     enqueue,
     disconnectStreams: () => {
       for (const stream of [...activeStreams]) stream.close();
@@ -571,6 +598,228 @@ test("uses one Environment app-server for multiple native Sessions", async () =>
         .length,
       2,
     );
+  } finally {
+    await context.close();
+  }
+});
+
+test("reads and parses persisted rollout Activity with the native snapshot", async () => {
+  const rollout = [
+    {
+      timestamp: "2026-07-18T00:00:00.000Z",
+      type: "session_meta",
+      payload: { id: "thread-one" },
+    },
+    {
+      timestamp: "2026-07-18T00:00:01.000Z",
+      type: "turn_context",
+      payload: { turn_id: "turn-one" },
+    },
+    {
+      timestamp: "2026-07-18T00:00:02.000Z",
+      type: "response_item",
+      payload: {
+        type: "function_call",
+        name: "wait",
+        arguments: "{\"timeout_ms\":1000}",
+        call_id: "call-wait",
+      },
+    },
+    {
+      timestamp: "2026-07-18T00:00:03.000Z",
+      type: "response_item",
+      payload: {
+        type: "function_call_output",
+        call_id: "call-wait",
+        output: "completed",
+      },
+    },
+  ]
+    .map((record) => JSON.stringify(record))
+    .join("\n");
+  const context = fixture({ rollouts: { "thread-one": `${rollout}\n` } });
+
+  try {
+    const snapshot = await context.service.readNativeSnapshot(
+      "user",
+      "session-one",
+    );
+
+    assert.equal(snapshot.thread.id, "thread-one");
+    assert.equal(snapshot.thread.turns.length, 2);
+    assert.equal(snapshot.activity.availability, "available");
+    assert.equal(snapshot.activity.error, null);
+    assert.equal(snapshot.activity.records.length, 1);
+    assert.deepEqual(
+      {
+        turnId: snapshot.activity.records[0]?.turnId,
+        callId: snapshot.activity.records[0]?.callId,
+        callType: snapshot.activity.records[0]?.callType,
+        outputType: snapshot.activity.records[0]?.outputs[0]?.outputType,
+        name: snapshot.activity.records[0]?.name,
+        status: snapshot.activity.records[0]?.status,
+        output: (
+          snapshot.activity.records[0]?.outputs[0]?.payload as
+            | { output?: unknown }
+            | undefined
+        )?.output,
+      },
+      {
+        turnId: "turn-one",
+        callId: "call-wait",
+        callType: "function_call",
+        outputType: "function_call_output",
+        name: "wait",
+        status: "completed",
+        output: "completed",
+      },
+    );
+    assert.deepEqual(context.rolloutReads, [
+      {
+        path:
+          "/workspace/.sandpi/harnesses/codex/sessions/2026/07/18/" +
+          "rollout-test-thread-one.jsonl",
+        nativeSessionId: "thread-one",
+      },
+    ]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("delivers the conversation snapshot before persisted rollout Activity", async () => {
+  let releaseRollout!: (value: string) => void;
+  const rollout = new Promise<string>((resolve) => {
+    releaseRollout = resolve;
+  });
+  const context = fixture({ rollouts: { "thread-one": rollout } });
+
+  try {
+    const read = await Promise.race([
+      context.service.readNativeSnapshotWithCursor("user", "session-one"),
+      new Promise<never>((_, reject) =>
+        setTimeout(
+          () => reject(new Error("conversation snapshot waited for Activity")),
+          250,
+        ),
+      ),
+    ]);
+
+    assert.equal(read.snapshot.thread.id, "thread-one");
+    assert.equal(read.snapshot.activity.availability, "loading");
+    releaseRollout(
+      `${JSON.stringify({
+        timestamp: "2026-07-18T00:00:00.000Z",
+        type: "session_meta",
+        payload: { id: "thread-one" },
+      })}\n`,
+    );
+    assert.equal((await read.activity).availability, "available");
+  } finally {
+    await context.close();
+  }
+});
+
+test("keeps the conversation snapshot when persisted rollout Activity cannot be read", async () => {
+  const context = fixture({
+    rollouts: { "thread-one": new Error("volume read failed") },
+  });
+
+  try {
+    const snapshot = await context.service.readNativeSnapshot(
+      "user",
+      "session-one",
+    );
+
+    assert.equal(snapshot.thread.id, "thread-one");
+    assert.deepEqual(
+      snapshot.thread.turns.map((turn) => turn.id),
+      ["turn-one", "turn-two"],
+    );
+    assert.equal(snapshot.activity.availability, "unavailable");
+    assert.deepEqual(snapshot.activity.records, []);
+    assert.equal(
+      snapshot.activity.error?.code,
+      "codex_rollout_read_failed",
+    );
+    assert.equal(snapshot.activity.error?.message, "volume read failed");
+    assert.equal(context.rolloutReads.length, 1);
+  } finally {
+    await context.close();
+  }
+});
+
+test("rejects an unmanaged native rollout path without reading it", async () => {
+  const context = fixture({
+    onRequest(message) {
+      if (message.method !== "thread/read") return undefined;
+      const params = message.params as { threadId: string };
+      return {
+        id: message.id,
+        result: {
+          thread: {
+            id: params.threadId,
+            path: `/workspace/private/rollout-test-${params.threadId}.jsonl`,
+            status: { type: "idle" },
+            turns: [completedTurn("turn-one")],
+          },
+        },
+      };
+    },
+  });
+
+  try {
+    const snapshot = await context.service.readNativeSnapshot(
+      "user",
+      "session-one",
+    );
+
+    assert.equal(snapshot.thread.id, "thread-one");
+    assert.equal(snapshot.thread.turns.length, 1);
+    assert.equal(snapshot.activity.availability, "unavailable");
+    assert.deepEqual(snapshot.activity.records, []);
+    assert.equal(
+      snapshot.activity.error?.code,
+      "codex_rollout_path_invalid",
+    );
+    assert.equal(context.rolloutReads.length, 0);
+  } finally {
+    await context.close();
+  }
+});
+
+test("scopes a non-string native rollout path to Activity", async () => {
+  const context = fixture({
+    onRequest(message) {
+      if (message.method !== "thread/read") return undefined;
+      const params = message.params as { threadId: string };
+      return {
+        id: message.id,
+        result: {
+          thread: {
+            id: params.threadId,
+            path: { unexpected: "shape" },
+            status: { type: "idle" },
+            turns: [completedTurn("turn-one")],
+          },
+        },
+      };
+    },
+  });
+
+  try {
+    const snapshot = await context.service.readNativeSnapshot(
+      "user",
+      "session-one",
+    );
+
+    assert.equal(snapshot.thread.id, "thread-one");
+    assert.equal(snapshot.activity.availability, "unavailable");
+    assert.equal(
+      snapshot.activity.error?.code,
+      "codex_rollout_path_invalid",
+    );
+    assert.equal(context.rolloutReads.length, 0);
   } finally {
     await context.close();
   }
@@ -654,6 +903,45 @@ test("routes a shared Supervisor journal by native thread id", async () => {
       "turn-one-live",
     );
     assert.equal(context.sessionRuntimes.get("session-two")?.activeNativeTurnId, undefined);
+  } finally {
+    await context.close();
+  }
+});
+
+test("marks completed Turns for persisted Activity refresh", async () => {
+  const context = fixture();
+  context.enqueue([
+    {
+      method: "turn/started",
+      params: {
+        threadId: "thread-one",
+        turn: { ...completedTurn("turn-refresh"), status: "inProgress" },
+      },
+    },
+    {
+      method: "turn/completed",
+      params: {
+        threadId: "thread-one",
+        turn: completedTurn("turn-refresh"),
+      },
+    },
+  ]);
+
+  try {
+    context.service.ensureWorker("session-one");
+    await eventually(
+      () => context.service.listLiveNotifications("session-one").length === 2,
+      "completed Turn notifications were not streamed",
+    );
+    const updates = context.service.listLiveNotifications("session-one");
+    assert.deepEqual(
+      updates.map((update) =>
+        update.kind === "notification"
+          ? update.refreshPersistedActivity
+          : undefined,
+      ),
+      [false, true],
+    );
   } finally {
     await context.close();
   }

@@ -13,7 +13,10 @@ import type {
   WorkspaceIdeFile,
   WorkspaceIdeSnapshot,
 } from "../src/lib/types";
-import type { CodexNativeSnapshot } from "../src/harnesses/codex/types";
+import type {
+  CodexEventEnvelope,
+  CodexNativeSnapshot,
+} from "../src/harnesses/codex/types";
 import {
   mockEnvironmentAudit,
   mockEnvironmentMetrics,
@@ -310,6 +313,83 @@ test("keeps Codex Session Activity native and Environment Audit separate", async
     modelId: "e2e-native-codex-model",
     sessionStatus: "waiting",
     forkableTurnIds: [nativeTurnId],
+    activity: {
+      source: "codex-rollout",
+      availability: "available",
+      error: null,
+      records: [
+        {
+          kind: "rolloutToolCall",
+          id: `rollout:${nativeTurnId}:custom:call-e2e-rollout-exec`,
+          turnId: nativeTurnId,
+          createdAt: startedAt + 1,
+          completedAt: startedAt + 1.2,
+          durationMs: 200,
+          status: "completed",
+          callId: "call-e2e-rollout-exec",
+          callType: "custom_tool_call",
+          name: "exec",
+          namespace: null,
+          nativeStatus: "completed",
+          callPayload: {
+            type: "custom_tool_call",
+            call_id: "call-e2e-rollout-exec",
+            name: "exec",
+            input:
+              'const r = await tools.exec_command({"cmd":"git status --short"});',
+          },
+          outputs: [{
+            outputType: "custom_tool_call_output",
+            createdAt: startedAt + 1.2,
+            nativeStatus: null,
+            payload: {
+              type: "custom_tool_call_output",
+              call_id: "call-e2e-rollout-exec",
+              output: [
+                {
+                  type: "input_text",
+                  text: "Script completed\nOutput:\nclean\n",
+                },
+              ],
+            },
+          }],
+          codeModeTools: ["exec_command"],
+          payloadTruncated: false,
+        },
+        {
+          kind: "rolloutToolCall",
+          id: `rollout:${nativeTurnId}:function:call-e2e-rollout-wait`,
+          turnId: nativeTurnId,
+          createdAt: startedAt + 2,
+          completedAt: startedAt + 2.1,
+          durationMs: 100,
+          status: "completed",
+          callId: "call-e2e-rollout-wait",
+          callType: "function_call",
+          name: "wait",
+          namespace: null,
+          nativeStatus: null,
+          callPayload: {
+            type: "function_call",
+            call_id: "call-e2e-rollout-wait",
+            name: "wait",
+            arguments: '{"cell_id":"6"}',
+          },
+          outputs: [{
+            outputType: "function_call_output",
+            createdAt: startedAt + 2.1,
+            nativeStatus: null,
+            payload: {
+              type: "function_call_output",
+              call_id: "call-e2e-rollout-wait",
+              output: "Script completed",
+            },
+          }],
+          codeModeTools: [],
+          payloadTruncated: false,
+        },
+      ],
+    },
     thread: {
       id: nativeThreadId,
       createdAt: startedAt,
@@ -397,6 +477,27 @@ test("keeps Codex Session Activity native and Environment Audit separate", async
       ],
     },
   };
+  const persistedActivity = snapshot.activity;
+  const completedTurnNotification: CodexEventEnvelope = {
+    harness: "codex",
+    harnessVersion: "runtime",
+    protocolVersion: "v2",
+    sequence: 1,
+    receivedAt: startedAt + 5,
+    notification: {
+      method: "turn/completed",
+      params: {
+        threadId: nativeThreadId,
+        turn: snapshot.thread.turns[0]!,
+      },
+    },
+  };
+  snapshot.activity = {
+    source: "codex-rollout",
+    availability: "loading",
+    records: [],
+    error: null,
+  };
   const browserErrors: string[] = [];
   page.on("console", (message) => {
     if (message.type() === "error") browserErrors.push(message.text());
@@ -425,7 +526,14 @@ test("keeps Codex Session Activity native and Environment Audit separate", async
       status: 200,
       contentType: "text/event-stream",
       headers: { "Cache-Control": "no-cache" },
-      body: `event: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`,
+      body:
+        `event: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n` +
+        `event: notification\ndata: ${JSON.stringify(completedTurnNotification)}\n\n` +
+        `event: activity\ndata: ${JSON.stringify({
+          nativeSessionId: snapshot.nativeSessionId,
+          historyRevision: snapshot.historyRevision,
+          activity: persistedActivity,
+        })}\n\n`,
     });
   });
   await page.route("**/api/v1/sessions/**/models", async (route) => {
@@ -478,7 +586,26 @@ test("keeps Codex Session Activity native and Environment Audit separate", async
   await expect(
     activityView.getByText(nativeTurnId, { exact: true }),
   ).toBeVisible();
-  await expect(activityView.getByText("git status --short")).toBeVisible();
+  await expect(
+    activityView.locator(".codex-session-activity-intro"),
+  ).toContainText("5 records");
+  await expect(
+    activityView.locator(".codex-session-activity-turn > header"),
+  ).toContainText("5 records");
+  const commandActivity = activityView.locator(".codex-command-line", {
+    hasText: "git status --short",
+  });
+  await expect(commandActivity).toBeVisible();
+  const rolloutActivity = activityView
+    .locator(".codex-native-tool")
+    .filter({ hasText: "exec_command" });
+  await expect(rolloutActivity).toContainText("call-e2e-rollout-exec");
+  await expect(rolloutActivity.locator("time")).toHaveAttribute(
+    "dateTime",
+    new Date((startedAt + 1) * 1_000).toISOString(),
+  );
+  await rolloutActivity.locator("summary").click();
+  await expect(rolloutActivity).toContainText("Script completed");
   const mcpActivity = activityView
     .locator(".codex-native-tool")
     .filter({ hasText: "GitHub · get_release" });
@@ -489,7 +616,7 @@ test("keeps Codex Session Activity native and Environment Audit separate", async
   await activityView
     .getByRole("combobox", { name: "Filter Codex Session Activity" })
     .selectOption("external");
-  await expect(activityView.getByText("git status --short")).toBeHidden();
+  await expect(commandActivity).toBeHidden();
   await expect(mcpActivity).toBeVisible();
   await expect(activityView.getByText("sandpi v1.2.3")).toBeVisible();
   await expect.poll(() => auditRequests).toBe(0);

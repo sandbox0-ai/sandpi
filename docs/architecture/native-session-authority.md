@@ -1,9 +1,11 @@
 # Native coding-agent Session authority
 
 Sandpi treats the coding agent's native Session as the only durable source of
-conversation truth. For Codex this is an app-server Thread and its rollout under
-the Environment's persistent `CODEX_HOME`. Sandpi never persists, normalizes or
-reconstructs a parallel chat transcript in PostgreSQL.
+conversation truth. For Codex, the app-server Thread returned by
+`thread/read(includeTurns: true)` is the conversation authority. The rollout
+JSONL for that same native Thread supplies a separate, harness-owned Activity
+read model; it is not a second conversation transcript. Sandpi never persists,
+normalizes or reconstructs a parallel chat transcript in PostgreSQL.
 
 ## Resource boundaries
 
@@ -32,9 +34,16 @@ Environment
   does not poll the event-list API while the Environment is idle.
 - A reconnect begins with `thread/read(includeTurns: true)`. The server captures
   a process-local live cursor at the matching JSON-RPC response record, and the
-  client applies only the bounded notification suffix after that point.
-- A missing native rollout is an invariant failure. Sandpi reports it and never
+  client applies only the bounded notification suffix after that point. The
+  conversation snapshot carries an Activity-loading marker and is sent
+  immediately; the bounded Volume read completes in a separate SSE `activity`
+  event keyed by native Thread id and product history revision. The client
+  ignores an Activity result for a superseded snapshot.
+- A missing native Thread is an invariant failure. Sandpi reports it and never
   substitutes a database transcript or silently starts a replacement Thread.
+  Failure to read or fully parse the sibling rollout Activity is reported
+  explicitly as unavailable or partial, but does not invalidate a successfully
+  restored conversation.
 
 ## Persistent native state and credentials
 
@@ -92,14 +101,28 @@ Audit** section rather than from a Session surface.
 
 Session Activity is instead a harness-native execution record. Each harness
 defines and renders its own tool kinds, statuses and payloads rather than
-projecting them into a shared Sandpi activity schema. For Codex, Activity comes
-from the native Thread snapshot and its bounded notification suffix, and
-`threadId` is the exact product-Session attribution key. The shared Sandbox0
-Supervisor Session and journal identify transport provenance only; they do not
-identify which Codex Thread owns an item. A restored Codex Thread snapshot
-retains Turn timestamps but not per-item occurrence timestamps, so the Activity
-view in the current Session's **Inspector → Activity** tab shows Turn time and
-does not manufacture precise tool timestamps. The shared Inspector hosts the
+projecting them into a shared Sandpi activity schema. For Codex,
+`thread/read(includeTurns: true)` remains authoritative for conversation
+messages, but historical `ThreadItem`s are intentionally lossy and can omit
+command executions. The Codex adapter therefore builds a sibling Activity read
+model from the rollout JSONL named by that same native Thread, pairing native
+calls and every recorded output by Turn, call family and call id while
+preserving Codex-native types, bounded payloads and timestamps. The reader
+accepts Codex's canonical JSONL or exact compressed sibling, requires matching
+`session_meta` before any Activity record, and rejects paths outside the managed
+Codex home, symbolic links and oversized input. The bounded notification suffix
+still supplies live updates. A native `turn/completed` notification starts
+another non-blocking rollout read so calls omitted from historical
+`ThreadItem`s appear without a browser refresh; Thread id, history revision and
+read generation prevent a late result from replacing a newer Session snapshot.
+
+The native `threadId` is the exact product-Session attribution key. The shared
+Sandbox0 Supervisor Session and journal identify transport provenance only;
+they do not identify which Codex Thread owns an item. Sandpi does not use
+Codex's logs SQLite as Activity input: those rows are diagnostic tracing, not a
+stable native Session contract. If the rollout is unavailable or only partly
+parseable, the Activity surface shows the source error and any safe partial
+records while the conversation remains usable. The shared Inspector hosts the
 harness-owned renderer; it does not define a cross-harness Activity contract.
 
 External interactions preserve the same separation. Codex-native MCP, dynamic
@@ -193,6 +216,8 @@ Volume. Migration preserves their opaque native ids for diagnosis, marks them
 use the Environment runtime. Sandpi does not copy a legacy transcript into the
 database to make it appear resumable.
 
-Codex documents `thread/read(includeTurns: true)` as a UI projection that may
-omit transient deltas. Sandpi intentionally accepts the harness-visible native
-projection instead of creating a second durable conversation store.
+Codex documents `thread/read(includeTurns: true)` as a lossy UI projection that
+may omit transient deltas and historical command executions. Sandpi accepts it
+as the native conversation projection and reads the same Thread's rollout only
+for the sibling Codex Activity model. It does not create a second durable
+conversation store or treat diagnostic logs SQLite as one.

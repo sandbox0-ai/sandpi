@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { zstdCompressSync } from "node:zlib";
 
 import { APIError } from "sandbox0";
 
@@ -603,6 +604,207 @@ test("all Environment file access resolves through the shared Sandbox", async ()
   const content = await runtime.readFile(coordinates, "/workspace/README.md");
   assert.equal(Buffer.from(content).toString("utf8"), "hello");
   assert.deepEqual(sandboxIds, ["sandbox-environment"]);
+});
+
+test("reads a native Codex rollout only from its bound managed path", async () => {
+  const nativeSessionId = "019f-native-thread";
+  const rolloutPath =
+    "/workspace/.sandpi/harnesses/codex/sessions/2026/07/18/" +
+    `rollout-test-${nativeSessionId}.jsonl`;
+  const statPaths: string[] = [];
+  let reads = 0;
+  const runtime = runtimeWithClient({
+    sandboxes: {
+      sandbox(sandboxId: string) {
+        assert.equal(sandboxId, environment.sandboxId);
+        return {
+          async statFile(path: string) {
+            statPaths.push(path);
+            return path === rolloutPath
+              ? { type: "file", size: 8, isLink: false }
+              : { type: "dir", size: 0, isLink: false };
+          },
+          async readFile(path: string) {
+            reads += 1;
+            assert.equal(path, rolloutPath);
+            return Buffer.from("rollout\n");
+          },
+        };
+      },
+    },
+  });
+  const coordinates: EnvironmentRuntimeRecord = {
+    id: environment.id,
+    sandboxId: environment.sandboxId,
+    workspaceVolumeId: environment.workspaceVolumeId,
+    runtimeGeneration: 1,
+    decoder: { supervisorCursor: 0, tailBase64: "", runtimeGeneration: 1 },
+  };
+
+  const content = await runtime.readCodexRollout(
+    coordinates,
+    rolloutPath,
+    nativeSessionId,
+  );
+
+  assert.equal(Buffer.from(content).toString("utf8"), "rollout\n");
+  assert.equal(reads, 1);
+  assert.equal(statPaths.at(-1), rolloutPath);
+  assert.ok(statPaths.includes("/workspace/.sandpi/harnesses/codex"));
+  await assert.rejects(
+    runtime.readCodexRollout(
+      coordinates,
+      `/workspace/private/rollout-test-${nativeSessionId}.jsonl`,
+      nativeSessionId,
+    ),
+    (error: unknown) => {
+      assert.equal((error as { code?: string }).code, "codex_rollout_path_invalid");
+      return true;
+    },
+  );
+  assert.equal(reads, 1);
+});
+
+test("rejects a Codex rollout reached through a symbolic link", async () => {
+  const nativeSessionId = "019f-native-thread";
+  const rolloutPath =
+    "/workspace/.sandpi/harnesses/codex/sessions/2026/07/18/" +
+    `rollout-test-${nativeSessionId}.jsonl`;
+  let reads = 0;
+  const runtime = runtimeWithClient({
+    sandboxes: {
+      sandbox() {
+        return {
+          async statFile(path: string) {
+            return path === "/workspace/.sandpi/harnesses/codex"
+              ? { type: "symlink", size: 0, isLink: true }
+              : { type: "dir", size: 0, isLink: false };
+          },
+          async readFile() {
+            reads += 1;
+            return Buffer.from("must not read");
+          },
+        };
+      },
+    },
+  });
+  const coordinates: EnvironmentRuntimeRecord = {
+    id: environment.id,
+    sandboxId: environment.sandboxId,
+    workspaceVolumeId: environment.workspaceVolumeId,
+    runtimeGeneration: 1,
+    decoder: { supervisorCursor: 0, tailBase64: "", runtimeGeneration: 1 },
+  };
+
+  await assert.rejects(
+    runtime.readCodexRollout(coordinates, rolloutPath, nativeSessionId),
+    (error: unknown) => {
+      assert.equal((error as { code?: string }).code, "codex_rollout_path_symlink");
+      return true;
+    },
+  );
+  assert.equal(reads, 0);
+});
+
+test("falls back to Codex's compressed rollout sibling", async () => {
+  const nativeSessionId = "019f-native-thread";
+  const rolloutPath =
+    "/workspace/.sandpi/harnesses/codex/sessions/2026/07/18/" +
+    `rollout-test-${nativeSessionId}.jsonl`;
+  const compressedPath = `${rolloutPath}.zst`;
+  const compressed = zstdCompressSync(Buffer.from("compressed rollout\n"));
+  const readPaths: string[] = [];
+  const missing = () =>
+    new APIError({
+      statusCode: 404,
+      code: "not_found",
+      message: "not found",
+    });
+  const runtime = runtimeWithClient({
+    sandboxes: {
+      sandbox() {
+        return {
+          async statFile(path: string) {
+            if (path === rolloutPath) throw missing();
+            return path === compressedPath
+              ? { type: "file", size: compressed.byteLength, isLink: false }
+              : { type: "dir", size: 0, isLink: false };
+          },
+          async readFile(path: string) {
+            readPaths.push(path);
+            assert.equal(path, compressedPath);
+            return compressed;
+          },
+        };
+      },
+    },
+  });
+  const coordinates: EnvironmentRuntimeRecord = {
+    id: environment.id,
+    sandboxId: environment.sandboxId,
+    workspaceVolumeId: environment.workspaceVolumeId,
+    runtimeGeneration: 1,
+    decoder: { supervisorCursor: 0, tailBase64: "", runtimeGeneration: 1 },
+  };
+
+  const content = await runtime.readCodexRollout(
+    coordinates,
+    rolloutPath,
+    nativeSessionId,
+  );
+
+  assert.equal(
+    Buffer.from(content).toString("utf8"),
+    "compressed rollout\n",
+  );
+  assert.deepEqual(readPaths, [compressedPath]);
+});
+
+test("bounds decompressed Codex rollout output", async () => {
+  const nativeSessionId = "019f-native-thread";
+  const rolloutPath =
+    "/workspace/.sandpi/harnesses/codex/sessions/2026/07/18/" +
+    `rollout-test-${nativeSessionId}.jsonl`;
+  const compressedPath = `${rolloutPath}.zst`;
+  const compressed = zstdCompressSync(Buffer.alloc(16 * 1024 * 1024 + 1));
+  const missing = () =>
+    new APIError({
+      statusCode: 404,
+      code: "not_found",
+      message: "not found",
+    });
+  const runtime = runtimeWithClient({
+    sandboxes: {
+      sandbox() {
+        return {
+          async statFile(path: string) {
+            if (path === rolloutPath) throw missing();
+            return path === compressedPath
+              ? { type: "file", size: compressed.byteLength, isLink: false }
+              : { type: "dir", size: 0, isLink: false };
+          },
+          async readFile() {
+            return compressed;
+          },
+        };
+      },
+    },
+  });
+  const coordinates: EnvironmentRuntimeRecord = {
+    id: environment.id,
+    sandboxId: environment.sandboxId,
+    workspaceVolumeId: environment.workspaceVolumeId,
+    runtimeGeneration: 1,
+    decoder: { supervisorCursor: 0, tailBase64: "", runtimeGeneration: 1 },
+  };
+
+  await assert.rejects(
+    runtime.readCodexRollout(coordinates, rolloutPath, nativeSessionId),
+    (error: unknown) => {
+      assert.equal((error as { code?: string }).code, "codex_rollout_too_large");
+      return true;
+    },
+  );
 });
 
 test("streams retained and live Codex events from the Supervisor cursor", async () => {

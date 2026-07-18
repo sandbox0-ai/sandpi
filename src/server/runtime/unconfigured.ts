@@ -27,6 +27,7 @@ export class UnconfiguredRuntime implements RuntimeAdapter {
   readCodexEnvironmentCredential = unavailable;
   writeCodexMessage = unavailable;
   watchCodexEvents = unavailable;
+  readCodexRollout = unavailable;
   listFiles = unavailable;
   readFile = unavailable;
   getWorkspaceGitState = unavailable;

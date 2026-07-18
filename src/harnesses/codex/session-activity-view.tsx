@@ -13,9 +13,11 @@ import {
   CodexFileChangeActivity,
   CodexNativeItemActivity,
   CodexNativeToolActivity,
+  CodexRolloutToolCallActivity,
   CodexTurnResult,
 } from "./activity";
 import type { CodexConversationProjection } from "./events";
+import type { CodexRolloutActivityFeed } from "./rollout-activity";
 import {
   selectCodexSessionActivity,
   summarizeCodexSessionActivity,
@@ -33,6 +35,7 @@ interface CodexSessionActivityViewProps {
   language: OperationLanguage;
   timeZone: string;
   projection: CodexConversationProjection;
+  rolloutActivity?: CodexRolloutActivityFeed;
   nativeThreadId: string;
   historyRevision: number;
   loading: boolean;
@@ -61,15 +64,23 @@ function formatActivityTime(
 function ActivityEntry({
   entry,
   language,
+  timeZone,
   onOpenFiles,
 }: {
   entry: CodexSessionActivityEntry;
   language: OperationLanguage;
+  timeZone: string;
   onOpenFiles: () => void;
 }) {
   const activity =
     entry.kind === "command" ? (
       <CodexCommandActivity activity={entry} language={language} />
+    ) : entry.kind === "rolloutToolCall" ? (
+      <CodexRolloutToolCallActivity
+        activity={entry}
+        language={language}
+        timeZone={timeZone}
+      />
     ) : entry.kind === "fileChange" ? (
       <CodexFileChangeActivity
         activity={entry}
@@ -95,6 +106,7 @@ export function CodexSessionActivityView({
   language,
   timeZone,
   projection,
+  rolloutActivity,
   nativeThreadId,
   historyRevision,
   loading,
@@ -105,12 +117,12 @@ export function CodexSessionActivityView({
   const ui = getCodexUiCopy(language).conversation;
   const [filter, setFilter] = useState<CodexSessionActivityFilter>("all");
   const summary = useMemo(
-    () => summarizeCodexSessionActivity(projection),
-    [projection],
+    () => summarizeCodexSessionActivity(projection, rolloutActivity),
+    [projection, rolloutActivity],
   );
   const turns = useMemo(
-    () => selectCodexSessionActivity(projection, filter),
-    [filter, projection],
+    () => selectCodexSessionActivity(projection, filter, rolloutActivity),
+    [filter, projection, rolloutActivity],
   );
 
   return (
@@ -172,6 +184,29 @@ export function CodexSessionActivityView({
           </button>
         </section>
 
+        {rolloutActivity?.error ? (
+          <section
+            className="codex-session-activity-source-error"
+            role={rolloutActivity.availability === "unavailable" ? "alert" : "status"}
+          >
+            <SearchX size={15} aria-hidden="true" />
+            <div>
+              <strong>{ui.rolloutActivityIssue}</strong>
+              <p>{rolloutActivity.error.message}</p>
+              <code>{rolloutActivity.error.code}</code>
+            </div>
+          </section>
+        ) : null}
+        {rolloutActivity?.availability === "loading" ? (
+          <section
+            className="codex-session-activity-source-loading"
+            role="status"
+          >
+            <LoaderCircle className="spin" size={15} aria-hidden="true" />
+            <span>{ui.loadingPersistedActivity}</span>
+          </section>
+        ) : null}
+
         {loading ? (
           <div className="codex-session-activity-empty" role="status">
             <LoaderCircle className="spin" size={21} aria-hidden="true" />
@@ -231,6 +266,7 @@ export function CodexSessionActivityView({
                       entry={entry}
                       key={entry.id}
                       language={language}
+                      timeZone={timeZone}
                       onOpenFiles={onOpenFiles}
                     />
                   ))}

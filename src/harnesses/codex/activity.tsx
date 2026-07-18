@@ -22,8 +22,13 @@ import type {
   CodexTurnResultView,
   CodexTurnView,
 } from "./events";
+import type { CodexRolloutToolActivity } from "./rollout-activity";
 import { getCodexUiCopy } from "./ui";
 import type { OperationLanguage } from "@/lib/operation-ui";
+import {
+  formatUnixTimestamp,
+  unixTimestampToIso,
+} from "@/lib/time";
 
 function activityIcon(status: CodexActivityStatus) {
   if (status === "completed") {
@@ -466,6 +471,119 @@ export function CodexNativeToolActivity({
               ))}
             </div>
           </details>
+        ) : null}
+      </div>
+    </article>
+  );
+}
+
+export function CodexRolloutToolCallActivity({
+  activity,
+  language,
+  timeZone,
+}: {
+  activity: CodexRolloutToolActivity;
+  language: OperationLanguage;
+  timeZone: string;
+}) {
+  const ui = getCodexUiCopy(language).conversation;
+  const subject =
+    activity.codeModeTools.length > 0
+      ? activity.codeModeTools.join(" · ")
+      : [activity.namespace, activity.name].filter(Boolean).join(" · ");
+  const payloads = [
+    { label: "call", value: activity.callPayload },
+    ...activity.outputs.map((output, index) => ({
+      label: [
+        `output ${index + 1}`,
+        output.outputType,
+        output.createdAt === null
+          ? null
+          : formatUnixTimestamp(
+              output.createdAt,
+              language === "zh-CN" ? "zh-CN" : "en-US",
+              timeZone,
+              {
+                hour: "2-digit",
+                minute: "2-digit",
+                second: "2-digit",
+              },
+            ),
+      ]
+        .filter(Boolean)
+        .join(" · "),
+      value: output.payload,
+    })),
+  ];
+  const occurredAt = formatUnixTimestamp(
+    activity.createdAt,
+    language === "zh-CN" ? "zh-CN" : "en-US",
+    timeZone,
+    {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    },
+  );
+
+  return (
+    <article className="message message-codex-activity">
+      <div
+        className={`codex-activity codex-native-tool status-${activity.status}`}
+      >
+        <div className="codex-activity-heading">
+          <span
+            className={`activity-status status-${activity.status}`}
+            aria-hidden="true"
+          >
+            {activity.status === "running" ? (
+              activityIcon(activity.status)
+            ) : activity.status === "failed" ? (
+              <X size={13} strokeWidth={2.6} />
+            ) : (
+              <Wrench size={13} />
+            )}
+          </span>
+          <strong>
+            {ui.nativeItemStatus("rolloutToolCall", activity.status)}
+          </strong>
+          <span className="codex-activity-boundary">
+            {ui.persistedRollout}
+          </span>
+          {activity.durationMs !== null ? (
+            <span className="activity-duration">
+              {formatDuration(activity.durationMs)}
+            </span>
+          ) : null}
+          <time
+            className="codex-rollout-time"
+            dateTime={unixTimestampToIso(activity.createdAt)}
+            title={unixTimestampToIso(activity.createdAt)}
+          >
+            {occurredAt}
+          </time>
+          <code className="codex-native-item-type">{activity.callType}</code>
+        </div>
+        <p className="codex-native-item-detail">{subject}</p>
+        <code className="codex-rollout-call-id" title={activity.callId}>
+          {activity.callId}
+        </code>
+        <details className="codex-native-tool-details">
+          <summary>
+            <Braces size={12} aria-hidden="true" />
+            {ui.nativePayload}
+          </summary>
+          <div>
+            {payloads.map((payload) => (
+              <section key={payload.label}>
+                <strong>{payload.label}</strong>
+                <pre>{boundedNativeToolPayload(payload.value)}</pre>
+              </section>
+            ))}
+          </div>
+        </details>
+        {activity.payloadTruncated ? (
+          <small className="codex-output-note">{ui.outputTruncated}</small>
         ) : null}
       </div>
     </article>

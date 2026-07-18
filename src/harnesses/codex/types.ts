@@ -3,6 +3,7 @@ import type {
   HarnessEventEnvelope,
   SessionStatus,
 } from "@/lib/types";
+import type { CodexRolloutActivityFeed } from "./rollout-activity";
 
 /**
  * Hand-maintained subset of the Codex app-server v2 schema used by the current UI and mock
@@ -186,6 +187,8 @@ export interface CodexThread {
   sessionId?: string;
   forkedFromId?: string | null;
   preview?: string;
+  /** Native rollout path exposed by app-server for this stored Thread. */
+  path?: string | null;
   createdAt?: number;
   updatedAt?: number;
   status: CodexThreadStatus;
@@ -327,8 +330,20 @@ export interface CodexNativeSnapshot {
    */
   sessionStatus: SessionStatus;
   thread: CodexThread;
+  /**
+   * Codex-only durable tool records reconstructed from this native Thread's
+   * rollout. app-server intentionally returns a lossy historical item view.
+   */
+  activity: CodexRolloutActivityFeed;
   /** Completed native Turns through which Codex can fork a child Thread. */
   forkableTurnIds: string[];
+}
+
+/** Supplemental Codex Activity delivered after the conversation snapshot. */
+export interface CodexNativeActivityUpdate {
+  nativeSessionId: string;
+  historyRevision: number;
+  activity: CodexRolloutActivityFeed;
 }
 
 /**

@@ -118,6 +118,17 @@ export interface RuntimeAdapter {
     after?: number,
     signal?: AbortSignal,
   ): Promise<RuntimeCodexEventStreamHandle>;
+  /**
+   * Read one native Codex rollout after validating that it belongs to the
+   * requested Thread. This internal path is never exposed through Workspace
+   * file APIs.
+   */
+  readCodexRollout(
+    runtime: EnvironmentRuntimeRecord,
+    path: string,
+    nativeSessionId: string,
+    signal?: AbortSignal,
+  ): Promise<Uint8Array>;
   listFiles(
     runtime: EnvironmentRuntimeRecord,
     path: string,

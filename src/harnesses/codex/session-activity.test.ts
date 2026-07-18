@@ -12,6 +12,10 @@ import {
   selectCodexSessionActivity,
   summarizeCodexSessionActivity,
 } from "./session-activity";
+import type {
+  CodexRolloutActivityFeed,
+  CodexRolloutToolActivity,
+} from "./rollout-activity";
 import type { CodexTurn } from "./types";
 
 const startedAt = toUnixTimestamp(new Date("2026-07-18T08:00:00Z"));
@@ -145,6 +149,58 @@ const projection = projectCodexTimeline(
   createMockCodexThread("thread-native-activity", [nativeActivityTurn]),
 );
 
+function rolloutTool(
+  index: number,
+  input: Partial<CodexRolloutToolActivity> = {},
+): CodexRolloutToolActivity {
+  return {
+    kind: "rolloutToolCall",
+    id: `rollout:turn-native-activity:function:call-${index}`,
+    turnId: nativeActivityTurn.id,
+    createdAt: startedAt + index / 100,
+    completedAt: startedAt + index / 100 + 0.001,
+    durationMs: 1,
+    status: "completed",
+    callId: `call-${index}`,
+    callType: "function_call",
+    name: "wait",
+    namespace: null,
+    nativeStatus: null,
+    callPayload: {
+      type: "function_call",
+      call_id: `call-${index}`,
+      name: "wait",
+      arguments: "{}",
+    },
+    outputs: [
+      {
+        outputType: "function_call_output",
+        createdAt: startedAt + index / 100 + 0.001,
+        nativeStatus: null,
+        payload: {
+          type: "function_call_output",
+          call_id: `call-${index}`,
+          output: "done",
+        },
+      },
+    ],
+    codeModeTools: [],
+    payloadTruncated: false,
+    ...input,
+  };
+}
+
+function rolloutFeed(
+  records: CodexRolloutToolActivity[],
+): CodexRolloutActivityFeed {
+  return {
+    source: "codex-rollout",
+    availability: "available",
+    records,
+    error: null,
+  };
+}
+
 test("summarizes Codex Session Activity with Codex-owned categories", () => {
   assert.deepEqual(summarizeCodexSessionActivity(projection), {
     total: 9,
@@ -221,4 +277,146 @@ test("keeps native Turn ordinals stable when earlier Turns do not match a filter
   );
   assert.equal(external?.ordinal, 2);
   assert.equal(external?.turnId, nativeActivityTurn.id);
+});
+
+test("merges durable rollout calls without normalizing them into conversation items", () => {
+  const activity = rolloutFeed([
+    rolloutTool(1, {
+      callType: "custom_tool_call",
+      name: "exec",
+      codeModeTools: ["exec_command"],
+    }),
+    rolloutTool(2, {
+      callType: "custom_tool_call",
+      name: "exec",
+      codeModeTools: ["apply_patch"],
+    }),
+  ]);
+
+  assert.deepEqual(summarizeCodexSessionActivity(projection, activity), {
+    total: 11,
+    external: 4,
+    commands: 2,
+    files: 2,
+    agents: 2,
+    system: 1,
+  });
+  const [turn] = selectCodexSessionActivity(projection, "all", activity);
+  assert.equal(turn?.entries.length, 11);
+  assert.equal(
+    turn?.entries.filter((entry) => entry.kind === "rolloutToolCall").length,
+    2,
+  );
+});
+
+test("restores the real 30-call rollout shape alongside its modeled file change", () => {
+  const thread = createMockCodexThread("thread-real-rollout-shape", [
+    {
+      ...nativeActivityTurn,
+      items: nativeActivityTurn.items.filter(
+        (item) =>
+          item.type === "userMessage" ||
+          item.type === "fileChange" ||
+          item.type === "agentMessage",
+      ),
+    },
+  ]);
+  const fileProjection = projectCodexTimeline(thread);
+  const records = [
+    ...Array.from({ length: 18 }, (_, index) =>
+      rolloutTool(index, {
+        name: "exec",
+        callType: "custom_tool_call",
+        codeModeTools: ["exec_command"],
+      }),
+    ),
+    rolloutTool(18, {
+      name: "exec",
+      callType: "custom_tool_call",
+      codeModeTools: ["apply_patch"],
+    }),
+    rolloutTool(19, {
+      name: "exec",
+      callType: "custom_tool_call",
+      codeModeTools: ["write_stdin"],
+    }),
+    ...Array.from({ length: 10 }, (_, index) =>
+      rolloutTool(index + 20, { name: "wait" }),
+    ),
+  ];
+  const activity = rolloutFeed(records);
+
+  assert.deepEqual(summarizeCodexSessionActivity(fileProjection, activity), {
+    total: 31,
+    external: 0,
+    commands: 29,
+    files: 2,
+    agents: 0,
+    system: 0,
+  });
+  assert.equal(
+    selectCodexSessionActivity(fileProjection, "all", activity)[0]?.entries
+      .length,
+    31,
+  );
+});
+
+test("categorizes namespaced Codex code-mode tools without cross-harness normalization", () => {
+  const activity = rolloutFeed([
+    rolloutTool(1, { codeModeTools: ["web.run"] }),
+    rolloutTool(2, { codeModeTools: ["image_gen.imagegen"] }),
+    rolloutTool(3, { codeModeTools: ["collaboration.spawn_agent"] }),
+    rolloutTool(4, { codeModeTools: ["functions.exec_command"] }),
+    rolloutTool(5, {
+      codeModeTools: ["exec_command", "mcp__docs__search"],
+    }),
+  ]);
+  const emptyProjection = projectCodexTimeline(
+    createMockCodexThread("thread-code-mode-categories", [
+      createMockCodexTurn({
+        content: "Use native Codex tools.",
+        assistantText: "Done.",
+        createdAt: startedAt,
+      }),
+    ]),
+  );
+  const turnId = emptyProjection.turns[0]!.turnId;
+  for (const record of activity.records) record.turnId = turnId;
+
+  assert.deepEqual(summarizeCodexSessionActivity(emptyProjection, activity), {
+    total: 5,
+    external: 3,
+    commands: 2,
+    files: 0,
+    agents: 1,
+    system: 0,
+  });
+});
+
+test("deduplicates rollout calls only when the same Turn has an exact native id", () => {
+  const sameId = rolloutTool(1, {
+    callId: "activity-command",
+    id: "rollout:turn-native-activity:function:activity-command",
+  });
+  const otherTurn = rolloutTool(2, {
+    turnId: "turn-other",
+    callId: "activity-command",
+    id: "rollout:turn-other:function:activity-command",
+  });
+  const activity = rolloutFeed([sameId, otherTurn]);
+
+  assert.equal(
+    summarizeCodexSessionActivity(projection, activity).total,
+    10,
+  );
+  assert.deepEqual(
+    selectCodexSessionActivity(projection, "all", activity).map((turn) => [
+      turn.turnId,
+      turn.entries.length,
+    ]),
+    [
+      [nativeActivityTurn.id, 9],
+      ["turn-other", 1],
+    ],
+  );
 });

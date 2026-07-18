@@ -1,6 +1,8 @@
 import { isUtf8 } from "node:buffer";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
+import { promisify } from "node:util";
+import { zstdDecompress } from "node:zlib";
 
 import {
   APIError,
@@ -82,12 +84,16 @@ const CODEX_AUTH_MAX_BYTES = 4 * 1024 * 1024;
 const AUTH_SANDBOX_HARD_TTL_SECONDS = 30 * 60;
 const MAX_GIT_DISCOVERY_DEPTH = 13;
 const MAX_FILE_PREVIEW_BYTES = 5 * 1024 * 1024;
+const MAX_CODEX_ROLLOUT_BYTES = 16 * 1024 * 1024;
+const CODEX_ROLLOUT_REPRESENTATION_RETRIES = 3;
+const CODEX_ROLLOUT_REPRESENTATION_RETRY_MS = 50;
 const GIT_STATUS_CONCURRENCY = 4;
 const SANDBOX_AUTO_RESUME_TIMEOUT_MS = 120_000;
 const SANDBOX_AUTO_RESUME_RETRY_DELAY_MS = 250;
 const SANDBOX0_TRANSPORT_RETRY_DELAYS_MS = [100, 250] as const;
 
 type SdkRuntimeMetricSeries = SandboxMetrics["series"][number];
+const decompressZstd = promisify(zstdDecompress);
 
 export class Sandbox0Runtime implements RuntimeAdapter {
   readonly mode = "sandbox0" as const;
@@ -754,6 +760,49 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     } catch (error) {
       throw translateWorkspaceFileError(error);
     }
+  }
+
+  async readCodexRollout(
+    runtime: EnvironmentRuntimeRecord,
+    requestedPath: string,
+    nativeSessionId: string,
+    signal?: AbortSignal,
+  ) {
+    signal?.throwIfAborted();
+    const filePath = safeCodexRolloutPath(requestedPath, nativeSessionId);
+    const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
+    for (
+      let attempt = 0;
+      attempt < CODEX_ROLLOUT_REPRESENTATION_RETRIES;
+      attempt += 1
+    ) {
+      try {
+        return await readCodexRolloutRepresentation(
+          sandbox,
+          filePath,
+          signal,
+        );
+      } catch (error) {
+        if (
+          !(error instanceof HttpError) ||
+          error.code !== "codex_rollout_representation_missing"
+        ) {
+          throw error;
+        }
+        if (attempt === CODEX_ROLLOUT_REPRESENTATION_RETRIES - 1) {
+          throw new HttpError(
+            404,
+            "codex_rollout_not_found",
+            "The native Codex rollout is no longer available.",
+          );
+        }
+        await abortableDelay(
+          CODEX_ROLLOUT_REPRESENTATION_RETRY_MS,
+          signal,
+        );
+      }
+    }
+    throw new Error("Codex rollout representation retry loop exhausted");
   }
 
   async getWorkspaceGitState(
@@ -1483,6 +1532,187 @@ function safeWorkspacePath(requestedPath: string) {
   );
 }
 
+function safeCodexRolloutPath(
+  requestedPath: string,
+  nativeSessionId: string,
+) {
+  const normalized = path.posix.normalize(requestedPath);
+  const roots = [
+    `${ENVIRONMENT_CODEX_HOME}/sessions`,
+    `${ENVIRONMENT_CODEX_HOME}/archived_sessions`,
+  ];
+  const underManagedRoot = roots.some((root) => {
+    const relative = path.posix.relative(root, normalized);
+    return relative !== "" && relative !== ".." && !relative.startsWith("../");
+  });
+  if (
+    !path.posix.isAbsolute(requestedPath) ||
+    normalized !== requestedPath ||
+    !underManagedRoot ||
+    !path.posix.basename(normalized).endsWith(`-${nativeSessionId}.jsonl`)
+  ) {
+    throw new HttpError(
+      403,
+      "codex_rollout_path_invalid",
+      "Codex returned an invalid rollout path.",
+    );
+  }
+  return normalized;
+}
+
+async function readCodexRolloutRepresentation(
+  sandbox: ReturnType<Client["sandboxes"]["sandbox"]>,
+  plainPath: string,
+  signal?: AbortSignal,
+) {
+  signal?.throwIfAborted();
+  const plainFile = await assertCodexRolloutPathHasNoSymlink(
+    sandbox,
+    plainPath,
+    true,
+  );
+  try {
+    if (plainFile) {
+      return await readBoundedCodexRolloutFile(
+        sandbox,
+        plainPath,
+        signal,
+        plainFile,
+      );
+    }
+  } catch (error) {
+    if (!isMissingResource(error)) throw error;
+  }
+
+  const compressedPath = `${plainPath}.zst`;
+  const compressedFile = await assertCodexRolloutPathHasNoSymlink(
+    sandbox,
+    compressedPath,
+    true,
+  );
+  if (!compressedFile) {
+    throw new HttpError(
+      404,
+      "codex_rollout_representation_missing",
+      "Codex rollout representation is changing.",
+    );
+  }
+  let compressed: Uint8Array;
+  try {
+    compressed = await readBoundedCodexRolloutFile(
+      sandbox,
+      compressedPath,
+      signal,
+      compressedFile,
+    );
+  } catch (error) {
+    if (!isMissingResource(error)) throw error;
+    throw new HttpError(
+      404,
+      "codex_rollout_representation_missing",
+      "Codex rollout representation is changing.",
+    );
+  }
+
+  try {
+    const content = await decompressZstd(compressed, {
+      maxOutputLength: MAX_CODEX_ROLLOUT_BYTES,
+    });
+    signal?.throwIfAborted();
+    return content;
+  } catch (error) {
+    if (
+      error !== null &&
+      typeof error === "object" &&
+      "code" in error &&
+      error.code === "ERR_BUFFER_TOO_LARGE"
+    ) {
+      throw new HttpError(
+        413,
+        "codex_rollout_too_large",
+        "This Codex rollout is too large to load as Session Activity.",
+      );
+    }
+    throw new HttpError(
+      502,
+      "codex_rollout_decompression_failed",
+      "The compressed Codex rollout could not be decoded.",
+    );
+  }
+}
+
+async function assertCodexRolloutPathHasNoSymlink(
+  sandbox: ReturnType<Client["sandboxes"]["sandbox"]>,
+  filePath: string,
+  allowMissingLeaf: boolean,
+) {
+  const relative = path.posix.relative("/workspace", filePath);
+  const components = relative.split("/").filter(Boolean);
+  const paths = components.map((_, index) =>
+    path.posix.join("/workspace", ...components.slice(0, index + 1)),
+  );
+  const files = await Promise.all(
+    paths.map(async (componentPath, index) => {
+      try {
+        return await sandbox.statFile(componentPath);
+      } catch (error) {
+        if (
+          allowMissingLeaf &&
+          index === paths.length - 1 &&
+          isMissingResource(error)
+        ) {
+          return undefined;
+        }
+        throw error;
+      }
+    }),
+  );
+  for (const file of files) {
+    if (file && (file.type === "symlink" || file.isLink)) {
+      throw new HttpError(
+        403,
+        "codex_rollout_path_symlink",
+        "Codex rollout activity cannot be read through a symbolic link.",
+      );
+    }
+  }
+  return files.at(-1);
+}
+
+async function readBoundedCodexRolloutFile(
+  sandbox: ReturnType<Client["sandboxes"]["sandbox"]>,
+  filePath: string,
+  signal?: AbortSignal,
+  knownFile?: Awaited<ReturnType<typeof sandbox.statFile>>,
+) {
+  signal?.throwIfAborted();
+  const file = knownFile ?? (await sandbox.statFile(filePath));
+  if (file.type !== "file") {
+    throw new HttpError(
+      502,
+      "codex_rollout_not_regular",
+      "The native Codex rollout is not a regular file.",
+    );
+  }
+  if ((file.size ?? 0) > MAX_CODEX_ROLLOUT_BYTES) {
+    throw new HttpError(
+      413,
+      "codex_rollout_too_large",
+      "This Codex rollout is too large to load as Session Activity.",
+    );
+  }
+  const content = await sandbox.readFile(filePath);
+  signal?.throwIfAborted();
+  if (content.byteLength > MAX_CODEX_ROLLOUT_BYTES) {
+    throw new HttpError(
+      413,
+      "codex_rollout_too_large",
+      "This Codex rollout is too large to load as Session Activity.",
+    );
+  }
+  return content;
+}
+
 function safeEditableWorkspacePath(requestedPath: string) {
   const filePath = safeWorkspacePath(requestedPath);
   if (
@@ -1761,6 +1991,25 @@ function sandboxAutoResumeTimeout(sandboxId: string) {
 
 function delay(milliseconds: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function abortableDelay(milliseconds: number, signal?: AbortSignal) {
+  if (!signal) return delay(milliseconds);
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise<void>((resolve, reject) => {
+    const finish = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", abort);
+      resolve();
+    };
+    const abort = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", abort);
+      reject(signal.reason);
+    };
+    const timer = setTimeout(finish, milliseconds);
+    signal.addEventListener("abort", abort, { once: true });
+  });
 }
 
 function validDate(value: unknown): value is Date {

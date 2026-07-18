@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
+import path from "node:path";
 
+import type { CodexRolloutActivityFeed } from "@/harnesses/codex/rollout-activity";
 import {
   CODEX_TRANSCRIPT_NOTIFICATION_METHODS,
   type CodexEventEnvelope,
@@ -41,6 +43,7 @@ import {
   nativeCodexTurnInput,
   type EncodedCodexInputImage,
 } from "./input-images";
+import { parseCodexRolloutActivity } from "./rollout-activity";
 
 const STREAM_RECONNECT_DELAY_MS = 250;
 const STREAM_BATCH_DELAY_MS = 20;
@@ -51,6 +54,12 @@ const RUNTIME_RECOVERY_LOCK_RETRY_MS = 250;
 const MAX_RPC_RESPONSES_PER_ENVIRONMENT = 512;
 const MAX_LIVE_NOTIFICATIONS_PER_SESSION = 1_000;
 const CODEX_ENVIRONMENT_CWD = "/workspace";
+const CODEX_ENVIRONMENT_HOME = "/workspace/.sandpi/harnesses/codex";
+const CODEX_ROLLOUT_ROOTS = [
+  `${CODEX_ENVIRONMENT_HOME}/sessions`,
+  `${CODEX_ENVIRONMENT_HOME}/archived_sessions`,
+] as const;
+const CODEX_ROLLOUT_READ_TIMEOUT_MS = 30_000;
 const CODEX_MCP_SERVER_NAME = /^[A-Za-z0-9_-]{1,64}$/;
 const TRANSCRIPT_NOTIFICATION_METHODS = new Set<string>(
   CODEX_TRANSCRIPT_NOTIFICATION_METHODS,
@@ -78,6 +87,8 @@ export type CodexLiveUpdate =
       cursor: number;
       kind: "notification";
       event: CodexEventEnvelope;
+      /** The completed Turn may have appended calls omitted by thread/read. */
+      refreshPersistedActivity: boolean;
     }
   | {
       cursor: number;
@@ -120,6 +131,8 @@ export interface CodexNativeSnapshotRead {
   snapshot: CodexNativeSnapshot;
   /** Process-local cursor at the exact matching thread/read response. */
   liveCursor: number;
+  /** Supplemental rollout read that never delays the conversation snapshot. */
+  activity: Promise<CodexRolloutActivityFeed>;
 }
 
 /**
@@ -836,12 +849,17 @@ export class CodexService {
   }
 
   async readNativeSnapshot(userId: string, sessionId: string) {
-    return (await this.readNativeSnapshotWithCursor(userId, sessionId)).snapshot;
+    const read = await this.readNativeSnapshotWithCursor(userId, sessionId);
+    return {
+      ...read.snapshot,
+      activity: await read.activity,
+    };
   }
 
   async readNativeSnapshotWithCursor(
     userId: string,
     sessionId: string,
+    signal?: AbortSignal,
   ): Promise<CodexNativeSnapshotRead> {
     const sessionRuntime = await this.requireNativeSessionRuntime(
       userId,
@@ -883,15 +901,22 @@ export class CodexService {
         "Codex returned an invalid native Session snapshot.",
       );
     }
-    const latest = await this.store.sessionRuntime(sessionId);
-    const forkableTurnIds = thread.turns
-      .filter((turn) => turn.status !== "inProgress")
-      .map((turn) => turn.id);
     const anchor = this.takeRpcAnchor(
       sessionRuntime.environmentId,
       requestId,
       sessionId,
     );
+    const activity = this.readCodexRolloutActivity(
+      sessionRuntime.environmentId,
+      environmentRuntime,
+      sessionRuntime.nativeSessionId,
+      thread.path,
+      signal,
+    );
+    const latest = await this.store.sessionRuntime(sessionId);
+    const forkableTurnIds = thread.turns
+      .filter((turn) => turn.status !== "inProgress")
+      .map((turn) => turn.id);
     return {
       snapshot: {
         protocol: "codex-app-server",
@@ -903,10 +928,104 @@ export class CodexService {
             ? "waiting"
             : latest.sessionStatus,
         thread,
+        activity: loadingCodexRolloutActivity(),
         forkableTurnIds,
       },
       liveCursor: anchor ?? this.liveCursor(sessionId),
+      activity,
     };
+  }
+
+  private async readCodexRolloutActivity(
+    environmentId: string,
+    runtime: StoredEnvironmentRuntime,
+    nativeSessionId: string,
+    nativeRolloutPath: unknown,
+    signal?: AbortSignal,
+  ): Promise<CodexRolloutActivityFeed> {
+    const rolloutPath = validCodexRolloutPath(
+      nativeRolloutPath,
+      nativeSessionId,
+    );
+    if (!rolloutPath) {
+      return unavailableCodexRolloutActivity(
+        nativeRolloutPath !== null && nativeRolloutPath !== undefined
+          ? "codex_rollout_path_invalid"
+          : "codex_rollout_path_missing",
+        nativeRolloutPath !== null && nativeRolloutPath !== undefined
+          ? "Codex returned an invalid rollout path. Persisted tool activity is unavailable."
+          : "Codex did not expose a rollout path. Persisted tool activity is unavailable.",
+      );
+    }
+
+    let readTimeout: ReturnType<typeof setTimeout> | undefined;
+    let abortRead: (() => void) | undefined;
+    try {
+      const reads: Array<Promise<Uint8Array>> = [
+        this.runtime.readCodexRollout(
+          runtime,
+          rolloutPath,
+          nativeSessionId,
+          signal,
+        ),
+        new Promise<never>((_, reject) => {
+          readTimeout = setTimeout(
+            () =>
+              reject(
+                new HttpError(
+                  504,
+                  "codex_rollout_read_timeout",
+                  "Codex rollout activity took too long to load.",
+                ),
+              ),
+            CODEX_ROLLOUT_READ_TIMEOUT_MS,
+          );
+          readTimeout.unref();
+        }),
+      ];
+      if (signal) {
+        reads.push(
+          new Promise<never>((_, reject) => {
+            abortRead = () =>
+              reject(
+                new HttpError(
+                  499,
+                  "codex_rollout_read_aborted",
+                  "Codex rollout activity loading was cancelled.",
+                ),
+              );
+            if (signal.aborted) abortRead();
+            else signal.addEventListener("abort", abortRead, { once: true });
+          }),
+        );
+      }
+      const bytes = await Promise.race(reads);
+      return parseCodexRolloutActivity(
+        Buffer.from(bytes).toString("utf8"),
+        nativeSessionId,
+      );
+    } catch (error) {
+      const code =
+        error instanceof HttpError ? error.code : "codex_rollout_read_failed";
+      const message = errorMessage(error);
+      this.logger.debug(
+        {
+          environmentId,
+          nativeSessionId,
+          code,
+        },
+        "Codex persisted Session Activity unavailable",
+      );
+      return unavailableCodexRolloutActivity(
+        code.startsWith("codex_rollout_")
+          ? code
+          : "codex_rollout_read_failed",
+        message,
+      );
+    } finally {
+      if (readTimeout) clearTimeout(readTimeout);
+      if (abortRead) signal?.removeEventListener("abort", abortRead);
+    }
   }
 
   async interruptActiveTurn(input: {
@@ -1620,7 +1739,13 @@ export class CodexService {
       receivedAt: toUnixTimestamp(new Date(record.receivedAt)),
       notification: record.message as CodexServerNotification,
     };
-    state.updates.push({ cursor: state.cursor, kind: "notification", event });
+    state.updates.push({
+      cursor: state.cursor,
+      kind: "notification",
+      event,
+      refreshPersistedActivity:
+        event.notification.method === "turn/completed",
+    });
     if (state.updates.length > MAX_LIVE_NOTIFICATIONS_PER_SESSION) {
       state.updates.splice(
         0,
@@ -2152,6 +2277,53 @@ function turnSubmissionCoordinates(sessionId: string) {
 
 function rpcId(kind: string, sessionId: string) {
   return `${kind}:${sessionId}:${randomUUID()}`;
+}
+
+function validCodexRolloutPath(
+  nativeRolloutPath: unknown,
+  nativeSessionId: string,
+) {
+  if (
+    typeof nativeRolloutPath !== "string" ||
+    !nativeRolloutPath ||
+    !path.posix.isAbsolute(nativeRolloutPath)
+  ) {
+    return undefined;
+  }
+  const normalized = path.posix.normalize(nativeRolloutPath);
+  const underManagedRoot = CODEX_ROLLOUT_ROOTS.some((root) => {
+    const relative = path.posix.relative(root, normalized);
+    return relative !== "" && relative !== ".." && !relative.startsWith("../");
+  });
+  if (
+    normalized !== nativeRolloutPath ||
+    !underManagedRoot ||
+    !path.posix.basename(normalized).endsWith(`-${nativeSessionId}.jsonl`)
+  ) {
+    return undefined;
+  }
+  return normalized;
+}
+
+function loadingCodexRolloutActivity(): CodexRolloutActivityFeed {
+  return {
+    source: "codex-rollout",
+    availability: "loading",
+    records: [],
+    error: null,
+  };
+}
+
+function unavailableCodexRolloutActivity(
+  code: string,
+  message: string,
+): CodexRolloutActivityFeed {
+  return {
+    source: "codex-rollout",
+    availability: "unavailable",
+    records: [],
+    error: { code, message },
+  };
 }
 
 function rpcKey(environmentId: string, requestId: string) {
