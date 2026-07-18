@@ -111,29 +111,6 @@ const copy = {
       binaryFilePreview: "Binary files cannot be previewed here.",
       volumeLive: (volumeId: string) => `Volume live · ${volumeId}`,
       auditEvents: "Environment audit",
-      activitySummary: (count: number, attention: number) =>
-        attention > 0
-          ? `${count} ${count === 1 ? "activity" : "activities"} · ${attention} needs attention`
-          : `${count} ${count === 1 ? "activity" : "activities"} · No issues detected`,
-      activityFilter: "Filter Environment audit",
-      allActivity: "All records",
-      attentionOnly: "Needs attention",
-      networkActivity: "Network",
-      runtimeActivity: "Runtime operations",
-      sandboxLifecycle: "Sandbox operations",
-      auditDataVerified: "Audit data verified",
-      recordsNeedVerification: (count: number) =>
-        `${count} signed ${count === 1 ? "record needs" : "records need"} verification`,
-      connectedTo: (endpoint: string) => `Connected to ${endpoint}`,
-      connectionAllowed: "Allowed by this Environment's network policy.",
-      blockedConnection: (endpoint: string) => `Blocked connection to ${endpoint}`,
-      connectionBlocked: "Denied by this Environment's network policy.",
-      sandboxResumed: "Sandbox resumed",
-      sandboxReady: "The Environment runtime is ready.",
-      recordedActivity: (resource: string) => `Activity on ${resource}`,
-      recordedBy: (source: string) => `Recorded by ${source}`,
-      activityTrail: (count: number) =>
-        `${count} signed ${count === 1 ? "record" : "records"}`,
       phaseLabel: (phase: "attempt" | "result" | "effect") =>
         ({ attempt: "Requested", result: "Request completed", effect: "Observed" })[
           phase
@@ -157,16 +134,10 @@ const copy = {
           error: "Failed",
           unknown: "Unknown",
         })[outcome],
-      technicalDetails: "Technical details",
       signatureVerified: "Signature verified",
       signatureInvalid: "Invalid signature",
       signatureUnavailable: "Verification unavailable",
       eventIdConflict: "Event ID conflict",
-      copyEvent: "Copy event JSON",
-      noAuditEvents: "No signed audit events yet",
-      noMatchingAuditEvents: "No events match these filters",
-      asynchronousAudit:
-        "Canonical events can appear shortly after the observed sandbox activity.",
       lastHour: "Last hour",
       last15Minutes: "Last 15 minutes",
       last6Hours: "Last 6 hours",
@@ -262,28 +233,6 @@ const copy = {
       binaryFilePreview: "暂不支持在这里预览二进制文件。",
       volumeLive: (volumeId: string) => `Volume 在线 · ${volumeId}`,
       auditEvents: "Environment 审计",
-      activitySummary: (count: number, attention: number) =>
-        attention > 0
-          ? `${count} 项活动 · ${attention} 项需关注`
-          : `${count} 项活动 · 未发现问题`,
-      activityFilter: "筛选 Environment 审计",
-      allActivity: "全部记录",
-      attentionOnly: "需要关注",
-      networkActivity: "网络",
-      runtimeActivity: "运行时操作",
-      sandboxLifecycle: "Sandbox 操作",
-      auditDataVerified: "审计数据已验证",
-      recordsNeedVerification: (count: number) =>
-        `${count} 条签名记录需要验证`,
-      connectedTo: (endpoint: string) => `已连接 ${endpoint}`,
-      connectionAllowed: "该连接符合当前 Environment 的网络策略。",
-      blockedConnection: (endpoint: string) => `已阻止连接 ${endpoint}`,
-      connectionBlocked: "当前 Environment 的网络策略拒绝了该连接。",
-      sandboxResumed: "Sandbox 已恢复",
-      sandboxReady: "Environment 运行时已就绪。",
-      recordedActivity: (resource: string) => `${resource} 活动`,
-      recordedBy: (source: string) => `由 ${source} 记录`,
-      activityTrail: (count: number) => `${count} 条签名记录`,
       phaseLabel: (phase: "attempt" | "result" | "effect") =>
         ({ attempt: "已请求", result: "请求已完成", effect: "已观察到结果" })[
           phase
@@ -307,15 +256,10 @@ const copy = {
           error: "失败",
           unknown: "未知",
         })[outcome],
-      technicalDetails: "技术详情",
       signatureVerified: "签名已验证",
       signatureInvalid: "签名无效",
       signatureUnavailable: "无法验证签名",
       eventIdConflict: "事件 ID 冲突",
-      copyEvent: "复制事件 JSON",
-      noAuditEvents: "暂无签名审计事件",
-      noMatchingAuditEvents: "没有符合筛选条件的事件",
-      asynchronousAudit: "Sandbox 活动发生后，规范事件可能需要短暂时间才会出现。",
       lastHour: "最近一小时",
       last15Minutes: "最近 15 分钟",
       last6Hours: "最近 6 小时",

@@ -2,6 +2,7 @@
 
 import {
   Braces,
+  ChevronDown,
   ChevronRight,
   LoaderCircle,
   SearchX,
@@ -167,7 +168,7 @@ export function CodexSessionActivityView({
               )}
             </p>
           </div>
-          <label>
+          <label className="filter-button metrics-range-filter codex-session-activity-filter">
             <span className="sr-only">{ui.sessionActivityFilter}</span>
             <select
               aria-label={ui.sessionActivityFilter}
@@ -197,6 +198,7 @@ export function CodexSessionActivityView({
                 {ui.systemActivity} ({summary.system})
               </option>
             </select>
+            <ChevronDown size={13} aria-hidden="true" />
           </label>
         </header>
 
@@ -208,7 +210,6 @@ export function CodexSessionActivityView({
               <ChevronRight size={12} aria-hidden="true" />
             </summary>
             <div>
-              <span>{ui.nativeActivityBoundaryBody}</span>
               <code title={nativeThreadId}>
                 {nativeThreadId} · r{historyRevision}
               </code>

@@ -43,6 +43,7 @@ import { toSandbox0NetworkPolicy } from "./network-policy";
 import {
   CODEX_ENVIRONMENT_CREDENTIAL_PATH,
   type CodexAuthRuntime,
+  type EnvironmentAuditPageOptions,
   type EnvironmentRuntimeRecord,
   type ProvisionedEnvironment,
   type RecoveredCodexEnvironmentRuntime,
@@ -1160,11 +1161,12 @@ export class Sandbox0Runtime implements RuntimeAdapter {
 
   async getEnvironmentAudit(
     runtime: EnvironmentRuntimeRecord,
+    options: EnvironmentAuditPageOptions = {},
   ): Promise<EnvironmentAuditFeed> {
     try {
       const response = await this.client.sandboxes
         .sandbox(runtime.sandboxId)
-        .listObservabilityEvents({ limit: 250 });
+        .listObservabilityEvents({ limit: 250, cursor: options.cursor });
       return {
         ...response,
         events: response.events.map((event) => ({

@@ -46,8 +46,6 @@ const copy = {
       agentActivity: "Agent collaboration",
       systemActivity: "Codex system",
       activitySource: "How this activity is sourced",
-      nativeActivityBoundaryBody:
-        "Attributed by native Thread and Turn IDs. Conversation items come from app-server; durable tool calls are paired from the same Thread rollout with native timestamps. This is an execution record, not signed audit. Environment network evidence stays separate and is not joined by timestamp.",
       openEnvironmentAudit: "Open Environment Audit",
       loadingSessionActivity: "Loading Codex activity…",
       noSessionActivity: "No Codex activity yet",
@@ -377,8 +375,6 @@ const copy = {
       agentActivity: "Agent 协作",
       systemActivity: "Codex 系统",
       activitySource: "活动记录来源",
-      nativeActivityBoundaryBody:
-        "通过原生 Thread 与 Turn ID 归属。对话内容来自 app-server；持久工具调用从同一 Thread 的 rollout 按原生时间戳配对。这是执行记录，不是签名审计；Environment 网络证据单独展示，不按时间戳关联。",
       openEnvironmentAudit: "打开 Environment 审计",
       loadingSessionActivity: "正在加载 Codex 活动…",
       noSessionActivity: "暂无 Codex 活动",

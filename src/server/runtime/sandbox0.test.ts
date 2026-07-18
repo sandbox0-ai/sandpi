@@ -953,3 +953,44 @@ test("lists one Workspace directory without recursively expanding folders", asyn
     ],
   );
 });
+
+test("continues Environment audit history from the opaque Sandbox0 cursor", async () => {
+  const calls: unknown[] = [];
+  const occurredAt = new Date("2026-07-19T05:00:00.123Z");
+  const ingestedAt = new Date("2026-07-19T05:00:00.456Z");
+  const runtime = runtimeWithClient({
+    sandboxes: {
+      sandbox(sandboxId: string) {
+        assert.equal(sandboxId, "sandbox-environment");
+        return {
+          async listObservabilityEvents(options: unknown) {
+            calls.push(options);
+            return {
+              events: [{ eventId: "event-newer", occurredAt, ingestedAt }],
+              nextCursor: "cursor-next",
+              watermark: "watermark-current",
+            };
+          },
+        };
+      },
+    },
+  });
+  const coordinates: EnvironmentRuntimeRecord = {
+    id: environment.id,
+    sandboxId: environment.sandboxId,
+    workspaceVolumeId: environment.workspaceVolumeId,
+    runtimeGeneration: 1,
+    decoder: { supervisorCursor: 0, tailBase64: "", runtimeGeneration: 1 },
+  };
+
+  const feed = await runtime.getEnvironmentAudit(coordinates, {
+    cursor: "cursor-current",
+  });
+
+  assert.deepEqual(calls, [{ limit: 250, cursor: "cursor-current" }]);
+  assert.equal(feed.nextCursor, "cursor-next");
+  assert.equal(feed.watermark, "watermark-current");
+  assert.equal(feed.events[0]?.eventId, "event-newer");
+  assert.equal(feed.events[0]?.occurredAt, occurredAt.getTime() / 1_000);
+  assert.equal(feed.events[0]?.ingestedAt, ingestedAt.getTime() / 1_000);
+});

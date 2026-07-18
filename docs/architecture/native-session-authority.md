@@ -99,6 +99,26 @@ be presented as if a Sandbox-level event were attributable to one product
 Session. The product exposes this feed from the Environment's **Settings →
 Audit** section rather than from a Session surface.
 
+The canonical layer preserves every signed event identity, payload hash, phase,
+producer and integrity result. It correlates facts only by Sandbox0's exact
+`operationId`; it never joins by timestamp. Sandbox0 audit cursors move from the
+oldest records toward newer records, so the UI labels the currently loaded time
+range and whether it is partial. **Load newer signed records** advances the
+opaque cursor on demand. Overlapping pages discard only an exact
+`eventId + payloadHash` duplicate, while conflicting payload variants remain
+visible as evidence. The UI does not poll this endpoint automatically because
+reading Environment Audit is itself an auditable operation.
+
+The compact activity list is a presentation read model, not another audit
+store. It can collapse successful allowlisted routine reads into short bursts
+and summarize successful external connections by a signed host and port across
+the loaded range. Denied, failed, unknown, integrity-affected, mutating and
+effect records remain independently visible. The overview reports loaded event
+and operation counts, puts issues first, and scopes verification claims to the
+loaded records. Expanding an activity reveals canonical operations and
+attempt/result/effect evidence; raw signed JSON is mounted only when its
+technical disclosure is opened.
+
 Session Activity is instead a harness-native execution record. Each harness
 defines and renders its own tool kinds, statuses and payloads rather than
 projecting them into a shared Sandpi activity schema. For Codex,

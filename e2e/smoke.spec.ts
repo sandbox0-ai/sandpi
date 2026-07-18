@@ -301,6 +301,7 @@ test("keeps Codex Session Activity native and Environment Audit separate", async
   const nativeThreadId = "thread-e2e-native-activity";
   const nativeTurnId = "turn-e2e-native-activity";
   let auditRequests = 0;
+  const auditCursors: string[] = [];
   let environmentUpdates = 0;
   let releaseAuditResponse!: () => void;
   const auditResponseGate = new Promise<void>((resolve) => {
@@ -511,6 +512,8 @@ test("keeps Codex Session Activity native and Environment Audit separate", async
         `/api/v1/environments/${encodeURIComponent(environment.id)}/audit`
     ) {
       auditRequests += 1;
+      const cursor = requestUrl.searchParams.get("cursor");
+      if (cursor) auditCursors.push(cursor);
     }
     if (
       browserRequest.method() === "PUT" &&
@@ -552,7 +555,20 @@ test("keeps Codex Session Activity native and Environment Audit separate", async
       },
     });
   });
-  await page.route("**/api/v1/environments/**/audit", async (route) => {
+  await page.route("**/api/v1/environments/**/audit**", async (route) => {
+    const cursor = new URL(route.request().url()).searchParams.get("cursor");
+    if (cursor) {
+      await route.fulfill({
+        json: {
+          data: {
+            ...mockEnvironmentAudit,
+            events: [],
+            nextCursor: undefined,
+          },
+        },
+      });
+      return;
+    }
     await auditResponseGate;
     await route.fulfill({ json: { data: mockEnvironmentAudit } });
   });
@@ -577,9 +593,29 @@ test("keeps Codex Session Activity native and Environment Audit separate", async
   const activityView = page.getByLabel("Codex Session Activity", {
     exact: true,
   });
+  const activityHeading = activityView.getByRole("heading", {
+    name: "Codex Session Activity",
+  });
+  const activityFilter = activityView.getByRole("combobox", {
+    name: "Filter Codex Session Activity",
+  });
   await expect(
-    activityView.getByRole("heading", { name: "Codex Session Activity" }),
+    activityHeading,
   ).toBeVisible();
+  await expect(activityFilter).toBeVisible();
+  const [activityHeadingBox, activityFilterBox] = await Promise.all([
+    activityHeading.boundingBox(),
+    activityFilter.boundingBox(),
+  ]);
+  expect(activityHeadingBox).not.toBeNull();
+  expect(activityFilterBox).not.toBeNull();
+  expect(activityFilterBox!.y).toBeLessThan(activityHeadingBox!.y);
+  await expect(
+    activityView.getByText(
+      "Attributed by native Thread and Turn IDs.",
+      { exact: false },
+    ),
+  ).toHaveCount(0);
   await expect(
     activityView.getByRole("heading", {
       name: "Check the release and repository.",
@@ -631,9 +667,7 @@ test("keeps Codex Session Activity native and Environment Audit separate", async
   await mcpActivity.locator(".codex-native-tool-details > summary").click();
   await expect(mcpActivity).toContainText('"repo": "sandpi"');
 
-  await activityView
-    .getByRole("combobox", { name: "Filter Codex Session Activity" })
-    .selectOption("external");
+  await activityFilter.selectOption("external");
   await expect(commandActivity).toBeHidden();
   await expect(mcpActivity).toBeVisible();
   await expect(activityView.getByText("sandpi v1.2.3")).toBeVisible();
@@ -669,10 +703,68 @@ test("keeps Codex Session Activity native and Environment Audit separate", async
   await expect(
     settingsDialog.getByRole("region", { name: "Environment audit" }),
   ).toBeVisible();
-  await expect(settingsDialog.getByText("Audit data verified")).toBeVisible();
+  const auditRegion = settingsDialog.getByRole("region", {
+    name: "Environment audit",
+  });
+  await expect(auditRegion).toContainText(
+    "8 signed records · 4 operations · 1 issue",
+  );
+  await expect(auditRegion).toContainText(
+    "Earliest loaded range; newer records are available",
+  );
+  await expect(
+    auditRegion.getByText("All 8 loaded records are verified"),
+  ).toBeVisible();
+  await expect(
+    auditRegion.locator(".audit-technical-content pre"),
+  ).toHaveCount(0);
+
+  const firstAuditActivity = auditRegion.locator(".audit-activity").first();
+  await expect(firstAuditActivity).toContainText(
+    "Blocked connection to telemetry.example.dev:443",
+  );
+  await firstAuditActivity.locator(":scope > summary").click();
+  await expect(
+    firstAuditActivity.locator(".audit-activity-facts"),
+  ).toBeVisible();
+  await expect(
+    firstAuditActivity.locator(".audit-technical-content pre"),
+  ).toHaveCount(0);
+  await firstAuditActivity
+    .locator(".audit-technical-details > summary")
+    .first()
+    .click();
+  const signedEventJson = firstAuditActivity
+    .locator(".audit-technical-content pre")
+    .first();
+  await expect(signedEventJson).toBeVisible();
+  await expect(signedEventJson).toHaveAttribute("tabindex", "0");
+  await expect(signedEventJson).toContainText(
+    "55555555-5555-4555-8555-555555555555",
+  );
+
+  await auditRegion
+    .getByRole("combobox", { name: "Filter loaded Environment audit" })
+    .selectOption("attention");
+  await expect(auditRegion.locator(".audit-activity-item")).toHaveCount(1);
+
+  const auditRequestsBeforePagination = auditRequests;
+  await auditRegion
+    .getByRole("button", { name: "Load newer signed records" })
+    .click();
+  await expect
+    .poll(() => auditCursors)
+    .toEqual(["mock-history-cursor"]);
+  await expect(
+    auditRegion.getByRole("button", { name: "Load newer signed records" }),
+  ).toHaveCount(0);
+  await expect(auditRegion).toContainText(
+    "8 signed records · 4 operations · 1 issue",
+  );
+  await expect(auditRegion).toContainText("All available records loaded");
   await expect
     .poll(() => auditRequests)
-    .toBeGreaterThan(0);
+    .toBe(auditRequestsBeforePagination + 1);
   await expect(
     settingsDialog.getByText("Environment audit records are read-only."),
   ).toBeVisible();

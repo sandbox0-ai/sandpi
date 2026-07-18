@@ -39,6 +39,7 @@ import {
   CodexSkillsSettings,
 } from "@/harnesses/codex/environment-settings";
 import { EnvironmentAuditPanel } from "@/components/environment-audit-panel";
+import { mergeEnvironmentAuditEventPages } from "@/lib/environment-audit";
 import type { OperationLanguage } from "@/lib/operation-ui";
 import {
   formatUnixTimestamp,
@@ -199,6 +200,10 @@ export function EnvironmentSettings({
   const [environmentAuditLoading, setEnvironmentAuditLoading] = useState(false);
   const [environmentAuditError, setEnvironmentAuditError] = useState("");
   const [environmentAuditReload, setEnvironmentAuditReload] = useState(0);
+  const [environmentAuditLoadingNewer, setEnvironmentAuditLoadingNewer] =
+    useState(false);
+  const [environmentAuditNewerError, setEnvironmentAuditNewerError] =
+    useState("");
   const drawerRef = useRef<HTMLElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const dangerZoneRef = useRef<HTMLDivElement>(null);
@@ -214,6 +219,8 @@ export function EnvironmentSettings({
     const controller = new AbortController();
     setEnvironmentAudit(null);
     setEnvironmentAuditError("");
+    setEnvironmentAuditNewerError("");
+    setEnvironmentAuditLoadingNewer(false);
     setEnvironmentAuditLoading(true);
     void apiFetch<ApiEnvelope<EnvironmentAuditFeed>>(
       `/api/v1/environments/${encodeURIComponent(environment.id)}/audit`,
@@ -241,6 +248,41 @@ export function EnvironmentSettings({
 
     return () => controller.abort();
   }, [activeTab, environment.id, environmentAuditReload]);
+
+  async function loadNewerEnvironmentAudit() {
+    const cursor = environmentAudit?.nextCursor;
+    if (!cursor || environmentAuditLoadingNewer) return;
+
+    setEnvironmentAuditLoadingNewer(true);
+    setEnvironmentAuditNewerError("");
+    try {
+      const response = await apiFetch<ApiEnvelope<EnvironmentAuditFeed>>(
+        `/api/v1/environments/${encodeURIComponent(environment.id)}/audit?cursor=${encodeURIComponent(cursor)}`,
+      );
+      setEnvironmentAudit((current) =>
+        current
+          ? {
+              ...current,
+              ...response.data,
+              events: mergeEnvironmentAuditEventPages([
+                current.events,
+                response.data.events,
+              ]),
+              nextCursor: response.data.nextCursor,
+              watermark: response.data.watermark ?? current.watermark,
+            }
+          : response.data,
+      );
+    } catch (error) {
+      setEnvironmentAuditNewerError(
+        error instanceof Error
+          ? error.message
+          : "Newer Environment audit records could not be loaded.",
+      );
+    } finally {
+      setEnvironmentAuditLoadingNewer(false);
+    }
+  }
 
   useEffect(() => {
     const previouslyFocused = document.activeElement as HTMLElement | null;
@@ -846,6 +888,9 @@ export function EnvironmentSettings({
                     audit={environmentAudit}
                     environmentId={environment.id}
                     language={language}
+                    loadNewerError={environmentAuditNewerError}
+                    loadingNewer={environmentAuditLoadingNewer}
+                    onLoadNewer={() => void loadNewerEnvironmentAudit()}
                     timeZone={timeZone}
                   />
                 ) : null}
