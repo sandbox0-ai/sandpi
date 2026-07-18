@@ -8,6 +8,17 @@ import {
   type CodexServerNotification,
   type CodexThread,
 } from "@/harnesses/codex/types";
+import type {
+  CodexEnvironmentSkill,
+  CodexMcpAuthStatus,
+  CodexMcpInventory,
+  CodexMcpServer,
+  CodexMcpServerInput,
+  CodexMcpTransport,
+  CodexSkillDependency,
+  CodexSkillError,
+  CodexSkillsInventory,
+} from "@/harnesses/codex/environment-tools";
 import type { Environment } from "@/lib/types";
 import { toUnixTimestamp } from "@/lib/time";
 import { HttpError } from "@/server/http-error";
@@ -39,6 +50,8 @@ const RUNTIME_RECOVERY_LOCK_TIMEOUT_MS = 130_000;
 const RUNTIME_RECOVERY_LOCK_RETRY_MS = 250;
 const MAX_RPC_RESPONSES_PER_ENVIRONMENT = 512;
 const MAX_LIVE_NOTIFICATIONS_PER_SESSION = 1_000;
+const CODEX_ENVIRONMENT_CWD = "/workspace";
+const CODEX_MCP_SERVER_NAME = /^[A-Za-z0-9_-]{1,64}$/;
 const TRANSCRIPT_NOTIFICATION_METHODS = new Set<string>(
   CODEX_TRANSCRIPT_NOTIFICATION_METHODS,
 );
@@ -349,6 +362,368 @@ export class CodexService {
       await this.store.markSessionFailed(childSessionId, errorMessage(error));
       throw error;
     }
+  }
+
+  async listEnvironmentSkills(
+    userId: string,
+    environmentId: string,
+    forceReload = false,
+  ): Promise<CodexSkillsInventory> {
+    const runtime = await this.environmentRuntimeForEnvironment(
+      userId,
+      environmentId,
+    );
+    const response = await this.requestCodex(environmentId, runtime, {
+      method: "skills/list",
+      id: rpcId("skills-list", environmentId),
+      params: {
+        cwds: [CODEX_ENVIRONMENT_CWD],
+        ...(forceReload ? { forceReload: true } : {}),
+      },
+    });
+    const result = requireRpcResult(
+      response,
+      "codex_skills_list_failed",
+      "Codex could not list Environment skills.",
+    );
+    return codexSkillsInventory(result);
+  }
+
+  async setEnvironmentSkillEnabled(input: {
+    userId: string;
+    environmentId: string;
+    path: string;
+    enabled: boolean;
+  }) {
+    const inventory = await this.listEnvironmentSkills(
+      input.userId,
+      input.environmentId,
+      true,
+    );
+    if (!inventory.skills.some((skill) => skill.path === input.path)) {
+      throw new HttpError(
+        404,
+        "codex_skill_not_found",
+        "The Codex skill is no longer available in this Environment.",
+      );
+    }
+    const runtime = await this.environmentRuntimeForEnvironment(
+      input.userId,
+      input.environmentId,
+    );
+    const response = await this.requestCodex(input.environmentId, runtime, {
+      method: "skills/config/write",
+      id: rpcId("skills-config-write", input.environmentId),
+      params: { path: input.path, enabled: input.enabled },
+    });
+    const result = requireRpcResult(
+      response,
+      "codex_skill_update_failed",
+      "Codex could not update the skill.",
+    );
+    return {
+      path: input.path,
+      enabled: objectBoolean(result, "effectiveEnabled") ?? input.enabled,
+    };
+  }
+
+  async listEnvironmentMcpServers(
+    userId: string,
+    environmentId: string,
+  ): Promise<CodexMcpInventory> {
+    const runtime = await this.environmentRuntimeForEnvironment(
+      userId,
+      environmentId,
+    );
+    return this.readEnvironmentMcpInventory(environmentId, runtime);
+  }
+
+  async createEnvironmentMcpServer(input: {
+    userId: string;
+    environmentId: string;
+    name: string;
+    server: CodexMcpServerInput;
+  }) {
+    const runtime = await this.environmentRuntimeForEnvironment(
+      input.userId,
+      input.environmentId,
+    );
+    const config = await this.readEnvironmentCodexConfig(
+      input.environmentId,
+      runtime,
+    );
+    const name = requireMcpServerName(input.name);
+    if (Object.hasOwn(config.effectiveServers, name)) {
+      throw new HttpError(
+        409,
+        "codex_mcp_server_exists",
+        "An MCP server with this name already exists in the effective Codex configuration.",
+      );
+    }
+    await this.writeEnvironmentMcpServer(
+      input.environmentId,
+      runtime,
+      name,
+      input.server,
+    );
+    return this.readEnvironmentMcpInventory(input.environmentId, runtime);
+  }
+
+  async updateEnvironmentMcpServer(input: {
+    userId: string;
+    environmentId: string;
+    name: string;
+    server: CodexMcpServerInput;
+  }) {
+    const runtime = await this.environmentRuntimeForEnvironment(
+      input.userId,
+      input.environmentId,
+    );
+    const config = await this.readEnvironmentCodexConfig(
+      input.environmentId,
+      runtime,
+    );
+    const name = requireMcpServerName(input.name);
+    const current = objectRecord(config.userServers[name]);
+    if (!current) {
+      throw new HttpError(
+        404,
+        "codex_mcp_server_not_managed",
+        "This MCP server is not managed by the Environment Codex configuration.",
+      );
+    }
+    const currentTransport = mcpTransport(current);
+    if (currentTransport && currentTransport !== input.server.transport) {
+      throw new HttpError(
+        409,
+        "codex_mcp_transport_immutable",
+        "Remove and recreate the MCP server to change its transport.",
+      );
+    }
+    await this.writeEnvironmentMcpServer(
+      input.environmentId,
+      runtime,
+      name,
+      input.server,
+    );
+    return this.readEnvironmentMcpInventory(input.environmentId, runtime);
+  }
+
+  async setEnvironmentMcpServerEnabled(input: {
+    userId: string;
+    environmentId: string;
+    name: string;
+    enabled: boolean;
+  }) {
+    const runtime = await this.environmentRuntimeForEnvironment(
+      input.userId,
+      input.environmentId,
+    );
+    const config = await this.readEnvironmentCodexConfig(
+      input.environmentId,
+      runtime,
+    );
+    const name = requireMcpServerName(input.name);
+    if (!Object.hasOwn(config.userServers, name)) {
+      throw new HttpError(
+        404,
+        "codex_mcp_server_not_managed",
+        "This MCP server is not managed by the Environment Codex configuration.",
+      );
+    }
+    await this.writeCodexConfigValue(input.environmentId, runtime, {
+      keyPath: `mcp_servers.${name}.enabled`,
+      value: input.enabled,
+    });
+    await this.reloadEnvironmentMcpServers(input.environmentId, runtime);
+    return this.readEnvironmentMcpInventory(input.environmentId, runtime);
+  }
+
+  async deleteEnvironmentMcpServer(input: {
+    userId: string;
+    environmentId: string;
+    name: string;
+  }) {
+    const runtime = await this.environmentRuntimeForEnvironment(
+      input.userId,
+      input.environmentId,
+    );
+    const config = await this.readEnvironmentCodexConfig(
+      input.environmentId,
+      runtime,
+    );
+    const name = requireMcpServerName(input.name);
+    if (!Object.hasOwn(config.userServers, name)) {
+      throw new HttpError(
+        404,
+        "codex_mcp_server_not_managed",
+        "This MCP server is not managed by the Environment Codex configuration.",
+      );
+    }
+    await this.writeCodexConfigValue(input.environmentId, runtime, {
+      keyPath: `mcp_servers.${name}`,
+      value: null,
+    });
+    await this.reloadEnvironmentMcpServers(input.environmentId, runtime);
+    return this.readEnvironmentMcpInventory(input.environmentId, runtime);
+  }
+
+  private async readEnvironmentMcpInventory(
+    environmentId: string,
+    runtime: StoredEnvironmentRuntime,
+  ): Promise<CodexMcpInventory> {
+    const config = await this.readEnvironmentCodexConfig(environmentId, runtime);
+    const statuses = new Map<string, Record<string, unknown>>();
+    let cursor: string | undefined;
+    do {
+      const response = await this.requestCodex(environmentId, runtime, {
+        method: "mcpServerStatus/list",
+        id: rpcId("mcp-status-list", environmentId),
+        params: {
+          detail: "toolsAndAuthOnly",
+          ...(cursor ? { cursor } : {}),
+        },
+      });
+      const result = requireRpcResult(
+        response,
+        "codex_mcp_status_failed",
+        "Codex could not inspect MCP server status.",
+      );
+      const data = result.data;
+      if (!Array.isArray(data)) {
+        throw invalidCodexResponse(
+          "codex_mcp_status_failed",
+          "Codex returned an invalid MCP status list.",
+        );
+      }
+      for (const value of data) {
+        const status = objectRecord(value);
+        const name = objectString(status, "name");
+        if (status && name) statuses.set(name, status);
+      }
+      const nextCursor = result.nextCursor;
+      if (nextCursor !== undefined && nextCursor !== null && typeof nextCursor !== "string") {
+        throw invalidCodexResponse(
+          "codex_mcp_status_failed",
+          "Codex returned an invalid MCP status cursor.",
+        );
+      }
+      cursor = typeof nextCursor === "string" && nextCursor ? nextCursor : undefined;
+    } while (cursor);
+
+    return {
+      servers: Object.entries(config.effectiveServers)
+        .flatMap(([name, value]) => {
+          const definition = objectRecord(value);
+          if (!definition) return [];
+          return [
+            codexMcpServer(
+              name,
+              definition,
+              statuses.get(name),
+              Object.hasOwn(config.userServers, name),
+            ),
+          ];
+        })
+        .sort((left, right) => left.name.localeCompare(right.name)),
+    };
+  }
+
+  private async readEnvironmentCodexConfig(
+    environmentId: string,
+    runtime: StoredEnvironmentRuntime,
+  ) {
+    const response = await this.requestCodex(environmentId, runtime, {
+      method: "config/read",
+      id: rpcId("config-read", environmentId),
+      params: { includeLayers: true, cwd: CODEX_ENVIRONMENT_CWD },
+    });
+    const result = requireRpcResult(
+      response,
+      "codex_config_read_failed",
+      "Codex could not read the Environment configuration.",
+    );
+    const config = objectRecord(result.config);
+    if (!config) {
+      throw invalidCodexResponse(
+        "codex_config_read_failed",
+        "Codex returned an invalid Environment configuration.",
+      );
+    }
+    const effectiveServers = objectRecord(config.mcp_servers) ?? {};
+    const layers = Array.isArray(result.layers) ? result.layers : [];
+    const userLayer = layers.find((value) => {
+      const layer = objectRecord(value);
+      const name = objectRecord(layer?.name);
+      return objectString(name, "type") === "user" && name?.profile == null;
+    });
+    const userConfig = objectRecord(objectRecord(userLayer)?.config);
+    return {
+      effectiveServers,
+      userServers: objectRecord(userConfig?.mcp_servers) ?? {},
+    };
+  }
+
+  private async writeEnvironmentMcpServer(
+    environmentId: string,
+    runtime: StoredEnvironmentRuntime,
+    name: string,
+    server: CodexMcpServerInput,
+  ) {
+    const values = codexMcpConfigValues(server);
+    const response = await this.requestCodex(environmentId, runtime, {
+      method: "config/batchWrite",
+      id: rpcId("mcp-config-write", environmentId),
+      params: {
+        edits: Object.entries(values).map(([key, value]) => ({
+          keyPath: `mcp_servers.${name}.${key}`,
+          value,
+          mergeStrategy: "replace",
+        })),
+        reloadUserConfig: true,
+      },
+    });
+    requireRpcResult(
+      response,
+      "codex_mcp_update_failed",
+      "Codex could not update the MCP server.",
+    );
+    await this.reloadEnvironmentMcpServers(environmentId, runtime);
+  }
+
+  private async writeCodexConfigValue(
+    environmentId: string,
+    runtime: StoredEnvironmentRuntime,
+    edit: { keyPath: string; value: unknown },
+  ) {
+    const response = await this.requestCodex(environmentId, runtime, {
+      method: "config/value/write",
+      id: rpcId("config-value-write", environmentId),
+      params: {
+        ...edit,
+        mergeStrategy: "replace",
+      },
+    });
+    requireRpcResult(
+      response,
+      "codex_config_write_failed",
+      "Codex could not update the Environment configuration.",
+    );
+  }
+
+  private async reloadEnvironmentMcpServers(
+    environmentId: string,
+    runtime: StoredEnvironmentRuntime,
+  ) {
+    const response = await this.requestCodex(environmentId, runtime, {
+      method: "config/mcpServer/reload",
+      id: rpcId("mcp-reload", environmentId),
+    });
+    requireRpcResult(
+      response,
+      "codex_mcp_reload_failed",
+      "Codex saved the MCP configuration but could not reload it.",
+    );
   }
 
   async startTurn(input: {
@@ -791,6 +1166,21 @@ export class CodexService {
     // A supported Sandbox0 runtime operation inside recovery is the only wake
     // trigger. Concurrent callers share this Environment-scoped reconciliation.
     return this.recoverEnvironmentRuntime(environment.id);
+  }
+
+  private async environmentRuntimeForEnvironment(
+    userId: string,
+    environmentId: string,
+  ) {
+    const environment = await this.store.getEnvironment(userId, environmentId);
+    if (environment.codingAgent.harness !== "codex") {
+      throw new HttpError(
+        409,
+        "environment_harness_mismatch",
+        "This Environment is not bound to the Codex harness.",
+      );
+    }
+    return this.ensureEnvironmentRuntimeForUser(userId, environment);
   }
 
   private async environmentRuntimeForSession(userId: string, sessionId: string) {
@@ -1485,6 +1875,211 @@ function turnIdFromRpcResponse(response: Record<string, unknown>) {
   );
 }
 
+function requireRpcResult(
+  response: Record<string, unknown>,
+  code: string,
+  message: string,
+) {
+  if (response.error) {
+    throw new HttpError(502, code, `${message} ${rpcErrorMessage(response.error)}`);
+  }
+  const result = objectRecord(response.result);
+  if (!result) throw invalidCodexResponse(code, message);
+  return result;
+}
+
+function invalidCodexResponse(code: string, message: string) {
+  return new HttpError(502, code, message);
+}
+
+function codexSkillsInventory(result: Record<string, unknown>): CodexSkillsInventory {
+  if (!Array.isArray(result.data)) {
+    throw invalidCodexResponse(
+      "codex_skills_list_failed",
+      "Codex returned an invalid skills list.",
+    );
+  }
+  const entry = result.data
+    .map(objectRecord)
+    .find((candidate) => objectString(candidate, "cwd") === CODEX_ENVIRONMENT_CWD);
+  if (!entry) {
+    return { cwd: CODEX_ENVIRONMENT_CWD, skills: [], errors: [] };
+  }
+  const skills = Array.isArray(entry.skills)
+    ? entry.skills.flatMap((value): CodexEnvironmentSkill[] => {
+        const skill = objectRecord(value);
+        const name = objectString(skill, "name");
+        const path = objectString(skill, "path");
+        const scope = objectString(skill, "scope");
+        if (!name || !path || !isCodexSkillScope(scope)) return [];
+        const skillInterface = objectRecord(skill?.interface);
+        const dependencies = objectRecord(skill?.dependencies);
+        return [
+          {
+            name,
+            displayName: objectString(skillInterface, "displayName"),
+            description: objectString(skill, "description") ?? "",
+            shortDescription:
+              objectString(skillInterface, "shortDescription") ??
+              objectString(skill, "shortDescription"),
+            path,
+            scope,
+            enabled: objectBoolean(skill, "enabled") ?? true,
+            dependencies: codexSkillDependencies(dependencies?.tools),
+          },
+        ];
+      })
+    : [];
+  const errors = Array.isArray(entry.errors)
+    ? entry.errors.flatMap((value): CodexSkillError[] => {
+        const error = objectRecord(value);
+        const path = objectString(error, "path");
+        const message = objectString(error, "message");
+        return path && message ? [{ path, message }] : [];
+      })
+    : [];
+  return {
+    cwd: CODEX_ENVIRONMENT_CWD,
+    skills: skills.sort((left, right) => left.name.localeCompare(right.name)),
+    errors,
+  };
+}
+
+function isCodexSkillScope(
+  value: string | undefined,
+): value is CodexEnvironmentSkill["scope"] {
+  return value === "user" || value === "repo" || value === "system" || value === "admin";
+}
+
+function codexSkillDependencies(value: unknown): CodexSkillDependency[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((candidate): CodexSkillDependency[] => {
+    const dependency = objectRecord(candidate);
+    const type = objectString(dependency, "type");
+    const name = objectString(dependency, "value");
+    if (!type || !name) return [];
+    const description = objectString(dependency, "description");
+    const transport = objectString(dependency, "transport");
+    const command = objectString(dependency, "command");
+    const url = objectString(dependency, "url");
+    return [
+      {
+        type,
+        value: name,
+        ...(description ? { description } : {}),
+        ...(transport ? { transport } : {}),
+        ...(command ? { command } : {}),
+        ...(url ? { url } : {}),
+      },
+    ];
+  });
+}
+
+function requireMcpServerName(value: string) {
+  const name = value.trim();
+  if (!CODEX_MCP_SERVER_NAME.test(name)) {
+    throw new HttpError(
+      400,
+      "invalid_codex_mcp_server_name",
+      "MCP server names may contain letters, numbers, hyphens and underscores.",
+    );
+  }
+  return name;
+}
+
+function mcpTransport(
+  definition: Record<string, unknown>,
+): CodexMcpTransport | undefined {
+  if (typeof definition.command === "string") return "stdio";
+  if (typeof definition.url === "string") return "streamable-http";
+  return undefined;
+}
+
+function codexMcpConfigValues(server: CodexMcpServerInput) {
+  return {
+    command: server.transport === "stdio" ? server.command : null,
+    args:
+      server.transport === "stdio" && server.args.length > 0
+        ? server.args
+        : null,
+    url: server.transport === "streamable-http" ? server.url : null,
+    enabled: server.enabled,
+    required: server.required,
+    startup_timeout_sec: server.startupTimeoutSec ?? null,
+    tool_timeout_sec: server.toolTimeoutSec ?? null,
+    default_tools_approval_mode: server.defaultToolsApprovalMode ?? null,
+    enabled_tools: server.enabledTools.length > 0 ? server.enabledTools : null,
+    disabled_tools: server.disabledTools.length > 0 ? server.disabledTools : null,
+  };
+}
+
+function codexMcpServer(
+  name: string,
+  definition: Record<string, unknown>,
+  status: Record<string, unknown> | undefined,
+  managed: boolean,
+): CodexMcpServer {
+  const transport = mcpTransport(definition) ?? "stdio";
+  const enabled = objectBoolean(definition, "enabled") ?? true;
+  const authStatus = codexMcpAuthStatus(objectString(status, "authStatus"));
+  const serverInfo = objectRecord(status?.serverInfo);
+  const tools = objectRecord(status?.tools);
+  const resources = Array.isArray(status?.resources) ? status.resources : [];
+  const resourceTemplates = Array.isArray(status?.resourceTemplates)
+    ? status.resourceTemplates
+    : [];
+  const runtimeStatus = !enabled
+    ? "disabled"
+    : authStatus === "notLoggedIn"
+      ? "authentication-required"
+      : serverInfo
+        ? "connected"
+        : "unavailable";
+  return {
+    name,
+    transport,
+    command: objectString(definition, "command"),
+    args: objectStringArray(definition.args),
+    url: objectString(definition, "url"),
+    enabled,
+    required: objectBoolean(definition, "required") ?? false,
+    startupTimeoutSec: objectNumber(definition, "startup_timeout_sec"),
+    toolTimeoutSec: objectNumber(definition, "tool_timeout_sec"),
+    defaultToolsApprovalMode: codexMcpApprovalMode(
+      objectString(definition, "default_tools_approval_mode"),
+    ),
+    enabledTools: objectStringArray(definition.enabled_tools),
+    disabledTools: objectStringArray(definition.disabled_tools),
+    managed,
+    authStatus,
+    runtimeStatus,
+    serverTitle: objectString(serverInfo, "title") ?? objectString(serverInfo, "name"),
+    serverVersion: objectString(serverInfo, "version"),
+    toolCount: tools ? Object.keys(tools).length : 0,
+    resourceCount: resources.length + resourceTemplates.length,
+  };
+}
+
+function codexMcpAuthStatus(value: string | undefined): CodexMcpAuthStatus {
+  return value === "unsupported" ||
+    value === "notLoggedIn" ||
+    value === "bearerToken" ||
+    value === "oAuth"
+    ? value
+    : "unknown";
+}
+
+function codexMcpApprovalMode(
+  value: string | undefined,
+): CodexMcpServer["defaultToolsApprovalMode"] {
+  return value === "auto" ||
+    value === "prompt" ||
+    value === "writes" ||
+    value === "approve"
+    ? value
+    : undefined;
+}
+
 function modelListPage(result: unknown) {
   const page = objectRecord(result);
   if (!page || !Array.isArray(page.data)) {
@@ -1583,6 +2178,17 @@ function objectNumber(value: unknown, key: string) {
   return typeof field === "number" && Number.isFinite(field)
     ? field
     : undefined;
+}
+
+function objectBoolean(value: unknown, key: string) {
+  const field = objectRecord(value)?.[key];
+  return typeof field === "boolean" ? field : undefined;
+}
+
+function objectStringArray(value: unknown) {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
 }
 
 function trimMap<K, V>(map: Map<K, V>, maximum: number) {

@@ -4209,6 +4209,452 @@ pre,
   background: var(--panel-strong);
 }
 
+.codex-extension-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.codex-extension-toolbar {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.codex-extension-toolbar > p {
+  max-width: 430px;
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 9.5px;
+  line-height: 1.5;
+}
+
+.codex-extension-toolbar > div {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.codex-extension-toolbar .secondary-action-button {
+  height: 31px;
+  padding: 0 9px;
+  font-size: 9.5px;
+}
+
+.codex-extension-toolbar .icon-button {
+  width: 31px;
+  height: 31px;
+}
+
+.codex-extension-list {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel-strong);
+}
+
+.codex-skill-row,
+.codex-mcp-row {
+  display: grid;
+  min-height: 72px;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 11px;
+  padding: 11px 12px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.codex-skill-row:last-child,
+.codex-mcp-row:last-child {
+  border-bottom: 0;
+}
+
+.codex-extension-icon {
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--sidebar);
+  color: var(--ink-faint);
+}
+
+.codex-extension-icon.is-connected {
+  border-color: var(--green);
+  background: var(--green-soft);
+  color: var(--green);
+}
+
+.codex-extension-icon.is-authentication-required {
+  border-color: var(--amber);
+  background: var(--amber-soft);
+  color: var(--amber);
+}
+
+.codex-extension-main {
+  min-width: 0;
+}
+
+.codex-extension-title {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.codex-extension-title strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 10.5px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.codex-extension-title > span,
+.codex-extension-tags > span,
+.codex-readonly-badge {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  padding: 3px 5px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--panel);
+  color: var(--ink-faint);
+  font-size: 7.5px;
+  font-weight: 620;
+  line-height: 1;
+}
+
+.codex-extension-main > p {
+  overflow: hidden;
+  margin: 4px 0 0;
+  color: var(--ink-soft);
+  font-size: 9px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+}
+
+.codex-extension-main > code {
+  display: block;
+  overflow: hidden;
+  margin-top: 5px;
+  color: var(--ink-faint);
+  font-size: 7.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.codex-extension-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 7px;
+}
+
+.codex-extension-tags > span.is-connected {
+  border-color: var(--green);
+  background: var(--green-soft);
+  color: var(--green);
+}
+
+.codex-extension-tags > span.is-authentication-required {
+  border-color: var(--amber);
+  background: var(--amber-soft);
+  color: var(--amber);
+}
+
+.codex-extension-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.codex-extension-actions > button,
+.codex-mcp-remove-confirm > button,
+.codex-mcp-editor > header > button {
+  display: inline-flex;
+  width: 27px;
+  height: 27px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-faint);
+  cursor: pointer;
+}
+
+.codex-extension-actions > button:hover,
+.codex-mcp-remove-confirm > button:hover,
+.codex-mcp-editor > header > button:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+.codex-extension-actions > button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.codex-mcp-remove-confirm {
+  display: flex;
+  align-items: center;
+  padding-left: 4px;
+  border: 1px solid var(--red);
+  border-radius: 6px;
+  background: var(--red-soft);
+}
+
+.codex-mcp-remove-confirm > button.is-destructive {
+  width: auto;
+  padding: 0 5px;
+  color: var(--red);
+  font-size: 8px;
+  font-weight: 650;
+}
+
+.codex-extension-error,
+.codex-extension-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 9px 10px;
+  border: 1px solid var(--red);
+  border-radius: 8px;
+  background: var(--red-soft);
+  color: var(--red);
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.codex-extension-warning {
+  border-color: var(--amber);
+  background: var(--amber-soft);
+  color: var(--amber);
+}
+
+.codex-extension-error > svg,
+.codex-extension-warning > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.codex-extension-warning > div {
+  min-width: 0;
+}
+
+.codex-extension-warning p {
+  margin: 3px 0;
+  color: var(--ink-soft);
+}
+
+.codex-extension-warning code {
+  color: var(--ink-faint);
+  font-size: 7.5px;
+}
+
+.codex-extension-empty {
+  display: flex;
+  min-height: 174px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  padding: 26px;
+  border: 1px dashed var(--line);
+  border-radius: 9px;
+  color: var(--ink-faint);
+  text-align: center;
+}
+
+.codex-extension-empty > span {
+  display: inline-flex;
+  width: 40px;
+  height: 40px;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 10px;
+  border-radius: 9px;
+  background: var(--sidebar);
+}
+
+.codex-extension-empty strong {
+  color: var(--ink-soft);
+  font-size: 11px;
+}
+
+.codex-extension-empty p {
+  max-width: 390px;
+  margin: 6px 0 0;
+  font-size: 9.5px;
+  line-height: 1.5;
+}
+
+.codex-extension-skeleton {
+  display: grid;
+  min-height: 72px;
+  grid-template-columns: 32px minmax(0, 1fr);
+  align-items: center;
+  gap: 11px;
+  padding: 11px 12px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.codex-extension-skeleton:last-child {
+  border-bottom: 0;
+}
+
+.codex-extension-skeleton > span,
+.codex-extension-skeleton > div > span {
+  display: block;
+  border-radius: 6px;
+  background: var(--hover);
+  animation: codex-extension-pulse 1.25s ease-in-out infinite;
+}
+
+.codex-extension-skeleton > span {
+  width: 32px;
+  height: 32px;
+}
+
+.codex-extension-skeleton > div {
+  display: grid;
+  gap: 7px;
+}
+
+.codex-extension-skeleton > div > span:first-child {
+  width: 34%;
+  height: 9px;
+}
+
+.codex-extension-skeleton > div > span:last-child {
+  width: 76%;
+  height: 7px;
+}
+
+@keyframes codex-extension-pulse {
+  0%,
+  100% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.codex-mcp-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel-strong);
+}
+
+.codex-mcp-editor > header,
+.codex-mcp-editor > footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.codex-mcp-editor > header > div {
+  display: grid;
+  gap: 3px;
+}
+
+.codex-mcp-editor > header span {
+  color: var(--ink-faint);
+  font-size: 8px;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.codex-mcp-editor > header strong {
+  font-size: 11px;
+}
+
+.codex-mcp-editor > footer {
+  justify-content: flex-end;
+  padding-top: 2px;
+}
+
+.codex-mcp-switches {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.codex-mcp-switches > div {
+  display: flex;
+  min-height: 51px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.codex-mcp-switches > div:last-child {
+  border-bottom: 0;
+}
+
+.codex-mcp-switches span {
+  display: grid;
+  gap: 3px;
+}
+
+.codex-mcp-switches strong {
+  font-size: 9.5px;
+}
+
+.codex-mcp-switches small {
+  color: var(--ink-faint);
+  font-size: 8px;
+}
+
+.codex-mcp-advanced {
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.codex-mcp-advanced summary {
+  color: var(--ink-soft);
+  font-size: 9px;
+  font-weight: 630;
+  cursor: pointer;
+}
+
+.codex-mcp-advanced[open] summary {
+  margin-bottom: 12px;
+}
+
+.codex-mcp-advanced .full-field {
+  margin-top: 11px;
+}
+
+.is-spinning {
+  animation: settings-spin 900ms linear infinite;
+}
+
+@keyframes settings-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .archived-sessions-list {
   overflow: hidden;
   border: 1px solid var(--line);

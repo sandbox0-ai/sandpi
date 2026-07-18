@@ -53,6 +53,38 @@ import { TerminalInputQueue } from "@/server/terminal-input-queue";
 const SESSION_COOKIE = "sandpi_session";
 const CODEX_IMAGE_BODY_LIMIT_BYTES = 36 * 1024 * 1024;
 const WORKSPACE_FILE_BODY_LIMIT_BYTES = 7 * 1024 * 1024;
+const codexMcpServerInputSchema = z
+  .object({
+    transport: z.enum(["stdio", "streamable-http"]),
+    command: z.string().trim().min(1).max(1_000).optional(),
+    args: z.array(z.string().max(2_000)).max(128).default([]),
+    url: z.string().trim().url().max(4_096).optional(),
+    enabled: z.boolean().default(true),
+    required: z.boolean().default(false),
+    startupTimeoutSec: z.number().int().min(1).max(300).optional(),
+    toolTimeoutSec: z.number().int().min(1).max(3_600).optional(),
+    defaultToolsApprovalMode: z
+      .enum(["auto", "prompt", "writes", "approve"])
+      .optional(),
+    enabledTools: z.array(z.string().trim().min(1).max(200)).max(256).default([]),
+    disabledTools: z.array(z.string().trim().min(1).max(200)).max(256).default([]),
+  })
+  .superRefine((value, context) => {
+    if (value.transport === "stdio" && !value.command) {
+      context.addIssue({
+        code: "custom",
+        path: ["command"],
+        message: "A STDIO MCP server requires a command.",
+      });
+    }
+    if (value.transport === "streamable-http" && !value.url) {
+      context.addIssue({
+        code: "custom",
+        path: ["url"],
+        message: "A Streamable HTTP MCP server requires a URL.",
+      });
+    }
+  });
 
 export interface SandpiServerOptions {
   config?: SandpiConfig;
@@ -395,6 +427,99 @@ function registerApiRoutes(
         request.principal.userId,
         request.params.environmentId,
       ),
+    }),
+  );
+  app.get<{ Params: { environmentId: string } }>(
+    "/api/v1/environments/:environmentId/harnesses/codex/skills",
+    async (request) => ({
+      data: await services.codex.listEnvironmentSkills(
+        request.principal.userId,
+        request.params.environmentId,
+        queryString(request, "force") === "1",
+      ),
+    }),
+  );
+  app.put<{ Params: { environmentId: string } }>(
+    "/api/v1/environments/:environmentId/harnesses/codex/skills/config",
+    async (request) => {
+      const body = z
+        .object({
+          path: z.string().trim().min(1).max(4_096),
+          enabled: z.boolean(),
+        })
+        .parse(request.body);
+      return {
+        data: await services.codex.setEnvironmentSkillEnabled({
+          userId: request.principal.userId,
+          environmentId: request.params.environmentId,
+          ...body,
+        }),
+      };
+    },
+  );
+  app.get<{ Params: { environmentId: string } }>(
+    "/api/v1/environments/:environmentId/harnesses/codex/mcp-servers",
+    async (request) => ({
+      data: await services.codex.listEnvironmentMcpServers(
+        request.principal.userId,
+        request.params.environmentId,
+      ),
+    }),
+  );
+  app.post<{ Params: { environmentId: string } }>(
+    "/api/v1/environments/:environmentId/harnesses/codex/mcp-servers",
+    async (request, reply) => {
+      const body = z
+        .intersection(
+          z.object({
+            name: z.string().trim().regex(/^[A-Za-z0-9_-]{1,64}$/),
+          }),
+          codexMcpServerInputSchema,
+        )
+        .parse(request.body);
+      const { name, ...server } = body;
+      const data = await services.codex.createEnvironmentMcpServer({
+        userId: request.principal.userId,
+        environmentId: request.params.environmentId,
+        name,
+        server,
+      });
+      return reply.status(201).send({ data });
+    },
+  );
+  app.put<{ Params: { environmentId: string; name: string } }>(
+    "/api/v1/environments/:environmentId/harnesses/codex/mcp-servers/:name",
+    async (request) => ({
+      data: await services.codex.updateEnvironmentMcpServer({
+        userId: request.principal.userId,
+        environmentId: request.params.environmentId,
+        name: request.params.name,
+        server: codexMcpServerInputSchema.parse(request.body),
+      }),
+    }),
+  );
+  app.put<{ Params: { environmentId: string; name: string } }>(
+    "/api/v1/environments/:environmentId/harnesses/codex/mcp-servers/:name/enabled",
+    async (request) => {
+      const body = z.object({ enabled: z.boolean() }).parse(request.body);
+      return {
+        data: await services.codex.setEnvironmentMcpServerEnabled({
+          userId: request.principal.userId,
+          environmentId: request.params.environmentId,
+          name: request.params.name,
+          enabled: body.enabled,
+        }),
+      };
+    },
+  );
+  app.delete<{ Params: { environmentId: string; name: string } }>(
+    "/api/v1/environments/:environmentId/harnesses/codex/mcp-servers/:name",
+    async (request) => ({
+      data: await services.codex.deleteEnvironmentMcpServer({
+        userId: request.principal.userId,
+        environmentId: request.params.environmentId,
+        name: request.params.name,
+      }),
     }),
   );
 

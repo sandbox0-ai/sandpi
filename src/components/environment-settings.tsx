@@ -2,6 +2,7 @@
 
 import {
   Archive,
+  Cable,
   Check,
   CircleDot,
   Clock3,
@@ -17,6 +18,7 @@ import {
   RotateCcw,
   Settings2,
   Share2,
+  Sparkles,
   Trash2,
   TriangleAlert,
   Webhook,
@@ -31,6 +33,10 @@ import {
 
 import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
 import { copyTextToClipboard } from "@/lib/clipboard";
+import {
+  CodexMcpSettings,
+  CodexSkillsSettings,
+} from "@/harnesses/codex/environment-settings";
 import type { OperationLanguage } from "@/lib/operation-ui";
 import {
   formatUnixTimestamp,
@@ -43,6 +49,8 @@ type SettingsTab =
   | "general"
   | "archived-sessions"
   | "credentials"
+  | "skills"
+  | "mcp"
   | "network"
   | "functions"
   | "sharing";
@@ -90,6 +98,8 @@ const tabs: Array<{
   { id: "general", label: "General", icon: Settings2 },
   { id: "archived-sessions", label: "Archived sessions", icon: Archive },
   { id: "credentials", label: "Coding agent", icon: KeyRound },
+  { id: "skills", label: "Skills", icon: Sparkles },
+  { id: "mcp", label: "MCP servers", icon: Cable },
   { id: "network", label: "Network", icon: Network },
   { id: "functions", label: "Functions", icon: Webhook },
   { id: "sharing", label: "Sharing", icon: Share2 },
@@ -882,6 +892,34 @@ export function EnvironmentSettings({
               </SettingsSection>
             ) : null}
 
+            {activeTab === "skills" ? (
+              <SettingsSection
+                eyebrow={`${draft.codingAgent.label} native capabilities`}
+                title="Skills"
+                description={`Skills are discovered and enabled by ${draft.codingAgent.label}. Their locations, metadata and activation rules are not normalized across coding agents.`}
+              >
+                {draft.codingAgent.harness === "codex" ? (
+                  <CodexSkillsSettings environmentId={draft.id} />
+                ) : (
+                  <HarnessSettingsUnavailable agent={draft.codingAgent.label} />
+                )}
+              </SettingsSection>
+            ) : null}
+
+            {activeTab === "mcp" ? (
+              <SettingsSection
+                eyebrow={`${draft.codingAgent.label} native capabilities`}
+                title="MCP servers"
+                description={`MCP definitions and runtime status come directly from ${draft.codingAgent.label}. Sandpi keeps this configuration scoped to the Environment.`}
+              >
+                {draft.codingAgent.harness === "codex" ? (
+                  <CodexMcpSettings environmentId={draft.id} />
+                ) : (
+                  <HarnessSettingsUnavailable agent={draft.codingAgent.label} />
+                )}
+              </SettingsSection>
+            ) : null}
+
             {activeTab === "network" ? (
               <SettingsSection
                 eyebrow="Environment runtime"
@@ -1141,29 +1179,39 @@ export function EnvironmentSettings({
               <>
                 <Check size={14} /> Saved
               </>
+            ) : activeTab === "skills" || activeTab === "mcp" ? (
+              <>{draft.codingAgent.label} changes are saved immediately.</>
             ) : (
               <>Changes apply to future Session forks.</>
             )}
           </span>
           <div>
-            <button
-              type="button"
-              className="button-secondary"
-              disabled={saving || deleting}
-              onClick={onClose}
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              className="button-primary"
-              disabled={
-                saving || deleting || deleteConfirming || !draft.name.trim()
-              }
-              onClick={() => void saveAndClose()}
-            >
-              {saving ? "Saving…" : "Save changes"}
-            </button>
+            {activeTab === "skills" || activeTab === "mcp" ? (
+              <button type="button" className="button-primary" onClick={onClose}>
+                Done
+              </button>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  className="button-secondary"
+                  disabled={saving || deleting}
+                  onClick={onClose}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="button-primary"
+                  disabled={
+                    saving || deleting || deleteConfirming || !draft.name.trim()
+                  }
+                  onClick={() => void saveAndClose()}
+                >
+                  {saving ? "Saving…" : "Save changes"}
+                </button>
+              </>
+            )}
           </div>
         </footer>
       </section>
@@ -1191,6 +1239,20 @@ function SettingsSection({
       </header>
       <div className="settings-section-body">{children}</div>
     </section>
+  );
+}
+
+function HarnessSettingsUnavailable({ agent }: { agent: string }) {
+  return (
+    <div className="archived-sessions-empty">
+      <span aria-hidden="true">
+        <TriangleAlert size={20} />
+      </span>
+      <strong>{agent} settings are not available yet</strong>
+      <p>
+        This harness will provide its own native Skills and MCP implementation.
+      </p>
+    </div>
   );
 }
 

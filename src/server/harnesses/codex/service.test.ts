@@ -832,3 +832,189 @@ test("forks a product Session only through Codex thread/fork", async () => {
     await context.close();
   }
 });
+
+test("lists and toggles Environment skills through Codex native RPCs", async () => {
+  const skillPath = "/workspace/.agents/skills/release/SKILL.md";
+  const context = fixture({
+    onRequest(message) {
+      if (message.method === "skills/list") {
+        return {
+          id: message.id,
+          result: {
+            data: [
+              {
+                cwd: "/workspace",
+                skills: [
+                  {
+                    name: "release",
+                    description: "Prepare a release.",
+                    path: skillPath,
+                    scope: "repo",
+                    enabled: true,
+                    interface: { displayName: "Release" },
+                    dependencies: {
+                      tools: [{ type: "mcp", value: "github" }],
+                    },
+                  },
+                ],
+                errors: [],
+              },
+            ],
+          },
+        };
+      }
+      if (message.method === "skills/config/write") {
+        return {
+          id: message.id,
+          result: { effectiveEnabled: false },
+        };
+      }
+      return undefined;
+    },
+  });
+  try {
+    const inventory = await context.service.listEnvironmentSkills(
+      "user",
+      environment.id,
+    );
+    assert.equal(inventory.skills[0]?.displayName, "Release");
+    assert.deepEqual(inventory.skills[0]?.dependencies, [
+      { type: "mcp", value: "github" },
+    ]);
+
+    const updated = await context.service.setEnvironmentSkillEnabled({
+      userId: "user",
+      environmentId: environment.id,
+      path: skillPath,
+      enabled: false,
+    });
+    assert.deepEqual(updated, { path: skillPath, enabled: false });
+    const write = context.writes.find(
+      ({ message }) => message.method === "skills/config/write",
+    );
+    assert.deepEqual(write?.message.params, { path: skillPath, enabled: false });
+  } finally {
+    await context.close();
+  }
+});
+
+test("creates an Environment MCP server and reloads every native Thread", async () => {
+  let configured = false;
+  const definition = {
+    url: "https://docs.example.test/mcp",
+    enabled: true,
+    required: false,
+    default_tools_approval_mode: "prompt",
+  };
+  const context = fixture({
+    onRequest(message) {
+      if (message.method === "config/read") {
+        const mcpServers = configured ? { docs: definition } : {};
+        return {
+          id: message.id,
+          result: {
+            config: { mcp_servers: mcpServers },
+            origins: {},
+            layers: [
+              {
+                name: {
+                  type: "user",
+                  file: "/workspace/.sandpi/harnesses/codex/config.toml",
+                  profile: null,
+                },
+                version: "one",
+                config: { mcp_servers: mcpServers },
+              },
+            ],
+          },
+        };
+      }
+      if (message.method === "config/batchWrite") {
+        configured = true;
+        return {
+          id: message.id,
+          result: {
+            status: "ok",
+            version: "two",
+            filePath: "/workspace/.sandpi/harnesses/codex/config.toml",
+            overriddenMetadata: null,
+          },
+        };
+      }
+      if (message.method === "config/mcpServer/reload") {
+        return { id: message.id, result: {} };
+      }
+      if (message.method === "mcpServerStatus/list") {
+        return {
+          id: message.id,
+          result: {
+            data: configured
+              ? [
+                  {
+                    name: "docs",
+                    serverInfo: {
+                      name: "docs-server",
+                      title: "Docs",
+                      version: "1.0.0",
+                    },
+                    tools: { search: { name: "search" } },
+                    resources: [],
+                    resourceTemplates: [],
+                    authStatus: "unsupported",
+                  },
+                ]
+              : [],
+            nextCursor: null,
+          },
+        };
+      }
+      return undefined;
+    },
+  });
+  try {
+    const inventory = await context.service.createEnvironmentMcpServer({
+      userId: "user",
+      environmentId: environment.id,
+      name: "docs",
+      server: {
+        transport: "streamable-http",
+        url: definition.url,
+        args: [],
+        enabled: true,
+        required: false,
+        defaultToolsApprovalMode: "prompt",
+        enabledTools: [],
+        disabledTools: [],
+      },
+    });
+    assert.equal(inventory.servers[0]?.runtimeStatus, "connected");
+    assert.equal(inventory.servers[0]?.managed, true);
+    assert.equal(inventory.servers[0]?.toolCount, 1);
+
+    const batch = context.writes.find(
+      ({ message }) => message.method === "config/batchWrite",
+    );
+    const edits = (batch?.message.params as { edits: Array<Record<string, unknown>> })
+      .edits;
+    assert.ok(
+      edits.some(
+        (edit) =>
+          edit.keyPath === "mcp_servers.docs.url" &&
+          edit.value === definition.url,
+      ),
+    );
+    assert.ok(
+      edits.some(
+        (edit) => edit.keyPath === "mcp_servers.docs.command" && edit.value === null,
+      ),
+    );
+    assert.equal(
+      context.writes.some(
+        ({ message }) => message.method === "config/mcpServer/reload",
+      ),
+      true,
+    );
+  } finally {
+    await context.close();
+  }
+});

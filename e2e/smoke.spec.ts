@@ -831,7 +831,11 @@ test("renders the dedicated live Web IDE with Git state and changed lines", asyn
     revision: `sha256:${"c".repeat(43)}`,
     content: Buffer.from("export const externalChange = true;\n").toString("base64"),
   };
-  await save.click();
+  await expect(save).toBeEnabled();
+  // Use the editor's real keyboard save path here. The conflict response
+  // disables the button synchronously, which can make Playwright retry a
+  // locator click even though the first click already reached the server.
+  await page.keyboard.press("Control+S");
   await expect(page.getByText("This file changed outside the editor.")).toBeVisible();
   await page.getByRole("button", { name: "Use latest" }).click();
   await expect(page.getByText("export const externalChange = true;")).toBeVisible();
