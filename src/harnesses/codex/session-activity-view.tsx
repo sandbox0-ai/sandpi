@@ -2,11 +2,12 @@
 
 import {
   Braces,
+  ChevronRight,
   LoaderCircle,
   SearchX,
   ShieldCheck,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
 
 import {
   CodexCommandActivity,
@@ -19,10 +20,10 @@ import {
 import type { CodexConversationProjection } from "./events";
 import type { CodexRolloutActivityFeed } from "./rollout-activity";
 import {
-  selectCodexSessionActivity,
-  summarizeCodexSessionActivity,
-  type CodexSessionActivityEntry,
+  filterCodexSessionActivityActions,
+  projectCodexSessionActivity,
   type CodexSessionActivityFilter,
+  type CodexSessionActivityItem,
 } from "./session-activity";
 import { getCodexUiCopy } from "./ui";
 import {
@@ -62,37 +63,53 @@ function formatActivityTime(
 }
 
 function ActivityEntry({
-  entry,
+  item,
   language,
   timeZone,
   onOpenFiles,
 }: {
-  entry: CodexSessionActivityEntry;
+  item: CodexSessionActivityItem;
   language: OperationLanguage;
   timeZone: string;
   onOpenFiles: () => void;
 }) {
+  const { entry } = item;
+  const evidence = item.relatedEntries.filter(
+    (related) => related.kind === "rolloutToolCall",
+  );
   const activity =
     entry.kind === "command" ? (
-      <CodexCommandActivity activity={entry} language={language} />
+      <CodexCommandActivity
+        activity={entry}
+        compact
+        evidence={evidence}
+        language={language}
+      />
     ) : entry.kind === "rolloutToolCall" ? (
       <CodexRolloutToolCallActivity
         activity={entry}
         language={language}
+        relatedActivities={evidence}
         timeZone={timeZone}
       />
     ) : entry.kind === "fileChange" ? (
       <CodexFileChangeActivity
         activity={entry}
+        compact
+        evidence={evidence}
         language={language}
         onOpenFiles={onOpenFiles}
       />
     ) : entry.kind === "nativeItem" ? (
-      <CodexNativeItemActivity activity={entry} language={language} />
+      <CodexNativeItemActivity
+        activity={entry}
+        compact
+        language={language}
+      />
     ) : entry.kind === "turnResult" ? (
       <CodexTurnResult result={entry} language={language} />
     ) : (
-      <CodexNativeToolActivity activity={entry} language={language} />
+      <CodexNativeToolActivity activity={entry} compact language={language} />
     );
 
   return (
@@ -115,28 +132,39 @@ export function CodexSessionActivityView({
   onOpenFiles,
 }: CodexSessionActivityViewProps) {
   const ui = getCodexUiCopy(language).conversation;
+  const headingId = useId();
   const [filter, setFilter] = useState<CodexSessionActivityFilter>("all");
-  const summary = useMemo(
-    () => summarizeCodexSessionActivity(projection, rolloutActivity),
+  const presentation = useMemo(
+    () => projectCodexSessionActivity(projection, rolloutActivity),
     [projection, rolloutActivity],
   );
+  const { summary } = presentation;
   const turns = useMemo(
-    () => selectCodexSessionActivity(projection, filter, rolloutActivity),
-    [filter, projection, rolloutActivity],
+    () =>
+      filterCodexSessionActivityActions(
+        presentation.turns,
+        filter,
+      ),
+    [filter, presentation.turns],
   );
 
   return (
-    <div
+    <section
       className="codex-session-activity-view"
-      aria-label={ui.sessionActivity}
+      aria-labelledby={headingId}
     >
       <div className="codex-session-activity-column">
         <header className="codex-session-activity-intro">
           <div>
             <span>{ui.codexNativeActivity}</span>
-            <h2>{ui.sessionActivity}</h2>
-            <p>
-              {ui.sessionActivitySummary(summary.total, summary.external)}
+            <h2 id={headingId}>{ui.sessionActivity}</h2>
+            <p aria-live="polite">
+              {ui.sessionActivitySummary(
+                summary.total,
+                summary.records,
+                summary.external,
+                summary.issues,
+              )}
             </p>
           </div>
           <label>
@@ -150,6 +178,9 @@ export function CodexSessionActivityView({
               }
             >
               <option value="all">{ui.allSessionActivity}</option>
+              <option value="issues">
+                {ui.issueActivity} ({summary.issues})
+              </option>
               <option value="external">
                 {ui.externalActivity} ({summary.external})
               </option>
@@ -170,14 +201,19 @@ export function CodexSessionActivityView({
         </header>
 
         <section className="codex-session-activity-boundary">
-          <Braces size={15} aria-hidden="true" />
-          <div>
-            <strong>{ui.nativeActivityBoundary}</strong>
-            <span>{ui.nativeActivityBoundaryBody}</span>
-            <code title={nativeThreadId}>
-              {nativeThreadId} · r{historyRevision}
-            </code>
-          </div>
+          <details>
+            <summary>
+              <Braces size={13} aria-hidden="true" />
+              <strong>{ui.activitySource}</strong>
+              <ChevronRight size={12} aria-hidden="true" />
+            </summary>
+            <div>
+              <span>{ui.nativeActivityBoundaryBody}</span>
+              <code title={nativeThreadId}>
+                {nativeThreadId} · r{historyRevision}
+              </code>
+            </div>
+          </details>
           <button type="button" onClick={onOpenEnvironmentAudit}>
             <ShieldCheck size={13} aria-hidden="true" />
             {ui.openEnvironmentAudit}
@@ -233,16 +269,25 @@ export function CodexSessionActivityView({
           <div className="codex-session-activity-turns">
             {turns.map((turn) => (
               <section
+                aria-labelledby={`${headingId}-turn-${turn.ordinal}`}
                 className="codex-session-activity-turn"
                 key={turn.turnId}
               >
                 <header>
                   <div>
-                    <span>{ui.activityTurn(turn.ordinal)}</span>
-                    <code title={turn.turnId}>{turn.turnId}</code>
-                    {turn.prompt ? <strong>{turn.prompt}</strong> : null}
+                    <span title={turn.turnId}>
+                      {ui.activityTurn(turn.ordinal)}
+                    </span>
+                    <h3 id={`${headingId}-turn-${turn.ordinal}`}>
+                      {turn.prompt ?? ui.activityTurn(turn.ordinal)}
+                    </h3>
                   </div>
-                  <span>{ui.activityRecords(turn.entries.length)}</span>
+                  <span>
+                    {ui.activityItems(
+                      turn.items.length,
+                      turn.nativeRecordCount,
+                    )}
+                  </span>
                   {turn.turn && turn.turn.startedAt > 0 ? (
                     <time
                       dateTime={unixTimestampToIso(turn.turn.startedAt)}
@@ -261,10 +306,10 @@ export function CodexSessionActivityView({
                   ) : null}
                 </header>
                 <div className="codex-session-activity-records">
-                  {turn.entries.map((entry) => (
+                  {turn.items.map((item) => (
                     <ActivityEntry
-                      entry={entry}
-                      key={entry.id}
+                      item={item}
+                      key={item.entry.id}
                       language={language}
                       timeZone={timeZone}
                       onOpenFiles={onOpenFiles}
@@ -276,6 +321,6 @@ export function CodexSessionActivityView({
           </div>
         )}
       </div>
-    </div>
+    </section>
   );
 }

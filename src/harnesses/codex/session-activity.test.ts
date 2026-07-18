@@ -9,7 +9,9 @@ import {
   projectCodexTimeline,
 } from "./events";
 import {
+  groupCodexSessionActivityEntries,
   selectCodexSessionActivity,
+  selectCodexSessionActivityActions,
   summarizeCodexSessionActivity,
 } from "./session-activity";
 import type {
@@ -204,6 +206,8 @@ function rolloutFeed(
 test("summarizes Codex Session Activity with Codex-owned categories", () => {
   assert.deepEqual(summarizeCodexSessionActivity(projection), {
     total: 9,
+    records: 9,
+    issues: 0,
     external: 4,
     commands: 1,
     files: 1,
@@ -295,6 +299,8 @@ test("merges durable rollout calls without normalizing them into conversation it
 
   assert.deepEqual(summarizeCodexSessionActivity(projection, activity), {
     total: 11,
+    records: 11,
+    issues: 0,
     external: 4,
     commands: 2,
     files: 2,
@@ -322,35 +328,85 @@ test("restores the real 30-call rollout shape alongside its modeled file change"
     },
   ]);
   const fileProjection = projectCodexTimeline(thread);
+  const commands = Array.from({ length: 18 }, (_, index) =>
+    rolloutTool(index, {
+      name: "exec",
+      callType: "custom_tool_call",
+      codeModeTools: ["exec_command"],
+      callPayload: {
+        input:
+          index === 11
+            ? 'const r = await tools.exec_command({"cmd":"command-11","workdir":"/workspace"}); text(`\\nexit=${r.exit_code}`);'
+            : `tools.exec_command({"cmd":"command-${index}","workdir":"/workspace"});`,
+      },
+      outputs:
+        index < 10
+          ? [
+              {
+                outputType: "custom_tool_call_output",
+                createdAt: startedAt + index / 100 + 0.001,
+                nativeStatus: null,
+                payload: { output: `Script running with cell ID ${index}` },
+              },
+            ]
+          : index === 10
+            ? [
+                {
+                  outputType: "custom_tool_call_output",
+                  createdAt: startedAt + index / 100 + 0.001,
+                  nativeStatus: null,
+                  payload: { output: '{"session_id":79113}' },
+                },
+              ]
+            : index === 11
+              ? [
+                  {
+                    outputType: "custom_tool_call_output",
+                    createdAt: startedAt + index / 100 + 0.001,
+                    nativeStatus: null,
+                    payload: { output: "Type error\nexit=1" },
+                  },
+                ]
+              : [],
+    }),
+  );
   const records = [
-    ...Array.from({ length: 18 }, (_, index) =>
-      rolloutTool(index, {
-        name: "exec",
-        callType: "custom_tool_call",
-        codeModeTools: ["exec_command"],
-      }),
-    ),
+    ...commands,
     rolloutTool(18, {
       name: "exec",
       callType: "custom_tool_call",
       codeModeTools: ["apply_patch"],
+      callPayload: {
+        input:
+          'const patch = "*** Begin Patch\\n*** Update File: /workspace/README.md\\n*** End Patch"; tools.apply_patch(patch);',
+      },
     }),
     rolloutTool(19, {
       name: "exec",
       callType: "custom_tool_call",
       codeModeTools: ["write_stdin"],
+      callPayload: {
+        input: 'tools.write_stdin({"session_id":79113,"chars":""});',
+      },
     }),
     ...Array.from({ length: 10 }, (_, index) =>
-      rolloutTool(index + 20, { name: "wait" }),
+      rolloutTool(index + 20, {
+        name: "wait",
+        callPayload: {
+          arguments: JSON.stringify({ cell_id: String(index) }),
+        },
+      }),
     ),
   ];
   const activity = rolloutFeed(records);
 
   assert.deepEqual(summarizeCodexSessionActivity(fileProjection, activity), {
-    total: 31,
+    total: 19,
+    records: 31,
+    issues: 1,
     external: 0,
-    commands: 29,
-    files: 2,
+    commands: 18,
+    files: 1,
     agents: 0,
     system: 0,
   });
@@ -358,6 +414,25 @@ test("restores the real 30-call rollout shape alongside its modeled file change"
     selectCodexSessionActivity(fileProjection, "all", activity)[0]?.entries
       .length,
     31,
+  );
+  const [actionTurn] = selectCodexSessionActivityActions(
+    fileProjection,
+    "all",
+    activity,
+  );
+  assert.equal(actionTurn?.items.length, 19);
+  assert.equal(actionTurn?.nativeRecordCount, 31);
+  assert.equal(
+    actionTurn?.items.reduce(
+      (count, item) => count + item.relatedEntries.length,
+      0,
+    ),
+    12,
+  );
+  assert.equal(
+    selectCodexSessionActivityActions(fileProjection, "issues", activity)[0]
+      ?.items.length,
+    1,
   );
 });
 
@@ -385,6 +460,8 @@ test("categorizes namespaced Codex code-mode tools without cross-harness normali
 
   assert.deepEqual(summarizeCodexSessionActivity(emptyProjection, activity), {
     total: 5,
+    records: 5,
+    issues: 0,
     external: 3,
     commands: 2,
     files: 0,
@@ -419,4 +496,77 @@ test("deduplicates rollout calls only when the same Turn has an exact native id"
       ["turn-other", 1],
     ],
   );
+});
+
+test("does not group a background update without an exact native handle", () => {
+  const parent = rolloutTool(1, {
+    codeModeTools: ["exec_command"],
+    callPayload: { input: 'tools.exec_command({"cmd":"npm run build"});' },
+    outputs: [],
+  });
+  const child = rolloutTool(2, {
+    name: "wait",
+    callPayload: { arguments: '{"cell_id":"unmatched"}' },
+  });
+
+  assert.equal(groupCodexSessionActivityEntries([parent, child]).length, 2);
+});
+
+test("treats a failed modeled command without an exit code as an issue", () => {
+  const failedProjection = projectCodexTimeline(
+    createMockCodexThread("thread-failed-command", [
+      {
+        ...nativeActivityTurn,
+        items: nativeActivityTurn.items.map((item) =>
+          item.type === "commandExecution"
+            ? { ...item, status: "failed", exitCode: null }
+            : item,
+        ),
+      },
+    ]),
+  );
+
+  assert.equal(summarizeCodexSessionActivity(failedProjection).issues, 1);
+  assert.equal(
+    selectCodexSessionActivityActions(failedProjection, "issues")[0]?.items[0]
+      ?.entry.kind,
+    "command",
+  );
+});
+
+test("keeps a nonzero rollout outcome when richer command evidence says exit zero", () => {
+  const conflictingEvidence = rolloutFeed([
+    rolloutTool(1, {
+      name: "exec",
+      callType: "custom_tool_call",
+      codeModeTools: ["exec_command"],
+      callPayload: {
+        input:
+          'const r = await tools.exec_command({"cmd":"git status --short","workdir":"/workspace"}); text(`\\nexit=${r.exit_code}`);',
+      },
+      outputs: [
+        {
+          outputType: "custom_tool_call_output",
+          createdAt: startedAt + 0.011,
+          nativeStatus: null,
+          payload: { output: "Script completed\nOutput:\nexit=1" },
+        },
+      ],
+    }),
+  ]);
+
+  const summary = summarizeCodexSessionActivity(
+    projection,
+    conflictingEvidence,
+  );
+  assert.equal(summary.total, 9);
+  assert.equal(summary.records, 10);
+  assert.equal(summary.issues, 1);
+  const issue = selectCodexSessionActivityActions(
+    projection,
+    "issues",
+    conflictingEvidence,
+  )[0]?.items[0];
+  assert.equal(issue?.entry.kind, "command");
+  assert.equal(issue?.relatedEntries.length, 1);
 });

@@ -23,6 +23,11 @@ import type {
   CodexTurnView,
 } from "./events";
 import type { CodexRolloutToolActivity } from "./rollout-activity";
+import {
+  displayCodexCommand,
+  summarizeCodexRolloutActivity,
+  type CodexRolloutActionKind,
+} from "./rollout-activity-summary";
 import { getCodexUiCopy } from "./ui";
 import type { OperationLanguage } from "@/lib/operation-ui";
 import {
@@ -55,11 +60,6 @@ function formatDuration(milliseconds: number) {
   return milliseconds < 1_000 ? `${milliseconds}ms` : formatElapsed(milliseconds);
 }
 
-function displayCommand(command: string) {
-  const match = command.match(/^\/bin\/(?:ba|z|)sh\s+-lc\s+(["'])([\s\S]*)\1$/);
-  return match?.[2] ?? command;
-}
-
 function outputPreview(output: string) {
   const lines = output.trimEnd().split("\n");
   if (lines.length <= 7) return lines.join("\n");
@@ -74,15 +74,212 @@ function workspacePath(path: string) {
   return path.startsWith("/workspace/") ? path.slice("/workspace/".length) : path;
 }
 
+function failedActivityStatus(status: CodexActivityStatus) {
+  return (
+    status === "failed" ||
+    status === "declined" ||
+    status === "interrupted"
+  );
+}
+
+function effectiveActivityStatus(
+  status: CodexActivityStatus,
+  exitCode: number | null,
+): CodexActivityStatus {
+  return exitCode !== null && exitCode !== 0 ? "failed" : status;
+}
+
+function CompactActivity({
+  status,
+  icon,
+  action,
+  subject,
+  subjectCode = false,
+  external = false,
+  externalLabel = "External",
+  meta,
+  renderDetails,
+  className = "",
+}: {
+  status: CodexActivityStatus;
+  icon: ReactNode;
+  action: string;
+  subject: string;
+  subjectCode?: boolean;
+  external?: boolean;
+  externalLabel?: string;
+  meta?: ReactNode;
+  renderDetails?: () => ReactNode;
+  className?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const summaryContent = (
+    <>
+      <span
+        className={`activity-status status-${status}`}
+        aria-hidden="true"
+      >
+        {status === "running" ? (
+          <span className="activity-spinner" />
+        ) : failedActivityStatus(status) ? (
+          <X size={13} strokeWidth={2.6} />
+        ) : (
+          icon
+        )}
+      </span>
+      <strong>{action}</strong>
+      {subjectCode ? (
+        <code className="codex-compact-activity-subject" title={subject}>
+          {subject}
+        </code>
+      ) : (
+        <span className="codex-compact-activity-subject" title={subject}>
+          {subject}
+        </span>
+      )}
+      {external ? (
+        <span className="codex-activity-boundary is-external">
+          {externalLabel}
+        </span>
+      ) : null}
+      {meta ? <span className="codex-compact-activity-meta">{meta}</span> : null}
+      {renderDetails ? (
+        <ChevronRight
+          className="codex-compact-activity-chevron"
+          size={13}
+          aria-hidden="true"
+        />
+      ) : null}
+    </>
+  );
+
+  if (!renderDetails) {
+    return (
+      <div
+        className={`codex-activity codex-compact-activity status-${status} ${className}`}
+      >
+        <div className="codex-compact-activity-summary">{summaryContent}</div>
+      </div>
+    );
+  }
+  return (
+    <details
+      className={`codex-activity codex-compact-activity status-${status} ${className}`}
+      open={open}
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+    >
+      <summary>{summaryContent}</summary>
+      {open ? (
+        <div className="codex-compact-activity-body">{renderDetails()}</div>
+      ) : null}
+    </details>
+  );
+}
+
 export function CodexCommandActivity({
   activity,
   language,
+  compact = false,
+  evidence = [],
 }: {
   activity: CodexCommandActivityView;
   language: OperationLanguage;
+  compact?: boolean;
+  evidence?: CodexRolloutToolActivity[];
 }) {
   const ui = getCodexUiCopy(language).conversation;
-  const output = outputPreview(activity.output);
+  const evidenceSummaries = evidence.map(summarizeCodexRolloutActivity);
+  const evidenceExitCode =
+    evidenceSummaries.find(
+      (summary) => summary.exitCode !== null && summary.exitCode !== 0,
+    )?.exitCode ?? null;
+  const exitCode = evidenceExitCode ?? activity.exitCode;
+  const output = outputPreview(
+    activity.output ||
+      [...evidenceSummaries].reverse().find((summary) => summary.output)
+        ?.output ||
+      "",
+  );
+  if (compact) {
+    const status = effectiveActivityStatus(
+      evidence.some((item) => item.status === "failed")
+        ? "failed"
+        : activity.status,
+      exitCode,
+    );
+    const backgroundUpdates = evidenceSummaries.filter(
+      (summary) => summary.followsBackgroundHandle,
+    ).length;
+    const hasDetails = Boolean(activity.cwd || output || evidence.length > 0);
+    return (
+      <article className="message message-codex-activity">
+        <CompactActivity
+          status={status}
+          icon={<Wrench size={13} />}
+          action={ui.commandStatus(
+            status,
+            activity.exploration,
+            activity.waitingForProcess,
+          )}
+          subject={displayCodexCommand(activity.command)}
+          subjectCode
+          meta={
+            <>
+              {exitCode !== null && exitCode !== 0 ? (
+                <b className="codex-activity-issue">
+                  {ui.exitCode(exitCode)}
+                </b>
+              ) : null}
+              {backgroundUpdates > 0 ? (
+                <span>{ui.backgroundUpdates(backgroundUpdates)}</span>
+              ) : null}
+              {activity.durationMs !== null ? (
+                <span>{formatDuration(activity.durationMs)}</span>
+              ) : null}
+            </>
+          }
+          renderDetails={
+            hasDetails
+              ? () => (
+                  <>
+                    {activity.cwd ? (
+                      <p className="codex-activity-context">
+                        <span>{ui.workingDirectory}</span>
+                        <code>{activity.cwd}</code>
+                      </p>
+                    ) : null}
+                    {output ? (
+                      <pre
+                        className="codex-command-output"
+                        tabIndex={0}
+                        aria-label={ui.activityOutput}
+                        aria-live={
+                          activity.status === "running" ? "polite" : undefined
+                        }
+                      >
+                        <code>{output}</code>
+                      </pre>
+                    ) : null}
+                    {activity.outputTruncated ? (
+                      <small className="codex-output-note">
+                        {ui.outputTruncated}
+                      </small>
+                    ) : null}
+                    {evidence.length > 0 ? (
+                      <CodexRolloutEvidenceDetails
+                        activities={evidence}
+                        label={displayCodexCommand(activity.command)}
+                        language={language}
+                      />
+                    ) : null}
+                  </>
+                )
+              : undefined
+          }
+        />
+      </article>
+    );
+  }
   return (
     <article className="message message-codex-activity">
       <div className={`codex-activity codex-command status-${activity.status}`}>
@@ -107,11 +304,13 @@ export function CodexCommandActivity({
           ) : null}
         </div>
         <code className="codex-command-line" title={activity.command}>
-          {displayCommand(activity.command)}
+          {displayCodexCommand(activity.command)}
         </code>
         {output ? (
           <pre
             className="codex-command-output"
+            tabIndex={0}
+            aria-label={ui.activityOutput}
             aria-live={activity.status === "running" ? "polite" : undefined}
           >
             <code>{output}</code>
@@ -129,10 +328,14 @@ export function CodexFileChangeActivity({
   activity,
   language,
   onOpenFiles,
+  compact = false,
+  evidence = [],
 }: {
   activity: CodexFileChangeActivityView;
   language: OperationLanguage;
   onOpenFiles: () => void;
+  compact?: boolean;
+  evidence?: CodexRolloutToolActivity[];
 }) {
   const ui = getCodexUiCopy(language).conversation;
   const totalAdditions = activity.changes.reduce(
@@ -143,6 +346,94 @@ export function CodexFileChangeActivity({
     (total, change) => total + change.deletions,
     0,
   );
+  if (compact) {
+    const evidenceSummaries = evidence.map(summarizeCodexRolloutActivity);
+    const evidenceExitCode =
+      evidenceSummaries.find(
+        (summary) => summary.exitCode !== null && summary.exitCode !== 0,
+      )?.exitCode ?? null;
+    const status = effectiveActivityStatus(
+      evidence.some((item) => item.status === "failed")
+        ? "failed"
+        : activity.status,
+      evidenceExitCode,
+    );
+    const paths = activity.changes.map((change) => workspacePath(change.file));
+    const subject = [
+      ...paths.slice(0, 2),
+      ...(paths.length > 2 ? [`+${paths.length - 2}`] : []),
+    ].join(", ");
+    return (
+      <article className="message message-codex-activity">
+        <CompactActivity
+          status={status}
+          icon={<FilePenLine size={13} />}
+          action={ui.fileStatus(status, activity.changes.length)}
+          subject={subject}
+          subjectCode
+          meta={
+            <>
+              {evidenceExitCode !== null ? (
+                <b className="codex-activity-issue">
+                  {ui.exitCode(evidenceExitCode)}
+                </b>
+              ) : null}
+              <span className="codex-diff-totals">
+                <b>+{totalAdditions}</b>
+                <i>-{totalDeletions}</i>
+              </span>
+            </>
+          }
+          renderDetails={() => (
+            <>
+              <ul className="codex-file-change-list">
+                {activity.changes.slice(0, 12).map((change) => (
+                  <li key={`${change.file}:${change.movePath ?? ""}`}>
+                    <FilePenLine size={13} aria-hidden="true" />
+                    <span className="codex-file-action">
+                      {ui.fileAction(change.kind)}
+                    </span>
+                    <code title={change.file}>
+                      {workspacePath(change.file)}
+                      {change.movePath
+                        ? ` → ${workspacePath(change.movePath)}`
+                        : ""}
+                    </code>
+                    <span className="codex-file-stats">
+                      <b>+{change.additions}</b>
+                      <i>-{change.deletions}</i>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              {activity.changes.length > 12 ? (
+                <small className="codex-output-note">
+                  +{activity.changes.length - 12} files
+                </small>
+              ) : null}
+              <button
+                type="button"
+                className="codex-open-files"
+                onClick={onOpenFiles}
+              >
+                {ui.openChangedFiles}
+              </button>
+              {evidence.length > 0 ? (
+                <CodexRolloutEvidenceDetails
+                  activities={evidence}
+                  label={ui.fileStatus(
+                    status,
+                    activity.changes.length,
+                  )}
+                  language={language}
+                />
+              ) : null}
+            </>
+          )}
+        />
+      </article>
+    );
+  }
   return (
     <article className="message message-codex-activity">
       <div className={`codex-activity codex-file-change status-${activity.status}`}>
@@ -189,11 +480,25 @@ export function CodexFileChangeActivity({
 export function CodexNativeItemActivity({
   activity,
   language,
+  compact = false,
 }: {
   activity: CodexNativeItemActivityView;
   language: OperationLanguage;
+  compact?: boolean;
 }) {
   const ui = getCodexUiCopy(language).conversation;
+  if (compact) {
+    return (
+      <article className="message message-codex-activity">
+        <CompactActivity
+          status={activity.status}
+          icon={<Braces size={13} strokeWidth={2.2} />}
+          action={ui.nativeItemStatus(activity.itemType, activity.status)}
+          subject={activity.detail ?? activity.itemType}
+        />
+      </article>
+    );
+  }
   return (
     <article className="message message-codex-activity">
       <div className={`codex-activity codex-native-item status-${activity.status}`}>
@@ -268,7 +573,7 @@ function boundedNativeToolValue(
     return preview;
   }
 
-  const preview: Record<string, unknown> = {};
+  const preview = Object.create(null) as Record<string, unknown>;
   const keys = Object.keys(value);
   for (
     let index = 0;
@@ -407,12 +712,92 @@ function nativeToolPayloads(
   ];
 }
 
+function NativePayloadDetails({
+  payloads,
+  label,
+  language,
+}: {
+  payloads: Array<{ label: string; value: unknown }>;
+  label: string;
+  language: OperationLanguage;
+}) {
+  const ui = getCodexUiCopy(language).conversation;
+  const [open, setOpen] = useState(false);
+  if (payloads.length === 0) return null;
+  return (
+    <details
+      className="codex-native-tool-details"
+      open={open}
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+    >
+      <summary aria-label={`${ui.technicalDetails}: ${label}`}>
+        <Braces size={12} aria-hidden="true" />
+        <span>{ui.technicalDetails}</span>
+        <ChevronRight size={12} aria-hidden="true" />
+      </summary>
+      {open ? (
+        <div>
+          {payloads.map((payload, index) => (
+            <section key={`${payload.label}:${index}`}>
+              <strong>{payload.label}</strong>
+              <pre
+                aria-label={`${ui.technicalDetails}: ${payload.label}`}
+                tabIndex={0}
+              >
+                {boundedNativeToolPayload(payload.value)}
+              </pre>
+            </section>
+          ))}
+        </div>
+      ) : null}
+    </details>
+  );
+}
+
+function CodexRolloutEvidenceDetails({
+  activities,
+  label,
+  language,
+}: {
+  activities: CodexRolloutToolActivity[];
+  label: string;
+  language: OperationLanguage;
+}) {
+  const ui = getCodexUiCopy(language).conversation;
+  return (
+    <NativePayloadDetails
+      language={language}
+      label={label}
+      payloads={activities.map((activity, index) => ({
+        label: [
+          ui.nativeRecord(index + 1, activities.length),
+          activity.codeModeTools.join(" · ") || activity.name,
+        ].join(" · "),
+        value: {
+          callId: activity.callId,
+          callType: activity.callType,
+          nativeStatus: activity.nativeStatus,
+          createdAt: unixTimestampToIso(activity.createdAt),
+          completedAt:
+            activity.completedAt === null
+              ? null
+              : unixTimestampToIso(activity.completedAt),
+          call: activity.callPayload,
+          outputs: activity.outputs,
+        },
+      }))}
+    />
+  );
+}
+
 export function CodexNativeToolActivity({
   activity,
   language,
+  compact = false,
 }: {
   activity: CodexNativeToolActivityView;
   language: OperationLanguage;
+  compact?: boolean;
 }) {
   const ui = getCodexUiCopy(language).conversation;
   const payloads = nativeToolPayloads(activity);
@@ -421,6 +806,44 @@ export function CodexNativeToolActivity({
     activity.kind === "dynamicToolCall" ||
     activity.kind === "webSearch" ||
     activity.kind === "imageGeneration";
+  const subject = nativeToolSubject(activity);
+
+  if (compact) {
+    const status =
+      (activity.kind === "mcpToolCall" && activity.error) ||
+      (activity.kind === "dynamicToolCall" && activity.success === false)
+        ? "failed"
+        : activity.status;
+    return (
+      <article className="message message-codex-activity">
+        <CompactActivity
+          status={status}
+          icon={nativeToolIcon(activity)}
+          action={ui.nativeAction(activity.kind, status)}
+          subject={subject || activity.kind}
+          external={external}
+          externalLabel={ui.externalInteraction}
+          meta={
+            "durationMs" in activity && activity.durationMs !== null ? (
+              <span>{formatDuration(activity.durationMs)}</span>
+            ) : null
+          }
+          renderDetails={
+            payloads.length > 0
+              ? () => (
+                  <NativePayloadDetails
+                    payloads={payloads}
+                    label={subject || activity.kind}
+                    language={language}
+                  />
+                )
+              : undefined
+          }
+          className="codex-native-tool"
+        />
+      </article>
+    );
+  }
 
   return (
     <article className="message message-codex-activity">
@@ -451,9 +874,9 @@ export function CodexNativeToolActivity({
           ) : null}
           <code className="codex-native-item-type">{activity.kind}</code>
         </div>
-        {nativeToolSubject(activity) ? (
+        {subject ? (
           <p className="codex-native-item-detail">
-            {nativeToolSubject(activity)}
+            {subject}
           </p>
         ) : null}
         {payloads.length > 0 ? (
@@ -466,7 +889,12 @@ export function CodexNativeToolActivity({
               {payloads.map((payload) => (
                 <section key={payload.label}>
                   <strong>{payload.label}</strong>
-                  <pre>{boundedNativeToolPayload(payload.value)}</pre>
+                  <pre
+                    aria-label={`${ui.nativePayload}: ${payload.label}`}
+                    tabIndex={0}
+                  >
+                    {boundedNativeToolPayload(payload.value)}
+                  </pre>
                 </section>
               ))}
             </div>
@@ -481,40 +909,55 @@ export function CodexRolloutToolCallActivity({
   activity,
   language,
   timeZone,
+  relatedActivities = [],
 }: {
   activity: CodexRolloutToolActivity;
   language: OperationLanguage;
   timeZone: string;
+  relatedActivities?: CodexRolloutToolActivity[];
 }) {
   const ui = getCodexUiCopy(language).conversation;
+  const activities = [activity, ...relatedActivities];
+  const descriptions = activities.map(summarizeCodexRolloutActivity);
+  const description = descriptions[0]!;
+  const relatedFailure = activities.find(
+    (item, index) =>
+      item.status === "failed" ||
+      ((descriptions[index]?.exitCode ?? 0) !== 0),
+  );
+  const exitCode =
+    descriptions.find((item) => item.exitCode !== null && item.exitCode !== 0)
+      ?.exitCode ??
+    [...descriptions].reverse().find((item) => item.exitCode !== null)
+      ?.exitCode ??
+    null;
+  const status = effectiveActivityStatus(
+    relatedFailure ? "failed" : activity.status,
+    exitCode,
+  );
+  const readableOutput = outputPreview(
+    [...descriptions].reverse().find((item) => item.output)?.output ?? "",
+  );
+  const completedAt = Math.max(
+    ...activities
+      .map((item) => item.completedAt)
+      .filter((value): value is number => value !== null),
+  );
+  const durationMs = Number.isFinite(completedAt)
+    ? Math.max(0, Math.round((completedAt - activity.createdAt) * 1_000))
+    : activity.durationMs;
   const subject =
-    activity.codeModeTools.length > 0
-      ? activity.codeModeTools.join(" · ")
-      : [activity.namespace, activity.name].filter(Boolean).join(" · ");
-  const payloads = [
-    { label: "call", value: activity.callPayload },
-    ...activity.outputs.map((output, index) => ({
-      label: [
-        `output ${index + 1}`,
-        output.outputType,
-        output.createdAt === null
-          ? null
-          : formatUnixTimestamp(
-              output.createdAt,
-              language === "zh-CN" ? "zh-CN" : "en-US",
-              timeZone,
-              {
-                hour: "2-digit",
-                minute: "2-digit",
-                second: "2-digit",
-              },
-            ),
-      ]
-        .filter(Boolean)
-        .join(" · "),
-      value: output.payload,
-    })),
-  ];
+    description.kind === "fileChange"
+      ? description.filePaths
+          .slice(0, 2)
+          .map(workspacePath)
+          .concat(
+            description.filePaths.length > 2
+              ? [`+${description.filePaths.length - 2}`]
+              : [],
+          )
+          .join(", ") || description.subject
+      : description.subject;
   const occurredAt = formatUnixTimestamp(
     activity.createdAt,
     language === "zh-CN" ? "zh-CN" : "en-US",
@@ -525,67 +968,89 @@ export function CodexRolloutToolCallActivity({
       second: "2-digit",
     },
   );
+  const icon =
+    description.kind === "fileChange" ? (
+      <FilePenLine size={13} />
+    ) : description.kind === "web" ? (
+      <Search size={13} />
+    ) : description.kind === "integration" ? (
+      <Plug size={13} />
+    ) : description.kind === "agent" ? (
+      <UsersRound size={13} />
+    ) : description.kind === "image" ? (
+      <ImageIcon size={13} />
+    ) : (
+      <Wrench size={13} />
+    );
 
   return (
     <article className="message message-codex-activity">
-      <div
-        className={`codex-activity codex-native-tool status-${activity.status}`}
-      >
-        <div className="codex-activity-heading">
-          <span
-            className={`activity-status status-${activity.status}`}
-            aria-hidden="true"
-          >
-            {activity.status === "running" ? (
-              activityIcon(activity.status)
-            ) : activity.status === "failed" ? (
-              <X size={13} strokeWidth={2.6} />
-            ) : (
-              <Wrench size={13} />
-            )}
-          </span>
-          <strong>
-            {ui.nativeItemStatus("rolloutToolCall", activity.status)}
-          </strong>
-          <span className="codex-activity-boundary">
-            {ui.persistedRollout}
-          </span>
-          {activity.durationMs !== null ? (
-            <span className="activity-duration">
-              {formatDuration(activity.durationMs)}
-            </span>
-          ) : null}
-          <time
-            className="codex-rollout-time"
-            dateTime={unixTimestampToIso(activity.createdAt)}
-            title={unixTimestampToIso(activity.createdAt)}
-          >
-            {occurredAt}
-          </time>
-          <code className="codex-native-item-type">{activity.callType}</code>
-        </div>
-        <p className="codex-native-item-detail">{subject}</p>
-        <code className="codex-rollout-call-id" title={activity.callId}>
-          {activity.callId}
-        </code>
-        <details className="codex-native-tool-details">
-          <summary>
-            <Braces size={12} aria-hidden="true" />
-            {ui.nativePayload}
-          </summary>
-          <div>
-            {payloads.map((payload) => (
-              <section key={payload.label}>
-                <strong>{payload.label}</strong>
-                <pre>{boundedNativeToolPayload(payload.value)}</pre>
-              </section>
-            ))}
-          </div>
-        </details>
-        {activity.payloadTruncated ? (
-          <small className="codex-output-note">{ui.outputTruncated}</small>
-        ) : null}
-      </div>
+      <CompactActivity
+        className="codex-native-tool codex-rollout-tool"
+        status={status}
+        icon={icon}
+        action={ui.rolloutAction(
+          description.kind as CodexRolloutActionKind,
+          status,
+          description.filePaths.length,
+        )}
+        subject={subject}
+        subjectCode={
+          description.kind === "command" ||
+          description.kind === "fileChange"
+        }
+        external={description.external}
+        externalLabel={ui.externalInteraction}
+        meta={
+          <>
+            {exitCode !== null && exitCode !== 0 ? (
+              <b className="codex-activity-issue">
+                {ui.exitCode(exitCode)}
+              </b>
+            ) : null}
+            {relatedActivities.length > 0 ? (
+              <span>{ui.backgroundUpdates(relatedActivities.length)}</span>
+            ) : null}
+            {durationMs !== null ? <span>{formatDuration(durationMs)}</span> : null}
+            <time
+              className="codex-rollout-time"
+              dateTime={unixTimestampToIso(activity.createdAt)}
+              title={unixTimestampToIso(activity.createdAt)}
+            >
+              {occurredAt}
+            </time>
+          </>
+        }
+        renderDetails={() => (
+          <>
+            {description.detail ? (
+              <p className="codex-activity-context">
+                <span>
+                  {description.cwd ? ui.workingDirectory : ui.activityDetail}
+                </span>
+                <code>{description.detail}</code>
+              </p>
+            ) : null}
+            {readableOutput ? (
+              <pre
+                className="codex-command-output"
+                tabIndex={0}
+                aria-label={ui.activityOutput}
+              >
+                <code>{readableOutput}</code>
+              </pre>
+            ) : null}
+            <CodexRolloutEvidenceDetails
+              activities={activities}
+              label={subject}
+              language={language}
+            />
+            {activities.some((item) => item.payloadTruncated) ? (
+              <small className="codex-output-note">{ui.outputTruncated}</small>
+            ) : null}
+          </>
+        )}
+      />
     </article>
   );
 }

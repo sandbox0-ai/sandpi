@@ -348,7 +348,7 @@ test("keeps Codex Session Activity native and Environment Audit separate", async
               output: [
                 {
                   type: "input_text",
-                  text: "Script completed\nOutput:\nclean\n",
+                  text: "Script running with cell ID 6\nOutput:\nclean\n",
                 },
               ],
             },
@@ -581,36 +581,54 @@ test("keeps Codex Session Activity native and Environment Audit separate", async
     activityView.getByRole("heading", { name: "Codex Session Activity" }),
   ).toBeVisible();
   await expect(
+    activityView.getByRole("heading", {
+      name: "Check the release and repository.",
+    }),
+  ).toBeVisible();
+  await expect(
+    activityView.getByText(nativeThreadId, { exact: false }),
+  ).toBeHidden();
+  await activityView
+    .locator(".codex-session-activity-boundary summary")
+    .click();
+  await expect(
     activityView.getByText(nativeThreadId, { exact: false }),
   ).toBeVisible();
   await expect(
-    activityView.getByText(nativeTurnId, { exact: true }),
-  ).toBeVisible();
-  await expect(
     activityView.locator(".codex-session-activity-intro"),
-  ).toContainText("5 records");
+  ).toContainText("3 actions · 5 native records");
   await expect(
     activityView.locator(".codex-session-activity-turn > header"),
-  ).toContainText("5 records");
-  const commandActivity = activityView.locator(".codex-command-line", {
-    hasText: "git status --short",
-  });
+  ).toContainText("3 actions · 5 records");
+  const commandActivity = activityView
+    .locator(".codex-compact-activity")
+    .filter({ hasText: "git status --short" });
   await expect(commandActivity).toBeVisible();
-  const rolloutActivity = activityView
-    .locator(".codex-native-tool")
-    .filter({ hasText: "exec_command" });
-  await expect(rolloutActivity).toContainText("call-e2e-rollout-exec");
-  await expect(rolloutActivity.locator("time")).toHaveAttribute(
-    "dateTime",
-    new Date((startedAt + 1) * 1_000).toISOString(),
+  await expect(commandActivity.locator(":scope > summary")).toHaveAccessibleName(
+    /Ran.*git status --short.*1 update/,
   );
-  await rolloutActivity.locator("summary").click();
-  await expect(rolloutActivity).toContainText("Script completed");
+  await expect(commandActivity).not.toContainText(
+    "call-e2e-rollout-exec",
+  );
+  await commandActivity.locator(":scope > summary").click();
+  await expect(commandActivity).toContainText("1 update");
+  await commandActivity
+    .locator(".codex-native-tool-details > summary")
+    .click();
+  await expect(
+    commandActivity.locator(".codex-native-tool-details pre").first(),
+  ).toHaveAttribute("tabindex", "0");
+  await expect(commandActivity).toContainText("call-e2e-rollout-exec");
+  await expect(commandActivity).toContainText("Script completed");
   const mcpActivity = activityView
     .locator(".codex-native-tool")
     .filter({ hasText: "GitHub · get_release" });
   await expect(mcpActivity).toBeVisible();
-  await mcpActivity.locator("summary").click();
+  await expect(mcpActivity.locator(":scope > summary")).toHaveAccessibleName(
+    /Called.*GitHub.*get_release.*External/,
+  );
+  await mcpActivity.locator(":scope > summary").click();
+  await mcpActivity.locator(".codex-native-tool-details > summary").click();
   await expect(mcpActivity).toContainText('"repo": "sandpi"');
 
   await activityView

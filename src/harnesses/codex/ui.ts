@@ -1,5 +1,6 @@
 import type { OperationLanguage } from "@/lib/operation-ui";
 import type { SessionStatus } from "@/lib/types";
+import type { CodexRolloutActionKind } from "./rollout-activity-summary";
 
 const copy = {
   en: {
@@ -22,16 +23,29 @@ const copy = {
       activity: "Activity",
       sessionActivity: "Codex Session Activity",
       codexNativeActivity: "Harness-native record",
-      sessionActivitySummary: (count: number, external: number) =>
-        `${count} ${count === 1 ? "record" : "records"} · ${external} external or integration ${external === 1 ? "interaction" : "interactions"}`,
+      sessionActivitySummary: (
+        actions: number,
+        records: number,
+        external: number,
+        issues: number,
+      ) =>
+        [
+          `${actions} ${actions === 1 ? "action" : "actions"}`,
+          `${records} native ${records === 1 ? "record" : "records"}`,
+          `${external} external`,
+          ...(issues > 0
+            ? [`${issues} ${issues === 1 ? "issue" : "issues"}`]
+            : []),
+        ].join(" · "),
       sessionActivityFilter: "Filter Codex Session Activity",
       allSessionActivity: "All Codex activity",
+      issueActivity: "Issues",
       externalActivity: "External & integrations",
       commandActivity: "Commands",
       fileActivity: "File changes",
       agentActivity: "Agent collaboration",
       systemActivity: "Codex system",
-      nativeActivityBoundary: "Native Codex Thread activity",
+      activitySource: "How this activity is sourced",
       nativeActivityBoundaryBody:
         "Attributed by native Thread and Turn IDs. Conversation items come from app-server; durable tool calls are paired from the same Thread rollout with native timestamps. This is an execution record, not signed audit. Environment network evidence stays separate and is not joined by timestamp.",
       openEnvironmentAudit: "Open Environment Audit",
@@ -41,12 +55,110 @@ const copy = {
       sessionActivityEmptyBody:
         "Tool execution appears here when it is present in the native Codex Thread or its rollout.",
       activityTurn: (index: number) => `Turn ${index}`,
-      activityRecords: (count: number) =>
-        `${count} ${count === 1 ? "record" : "records"}`,
+      activityItems: (actions: number, records: number) =>
+        `${actions} ${actions === 1 ? "action" : "actions"} · ${records} ${records === 1 ? "record" : "records"}`,
       externalInteraction: "External",
       agentInteraction: "Agent",
-      persistedRollout: "Durable rollout",
       nativePayload: "Native details",
+      technicalDetails: "Technical details",
+      nativeRecord: (index: number, total: number) =>
+        total === 1 ? "Native record" : `Native record ${index} of ${total}`,
+      exitCode: (code: number) => `exit ${code}`,
+      workingDirectory: "Working directory",
+      activityDetail: "Detail",
+      activityOutput: "Tool output",
+      backgroundUpdates: (count: number) =>
+        `${count} ${count === 1 ? "update" : "updates"}`,
+      rolloutAction: (
+        kind: CodexRolloutActionKind,
+        status: "running" | "completed" | "failed" | "declined" | "interrupted",
+        fileCount: number,
+      ) => {
+        if (kind === "command") {
+          return status === "running"
+            ? "Running"
+            : status === "failed"
+              ? "Command failed"
+              : "Ran";
+        }
+        if (kind === "fileChange") {
+          return status === "running"
+            ? `Editing ${fileCount} ${fileCount === 1 ? "file" : "files"}`
+            : status === "failed"
+              ? "File edit failed"
+              : `Edited ${fileCount} ${fileCount === 1 ? "file" : "files"}`;
+        }
+        if (kind === "backgroundWait") {
+          return status === "running"
+            ? "Waiting for background task"
+            : status === "failed"
+              ? "Background wait failed"
+              : "Waited for background task";
+        }
+        if (kind === "backgroundInput") {
+          return status === "failed" ? "Input failed" : "Sent input";
+        }
+        if (kind === "backgroundCheck") {
+          return status === "running"
+            ? "Checking background task"
+            : status === "failed"
+              ? "Background check failed"
+              : "Checked background task";
+        }
+        if (kind === "web") {
+          return status === "running"
+            ? "Searching the web"
+            : status === "failed"
+              ? "Web interaction failed"
+              : "Searched the web";
+        }
+        if (kind === "integration") {
+          return status === "running"
+            ? "Calling integration"
+            : status === "failed"
+              ? "Integration failed"
+              : "Called integration";
+        }
+        if (kind === "agent") {
+          return status === "running"
+            ? "Working with agent"
+            : status === "failed"
+              ? "Agent interaction failed"
+              : "Worked with agent";
+        }
+        if (kind === "image") {
+          return status === "running"
+            ? "Generating image"
+            : status === "failed"
+              ? "Image generation failed"
+              : "Generated image";
+        }
+        return status === "running"
+          ? "Running tool"
+          : status === "failed"
+            ? "Tool call failed"
+            : "Ran tool";
+      },
+      nativeAction: (
+        kind: string,
+        status: "running" | "completed" | "failed" | "declined" | "interrupted",
+      ) => {
+        const label =
+          kind === "webSearch"
+            ? "Searched the web"
+            : kind === "imageGeneration"
+              ? "Generated image"
+              : kind === "collabAgentToolCall"
+                ? "Delegated"
+                : kind === "subAgentActivity"
+                  ? "Agent update"
+                  : "Called";
+        return status === "running"
+          ? label.replace(/ed$/, "ing")
+          : status === "completed"
+            ? label
+            : `${label} — failed`;
+      },
       loadingPersistedActivity: "Loading durable Codex tool activity…",
       rolloutActivityIssue: "Persisted tool activity is incomplete",
       closeInspector: "Close inspector",
@@ -244,16 +356,27 @@ const copy = {
       activity: "活动记录",
       sessionActivity: "Codex Session 活动",
       codexNativeActivity: "Harness 原生记录",
-      sessionActivitySummary: (count: number, external: number) =>
-        `${count} 条记录 · ${external} 条外部或集成交互`,
+      sessionActivitySummary: (
+        actions: number,
+        records: number,
+        external: number,
+        issues: number,
+      ) =>
+        [
+          `${actions} 个动作`,
+          `${records} 条原生记录`,
+          `${external} 个外部交互`,
+          ...(issues > 0 ? [`${issues} 个问题`] : []),
+        ].join(" · "),
       sessionActivityFilter: "筛选 Codex Session 活动",
       allSessionActivity: "全部 Codex 活动",
+      issueActivity: "问题",
       externalActivity: "外部与集成",
       commandActivity: "命令",
       fileActivity: "文件修改",
       agentActivity: "Agent 协作",
       systemActivity: "Codex 系统",
-      nativeActivityBoundary: "Codex 原生 Thread 活动",
+      activitySource: "活动记录来源",
       nativeActivityBoundaryBody:
         "通过原生 Thread 与 Turn ID 归属。对话内容来自 app-server；持久工具调用从同一 Thread 的 rollout 按原生时间戳配对。这是执行记录，不是签名审计；Environment 网络证据单独展示，不按时间戳关联。",
       openEnvironmentAudit: "打开 Environment 审计",
@@ -263,11 +386,109 @@ const copy = {
       sessionActivityEmptyBody:
         "原生 Codex Thread 或其 rollout 中出现工具执行后，会在这里显示。",
       activityTurn: (index: number) => `Turn ${index}`,
-      activityRecords: (count: number) => `${count} 条记录`,
+      activityItems: (actions: number, records: number) =>
+        `${actions} 个动作 · ${records} 条记录`,
       externalInteraction: "外部",
       agentInteraction: "Agent",
-      persistedRollout: "持久 Rollout",
       nativePayload: "原生详情",
+      technicalDetails: "技术详情",
+      nativeRecord: (index: number, total: number) =>
+        total === 1 ? "原生记录" : `原生记录 ${index}/${total}`,
+      exitCode: (code: number) => `退出码 ${code}`,
+      workingDirectory: "工作目录",
+      activityDetail: "详情",
+      activityOutput: "工具输出",
+      backgroundUpdates: (count: number) => `${count} 次更新`,
+      rolloutAction: (
+        kind: CodexRolloutActionKind,
+        status: "running" | "completed" | "failed" | "declined" | "interrupted",
+        fileCount: number,
+      ) => {
+        if (kind === "command") {
+          return status === "running"
+            ? "正在运行"
+            : status === "failed"
+              ? "命令失败"
+              : "运行";
+        }
+        if (kind === "fileChange") {
+          return status === "running"
+            ? `正在编辑 ${fileCount} 个文件`
+            : status === "failed"
+              ? "文件编辑失败"
+              : `编辑 ${fileCount} 个文件`;
+        }
+        if (kind === "backgroundWait") {
+          return status === "running"
+            ? "正在等待后台任务"
+            : status === "failed"
+              ? "后台等待失败"
+              : "等待后台任务";
+        }
+        if (kind === "backgroundInput") {
+          return status === "failed" ? "输入失败" : "发送输入";
+        }
+        if (kind === "backgroundCheck") {
+          return status === "running"
+            ? "正在检查后台任务"
+            : status === "failed"
+              ? "后台检查失败"
+              : "检查后台任务";
+        }
+        if (kind === "web") {
+          return status === "running"
+            ? "正在访问网页"
+            : status === "failed"
+              ? "网页交互失败"
+              : "访问网页";
+        }
+        if (kind === "integration") {
+          return status === "running"
+            ? "正在调用集成"
+            : status === "failed"
+              ? "集成调用失败"
+              : "调用集成";
+        }
+        if (kind === "agent") {
+          return status === "running"
+            ? "正在与 Agent 协作"
+            : status === "failed"
+              ? "Agent 协作失败"
+              : "与 Agent 协作";
+        }
+        if (kind === "image") {
+          return status === "running"
+            ? "正在生成图片"
+            : status === "failed"
+              ? "图片生成失败"
+              : "生成图片";
+        }
+        return status === "running"
+          ? "正在运行工具"
+          : status === "failed"
+            ? "工具调用失败"
+            : "运行工具";
+      },
+      nativeAction: (
+        kind: string,
+        status: "running" | "completed" | "failed" | "declined" | "interrupted",
+      ) => {
+        const label =
+          kind === "webSearch"
+            ? "访问网页"
+            : kind === "imageGeneration"
+              ? "生成图片"
+              : kind === "collabAgentToolCall"
+                ? "委派 Agent"
+                : kind === "subAgentActivity"
+                  ? "Agent 更新"
+                  : "调用";
+        return status === "running"
+          ? `正在${label}`
+          : status === "completed"
+            ? label
+            : `${label}失败`;
+      },
       loadingPersistedActivity: "正在加载持久 Codex 工具活动…",
       rolloutActivityIssue: "持久工具活动记录不完整",
       closeInspector: "关闭检查器",

@@ -125,6 +125,16 @@ parseable, the Activity surface shows the source error and any safe partial
 records while the conversation remains usable. The shared Inspector hosts the
 harness-owned renderer; it does not define a cross-harness Activity contract.
 
+The Activity UI projects those native records into a compact, readable action
+layer: concrete commands, changed paths, integration targets and explicit
+outcomes are primary, while call ids, native types and payloads remain available
+as technical evidence. Background waits or terminal updates are attached only
+when Codex provides an exact cell or session handle. A richer app-server
+command or file-change item replaces a rollout duplicate only when its semantic
+signature is unique within the Turn; neither grouping rule relies on timestamp
+proximity. The UI reports both logical action count and retained native-record
+count so progressive disclosure never hides evidence.
+
 External interactions preserve the same separation. Codex-native MCP, dynamic
 tool and web-search activity describes the semantic tool execution in Session
 Activity, while Sandbox0 network events remain signed Environment Audit
