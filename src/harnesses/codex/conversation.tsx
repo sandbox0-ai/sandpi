@@ -9,7 +9,6 @@ import {
   Copy,
   Files,
   GitFork,
-  ListTree,
   LoaderCircle,
   Menu,
   PanelLeftOpen,
@@ -30,7 +29,7 @@ import {
   type UIEvent,
 } from "react";
 
-import type { InspectorTab } from "@/components/inspector";
+import { Inspector, type InspectorTab } from "@/components/inspector";
 import { MarkdownContent } from "@/components/markdown-content";
 import { SessionActionsMenu } from "@/components/session-actions-menu";
 import {
@@ -92,11 +91,13 @@ interface ConversationProps {
   environment: Environment;
   session: CodexSession;
   inspectorOpen: boolean;
+  inspectorTab: InspectorTab;
   terminalOpen: boolean;
   onToggleSidebar: () => void;
   onToggleInspector: () => void;
+  onInspectorTabChange: (tab: InspectorTab) => void;
   onToggleTerminal: () => void;
-  onOpenSettings: () => void;
+  onOpenSettings: (tab?: "general" | "audit") => void;
   onOpenInspector: (tab: InspectorTab) => void;
   onSessionChange: (session: CodexSession) => void;
   onDerivedSessionCreated: (session: CodexSession) => void;
@@ -126,9 +127,11 @@ export function CodexConversation({
   environment,
   session,
   inspectorOpen,
+  inspectorTab,
   terminalOpen,
   onToggleSidebar,
   onToggleInspector,
+  onInspectorTabChange,
   onToggleTerminal,
   onOpenSettings,
   onOpenInspector,
@@ -167,9 +170,6 @@ export function CodexConversation({
   const [nativeStreamEpoch, setNativeStreamEpoch] = useState(0);
   const [nativeStreamReady, setNativeStreamReady] = useState(false);
   const [nativeHistoryError, setNativeHistoryError] = useState("");
-  const [activeSurface, setActiveSurface] = useState<
-    "conversation" | "activity"
-  >("conversation");
   const [activityClock, setActivityClock] = useState(() => Date.now());
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
@@ -234,7 +234,6 @@ export function CodexConversation({
     setLiveNotifications([]);
     setNativeStreamReady(false);
     setNativeHistoryError("");
-    setActiveSurface("conversation");
     hasNativeSnapshotRef.current = false;
     hasNativeStreamFailureRef.current = false;
     liveNotificationSequencesRef.current.clear();
@@ -810,433 +809,419 @@ export function CodexConversation({
   }
 
   return (
-    <section
-      id="conversation"
-      className="conversation-pane"
-      aria-label={ui.label}
-      tabIndex={-1}
-    >
-      <header className="conversation-header">
-        <div className="conversation-title-area">
-          <button
-            type="button"
-            className="icon-button sidebar-expand-button"
-            aria-label={ui.expandSidebar}
-            title={ui.expandSidebar}
-            onClick={onToggleSidebar}
-          >
-            <PanelLeftOpen size={19} aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            className="icon-button mobile-menu-button"
-            aria-label={ui.openNavigation}
-            onClick={onToggleSidebar}
-          >
-            <Menu size={19} aria-hidden="true" />
-          </button>
-          <div className="conversation-title-line">
-            <div className="conversation-breadcrumb">
-              <button type="button" onClick={onOpenSettings}>
-                {environment.name}
-              </button>
-              <span>/</span>
-              <span>{session.title}</span>
-            </div>
-            <span className="conversation-context">
-              <span
-                className={`live-indicator status-${session.status}`}
-                aria-hidden="true"
-              />
-              <span>{ui.status(session.status)}</span>
-              <span aria-hidden="true">·</span>
-              <span className="conversation-context-summary">
-                {session.harnessLabel} · {selectedModel.displayName} ·{" "}
-                {ui.environmentRevision(session.environmentRevision)}
-              </span>
-            </span>
-          </div>
-        </div>
-
-        <div className="conversation-header-actions">
-          <button
-            type="button"
-            className={`header-action-button ${
-              activeSurface === "activity" ? "is-active" : ""
-            }`}
-            aria-label={
-              activeSurface === "activity"
-                ? ui.returnToConversation
-                : ui.sessionActivity
-            }
-            aria-pressed={activeSurface === "activity"}
-            title={
-              activeSurface === "activity"
-                ? ui.returnToConversation
-                : ui.sessionActivity
-            }
-            onClick={() =>
-              setActiveSurface((current) =>
-                current === "activity" ? "conversation" : "activity",
-              )
-            }
-          >
-            <ListTree size={15} aria-hidden="true" />
-            <span>
-              {activeSurface === "activity"
-                ? ui.returnToConversation
-                : ui.activity}
-            </span>
-          </button>
-          <button
-            type="button"
-            className={`header-action-button ${terminalOpen ? "is-active" : ""}`}
-            aria-label={ui.terminal}
-            aria-pressed={terminalOpen}
-            title={ui.terminal}
-            onClick={onToggleTerminal}
-          >
-            <SquareTerminal size={15} aria-hidden="true" />
-            <span>{ui.terminal}</span>
-          </button>
-          <button
-            type="button"
-            className={`icon-button ${inspectorOpen ? "is-active" : ""}`}
-            aria-label={inspectorOpen ? ui.closeInspector : ui.openInspector}
-            onClick={onToggleInspector}
-          >
-            <PanelRight size={18} />
-          </button>
-          <SessionActionsMenu
-            key={session.id}
-            language={language}
-            session={session}
-            triggerClassName="icon-button"
-            triggerIconSize={19}
-            sessionForkEnabled={session.status === "waiting"}
-            onForkSession={onForkSession}
-            onRenameSession={onRenameSession}
-            onArchiveSession={onArchiveSession}
-            onTogglePinSession={onTogglePinSession}
-          />
-        </div>
-      </header>
-
-      {activeSurface === "activity" ? (
-        <CodexSessionActivityView
-          key={nativeSnapshot?.thread.id ?? session.harnessState.threadId}
-          language={language}
-          timeZone={timeZone}
-          projection={visibleTimeline}
-          nativeThreadId={
-            nativeSnapshot?.thread.id ?? session.harnessState.threadId
-          }
-          historyRevision={
-            nativeSnapshot?.historyRevision ??
-            session.harnessState.historyRevision
-          }
-          loading={nativeHistoryLoading}
-          error={nativeHistoryError}
-          onOpenEnvironmentAudit={() => onOpenInspector("audit")}
-          onOpenFiles={() => onOpenInspector("files")}
-        />
-      ) : (
-        <>
-          <div
-            ref={conversationScrollRef}
-            className="conversation-scroll"
-            onScroll={handleConversationScroll}
-          >
-            <div
-              ref={conversationContentRef}
-              className="message-column"
-              aria-busy={nativeHistoryLoading}
+    <>
+      <section
+        id="conversation"
+        className="conversation-pane"
+        aria-label={ui.label}
+        tabIndex={-1}
+      >
+        <header className="conversation-header">
+          <div className="conversation-title-area">
+            <button
+              type="button"
+              className="icon-button sidebar-expand-button"
+              aria-label={ui.expandSidebar}
+              title={ui.expandSidebar}
+              onClick={onToggleSidebar}
             >
-              {nativeHistoryLoading ? (
-                <div
-                  className="conversation-runtime-loading"
-                  role="status"
-                  aria-live="polite"
-                >
-                  <span className="conversation-runtime-loading-icon">
-                    <LoaderCircle size={18} aria-hidden="true" />
-                  </span>
-                  <span className="conversation-runtime-loading-copy">
-                    <strong>{ui.loadingConversation}</strong>
-                    <small>{ui.loadingConversationBody}</small>
-                  </span>
-                </div>
-              ) : null}
-              {nativeHistoryError ? (
-                <div className="native-context-reset-notice" role="alert">
-                  <TriangleAlert size={16} aria-hidden="true" />
-                  <span>
-                    <strong>{ui.nativeRolloutUnavailableTitle}</strong>
-                    <small>{nativeHistoryError}</small>
-                  </span>
-                </div>
-              ) : null}
-              {timelineTurns.map((timelineTurn) => {
-                const activeTurn =
-                  runningTurn?.turnId === timelineTurn.turnId
-                    ? runningTurn
-                    : undefined;
-                const hasActivity =
-                  timelineTurn.activityEntries.length > 0 ||
-                  Boolean(activeTurn);
-                return (
-                  <Fragment key={timelineTurn.turnId}>
-                    {timelineTurn.userMessages.map(renderTimelineEntry)}
-                    {hasActivity ? (
-                      <CodexTurnActivity
-                        activeTurn={activeTurn}
-                        turn={timelineTurn.turn}
-                        language={language}
-                        now={activityClock}
-                      >
-                        {timelineTurn.activityEntries.map(renderTimelineEntry)}
-                      </CodexTurnActivity>
-                    ) : null}
-                    {timelineTurn.finalMessage
-                      ? renderTimelineEntry(timelineTurn.finalMessage)
-                      : null}
-                    {timelineTurn.results.map(renderTimelineEntry)}
-                  </Fragment>
-                );
-              })}
-              {runningTurn &&
+              <PanelLeftOpen size={19} aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              className="icon-button mobile-menu-button"
+              aria-label={ui.openNavigation}
+              onClick={onToggleSidebar}
+            >
+              <Menu size={19} aria-hidden="true" />
+            </button>
+            <div className="conversation-title-line">
+              <div className="conversation-breadcrumb">
+                <button type="button" onClick={() => onOpenSettings()}>
+                  {environment.name}
+                </button>
+                <span>/</span>
+                <span>{session.title}</span>
+              </div>
+              <span className="conversation-context">
+                <span
+                  className={`live-indicator status-${session.status}`}
+                  aria-hidden="true"
+                />
+                <span>{ui.status(session.status)}</span>
+                <span aria-hidden="true">·</span>
+                <span className="conversation-context-summary">
+                  {session.harnessLabel} · {selectedModel.displayName} ·{" "}
+                  {ui.environmentRevision(session.environmentRevision)}
+                </span>
+              </span>
+            </div>
+          </div>
+
+          <div className="conversation-header-actions">
+            <button
+              type="button"
+              className={`header-action-button ${terminalOpen ? "is-active" : ""}`}
+              aria-label={ui.terminal}
+              aria-pressed={terminalOpen}
+              title={ui.terminal}
+              onClick={onToggleTerminal}
+            >
+              <SquareTerminal size={15} aria-hidden="true" />
+              <span>{ui.terminal}</span>
+            </button>
+            <button
+              type="button"
+              className={`icon-button ${inspectorOpen ? "is-active" : ""}`}
+              aria-label={inspectorOpen ? ui.closeInspector : ui.openInspector}
+              onClick={onToggleInspector}
+            >
+              <PanelRight size={18} />
+            </button>
+            <SessionActionsMenu
+              key={session.id}
+              language={language}
+              session={session}
+              triggerClassName="icon-button"
+              triggerIconSize={19}
+              sessionForkEnabled={session.status === "waiting"}
+              onForkSession={onForkSession}
+              onRenameSession={onRenameSession}
+              onArchiveSession={onArchiveSession}
+              onTogglePinSession={onTogglePinSession}
+            />
+          </div>
+        </header>
+
+        <div
+          ref={conversationScrollRef}
+          className="conversation-scroll"
+          onScroll={handleConversationScroll}
+        >
+          <div
+            ref={conversationContentRef}
+            className="message-column"
+            aria-busy={nativeHistoryLoading}
+          >
+            {nativeHistoryLoading ? (
+              <div
+                className="conversation-runtime-loading"
+                role="status"
+                aria-live="polite"
+              >
+                <span className="conversation-runtime-loading-icon">
+                  <LoaderCircle size={18} aria-hidden="true" />
+                </span>
+                <span className="conversation-runtime-loading-copy">
+                  <strong>{ui.loadingConversation}</strong>
+                  <small>{ui.loadingConversationBody}</small>
+                </span>
+              </div>
+            ) : null}
+            {nativeHistoryError ? (
+              <div className="native-context-reset-notice" role="alert">
+                <TriangleAlert size={16} aria-hidden="true" />
+                <span>
+                  <strong>{ui.nativeRolloutUnavailableTitle}</strong>
+                  <small>{nativeHistoryError}</small>
+                </span>
+              </div>
+            ) : null}
+            {timelineTurns.map((timelineTurn) => {
+              const activeTurn =
+                runningTurn?.turnId === timelineTurn.turnId
+                  ? runningTurn
+                  : undefined;
+              const hasActivity =
+                timelineTurn.activityEntries.length > 0 ||
+                Boolean(activeTurn);
+              return (
+                <Fragment key={timelineTurn.turnId}>
+                  {timelineTurn.userMessages.map(renderTimelineEntry)}
+                  {hasActivity ? (
+                    <CodexTurnActivity
+                      activeTurn={activeTurn}
+                      turn={timelineTurn.turn}
+                      language={language}
+                      now={activityClock}
+                    >
+                      {timelineTurn.activityEntries.map(renderTimelineEntry)}
+                    </CodexTurnActivity>
+                  ) : null}
+                  {timelineTurn.finalMessage
+                    ? renderTimelineEntry(timelineTurn.finalMessage)
+                    : null}
+                  {timelineTurn.results.map(renderTimelineEntry)}
+                </Fragment>
+              );
+            })}
+            {runningTurn &&
               !nativeHistoryLoading &&
               !timelineTurns.some(
                 (turn) => turn.turnId === runningTurn.turnId,
               ) ? (
-                <CodexTurnActivity
-                  activeTurn={runningTurn}
-                  language={language}
-                  now={activityClock}
-                />
-              ) : null}
-            </div>
+              <CodexTurnActivity
+                activeTurn={runningTurn}
+                language={language}
+                now={activityClock}
+              />
+            ) : null}
           </div>
+        </div>
 
-          <div className="composer-region">
-            <div className="composer-shell">
-          {pastedImages.length ? (
-            <div
-              className="composer-image-previews"
-              aria-label={ui.attachedImages}
-            >
-              {pastedImages.map((attachment) => (
-                <div className="composer-image-preview" key={attachment.id}>
-                  <Image
-                    src={attachment.previewUrl}
-                    alt={attachment.name}
-                    width={64}
-                    height={64}
-                    unoptimized
-                  />
+        <div className="composer-region">
+          <div className="composer-shell">
+            {pastedImages.length ? (
+              <div
+                className="composer-image-previews"
+                aria-label={ui.attachedImages}
+              >
+                {pastedImages.map((attachment) => (
+                  <div className="composer-image-preview" key={attachment.id}>
+                    <Image
+                      src={attachment.previewUrl}
+                      alt={attachment.name}
+                      width={64}
+                      height={64}
+                      unoptimized
+                    />
+                    <button
+                      type="button"
+                      aria-label={ui.removeImage(attachment.name)}
+                      title={ui.removeImage(attachment.name)}
+                      onClick={() => {
+                        setPastedImages((current) =>
+                          current.filter((image) => image.id !== attachment.id),
+                        );
+                        setAttachmentError("");
+                      }}
+                    >
+                      <X size={12} aria-hidden="true" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            {attachmentError ? (
+              <div className="composer-attachment-error" role="status">
+                {attachmentError}
+              </div>
+            ) : null}
+            {/*
+              Slash commands, approvals, steering and other composer behavior are Codex-native.
+              Do not lift them into the shared dispatcher when additional harnesses are added.
+            */}
+            <textarea
+              ref={composerRef}
+              name="message"
+              autoComplete="off"
+              value={draft}
+              onChange={(event) => {
+                setDraft(event.target.value);
+                syncComposerHeight(event.currentTarget);
+              }}
+              onPaste={(event) => {
+                const imageFiles = clipboardCodexImageFiles(event.clipboardData);
+                if (imageFiles.length === 0) {
+                  return;
+                }
+                event.preventDefault();
+                void addPastedImages(imageFiles);
+              }}
+              onKeyDown={(event) => {
+                if (
+                  shouldSubmitComposer(
+                    {
+                      key: event.key,
+                      shiftKey: event.shiftKey,
+                      metaKey: event.metaKey,
+                      ctrlKey: event.ctrlKey,
+                      isComposing: event.nativeEvent.isComposing,
+                    },
+                    sendShortcut,
+                  )
+                ) {
+                  event.preventDefault();
+                  void submitMessage();
+                }
+              }}
+              aria-label={ui.messageAgent(environment.codingAgent.label)}
+              placeholder={ui.askPlaceholder(environment.codingAgent.label)}
+              rows={1}
+            />
+            <div className="composer-toolbar">
+              <div className="composer-tools">
+                <button
+                  type="button"
+                  className="composer-icon-button"
+                  aria-label={ui.attachFile}
+                  onClick={() => imageInputRef.current?.click()}
+                >
+                  <Paperclip size={17} />
+                </button>
+                <input
+                  ref={imageInputRef}
+                  className="sr-only"
+                  type="file"
+                  accept="image/png,image/jpeg,image/gif,image/webp"
+                  multiple
+                  tabIndex={-1}
+                  onChange={(event) => {
+                    const files = Array.from(event.currentTarget.files ?? []);
+                    event.currentTarget.value = "";
+                    if (files.length > 0) void addPastedImages(files);
+                  }}
+                />
+                <button
+                  type="button"
+                  className="composer-icon-button"
+                  aria-label={ui.mentionFile}
+                >
+                  <AtSign size={17} />
+                </button>
+                <span
+                  className="composer-agent-bound"
+                  title={ui.boundToEnvironment}
+                >
+                  <span className="codex-glyph" />
+                  <span className="composer-harness-label">
+                    {environment.codingAgent.label}
+                  </span>
+                  <label
+                    className="composer-model-picker"
+                    title={modelCatalogUnavailable || undefined}
+                    data-availability={
+                      modelCatalogUnavailable ? "runtime-unavailable" : "available"
+                    }
+                  >
+                    <span className="sr-only">
+                      {ui.selectModel(environment.codingAgent.label)}
+                    </span>
+                    <select
+                      name="coding-agent-model"
+                      aria-label={ui.selectModel(
+                        environment.codingAgent.label,
+                      )}
+                      value={selectedModel.id}
+                      disabled={modelOptions.length === 0 || sending}
+                      onChange={(event) => setSelectedModelId(event.target.value)}
+                    >
+                      {(modelOptions.length > 0
+                        ? modelOptions
+                        : [selectedModel]
+                      ).map((model) => (
+                        <option value={model.id} key={model.id}>
+                          {model.displayName}
+                        </option>
+                      ))}
+                    </select>
+                    <ChevronDown size={12} aria-hidden="true" />
+                  </label>
+                </span>
+              </div>
+              <div className="composer-send-area">
+                <span
+                  className={`connection-copy ${
+                    nativeHistoryError
+                      ? "is-unavailable"
+                      : !nativeReady
+                        ? "is-loading"
+                        : ""
+                  }`}
+                >
+                  <span />
+                  {nativeHistoryError
+                    ? ui.runtimeUnavailable
+                    : nativeReady
+                      ? ui.durableSession
+                      : ui.checkingRuntime}
+                </span>
+                {turnRunning ? (
                   <button
                     type="button"
-                    aria-label={ui.removeImage(attachment.name)}
-                    title={ui.removeImage(attachment.name)}
-                    onClick={() => {
-                      setPastedImages((current) =>
-                        current.filter((image) => image.id !== attachment.id),
-                      );
-                      setAttachmentError("");
-                    }}
+                    className={`send-button is-running ${
+                      interrupting ? "is-interrupting" : ""
+                    }`}
+                    disabled={interrupting || !interruptibleTurnId}
+                    aria-label={
+                      interrupting
+                        ? ui.interruptingTurn
+                        : interruptibleTurnId
+                          ? ui.interruptTurn
+                          : ui.turnStarting
+                    }
+                    aria-busy={interrupting}
+                    title={ui.interruptTurn}
+                    onClick={() => void interruptActiveTurn()}
                   >
-                    <X size={12} aria-hidden="true" />
-                  </button>
-                </div>
-              ))}
-            </div>
-          ) : null}
-          {attachmentError ? (
-            <div className="composer-attachment-error" role="status">
-              {attachmentError}
-            </div>
-          ) : null}
-          {/*
-            Slash commands, approvals, steering and other composer behavior are Codex-native.
-            Do not lift them into the shared dispatcher when additional harnesses are added.
-          */}
-          <textarea
-            ref={composerRef}
-            name="message"
-            autoComplete="off"
-            value={draft}
-            onChange={(event) => {
-              setDraft(event.target.value);
-              syncComposerHeight(event.currentTarget);
-            }}
-            onPaste={(event) => {
-              const imageFiles = clipboardCodexImageFiles(event.clipboardData);
-              if (imageFiles.length === 0) {
-                return;
-              }
-              event.preventDefault();
-              void addPastedImages(imageFiles);
-            }}
-            onKeyDown={(event) => {
-              if (
-                shouldSubmitComposer(
-                  {
-                    key: event.key,
-                    shiftKey: event.shiftKey,
-                    metaKey: event.metaKey,
-                    ctrlKey: event.ctrlKey,
-                    isComposing: event.nativeEvent.isComposing,
-                  },
-                  sendShortcut,
-                )
-              ) {
-                event.preventDefault();
-                void submitMessage();
-              }
-            }}
-            aria-label={ui.messageAgent(environment.codingAgent.label)}
-            placeholder={ui.askPlaceholder(environment.codingAgent.label)}
-            rows={1}
-          />
-          <div className="composer-toolbar">
-            <div className="composer-tools">
-              <button
-                type="button"
-                className="composer-icon-button"
-                aria-label={ui.attachFile}
-                onClick={() => imageInputRef.current?.click()}
-              >
-                <Paperclip size={17} />
-              </button>
-              <input
-                ref={imageInputRef}
-                className="sr-only"
-                type="file"
-                accept="image/png,image/jpeg,image/gif,image/webp"
-                multiple
-                tabIndex={-1}
-                onChange={(event) => {
-                  const files = Array.from(event.currentTarget.files ?? []);
-                  event.currentTarget.value = "";
-                  if (files.length > 0) void addPastedImages(files);
-                }}
-              />
-              <button
-                type="button"
-                className="composer-icon-button"
-                aria-label={ui.mentionFile}
-              >
-                <AtSign size={17} />
-              </button>
-              <span
-                className="composer-agent-bound"
-                title={ui.boundToEnvironment}
-              >
-                <span className="codex-glyph" />
-                <span className="composer-harness-label">
-                  {environment.codingAgent.label}
-                </span>
-                <label
-                  className="composer-model-picker"
-                  title={modelCatalogUnavailable || undefined}
-                  data-availability={
-                    modelCatalogUnavailable ? "runtime-unavailable" : "available"
-                  }
-                >
-                  <span className="sr-only">
-                    {ui.selectModel(environment.codingAgent.label)}
-                  </span>
-                  <select
-                    name="coding-agent-model"
-                    aria-label={ui.selectModel(
-                      environment.codingAgent.label,
+                    {interrupting ? (
+                      <span className="activity-spinner" aria-hidden="true" />
+                    ) : (
+                      <Square size={10} fill="currentColor" aria-hidden="true" />
                     )}
-                    value={selectedModel.id}
-                    disabled={modelOptions.length === 0 || sending}
-                    onChange={(event) => setSelectedModelId(event.target.value)}
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="send-button"
+                    disabled={
+                      sending ||
+                      session.status !== "waiting" ||
+                      !nativeReady ||
+                      (!draft.trim() && pastedImages.length === 0)
+                    }
+                    aria-label={ui.sendMessage}
+                    onClick={() => void submitMessage()}
                   >
-                    {(modelOptions.length > 0
-                      ? modelOptions
-                      : [selectedModel]
-                    ).map((model) => (
-                      <option value={model.id} key={model.id}>
-                        {model.displayName}
-                      </option>
-                    ))}
-                  </select>
-                  <ChevronDown size={12} aria-hidden="true" />
-                </label>
-              </span>
+                    <ArrowUp size={17} strokeWidth={2.5} />
+                  </button>
+                )}
+              </div>
             </div>
-            <div className="composer-send-area">
-              <span
-                className={`connection-copy ${
-                  nativeHistoryError
-                    ? "is-unavailable"
-                    : !nativeReady
-                      ? "is-loading"
-                      : ""
+          </div>
+          <p className="composer-footnote">
+            <Files size={12} /> {ui.workingInWorkspace}
+            <span>·</span>
+            <Settings2 size={12} /> {ui.networkInherited(environment.name)}
+          </p>
+        </div>
+      </section>
+      {inspectorOpen ? (
+        <Inspector
+          language={language}
+          timeZone={timeZone}
+          environment={environment}
+          session={session}
+          activeTab={inspectorTab}
+          onTabChange={onInspectorTabChange}
+          onClose={onToggleInspector}
+          sessionActivity={{
+            label: ui.activity,
+            content: (
+              <CodexSessionActivityView
+                key={`${session.id}:${
+                  nativeSnapshot?.thread.id ?? session.harnessState.threadId
                 }`}
-              >
-                <span />
-                {nativeHistoryError
-                  ? ui.runtimeUnavailable
-                  : nativeReady
-                    ? ui.durableSession
-                    : ui.checkingRuntime}
-              </span>
-              {turnRunning ? (
-                <button
-                  type="button"
-                  className={`send-button is-running ${
-                    interrupting ? "is-interrupting" : ""
-                  }`}
-                  disabled={interrupting || !interruptibleTurnId}
-                  aria-label={
-                    interrupting
-                      ? ui.interruptingTurn
-                      : interruptibleTurnId
-                        ? ui.interruptTurn
-                        : ui.turnStarting
-                  }
-                  aria-busy={interrupting}
-                  title={ui.interruptTurn}
-                  onClick={() => void interruptActiveTurn()}
-                >
-                  {interrupting ? (
-                    <span className="activity-spinner" aria-hidden="true" />
-                  ) : (
-                    <Square size={10} fill="currentColor" aria-hidden="true" />
-                  )}
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  className="send-button"
-                  disabled={
-                    sending ||
-                    session.status !== "waiting" ||
-                    !nativeReady ||
-                    (!draft.trim() && pastedImages.length === 0)
-                  }
-                  aria-label={ui.sendMessage}
-                  onClick={() => void submitMessage()}
-                >
-                  <ArrowUp size={17} strokeWidth={2.5} />
-                </button>
-              )}
-            </div>
-          </div>
-            </div>
-            <p className="composer-footnote">
-              <Files size={12} /> {ui.workingInWorkspace}
-              <span>·</span>
-              <Settings2 size={12} /> {ui.networkInherited(environment.name)}
-            </p>
-          </div>
-        </>
-      )}
-    </section>
+                language={language}
+                timeZone={timeZone}
+                projection={visibleTimeline}
+                nativeThreadId={
+                  nativeSnapshot?.thread.id ?? session.harnessState.threadId
+                }
+                historyRevision={
+                  nativeSnapshot?.historyRevision ??
+                  session.harnessState.historyRevision
+                }
+                loading={nativeHistoryLoading}
+                error={nativeHistoryError}
+                onOpenEnvironmentAudit={() => onOpenSettings("audit")}
+                onOpenFiles={() => onOpenInspector("files")}
+              />
+            ),
+          }}
+        />
+      ) : null}
+    </>
   );
 }
 

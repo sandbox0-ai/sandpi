@@ -20,7 +20,6 @@ const copy = {
       environmentRevision: (revision: number) => `Environment r${revision}`,
       terminal: "Terminal",
       activity: "Activity",
-      returnToConversation: "Return to conversation",
       sessionActivity: "Codex Session Activity",
       codexNativeActivity: "Harness-native record",
       sessionActivitySummary: (count: number, external: number) =>
@@ -239,7 +238,6 @@ const copy = {
       environmentRevision: (revision: number) => `环境 r${revision}`,
       terminal: "终端",
       activity: "活动记录",
-      returnToConversation: "返回对话",
       sessionActivity: "Codex Session 活动",
       codexNativeActivity: "Harness 原生记录",
       sessionActivitySummary: (count: number, external: number) =>

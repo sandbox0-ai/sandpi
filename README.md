@@ -94,12 +94,14 @@ Web today; iOS / Android / HarmonyOS later
   Network-policy edits are applied to that running Environment Sandbox rather
   than deferred to a future product Session.
 - **Audit and activity boundary:** signed Sandbox audit is displayed as common
-  Environment evidence. Session Activity is a harness-native execution record.
-  Codex attributes native tool activity by Thread id; the shared Supervisor
-  Session identifies only its transport provenance. Native external-tool
-  semantics and Environment network audit remain separate views because the
-  audit feed has no Thread correlation key, so Sandpi does not join them by
-  timestamp.
+  Environment evidence in **Environment Settings → Audit**. The current
+  Session's Inspector exposes **Activity** as a harness-native execution record;
+  each harness supplies its own renderer instead of a normalized shared event
+  model. Codex attributes native tool activity by Thread id, while the shared
+  Supervisor Session identifies only its transport provenance. Native
+  external-tool semantics and Environment network audit remain separate views
+  because the audit feed has no Thread correlation key, so Sandpi neither
+  normalizes their timestamps nor infers a correlation from temporal proximity.
 - **Durable lifecycle:** every Environment Sandbox has a 30-day Sandbox0 hard
   TTL. A native `turn/completed` event writes a PostgreSQL pause deadline thirty
   minutes later; any Sandpi replica may scan it, but a per-Environment advisory

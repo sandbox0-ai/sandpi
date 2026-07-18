@@ -18,6 +18,7 @@ import {
   RotateCcw,
   Settings2,
   Share2,
+  ShieldCheck,
   Sparkles,
   Trash2,
   TriangleAlert,
@@ -37,17 +38,23 @@ import {
   CodexMcpSettings,
   CodexSkillsSettings,
 } from "@/harnesses/codex/environment-settings";
+import { EnvironmentAuditPanel } from "@/components/environment-audit-panel";
 import type { OperationLanguage } from "@/lib/operation-ui";
 import {
   formatUnixTimestamp,
   unixTimestampToIso,
   type UnixTimestamp,
 } from "@/lib/time";
-import type { CodingSession, Environment } from "@/lib/types";
+import type {
+  CodingSession,
+  Environment,
+  EnvironmentAuditFeed,
+} from "@/lib/types";
 
-type SettingsTab =
+export type EnvironmentSettingsTab =
   | "general"
   | "archived-sessions"
+  | "audit"
   | "credentials"
   | "skills"
   | "mcp"
@@ -57,6 +64,7 @@ type SettingsTab =
 
 interface EnvironmentSettingsProps {
   environment: Environment;
+  initialTab?: EnvironmentSettingsTab;
   teamName: string;
   language: OperationLanguage;
   timeZone: string;
@@ -91,12 +99,13 @@ const ACTIVE_CODEX_AUTH_STATUSES = new Set<CodexDeviceAuthFlow["status"]>([
 ]);
 
 const tabs: Array<{
-  id: SettingsTab;
+  id: EnvironmentSettingsTab;
   label: string;
   icon: React.ComponentType<{ size?: number }>;
 }> = [
   { id: "general", label: "General", icon: Settings2 },
   { id: "archived-sessions", label: "Archived sessions", icon: Archive },
+  { id: "audit", label: "Audit", icon: ShieldCheck },
   { id: "credentials", label: "Coding agent", icon: KeyRound },
   { id: "skills", label: "Skills", icon: Sparkles },
   { id: "mcp", label: "MCP servers", icon: Cable },
@@ -139,8 +148,27 @@ function formatArchivedSessionTime(
   });
 }
 
+function hasUnsavedEnvironmentChanges(
+  draft: Environment,
+  environment: Environment,
+) {
+  const draftDomains = draft.networkPolicy.allowedDomains;
+  const savedDomains = environment.networkPolicy.allowedDomains;
+  return (
+    draft.name.trim() !== environment.name ||
+    draft.description !== environment.description ||
+    draft.color !== environment.color ||
+    draft.networkPolicy.mode !== environment.networkPolicy.mode ||
+    draft.networkPolicy.logDeniedRequests !==
+      environment.networkPolicy.logDeniedRequests ||
+    draftDomains.length !== savedDomains.length ||
+    draftDomains.some((domain, index) => domain !== savedDomains[index])
+  );
+}
+
 export function EnvironmentSettings({
   environment,
+  initialTab = "general",
   teamName,
   language,
   timeZone,
@@ -150,7 +178,8 @@ export function EnvironmentSettings({
   onRestoreSession,
   onClose,
 }: EnvironmentSettingsProps) {
-  const [activeTab, setActiveTab] = useState<SettingsTab>("general");
+  const [activeTab, setActiveTab] =
+    useState<EnvironmentSettingsTab>(initialTab);
   const [draft, setDraft] = useState(environment);
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -165,9 +194,53 @@ export function EnvironmentSettings({
   const [codexAuthBusy, setCodexAuthBusy] = useState(false);
   const [codexAuthError, setCodexAuthError] = useState("");
   const [copiedDeviceCode, setCopiedDeviceCode] = useState(false);
+  const [environmentAudit, setEnvironmentAudit] =
+    useState<EnvironmentAuditFeed | null>(null);
+  const [environmentAuditLoading, setEnvironmentAuditLoading] = useState(false);
+  const [environmentAuditError, setEnvironmentAuditError] = useState("");
+  const [environmentAuditReload, setEnvironmentAuditReload] = useState(0);
   const drawerRef = useRef<HTMLElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const dangerZoneRef = useRef<HTMLDivElement>(null);
+  const hasUnsavedChanges = hasUnsavedEnvironmentChanges(draft, environment);
+
+  useEffect(() => {
+    setActiveTab(initialTab);
+  }, [environment.id, initialTab]);
+
+  useEffect(() => {
+    if (activeTab !== "audit") return;
+
+    const controller = new AbortController();
+    setEnvironmentAudit(null);
+    setEnvironmentAuditError("");
+    setEnvironmentAuditLoading(true);
+    void apiFetch<ApiEnvelope<EnvironmentAuditFeed>>(
+      `/api/v1/environments/${encodeURIComponent(environment.id)}/audit`,
+      { signal: controller.signal },
+    )
+      .then((response) => {
+        if (!controller.signal.aborted) {
+          setEnvironmentAudit(response.data);
+        }
+      })
+      .catch((error) => {
+        if (!controller.signal.aborted) {
+          setEnvironmentAuditError(
+            error instanceof Error
+              ? error.message
+              : "Environment audit could not be loaded.",
+          );
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setEnvironmentAuditLoading(false);
+        }
+      });
+
+    return () => controller.abort();
+  }, [activeTab, environment.id, environmentAuditReload]);
 
   useEffect(() => {
     const previouslyFocused = document.activeElement as HTMLElement | null;
@@ -731,6 +804,54 @@ export function EnvironmentSettings({
               </SettingsSection>
             ) : null}
 
+            {activeTab === "audit" ? (
+              <SettingsSection
+                eyebrow="Sandbox0 signed evidence"
+                title="Environment audit"
+                description="Signed Sandbox0 records for this Environment's shared Sandbox. They cover activity across every Session and stay separate from harness-native Session Activity."
+              >
+                {environmentAuditLoading ? (
+                  <div
+                    className="archived-sessions-empty"
+                    role="status"
+                    aria-busy="true"
+                    aria-live="polite"
+                  >
+                    <span aria-hidden="true">
+                      <RefreshCw className="is-spinning" size={20} />
+                    </span>
+                    <strong>Loading Environment audit…</strong>
+                    <p>Fetching signed records from Sandbox0.</p>
+                  </div>
+                ) : environmentAuditError ? (
+                  <div className="archived-sessions-empty" role="alert">
+                    <span aria-hidden="true">
+                      <TriangleAlert size={20} />
+                    </span>
+                    <strong>Environment audit is unavailable</strong>
+                    <p>{environmentAuditError}</p>
+                    <button
+                      type="button"
+                      className="secondary-action-button"
+                      onClick={() =>
+                        setEnvironmentAuditReload((current) => current + 1)
+                      }
+                    >
+                      <RefreshCw size={14} aria-hidden="true" />
+                      Retry
+                    </button>
+                  </div>
+                ) : environmentAudit ? (
+                  <EnvironmentAuditPanel
+                    audit={environmentAudit}
+                    environmentId={environment.id}
+                    language={language}
+                    timeZone={timeZone}
+                  />
+                ) : null}
+              </SettingsSection>
+            ) : null}
+
             {activeTab === "credentials" ? (
               <SettingsSection
                 eyebrow="Bound to this Environment"
@@ -1179,6 +1300,12 @@ export function EnvironmentSettings({
               <>
                 <Check size={14} /> Saved
               </>
+            ) : activeTab === "audit" ? (
+              hasUnsavedChanges ? (
+                <>Pending Environment changes will be saved when you finish.</>
+              ) : (
+                <>Environment audit records are read-only.</>
+              )
             ) : activeTab === "skills" || activeTab === "mcp" ? (
               <>{draft.codingAgent.label} changes are saved immediately.</>
             ) : (
@@ -1186,7 +1313,27 @@ export function EnvironmentSettings({
             )}
           </span>
           <div>
-            {activeTab === "skills" || activeTab === "mcp" ? (
+            {activeTab === "audit" ? (
+              <button
+                type="button"
+                className="button-primary"
+                disabled={
+                  saving ||
+                  deleting ||
+                  deleteConfirming ||
+                  (hasUnsavedChanges && !draft.name.trim())
+                }
+                onClick={() => {
+                  if (hasUnsavedChanges) {
+                    void saveAndClose();
+                  } else {
+                    onClose();
+                  }
+                }}
+              >
+                {saving ? "Saving…" : "Done"}
+              </button>
+            ) : activeTab === "skills" || activeTab === "mcp" ? (
               <button type="button" className="button-primary" onClick={onClose}>
                 Done
               </button>

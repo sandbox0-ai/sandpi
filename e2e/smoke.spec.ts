@@ -240,11 +240,16 @@ test("shows a Sandbox0 credential failure instead of loading forever", async ({
   await expect(page.getByText("Loading conversation…")).toBeHidden();
   await expect(page.getByText("Codex runtime unavailable")).toBeVisible();
 
+  await page.getByRole("button", { name: "Open inspector" }).click();
   await page
-    .getByRole("button", { name: "Codex Session Activity" })
+    .getByRole("navigation", { name: "Inspector views" })
+    .getByRole("button", { name: "Activity", exact: true })
     .click();
-  await expect(page.getByRole("alert").getByText(message)).toBeVisible();
-  await expect(page.getByText("Loading Codex activity…")).toBeHidden();
+  const activityView = page.getByLabel("Codex Session Activity", {
+    exact: true,
+  });
+  await expect(activityView.getByRole("alert").getByText(message)).toBeVisible();
+  await expect(activityView.getByText("Loading Codex activity…")).toBeHidden();
 });
 
 test("shows a fallback when the Codex EventSource handshake fails", async ({
@@ -292,6 +297,12 @@ test("keeps Codex Session Activity native and Environment Audit separate", async
   const startedAt = Date.now() / 1_000 - 10;
   const nativeThreadId = "thread-e2e-native-activity";
   const nativeTurnId = "turn-e2e-native-activity";
+  let auditRequests = 0;
+  let environmentUpdates = 0;
+  let releaseAuditResponse!: () => void;
+  const auditResponseGate = new Promise<void>((resolve) => {
+    releaseAuditResponse = resolve;
+  });
   const snapshot: CodexNativeSnapshot = {
     protocol: "codex-app-server",
     nativeSessionId: nativeThreadId,
@@ -391,6 +402,23 @@ test("keeps Codex Session Activity native and Environment Audit separate", async
     if (message.type() === "error") browserErrors.push(message.text());
   });
   page.on("pageerror", (error) => browserErrors.push(error.message));
+  page.on("request", (browserRequest) => {
+    const requestUrl = new URL(browserRequest.url());
+    if (
+      browserRequest.method() === "GET" &&
+      requestUrl.pathname ===
+        `/api/v1/environments/${encodeURIComponent(environment.id)}/audit`
+    ) {
+      auditRequests += 1;
+    }
+    if (
+      browserRequest.method() === "PUT" &&
+      requestUrl.pathname ===
+        `/api/v1/environments/${encodeURIComponent(environment.id)}`
+    ) {
+      environmentUpdates += 1;
+    }
+  });
 
   await page.route("**/api/v1/sessions/**/events", async (route) => {
     await route.fulfill({
@@ -417,6 +445,7 @@ test("keeps Codex Session Activity native and Environment Audit separate", async
     });
   });
   await page.route("**/api/v1/environments/**/audit", async (route) => {
+    await auditResponseGate;
     await route.fulfill({ json: { data: mockEnvironmentAudit } });
   });
 
@@ -424,40 +453,91 @@ test("keeps Codex Session Activity native and Environment Audit separate", async
     `/?team=${encodeURIComponent(environment.teamId)}&environment=${encodeURIComponent(environment.id)}&session=${encodeURIComponent(session.id)}`,
   );
   await expect(page.getByText("The release is valid.")).toBeVisible();
+  await expect.poll(() => auditRequests).toBe(0);
+  await page.getByRole("button", { name: "Open inspector" }).click();
+  const inspectorViews = page.getByRole("navigation", {
+    name: "Inspector views",
+  });
+  await expect(
+    inspectorViews.getByRole("button", { name: "Audit", exact: true }),
+  ).toHaveCount(0);
   await page
-    .getByRole("button", { name: "Codex Session Activity" })
+    .getByRole("navigation", { name: "Inspector views" })
+    .getByRole("button", { name: "Activity", exact: true })
     .click();
 
+  const activityView = page.getByLabel("Codex Session Activity", {
+    exact: true,
+  });
   await expect(
-    page.getByRole("heading", { name: "Codex Session Activity" }),
+    activityView.getByRole("heading", { name: "Codex Session Activity" }),
   ).toBeVisible();
-  await expect(page.getByText(nativeThreadId, { exact: false })).toBeVisible();
-  await expect(page.getByText(nativeTurnId, { exact: true })).toBeVisible();
-  await expect(page.getByText("git status --short")).toBeVisible();
-  const mcpActivity = page
+  await expect(
+    activityView.getByText(nativeThreadId, { exact: false }),
+  ).toBeVisible();
+  await expect(
+    activityView.getByText(nativeTurnId, { exact: true }),
+  ).toBeVisible();
+  await expect(activityView.getByText("git status --short")).toBeVisible();
+  const mcpActivity = activityView
     .locator(".codex-native-tool")
     .filter({ hasText: "GitHub · get_release" });
   await expect(mcpActivity).toBeVisible();
   await mcpActivity.locator("summary").click();
   await expect(mcpActivity).toContainText('"repo": "sandpi"');
 
-  await page
+  await activityView
     .getByRole("combobox", { name: "Filter Codex Session Activity" })
     .selectOption("external");
-  await expect(page.getByText("git status --short")).toBeHidden();
+  await expect(activityView.getByText("git status --short")).toBeHidden();
   await expect(mcpActivity).toBeVisible();
-  await expect(page.getByText("sandpi v1.2.3")).toBeVisible();
+  await expect(activityView.getByText("sandpi v1.2.3")).toBeVisible();
+  await expect.poll(() => auditRequests).toBe(0);
 
-  await page
+  const auditRequest = page.waitForRequest((candidate) => {
+    const requestUrl = new URL(candidate.url());
+    return (
+      candidate.method() === "GET" &&
+      requestUrl.pathname ===
+        `/api/v1/environments/${encodeURIComponent(environment.id)}/audit`
+    );
+  });
+  await activityView
     .getByRole("button", { name: "Open Environment Audit" })
     .click();
+  await auditRequest;
+
+  const settingsDialog = page.getByRole("dialog", {
+    name: `${environment.name} settings`,
+  });
+  await expect(settingsDialog).toBeVisible();
   await expect(
-    page.getByRole("heading", { name: "Environment audit" }),
+    settingsDialog.getByRole("heading", { name: "Environment audit" }),
   ).toBeVisible();
   await expect(
-    page.getByRole("heading", { name: "Codex Session Activity" }),
+    settingsDialog.locator(".settings-nav button.is-active"),
+  ).toHaveText("Audit");
+  await expect(
+    settingsDialog.getByRole("status").getByText("Loading Environment audit…"),
+  ).toBeVisible();
+  releaseAuditResponse();
+  await expect(
+    settingsDialog.getByRole("region", { name: "Environment audit" }),
+  ).toBeVisible();
+  await expect(settingsDialog.getByText("Audit data verified")).toBeVisible();
+  await expect
+    .poll(() => auditRequests)
+    .toBeGreaterThan(0);
+  await expect(
+    settingsDialog.getByText("Environment audit records are read-only."),
   ).toBeVisible();
   await expect(page.getByText("Session audit")).toHaveCount(0);
+
+  await settingsDialog.getByRole("button", { name: "Done" }).click();
+  await expect(settingsDialog).toBeHidden();
+  await expect
+    .poll(() => environmentUpdates)
+    .toBe(0);
   expect(browserErrors).toEqual([]);
 });
 
@@ -808,7 +888,7 @@ test("shows a matching skeleton while each Inspector tab loads", async ({
   await page.route("**/api/v1/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (/\/sessions\/[^/]+\/events$/.test(path)) {
-      // This test exercises Environment Inspector loading, not native history
+      // This test exercises shared Inspector loading, not native history
       // authorization. Keep the unrelated EventSource healthy and let the
       // dedicated Codex streaming tests own its behavior.
       await route.fulfill({
@@ -818,7 +898,7 @@ test("shows a matching skeleton while each Inspector tab loads", async ({
       });
       return;
     }
-    if (/\/(ide|audit|metrics)$/.test(path)) {
+    if (/\/(ide|metrics)$/.test(path)) {
       await new Promise((resolve) => setTimeout(resolve, 700));
     }
     if (path.endsWith("/ide")) {
@@ -831,10 +911,6 @@ test("shows a matching skeleton while each Inspector tab loads", async ({
           },
         },
       });
-      return;
-    }
-    if (path.endsWith("/audit")) {
-      await route.fulfill({ json: { data: mockEnvironmentAudit } });
       return;
     }
     if (path.endsWith("/metrics")) {
@@ -869,7 +945,6 @@ test("shows a matching skeleton while each Inspector tab loads", async ({
 
   for (const [tab, label] of [
     ["files", "Files"],
-    ["audit", "Audit"],
     ["metrics", "Metrics"],
   ] as const) {
     if (tab !== "files") await tabs.getByRole("button", { name: label }).click();

@@ -11,7 +11,10 @@ import {
 
 import { Conversation } from "@/components/conversation";
 import { AppFrame } from "@/components/app-frame";
-import { EnvironmentSettings } from "@/components/environment-settings";
+import {
+  EnvironmentSettings,
+  type EnvironmentSettingsTab,
+} from "@/components/environment-settings";
 import { Inspector, type InspectorTab } from "@/components/inspector";
 import { NewEnvironmentDialog } from "@/components/new-environment-dialog";
 import { NewSessionWorkspace } from "@/components/new-session-workspace";
@@ -79,6 +82,8 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
   const [settingsEnvironmentId, setSettingsEnvironmentId] = useState<
     string | null
   >(null);
+  const [settingsEnvironmentTab, setSettingsEnvironmentTab] =
+    useState<EnvironmentSettingsTab>("general");
   const [newEnvironmentOpen, setNewEnvironmentOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(false);
@@ -264,6 +269,17 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
         (environment) => environment.id === settingsEnvironmentId,
       ) ?? null,
     [settingsEnvironmentId, teamEnvironments],
+  );
+
+  const openEnvironmentSettings = useCallback(
+    (
+      environmentId: string,
+      initialTab: EnvironmentSettingsTab = "general",
+    ) => {
+      setSettingsEnvironmentTab(initialTab);
+      setSettingsEnvironmentId(environmentId);
+    },
+    [],
   );
 
   const handleSelectTeam = useCallback(
@@ -613,7 +629,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
       }}
       onEnvironmentSettings={(environmentId) => {
         handleSelectEnvironment(environmentId);
-        setSettingsEnvironmentId(environmentId);
+        openEnvironmentSettings(environmentId);
       }}
       onRenameSession={handleRenameSession}
       onForkSession={handleForkSession}
@@ -731,12 +747,14 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
           environment={selectedEnvironment}
           session={selectedSession}
           inspectorOpen={showInspector}
+          inspectorTab={inspectorTab}
           terminalOpen={showTerminal}
           onToggleSidebar={handleToggleNavigation}
           onToggleInspector={() => setInspectorOpen((open) => !open)}
+          onInspectorTabChange={setInspectorTab}
           onToggleTerminal={() => setTerminalOpen((open) => !open)}
-          onOpenSettings={() =>
-            setSettingsEnvironmentId(selectedEnvironment.id)
+          onOpenSettings={(tab = "general") =>
+            openEnvironmentSettings(selectedEnvironment.id, tab)
           }
           onOpenInspector={(tab) => {
             setInspectorTab(tab);
@@ -757,7 +775,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
           onEnvironmentChange={handleEnvironmentChange}
           onCreated={handleSessionCreated}
           onOpenSettings={() =>
-            setSettingsEnvironmentId(selectedEnvironment.id)
+            openEnvironmentSettings(selectedEnvironment.id)
           }
           onToggleSidebar={handleToggleNavigation}
           terminalOpen={showTerminal}
@@ -765,13 +783,12 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
         />
       )}
 
-      {showInspector ? (
+      {showInspector && !selectedSession ? (
         <Inspector
           language={preferences.general.language}
           timeZone={preferences.general.timeZone}
           environment={selectedEnvironment}
-          session={selectedSession}
-          activeTab={inspectorTab}
+          activeTab={inspectorTab === "activity" ? "files" : inspectorTab}
           onTabChange={setInspectorTab}
           onClose={() => setInspectorOpen(false)}
         />
@@ -790,7 +807,9 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
 
       {settingsEnvironment ? (
         <EnvironmentSettings
+          key={settingsEnvironment.id}
           environment={settingsEnvironment}
+          initialTab={settingsEnvironmentTab}
           teamName={selectedTeam.name}
           language={preferences.general.language}
           timeZone={preferences.general.timeZone}

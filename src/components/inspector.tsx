@@ -7,17 +7,16 @@ import {
   ChevronDown,
   FileCode2,
   Gauge,
+  ListTree,
   Network,
-  ShieldCheck,
   X,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import {
   InteractiveMetricChart,
   type MetricChartSeries,
 } from "@/components/metric-chart";
-import { EnvironmentAuditPanel } from "@/components/environment-audit-panel";
 import { WorkspaceIde } from "@/components/workspace-ide";
 import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
 import { getOperationUiCopy, type OperationLanguage } from "@/lib/operation-ui";
@@ -30,19 +29,26 @@ import { formatUnixTimestamp } from "@/lib/time";
 import type {
   CodingSession,
   Environment,
-  EnvironmentAuditFeed,
   EnvironmentMetrics,
   RuntimeMetricSeries,
   WorkspaceIdeSnapshot,
 } from "@/lib/types";
 
-export type InspectorTab = "files" | "audit" | "metrics";
+export type InspectorTab = "files" | "activity" | "metrics";
+
+export interface InspectorSessionActivity {
+  /** Harness-owned navigation copy; the shared Inspector never names the DTO. */
+  label: string;
+  /** Opaque harness renderer backed by the Conversation's native Session state. */
+  content: ReactNode;
+}
 
 interface InspectorProps {
   language: OperationLanguage;
   timeZone: string;
   environment: Environment;
   session?: CodingSession;
+  sessionActivity?: InspectorSessionActivity;
   activeTab: InspectorTab;
   onTabChange: (tab: InspectorTab) => void;
   onClose: () => void;
@@ -93,7 +99,7 @@ function InspectorSkeleton({
   activeTab,
   label,
 }: {
-  activeTab: InspectorTab;
+  activeTab: Exclude<InspectorTab, "activity">;
   label: string;
 }) {
   if (activeTab === "files") {
@@ -152,45 +158,6 @@ function InspectorSkeleton({
         >
           <SkeletonShape className="is-dot" />
           <SkeletonShape />
-        </div>
-      </div>
-    );
-  }
-
-  if (activeTab === "audit") {
-    return (
-      <div
-        className="inspector-panel audit-panel inspector-skeleton inspector-skeleton-audit"
-        role="status"
-        aria-busy="true"
-        aria-live="polite"
-      >
-        <span className="sr-only">{label}</span>
-        <div aria-hidden="true">
-          <div className="audit-toolbar inspector-skeleton-toolbar">
-            <div>
-              <SkeletonShape className="is-title" />
-              <SkeletonShape className="is-subtitle" />
-            </div>
-            <SkeletonShape className="is-filter" />
-          </div>
-          <div className="audit-verification inspector-skeleton-verification">
-            <SkeletonShape className="is-dot" />
-            <SkeletonShape />
-          </div>
-          <div className="audit-timeline">
-            {Array.from({ length: 5 }, (_, index) => (
-              <div className="inspector-skeleton-audit-row" key={index}>
-                <SkeletonShape className="is-glyph" />
-                <span>
-                  <SkeletonShape className="is-title" />
-                  <SkeletonShape className="is-subtitle" />
-                </span>
-                <SkeletonShape />
-                <SkeletonShape />
-              </div>
-            ))}
-          </div>
         </div>
       </div>
     );
@@ -309,6 +276,7 @@ export function Inspector({
   timeZone,
   environment,
   session,
+  sessionActivity,
   activeTab,
   onTabChange,
   onClose,
@@ -345,11 +313,13 @@ export function Inspector({
     metricRangeOptions.find(
       (option) => option.seconds === metricsRangeSeconds,
     ) ?? metricRangeOptions[1];
-  const requestKey = `${environment.id}:${activeTab}:${
-    activeTab === "metrics" ? metricsRangeSeconds : "default"
-  }`;
+  const requestKey =
+    activeTab === "activity"
+      ? ""
+      : `${environment.id}:${activeTab}:${
+          activeTab === "metrics" ? metricsRangeSeconds : "default"
+        }`;
   const [ideSnapshot, setIdeSnapshot] = useState<WorkspaceIdeSnapshot>();
-  const [audit, setAudit] = useState<EnvironmentAuditFeed>({ events: [] });
   const [metrics, setMetrics] = useState<EnvironmentMetrics>(
     emptyEnvironmentMetrics,
   );
@@ -359,8 +329,13 @@ export function Inspector({
     message: string;
   } | null>(null);
   const currentLoadError =
-    loadError?.requestKey === requestKey ? loadError.message : "";
-  const loading = resolvedRequestKey !== requestKey && !currentLoadError;
+    activeTab !== "activity" && loadError?.requestKey === requestKey
+      ? loadError.message
+      : "";
+  const loading =
+    activeTab !== "activity" &&
+    resolvedRequestKey !== requestKey &&
+    !currentLoadError;
   const cpuNow = lastMetricValue(metrics.cpuUtilization);
   const memoryNow = lastMetricValue(metrics.memoryWorkingSet);
   const networkReceiveNow = lastMetricValue(metrics.networkReceive);
@@ -375,12 +350,22 @@ export function Inspector({
 
   useEffect(() => {
     setIdeSnapshot(undefined);
-    setAudit({ events: [] });
     setMetrics(emptyEnvironmentMetrics());
     setLoadError(null);
   }, [environment.id]);
 
   useEffect(() => {
+    if (activeTab === "activity" && !sessionActivity) {
+      onTabChange("files");
+    }
+  }, [activeTab, onTabChange, sessionActivity]);
+
+  useEffect(() => {
+    if (activeTab === "activity") {
+      setLoadError(null);
+      return;
+    }
+
     const controller = new AbortController();
     setLoadError(null);
 
@@ -391,14 +376,10 @@ export function Inspector({
             `${path}/ide`,
             { signal: controller.signal },
           ).then((response) => setIdeSnapshot(response.data))
-        : activeTab === "audit"
-          ? apiFetch<ApiEnvelope<EnvironmentAuditFeed>>(`${path}/audit`, {
-              signal: controller.signal,
-            }).then((response) => setAudit(response.data))
-          : apiFetch<ApiEnvelope<EnvironmentMetrics>>(
-              `${path}/metrics?rangeSeconds=${metricsRangeSeconds}`,
-              { signal: controller.signal },
-            ).then((response) => setMetrics(response.data));
+        : apiFetch<ApiEnvelope<EnvironmentMetrics>>(
+            `${path}/metrics?rangeSeconds=${metricsRangeSeconds}`,
+            { signal: controller.signal },
+          ).then((response) => setMetrics(response.data));
 
     void request
       .catch((error) => {
@@ -432,13 +413,15 @@ export function Inspector({
           >
             <FileCode2 size={14} /> {ui.files}
           </button>
-          <button
-            type="button"
-            className={activeTab === "audit" ? "is-active" : ""}
-            onClick={() => onTabChange("audit")}
-          >
-            <ShieldCheck size={14} /> {ui.audit}
-          </button>
+          {sessionActivity ? (
+            <button
+              type="button"
+              className={activeTab === "activity" ? "is-active" : ""}
+              onClick={() => onTabChange("activity")}
+            >
+              <ListTree size={14} /> {sessionActivity.label}
+            </button>
+          ) : null}
           <button
             type="button"
             className={activeTab === "metrics" ? "is-active" : ""}
@@ -464,11 +447,15 @@ export function Inspector({
         </div>
       ) : null}
 
+      {activeTab === "activity" && sessionActivity
+        ? sessionActivity.content
+        : null}
+
       {loading ? (
         <InspectorSkeleton
-          activeTab={activeTab}
+          activeTab={activeTab === "files" ? "files" : "metrics"}
           label={ui.loadingView(
-            { files: ui.files, audit: ui.audit, metrics: ui.metrics }[activeTab],
+            activeTab === "files" ? ui.files : ui.metrics,
           )}
         />
       ) : !currentLoadError && activeTab === "files" ? (
@@ -482,15 +469,6 @@ export function Inspector({
             initialSnapshot={ideSnapshot}
           />
         </div>
-      ) : null}
-
-      {!loading && activeTab === "audit" ? (
-        <EnvironmentAuditPanel
-          audit={audit}
-          environmentId={environment.id}
-          language={language}
-          timeZone={timeZone}
-        />
       ) : null}
 
       {!loading && activeTab === "metrics" ? (

@@ -87,7 +87,8 @@ therefore have no effect on the native process or rollout.
 Environment Audit is harness-agnostic, signed Sandbox0 evidence. It belongs to
 the Environment because all product Sessions use the same Sandbox; it must not
 be presented as if a Sandbox-level event were attributable to one product
-Session.
+Session. The product exposes this feed from the Environment's **Settings →
+Audit** section rather than from a Session surface.
 
 Session Activity is instead a harness-native execution record. Each harness
 defines and renders its own tool kinds, statuses and payloads rather than
@@ -97,14 +98,16 @@ from the native Thread snapshot and its bounded notification suffix, and
 Supervisor Session and journal identify transport provenance only; they do not
 identify which Codex Thread owns an item. A restored Codex Thread snapshot
 retains Turn timestamps but not per-item occurrence timestamps, so the Activity
-view shows Turn time and does not manufacture precise tool timestamps.
+view in the current Session's **Inspector → Activity** tab shows Turn time and
+does not manufacture precise tool timestamps. The shared Inspector hosts the
+harness-owned renderer; it does not define a cross-harness Activity contract.
 
 External interactions preserve the same separation. Codex-native MCP, dynamic
 tool and web-search activity describes the semantic tool execution in Session
 Activity, while Sandbox0 network events remain signed Environment Audit
 evidence. The network audit feed has no native Thread correlation key, so
-Sandpi displays the two views separately and never infers a join from nearby
-timestamps.
+Sandpi displays the two views separately, does not normalize their timestamps
+onto a common timeline, and never infers a join from temporal proximity.
 
 ## Environment lifecycle
 

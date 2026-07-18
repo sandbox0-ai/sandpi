@@ -274,10 +274,12 @@ export function EnvironmentAuditPanel({
   useEffect(() => setView("all"), [environmentId]);
 
   return (
-    <div className="inspector-panel audit-panel">
+    <section
+      className="settings-card audit-panel"
+      aria-label={ui.auditEvents}
+    >
       <div className="audit-toolbar">
         <div>
-          <h2>{ui.auditEvents}</h2>
           <p>{ui.activitySummary(summary.operations, summary.attention)}</p>
         </div>
         <label className="audit-view-filter">
@@ -340,6 +342,6 @@ export function EnvironmentAuditPanel({
           <p>{ui.asynchronousAudit}</p>
         </div>
       )}
-    </div>
+    </section>
   );
 }

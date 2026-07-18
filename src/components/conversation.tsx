@@ -13,11 +13,13 @@ interface ConversationProps {
   environment: Environment;
   session: CodingSession;
   inspectorOpen: boolean;
+  inspectorTab: InspectorTab;
   terminalOpen: boolean;
   onToggleSidebar: () => void;
   onToggleInspector: () => void;
+  onInspectorTabChange: (tab: InspectorTab) => void;
   onToggleTerminal: () => void;
-  onOpenSettings: () => void;
+  onOpenSettings: (tab?: "general" | "audit") => void;
   onOpenInspector: (tab: InspectorTab) => void;
   onSessionChange: (session: CodingSession) => void;
   onDerivedSessionCreated: (session: CodingSession) => void;
