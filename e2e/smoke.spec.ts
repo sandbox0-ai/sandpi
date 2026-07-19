@@ -93,6 +93,113 @@ test("loads the live workspace and Environment credential surface", async ({
   expect(browserErrors).toEqual([]);
 });
 
+test("prefills native MCP definitions from the three shortcut groups", async ({
+  page,
+  request,
+}) => {
+  const response = await request.get("/api/v1/bootstrap");
+  expect(response.ok()).toBeTruthy();
+  const bootstrap = (await response.json()) as ApiEnvelope<SandpiBootstrap>;
+  const environment = bootstrap.data.environments[0];
+  test.skip(!environment, "An Environment is required for this check.");
+  if (!environment) return;
+
+  await page.route(
+    `**/api/v1/environments/${encodeURIComponent(environment.id)}/harnesses/codex/mcp-servers`,
+    async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          data: {
+            servers: [
+              {
+                name: "github",
+                transport: "streamable-http",
+                args: [],
+                url: "https://api.githubcopilot.com/mcp/",
+                enabled: true,
+                required: false,
+                enabledTools: [],
+                disabledTools: [],
+                managed: false,
+                authStatus: "notLoggedIn",
+                runtimeStatus: "authentication-required",
+                toolCount: 0,
+                resourceCount: 0,
+              },
+            ],
+          },
+        }),
+      });
+    },
+  );
+
+  await page.goto(
+    `/?team=${encodeURIComponent(environment.teamId)}&environment=${encodeURIComponent(environment.id)}&new=1`,
+  );
+  await page
+    .getByRole("button", { name: `${environment.name} settings` })
+    .last()
+    .click();
+  const settingsDialog = page.getByRole("dialog", {
+    name: `${environment.name} settings`,
+  });
+  await settingsDialog.getByRole("button", { name: "MCP servers" }).click();
+
+  await expect(
+    settingsDialog.getByText("Aggregator services", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    settingsDialog.getByText("Third-party MCP servers", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    settingsDialog.getByText("Local MCP servers", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    settingsDialog.getByRole("button", { name: "GitHub is configured" }),
+  ).toBeDisabled();
+
+  await settingsDialog
+    .getByRole("button", { name: "Configure OpenConnector" })
+    .click();
+  await expect(settingsDialog.getByLabel("Transport")).toHaveValue(
+    "streamable-http",
+  );
+  await expect(settingsDialog.getByLabel("Server URL")).toHaveValue(
+    "https://connector.oomol.com/v1/mcp",
+  );
+  await settingsDialog.getByRole("button", { name: "Cancel" }).click();
+
+  await settingsDialog
+    .getByRole("button", { name: "Configure Playwright" })
+    .click();
+  await expect(
+    settingsDialog.getByText("Playwright", { exact: true }),
+  ).toBeInViewport();
+  await expect(
+    settingsDialog.getByText(/Runs inside the Environment sandbox/),
+  ).toBeInViewport();
+  await expect(settingsDialog.getByLabel("Name")).toHaveValue("playwright");
+  await expect(settingsDialog.getByLabel("Transport")).toHaveValue("stdio");
+  await expect(settingsDialog.getByLabel("Command")).toHaveValue("npx");
+  await expect(settingsDialog.getByLabel(/Arguments/)).toHaveValue(
+    "-y\n@playwright/mcp@latest\n--headless\n--no-sandbox",
+  );
+
+  await settingsDialog.getByRole("button", { name: "Cancel" }).click();
+  await settingsDialog
+    .getByRole("button", { name: "Configure Context7" })
+    .click();
+  await expect(settingsDialog.getByLabel("Name")).toHaveValue("context7");
+  await expect(settingsDialog.getByLabel("Transport")).toHaveValue(
+    "streamable-http",
+  );
+  await expect(settingsDialog.getByLabel("Server URL")).toHaveValue(
+    "https://mcp.context7.com/mcp",
+  );
+});
+
 test("configures Sandbox0 network modes through safe domain exceptions", async ({
   page,
   request,

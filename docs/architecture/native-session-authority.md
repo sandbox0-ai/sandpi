@@ -252,6 +252,17 @@ evidence. The network audit feed has no native Thread correlation key, so
 Sandpi displays the two views separately, does not normalize their timestamps
 onto a common timeline, and never infers a join from temporal proximity.
 
+Environment MCP settings include a curated shortcut catalog in three groups:
+aggregator services, hosted third-party servers and local STDIO servers. Every
+non-local shortcut prefills a fixed HTTPS endpoint operated by the service
+provider; self-hosted endpoints remain available through Custom server. A
+shortcut only prefills a Codex-native definition before the user saves it;
+`config.toml` remains the single configuration authority and Sandpi stores no
+parallel integration record. Local servers are launched by Codex inside the
+Environment Sandbox, not in the browser. Remote OAuth and authorization headers
+remain native MCP authentication concerns and are not implied by selecting a
+catalog entry.
+
 ## Environment lifecycle
 
 Every Environment Sandbox is claimed with a 30-day Sandbox0 hard TTL,

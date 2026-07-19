@@ -2,6 +2,7 @@
 
 import {
   AlertTriangle,
+  ExternalLink,
   Pencil,
   Plus,
   RefreshCw,
@@ -10,7 +11,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import type {
   CodexEnvironmentSkill,
@@ -21,6 +22,12 @@ import type {
   CodexMcpTransport,
   CodexSkillsInventory,
 } from "@/harnesses/codex/environment-tools";
+import {
+  CODEX_MCP_PRESET_CATEGORIES,
+  CODEX_MCP_PRESETS,
+  codexMcpInputFromPreset,
+  type CodexMcpPreset,
+} from "@/harnesses/codex/mcp-catalog";
 import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
 
 interface CodexEnvironmentSettingsProps {
@@ -193,6 +200,7 @@ export function CodexSkillsSettings({
 
 interface McpDraft extends CodexMcpServerInput {
   name: string;
+  presetId?: string;
   argsText: string;
   enabledToolsText: string;
   disabledToolsText: string;
@@ -234,6 +242,18 @@ function mcpDraft(server: CodexMcpServer): McpDraft {
   };
 }
 
+function mcpPresetDraft(preset: CodexMcpPreset): McpDraft {
+  const input = codexMcpInputFromPreset(preset);
+  return {
+    ...input,
+    name: preset.name,
+    presetId: preset.id,
+    argsText: input.args.join("\n"),
+    enabledToolsText: input.enabledTools.join(", "),
+    disabledToolsText: input.disabledTools.join(", "),
+  };
+}
+
 export function CodexMcpSettings({
   environmentId,
 }: CodexEnvironmentSettingsProps) {
@@ -245,6 +265,9 @@ export function CodexMcpSettings({
   const [draft, setDraft] = useState<McpDraft | null>(null);
   const [editingName, setEditingName] = useState("");
   const [error, setError] = useState("");
+  const selectedPreset = draft?.presetId
+    ? CODEX_MCP_PRESETS.find((preset) => preset.id === draft.presetId)
+    : undefined;
 
   const load = useCallback(async () => {
     setRefreshing(true);
@@ -374,13 +397,14 @@ export function CodexMcpSettings({
             setRemoveConfirmName("");
           }}
         >
-          <Plus size={14} aria-hidden="true" /> Add server
+          <Plus size={14} aria-hidden="true" /> Custom server
         </button>
       </ExtensionToolbar>
       {error ? <ExtensionError message={error} /> : null}
       {draft ? (
         <McpEditor
           draft={draft}
+          preset={selectedPreset}
           editing={Boolean(editingName)}
           busy={Boolean(busyName)}
           onChange={setDraft}
@@ -391,7 +415,20 @@ export function CodexMcpSettings({
           }}
           onSave={() => void saveServer()}
         />
-      ) : null}
+      ) : (
+        <McpCatalog
+          configuredNames={
+            new Set(inventory?.servers.map((server) => server.name) ?? [])
+          }
+          disabled={loading || Boolean(busyName)}
+          onSelect={(preset) => {
+            setDraft(mcpPresetDraft(preset));
+            setEditingName("");
+            setRemoveConfirmName("");
+            setError("");
+          }}
+        />
+      )}
       {loading ? (
         <ExtensionSkeleton rows={2} />
       ) : inventory && inventory.servers.length > 0 ? (
@@ -496,16 +533,116 @@ export function CodexMcpSettings({
         />
       )}
       <p className="settings-footnote">
-        Sandpi exposes Codex&apos;s native MCP configuration and runtime status.
-        OAuth callback brokering for a remote app-server is intentionally not
-        emulated by a generic Sandpi credential flow.
+        Catalog entries only prefill Codex&apos;s native MCP configuration;
+        Sandpi does not persist a second integration state. OAuth callback
+        brokering for a remote app-server is intentionally not emulated by a
+        generic Sandpi credential flow.
       </p>
+    </div>
+  );
+}
+
+function McpCatalog({
+  configuredNames,
+  disabled,
+  onSelect,
+}: {
+  configuredNames: ReadonlySet<string>;
+  disabled: boolean;
+  onSelect: (preset: CodexMcpPreset) => void;
+}) {
+  return (
+    <div className="codex-mcp-catalog" aria-label="MCP server catalog">
+      <header>
+        <div>
+          <strong>Quick add</strong>
+          <p>
+            Choose a preset to review its native Codex definition before saving.
+          </p>
+        </div>
+        <span>{CODEX_MCP_PRESETS.length} presets</span>
+      </header>
+      {CODEX_MCP_PRESET_CATEGORIES.map((category) => {
+        const presets = CODEX_MCP_PRESETS.filter(
+          (preset) => preset.category === category.id,
+        );
+        return (
+          <section
+            className="codex-mcp-catalog-group"
+            aria-labelledby={`codex-mcp-category-${category.id}`}
+            key={category.id}
+          >
+            <div className="codex-mcp-catalog-heading">
+              <div>
+                <strong id={`codex-mcp-category-${category.id}`}>
+                  {category.label}
+                </strong>
+                <p>{category.description}</p>
+              </div>
+              <span>{presets.length}</span>
+            </div>
+            <div className="codex-mcp-preset-grid">
+              {presets.map((preset) => {
+                const configured = configuredNames.has(preset.name);
+                return (
+                  <article className="codex-mcp-preset-card" key={preset.id}>
+                    <header>
+                      <span aria-hidden="true">
+                        <Server size={15} />
+                      </span>
+                      <div>
+                        <strong>{preset.title}</strong>
+                        <span>
+                          {preset.transport === "stdio"
+                            ? "Local STDIO"
+                            : "Streamable HTTP"}
+                        </span>
+                      </div>
+                    </header>
+                    <p>{preset.description}</p>
+                    <code title={mcpPresetEndpoint(preset)}>
+                      {mcpPresetEndpoint(preset)}
+                    </code>
+                    <footer>
+                      <span>{preset.connectionLabel}</span>
+                      <div>
+                        <a
+                          href={preset.docsUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          aria-label={`Open ${preset.title} setup guide`}
+                          title={`Open ${preset.title} setup guide`}
+                        >
+                          <ExternalLink size={12} aria-hidden="true" />
+                        </a>
+                        <button
+                          type="button"
+                          disabled={disabled || configured}
+                          aria-label={
+                            configured
+                              ? `${preset.title} is configured`
+                              : `Configure ${preset.title}`
+                          }
+                          onClick={() => onSelect(preset)}
+                        >
+                          {configured ? "Configured" : "Configure"}
+                        </button>
+                      </div>
+                    </footer>
+                  </article>
+                );
+              })}
+            </div>
+          </section>
+        );
+      })}
     </div>
   );
 }
 
 function McpEditor({
   draft,
+  preset,
   editing,
   busy,
   onChange,
@@ -513,25 +650,44 @@ function McpEditor({
   onSave,
 }: {
   draft: McpDraft;
+  preset?: CodexMcpPreset;
   editing: boolean;
   busy: boolean;
   onChange: (draft: McpDraft) => void;
   onCancel: () => void;
   onSave: () => void;
 }) {
+  const editorRef = useRef<HTMLDivElement>(null);
   const update = <K extends keyof McpDraft>(key: K, value: McpDraft[K]) =>
     onChange({ ...draft, [key]: value });
+
+  useEffect(() => {
+    editorRef.current?.scrollIntoView({ block: "start" });
+  }, []);
+
   return (
-    <div className="codex-mcp-editor">
+    <div className="codex-mcp-editor" ref={editorRef}>
       <header>
         <div>
           <span>{editing ? "Codex MCP server" : "New Codex MCP server"}</span>
-          <strong>{editing ? draft.name : "Configure a native server"}</strong>
+          <strong>
+            {editing
+              ? draft.name
+              : preset?.title ?? "Configure a native server"}
+          </strong>
         </div>
         <button type="button" aria-label="Close MCP editor" onClick={onCancel}>
           <X size={15} aria-hidden="true" />
         </button>
       </header>
+      {preset ? (
+        <div className="codex-mcp-preset-note">
+          <p>{preset.setupHint}</p>
+          <a href={preset.docsUrl} target="_blank" rel="noreferrer">
+            Setup guide <ExternalLink size={11} aria-hidden="true" />
+          </a>
+        </div>
+      ) : null}
       <div className="field-grid two-columns">
         <label>
           Name
@@ -700,6 +856,13 @@ function McpEditor({
       </footer>
     </div>
   );
+}
+
+function mcpPresetEndpoint(preset: CodexMcpPreset) {
+  if (preset.transport === "stdio") {
+    return [preset.command, ...(preset.args ?? [])].filter(Boolean).join(" ");
+  }
+  return preset.url;
 }
 
 function ExtensionToolbar({

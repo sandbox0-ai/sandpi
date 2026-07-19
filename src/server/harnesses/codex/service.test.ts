@@ -3541,18 +3541,36 @@ test("lists and toggles Environment skills through Codex native RPCs", async () 
   }
 });
 
-test("creates an Environment MCP server and reloads every native Thread", async () => {
-  let configured = false;
+test("creates remote and local Environment MCP servers and reloads every native Thread", async () => {
+  let configured = 0;
   const definition = {
     url: "https://docs.example.test/mcp",
     enabled: true,
     required: false,
     default_tools_approval_mode: "prompt",
   };
+  const localDefinition = {
+    command: "npx",
+    args: [
+      "-y",
+      "@playwright/mcp@latest",
+      "--headless",
+      "--no-sandbox",
+    ],
+    enabled: true,
+    required: false,
+    startup_timeout_sec: 120,
+    default_tools_approval_mode: "prompt",
+  };
   const context = fixture({
     onRequest(message) {
       if (message.method === "config/read") {
-        const mcpServers = configured ? { docs: definition } : {};
+        const mcpServers =
+          configured === 0
+            ? {}
+            : configured === 1
+              ? { docs: definition }
+              : { docs: definition, playwright: localDefinition };
         return {
           id: message.id,
           result: {
@@ -3573,7 +3591,7 @@ test("creates an Environment MCP server and reloads every native Thread", async 
         };
       }
       if (message.method === "config/batchWrite") {
-        configured = true;
+        configured += 1;
         return {
           id: message.id,
           result: {
@@ -3591,7 +3609,7 @@ test("creates an Environment MCP server and reloads every native Thread", async 
         return {
           id: message.id,
           result: {
-            data: configured
+            data: configured > 0
               ? [
                   {
                     name: "docs",
@@ -3605,6 +3623,22 @@ test("creates an Environment MCP server and reloads every native Thread", async 
                     resourceTemplates: [],
                     authStatus: "unsupported",
                   },
+                  ...(configured > 1
+                    ? [
+                        {
+                          name: "playwright",
+                          serverInfo: {
+                            name: "playwright",
+                            title: "Playwright",
+                            version: "1.0.0",
+                          },
+                          tools: {},
+                          resources: [],
+                          resourceTemplates: [],
+                          authStatus: "unsupported",
+                        },
+                      ]
+                    : []),
                 ]
               : [],
             nextCursor: null,
@@ -3656,6 +3690,70 @@ test("creates an Environment MCP server and reloads every native Thread", async 
         ({ message }) => message.method === "config/mcpServer/reload",
       ),
       true,
+    );
+
+    const localInventory = await context.service.createEnvironmentMcpServer({
+      userId: "user",
+      environmentId: environment.id,
+      name: "playwright",
+      server: {
+        transport: "stdio",
+        command: localDefinition.command,
+        args: localDefinition.args,
+        enabled: true,
+        required: false,
+        startupTimeoutSec: 120,
+        defaultToolsApprovalMode: "prompt",
+        enabledTools: [],
+        disabledTools: [],
+      },
+    });
+    const local = localInventory.servers.find(
+      (server) => server.name === "playwright",
+    );
+    assert.equal(local?.transport, "stdio");
+    assert.equal(local?.command, "npx");
+    assert.deepEqual(local?.args, localDefinition.args);
+
+    const batches = context.writes.filter(
+      ({ message }) => message.method === "config/batchWrite",
+    );
+    const localEdits = (
+      batches[1]?.message.params as { edits: Array<Record<string, unknown>> }
+    ).edits;
+    assert.ok(
+      localEdits.some(
+        (edit) =>
+          edit.keyPath === "mcp_servers.playwright.command" &&
+          edit.value === "npx",
+      ),
+    );
+    assert.ok(
+      localEdits.some(
+        (edit) =>
+          edit.keyPath === "mcp_servers.playwright.args" &&
+          Array.isArray(edit.value) &&
+          edit.value.join("\n") === localDefinition.args.join("\n"),
+      ),
+    );
+    assert.ok(
+      localEdits.some(
+        (edit) =>
+          edit.keyPath === "mcp_servers.playwright.url" && edit.value === null,
+      ),
+    );
+    assert.ok(
+      localEdits.some(
+        (edit) =>
+          edit.keyPath === "mcp_servers.playwright.startup_timeout_sec" &&
+          edit.value === 120,
+      ),
+    );
+    assert.equal(
+      context.writes.filter(
+        ({ message }) => message.method === "config/mcpServer/reload",
+      ).length,
+      2,
     );
   } finally {
     await context.close();

@@ -5209,6 +5209,223 @@ code.codex-compact-activity-subject {
   height: 31px;
 }
 
+.codex-mcp-catalog {
+  display: flex;
+  flex-direction: column;
+  gap: 17px;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel-strong);
+}
+
+.codex-mcp-catalog > header,
+.codex-mcp-catalog-heading,
+.codex-mcp-preset-card > header,
+.codex-mcp-preset-card > footer,
+.codex-mcp-preset-card > footer > div {
+  display: flex;
+  align-items: center;
+}
+
+.codex-mcp-catalog > header {
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 11px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.codex-mcp-catalog > header > div,
+.codex-mcp-catalog-heading > div,
+.codex-mcp-preset-card > header > div {
+  min-width: 0;
+}
+
+.codex-mcp-catalog > header strong {
+  color: var(--ink);
+  font-size: 11px;
+}
+
+.codex-mcp-catalog > header p,
+.codex-mcp-catalog-heading p {
+  margin: 3px 0 0;
+  color: var(--ink-faint);
+  font-size: 8.5px;
+  line-height: 1.45;
+}
+
+.codex-mcp-catalog > header > span,
+.codex-mcp-catalog-heading > span {
+  flex: 0 0 auto;
+  padding: 3px 5px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--panel);
+  color: var(--ink-faint);
+  font-size: 7.5px;
+  font-weight: 620;
+  line-height: 1;
+}
+
+.codex-mcp-catalog-group {
+  display: grid;
+  gap: 8px;
+}
+
+.codex-mcp-catalog-heading {
+  min-height: 29px;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.codex-mcp-catalog-heading strong {
+  color: var(--ink-soft);
+  font-size: 9.5px;
+  font-weight: 660;
+}
+
+.codex-mcp-preset-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.codex-mcp-preset-card {
+  display: flex;
+  min-width: 0;
+  min-height: 151px;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.codex-mcp-preset-card > header {
+  gap: 8px;
+}
+
+.codex-mcp-preset-card > header > span {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--sidebar);
+  color: var(--ink-faint);
+}
+
+.codex-mcp-preset-card > header > div {
+  display: grid;
+  gap: 3px;
+}
+
+.codex-mcp-preset-card > header strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 10px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.codex-mcp-preset-card > header > div > span {
+  color: var(--ink-faint);
+  font-size: 7.5px;
+}
+
+.codex-mcp-preset-card > p {
+  min-height: 25px;
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 8.5px;
+  line-height: 1.45;
+}
+
+.codex-mcp-preset-card > code {
+  display: block;
+  overflow: hidden;
+  min-width: 0;
+  padding: 5px 6px;
+  border-radius: 5px;
+  background: var(--sidebar);
+  color: var(--ink-faint);
+  font-size: 7px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.codex-mcp-preset-card > footer {
+  justify-content: space-between;
+  gap: 7px;
+  margin-top: auto;
+}
+
+.codex-mcp-preset-card > footer > span {
+  overflow: hidden;
+  padding: 3px 5px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--ink-faint);
+  font-size: 7px;
+  font-weight: 620;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.codex-mcp-preset-card > footer > div {
+  flex: 0 0 auto;
+  gap: 4px;
+}
+
+.codex-mcp-preset-card > footer a,
+.codex-mcp-preset-card > footer button {
+  display: inline-flex;
+  height: 25px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-strong);
+  color: var(--ink-soft);
+}
+
+.codex-mcp-preset-card > footer a {
+  width: 25px;
+}
+
+.codex-mcp-preset-card > footer button {
+  min-width: 59px;
+  padding: 0 7px;
+  font-size: 8px;
+  font-weight: 630;
+  cursor: pointer;
+}
+
+.codex-mcp-preset-card > footer a:hover,
+.codex-mcp-preset-card > footer button:hover:not(:disabled) {
+  border-color: var(--ink-faint);
+  background: var(--hover);
+  color: var(--ink);
+}
+
+.codex-mcp-preset-card > footer a:focus-visible,
+.codex-mcp-preset-card > footer button:focus-visible {
+  outline: 2px solid #6e8bad;
+  outline-offset: 2px;
+}
+
+.codex-mcp-preset-card > footer button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
 .codex-extension-list {
   overflow: hidden;
   border: 1px solid var(--line);
@@ -5548,6 +5765,39 @@ code.codex-compact-activity-subject {
 .codex-mcp-editor > footer {
   justify-content: flex-end;
   padding-top: 2px;
+}
+
+.codex-mcp-preset-note {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 10px;
+  border: 1px solid var(--amber);
+  border-radius: 8px;
+  background: var(--amber-soft);
+}
+
+.codex-mcp-preset-note p {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 8.5px;
+  line-height: 1.5;
+}
+
+.codex-mcp-preset-note a {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  color: var(--amber);
+  font-size: 8px;
+  font-weight: 640;
+  white-space: nowrap;
+}
+
+.codex-mcp-preset-note a:hover {
+  color: var(--ink);
 }
 
 .codex-mcp-switches {
@@ -6667,8 +6917,13 @@ code.codex-compact-activity-subject {
 
   .field-grid.two-columns,
   .share-form-grid,
-  .network-mode-grid {
+  .network-mode-grid,
+  .codex-mcp-preset-grid {
     grid-template-columns: 1fr;
+  }
+
+  .codex-mcp-preset-note {
+    flex-direction: column;
   }
 
   .network-mode-option {
