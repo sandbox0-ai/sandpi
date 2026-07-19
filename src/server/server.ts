@@ -15,7 +15,6 @@ import type { Pool } from "pg";
 import { ZodError, z } from "zod";
 
 import type {
-  NetworkPolicy,
   SandpiDeploymentSummary,
   SandpiPreferences,
 } from "@/lib/types";
@@ -56,6 +55,7 @@ import { SecretBox } from "@/server/secrets";
 import { SandpiStore } from "@/server/store";
 import { TerminalHeartbeat } from "@/server/terminal-heartbeat";
 import { TerminalInputQueue } from "@/server/terminal-input-queue";
+import { networkPolicySchema } from "@/server/network-policy-schema";
 
 const SESSION_COOKIE = "sandpi_session";
 const CODEX_IMAGE_BODY_LIMIT_BYTES = 36 * 1024 * 1024;
@@ -1458,16 +1458,6 @@ function isOptionalCodexRuntimeError(error: unknown): error is HttpError {
         [404, 409, 503].includes(error.statusCode)))
   );
 }
-
-function rpcNetworkMode(value: string): NetworkPolicy["mode"] {
-  return value as NetworkPolicy["mode"];
-}
-
-const networkPolicySchema = z.object({
-  mode: z.enum(["restricted", "allow-all", "block-all"]).transform(rpcNetworkMode),
-  allowedDomains: z.array(z.string().trim().min(1).max(253)).max(500),
-  logDeniedRequests: z.boolean(),
-});
 
 const preferencesSchema: z.ZodType<SandpiPreferences> = z.object({
   general: z.object({

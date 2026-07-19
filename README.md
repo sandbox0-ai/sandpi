@@ -126,7 +126,10 @@ Web today; iOS / Android / HarmonyOS later
   template and network policy. Product Sessions are lightweight references to
   native harness Sessions inside that runtime and cannot switch harnesses.
   Network-policy edits are applied to that running Environment Sandbox rather
-  than deferred to a future product Session.
+  than deferred to a future product Session. The settings surface follows
+  Sandbox0's two native fallback modes: `block-all` adds domain allow
+  exceptions, while `allow-all` adds domain deny exceptions. Sandpi submits
+  those exceptions as native `trafficRules`.
 - **Audit and activity boundary:** signed Sandbox audit is displayed as common
   Environment evidence in **Environment Settings → Audit**. The current
   Session's Inspector exposes **Activity** as a harness-native execution record;

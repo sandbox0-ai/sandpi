@@ -218,8 +218,7 @@ export async function seedCommunityDefaults(
         JSON.stringify({ label: "Codex", status: "not-connected" }),
         JSON.stringify({
           mode: "allow-all",
-          allowedDomains: [],
-          logDeniedRequests: true,
+          domainExceptions: [],
         }),
         JSON.stringify({
           managedBy: "sandpi",

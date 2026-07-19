@@ -5876,16 +5876,38 @@ code.codex-compact-activity-subject {
   line-height: 1.5;
 }
 
+.network-mode-fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.network-mode-fieldset > legend {
+  padding: 0;
+  color: var(--ink);
+  font-size: 10.5px;
+  font-weight: 650;
+}
+
+.network-mode-fieldset > p {
+  margin: 5px 0 11px;
+  color: var(--ink-faint);
+  font-size: 9.5px;
+  line-height: 1.45;
+}
+
 .network-mode-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
 }
 
-.network-mode-grid button {
+.network-mode-option {
   position: relative;
-  min-height: 112px;
-  padding: 12px;
+  min-width: 0;
+  min-height: 126px;
+  padding: 13px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--panel-strong);
@@ -5893,35 +5915,75 @@ code.codex-compact-activity-subject {
   cursor: pointer;
 }
 
-.network-mode-grid button:hover,
-.network-mode-grid button.is-selected {
+.network-mode-option:hover {
+  border-color: var(--ink-faint);
+  background: color-mix(in srgb, var(--hover) 45%, var(--panel-strong));
+}
+
+.network-mode-option.is-selected {
   border-color: var(--green);
 }
 
-.network-mode-grid button.is-selected {
+.network-mode-option.is-selected {
+  background: color-mix(in srgb, var(--green) 5%, var(--panel-strong));
   box-shadow: inset 0 0 0 1px var(--green);
 }
 
-.network-mode-grid strong {
+.network-mode-option.is-pending,
+.network-mode-option.is-pending:hover {
+  border-color: var(--amber);
+  background: color-mix(in srgb, var(--amber-soft) 35%, var(--panel-strong));
+  box-shadow: inset 0 0 0 1px var(--amber);
+}
+
+.network-mode-option:has(input:focus-visible) {
+  outline: 2px solid #6e8bad;
+  outline-offset: 2px;
+}
+
+.network-mode-icon {
+  display: inline-flex;
+  width: 29px;
+  height: 29px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  background: var(--hover);
+  color: var(--ink-soft);
+}
+
+.network-mode-option.is-selected .network-mode-icon {
+  background: color-mix(in srgb, var(--green) 13%, var(--panel));
+  color: var(--green);
+}
+
+.network-mode-option strong {
   display: block;
-  margin-top: 22px;
+  margin-top: 11px;
   font-size: 10.5px;
 }
 
-.network-mode-grid p {
+.network-mode-option p {
   margin: 5px 0 0;
   color: var(--ink-faint);
-  font-size: 8.5px;
+  font-size: 9px;
   line-height: 1.4;
+}
+
+.network-mode-option code {
+  display: inline-block;
+  margin-top: 10px;
+  color: var(--ink-faint);
+  font-size: 8px;
 }
 
 .radio-mark {
   position: absolute;
-  top: 10px;
-  right: 10px;
+  top: 13px;
+  right: 13px;
   display: inline-flex;
-  width: 15px;
-  height: 15px;
+  width: 16px;
+  height: 16px;
   align-items: center;
   justify-content: center;
   border: 1px solid var(--line);
@@ -5929,8 +5991,78 @@ code.codex-compact-activity-subject {
   color: var(--green);
 }
 
-.network-mode-grid button.is-selected .radio-mark {
-  border-color: transparent;
+.network-mode-option.is-selected .radio-mark {
+  border-color: var(--green);
+}
+
+.network-mode-option.is-selected .radio-mark::after {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--green);
+  content: "";
+}
+
+.network-mode-confirmation {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--amber) 45%, var(--line));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--amber-soft) 62%, var(--panel));
+  color: var(--amber);
+}
+
+.network-mode-confirmation > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.network-mode-confirmation > div {
+  min-width: 0;
+}
+
+.network-mode-confirmation strong {
+  color: var(--ink);
+  font-size: 10px;
+}
+
+.network-mode-confirmation p {
+  margin: 4px 0 0;
+  color: var(--ink-soft);
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.network-mode-confirmation-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 10px;
+}
+
+.network-mode-confirmation-actions button {
+  height: 30px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-strong);
+  color: var(--ink-soft);
+  font-size: 9px;
+  font-weight: 620;
+  cursor: pointer;
+}
+
+.network-mode-confirmation-actions button:hover {
+  border-color: var(--ink-faint);
+  color: var(--ink);
+}
+
+.network-mode-confirmation-actions button.is-primary {
+  border-color: var(--amber);
+  background: var(--amber);
+  color: #fff;
 }
 
 .domain-card {
@@ -5941,12 +6073,43 @@ code.codex-compact-activity-subject {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
+  gap: 14px;
   color: var(--ink-faint);
+}
+
+.domain-card header > div {
+  min-width: 0;
 }
 
 .domain-card header strong {
   color: var(--ink);
   font-size: 10.5px;
+}
+
+.domain-action-badge {
+  display: inline-flex;
+  min-height: 25px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 8px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.domain-action-badge.is-allow {
+  border-color: color-mix(in srgb, var(--green) 40%, var(--line));
+  background: color-mix(in srgb, var(--green) 8%, var(--panel));
+  color: var(--green);
+}
+
+.domain-action-badge.is-block {
+  border-color: color-mix(in srgb, var(--red) 38%, var(--line));
+  background: var(--red-soft);
+  color: var(--red);
 }
 
 .domain-list {
@@ -5958,6 +6121,7 @@ code.codex-compact-activity-subject {
 
 .domain-list > span {
   display: inline-flex;
+  max-width: 100%;
   height: 27px;
   align-items: center;
   gap: 5px;
@@ -5967,6 +6131,15 @@ code.codex-compact-activity-subject {
   background: var(--sidebar);
   font-family: "SFMono-Regular", Consolas, monospace;
   font-size: 8.5px;
+}
+
+.domain-list > span code {
+  min-width: 0;
+  overflow: hidden;
+  color: inherit;
+  font-size: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .domain-list button {
@@ -5988,6 +6161,16 @@ code.codex-compact-activity-subject {
   color: var(--red);
 }
 
+.domain-empty-state {
+  margin: 14px 0 !important;
+  padding: 11px;
+  border: 1px dashed var(--line);
+  border-radius: 7px;
+  background: var(--sidebar);
+  color: var(--ink-faint);
+  text-align: center;
+}
+
 .add-domain-row {
   display: flex;
   gap: 7px;
@@ -5998,9 +6181,15 @@ code.codex-compact-activity-subject {
   flex: 1;
 }
 
+.add-domain-row input[aria-invalid="true"] {
+  border-color: var(--red);
+  box-shadow: 0 0 0 2px var(--red-soft);
+}
+
 .add-domain-row button {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 4px;
   padding: 0 11px;
   border: 1px solid var(--line);
@@ -6014,6 +6203,27 @@ code.codex-compact-activity-subject {
 .add-domain-row button:hover {
   background: var(--hover);
   color: var(--ink);
+}
+
+.domain-input-error {
+  margin: 7px 0 0 !important;
+  color: var(--red) !important;
+  font-size: 8.5px !important;
+}
+
+.network-audit-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 0;
+  color: var(--ink-faint);
+  font-size: 8.5px;
+  line-height: 1.5;
+}
+
+.network-audit-note svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
 }
 
 .function-row small {
@@ -6461,8 +6671,20 @@ code.codex-compact-activity-subject {
     grid-template-columns: 1fr;
   }
 
-  .network-mode-grid button {
-    min-height: 78px;
+  .network-mode-option {
+    min-height: 112px;
+  }
+
+  .domain-card header {
+    flex-direction: column;
+  }
+
+  .add-domain-row {
+    flex-direction: column;
+  }
+
+  .add-domain-row button {
+    min-height: 36px;
   }
 
   .credential-actions {

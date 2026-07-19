@@ -439,7 +439,7 @@ export class SandpiStore {
          ) VALUES (
            $1, $2, $3, $4, '', '#151515', 'updating', 1, 'coding-agent', 0,
            'codex', '{"label":"Codex","status":"not-connected"}'::JSONB,
-           '{"mode":"allow-all","allowedDomains":[],"logDeniedRequests":true}'::JSONB,
+           '{"mode":"allow-all","domainExceptions":[]}'::JSONB,
            '[]'::JSONB
          )`,
         [id, input.teamId, input.userId, input.name],

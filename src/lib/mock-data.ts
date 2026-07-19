@@ -677,14 +677,13 @@ export const mockEnvironments: Environment[] = [
       lastVerified: timestamp("2026-07-12T09:13:00+08:00"),
     },
     networkPolicy: {
-      mode: "restricted",
-      allowedDomains: [
+      mode: "block-all",
+      domainExceptions: [
         "github.com",
         "api.github.com",
         "registry.npmjs.org",
         "chatgpt.com",
       ],
-      logDeniedRequests: true,
     },
     functions: [
       {
@@ -728,9 +727,8 @@ export const mockEnvironments: Environment[] = [
       lastVerified: timestamp("2026-07-11T09:25:00+08:00"),
     },
     networkPolicy: {
-      mode: "restricted",
-      allowedDomains: ["github.com", "registry.npmjs.org", "chatgpt.com"],
-      logDeniedRequests: true,
+      mode: "block-all",
+      domainExceptions: ["github.com", "registry.npmjs.org", "chatgpt.com"],
     },
     functions: [
       {
@@ -766,9 +764,8 @@ export const mockEnvironments: Environment[] = [
       lastVerified: timestamp("2026-07-12T07:25:00+08:00"),
     },
     networkPolicy: {
-      mode: "restricted",
-      allowedDomains: ["github.com", "api.github.com", "chatgpt.com"],
-      logDeniedRequests: true,
+      mode: "block-all",
+      domainExceptions: ["github.com", "api.github.com", "chatgpt.com"],
     },
     functions: [],
   },

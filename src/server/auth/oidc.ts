@@ -306,7 +306,7 @@ async function createPersonalTeam(
         $1, $2, $3, 'Development', '', '#315c4b', 'updating', 1,
         'coding-agent', 'codex',
         '{"label":"Codex","status":"not-connected"}'::JSONB,
-        '{"mode":"allow-all","allowedDomains":[],"logDeniedRequests":true}'::JSONB,
+        '{"mode":"allow-all","domainExceptions":[]}'::JSONB,
         '[]'::JSONB
       )
     `,

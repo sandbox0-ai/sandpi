@@ -26,9 +26,8 @@ const environment: Environment = {
   credentialRevision: 1,
   codingAgent: { harness: "codex", label: "Codex", status: "connected" },
   networkPolicy: {
-    mode: "restricted",
-    allowedDomains: ["github.com"],
-    logDeniedRequests: true,
+    mode: "block-all",
+    domainExceptions: ["github.com"],
   },
   functions: [],
 };
@@ -110,6 +109,21 @@ test("claims exactly one Environment Sandbox around its shared Workspace Volume"
   assert.equal(
     ((claimInput?.config ?? {}) as Record<string, unknown>).autoResume,
     true,
+  );
+  assert.deepEqual(
+    ((claimInput?.config ?? {}) as Record<string, unknown>).network,
+    {
+      mode: "block-all",
+      egress: {
+        trafficRules: [
+          {
+            name: "sandpi-environment-domain-exceptions",
+            action: "allow",
+            domains: ["github.com"],
+          },
+        ],
+      },
+    },
   );
   assert.deepEqual(allocations, [
     {

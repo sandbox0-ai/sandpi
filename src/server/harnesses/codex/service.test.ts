@@ -55,8 +55,7 @@ const environment: Environment = {
   codingAgent: { harness: "codex", label: "Codex", status: "connected" },
   networkPolicy: {
     mode: "allow-all",
-    allowedDomains: [],
-    logDeniedRequests: false,
+    domainExceptions: [],
   },
   functions: [],
 };

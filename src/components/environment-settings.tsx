@@ -4,7 +4,6 @@ import {
   Archive,
   Cable,
   Check,
-  CircleDot,
   Clock3,
   Copy,
   ExternalLink,
@@ -40,6 +39,10 @@ import {
 } from "@/harnesses/codex/environment-settings";
 import { EnvironmentAuditPanel } from "@/components/environment-audit-panel";
 import { mergeEnvironmentAuditEventPages } from "@/lib/environment-audit";
+import {
+  NETWORK_DOMAIN_INPUT_ERROR,
+  normalizeNetworkDomain,
+} from "@/lib/network-policy";
 import type { OperationLanguage } from "@/lib/operation-ui";
 import {
   formatUnixTimestamp,
@@ -50,6 +53,7 @@ import type {
   CodingSession,
   Environment,
   EnvironmentAuditFeed,
+  NetworkPolicy,
 } from "@/lib/types";
 
 export type EnvironmentSettingsTab =
@@ -153,15 +157,13 @@ function hasUnsavedEnvironmentChanges(
   draft: Environment,
   environment: Environment,
 ) {
-  const draftDomains = draft.networkPolicy.allowedDomains;
-  const savedDomains = environment.networkPolicy.allowedDomains;
+  const draftDomains = draft.networkPolicy.domainExceptions;
+  const savedDomains = environment.networkPolicy.domainExceptions;
   return (
     draft.name.trim() !== environment.name ||
     draft.description !== environment.description ||
     draft.color !== environment.color ||
     draft.networkPolicy.mode !== environment.networkPolicy.mode ||
-    draft.networkPolicy.logDeniedRequests !==
-      environment.networkPolicy.logDeniedRequests ||
     draftDomains.length !== savedDomains.length ||
     draftDomains.some((domain, index) => domain !== savedDomains[index])
   );
@@ -190,6 +192,9 @@ export function EnvironmentSettings({
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState("");
   const [newDomain, setNewDomain] = useState("");
+  const [domainError, setDomainError] = useState("");
+  const [pendingNetworkMode, setPendingNetworkMode] =
+    useState<NetworkPolicy["mode"] | null>(null);
   const [codexAuthFlow, setCodexAuthFlow] =
     useState<CodexDeviceAuthFlow | null>(null);
   const [codexAuthBusy, setCodexAuthBusy] = useState(false);
@@ -208,6 +213,18 @@ export function EnvironmentSettings({
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const dangerZoneRef = useRef<HTMLDivElement>(null);
   const hasUnsavedChanges = hasUnsavedEnvironmentChanges(draft, environment);
+  const blocksByDefault = draft.networkPolicy.mode === "block-all";
+  const domainAction = blocksByDefault ? "allow" : "block";
+  const domainActionPast = blocksByDefault ? "allowed" : "blocked";
+  const domainListTitle = blocksByDefault
+    ? "Allowed domains"
+    : "Blocked domains";
+  const domainDescription = blocksByDefault
+    ? "These domains override the default block. Every other outbound destination remains blocked."
+    : "These domains override the default allow. Every other outbound destination remains reachable.";
+  const domainEmptyState = blocksByDefault
+    ? "No exceptions. All outbound destinations are blocked."
+    : "No exceptions. All outbound destinations are allowed.";
 
   useEffect(() => {
     setActiveTab(initialTab);
@@ -511,18 +528,60 @@ export function EnvironmentSettings({
   }
 
   function addDomain() {
-    const domain = newDomain.trim().toLowerCase();
-    if (!domain || draft.networkPolicy.allowedDomains.includes(domain)) {
+    const domain = normalizeNetworkDomain(newDomain);
+    if (!domain) {
+      setDomainError(NETWORK_DOMAIN_INPUT_ERROR);
+      return;
+    }
+    if (draft.networkPolicy.domainExceptions.includes(domain)) {
+      setDomainError(`${domain} is already ${domainActionPast}.`);
       return;
     }
     setDraft((current) => ({
       ...current,
       networkPolicy: {
         ...current.networkPolicy,
-        allowedDomains: [...current.networkPolicy.allowedDomains, domain],
+        domainExceptions: [
+          ...current.networkPolicy.domainExceptions,
+          domain,
+        ],
       },
     }));
     setNewDomain("");
+    setDomainError("");
+    setPendingNetworkMode(null);
+  }
+
+  function requestNetworkMode(mode: NetworkPolicy["mode"]) {
+    setDomainError("");
+    if (mode === draft.networkPolicy.mode) {
+      setPendingNetworkMode(null);
+      return;
+    }
+    if (draft.networkPolicy.domainExceptions.length > 0) {
+      setPendingNetworkMode(mode);
+      return;
+    }
+    setDraft((current) => ({
+      ...current,
+      networkPolicy: { ...current.networkPolicy, mode },
+    }));
+    setNewDomain("");
+    setPendingNetworkMode(null);
+  }
+
+  function confirmNetworkModeChange() {
+    if (!pendingNetworkMode) return;
+    setDraft((current) => ({
+      ...current,
+      networkPolicy: {
+        mode: pendingNetworkMode,
+        domainExceptions: [],
+      },
+    }));
+    setNewDomain("");
+    setDomainError("");
+    setPendingNetworkMode(null);
   }
 
   return (
@@ -583,7 +642,12 @@ export function EnvironmentSettings({
                   type="button"
                   key={tab.id}
                   className={activeTab === tab.id ? "is-active" : ""}
-                  onClick={() => setActiveTab(tab.id)}
+                  onClick={() => {
+                    setActiveTab(tab.id);
+                    if (tab.id !== "network") {
+                      setPendingNetworkMode(null);
+                    }
+                  }}
                 >
                   <Icon size={16} />
                   {tab.label}
@@ -1090,123 +1154,204 @@ export function EnvironmentSettings({
               <SettingsSection
                 eyebrow="Environment runtime"
                 title="Network policy"
-                description="This policy is applied to the Environment's shared Sandbox and therefore covers every native coding-agent Session in it."
+                description="Choose the default outbound action, then add only the domain exceptions. The policy covers every Session in this Environment's shared Sandbox."
               >
-                <div className="network-mode-grid">
-                  {(
-                    [
+                <fieldset className="network-mode-fieldset">
+                  <legend>Default outbound access</legend>
+                  <p>
+                    Domain exceptions receive the opposite action. Unmatched
+                    traffic always follows this default.
+                  </p>
+                  <div className="network-mode-grid">
+                    {(
                       [
-                        "restricted",
-                        "Restricted",
-                        "Allow listed destinations and block the rest.",
-                      ],
-                      [
-                        "allow-all",
-                        "Allow all",
-                        "Permit outbound traffic without a domain allowlist.",
-                      ],
-                      [
-                        "block-all",
-                        "Block all",
-                        "Disable all outbound network traffic.",
-                      ],
-                    ] as const
-                  ).map(([mode, label, description]) => (
-                    <button
-                      type="button"
-                      key={mode}
-                      className={
-                        draft.networkPolicy.mode === mode ? "is-selected" : ""
-                      }
-                      onClick={() =>
-                        setDraft((current) => ({
-                          ...current,
-                          networkPolicy: { ...current.networkPolicy, mode },
-                        }))
-                      }
-                    >
-                      <span className="radio-mark">
-                        {draft.networkPolicy.mode === mode ? (
-                          <CircleDot size={15} />
-                        ) : null}
-                      </span>
-                      <strong>{label}</strong>
-                      <p>{description}</p>
-                    </button>
-                  ))}
-                </div>
+                        [
+                          "block-all",
+                          "Block by default",
+                          "Only explicitly allowed domains can be reached.",
+                          LockKeyhole,
+                        ],
+                        [
+                          "allow-all",
+                          "Allow by default",
+                          "Every domain is reachable unless explicitly blocked.",
+                          Globe2,
+                        ],
+                      ] as const
+                    ).map(([mode, label, description, Icon]) => (
+                      <label
+                        key={mode}
+                        className={`network-mode-option ${
+                          draft.networkPolicy.mode === mode
+                            ? "is-selected"
+                            : pendingNetworkMode === mode
+                              ? "is-pending"
+                              : ""
+                        }`}
+                      >
+                        <input
+                          className="sr-only"
+                          type="radio"
+                          name="network-mode"
+                          value={mode}
+                          checked={draft.networkPolicy.mode === mode}
+                          onChange={() => requestNetworkMode(mode)}
+                        />
+                        <span className="network-mode-icon" aria-hidden="true">
+                          <Icon size={17} />
+                        </span>
+                        <span className="radio-mark" aria-hidden="true" />
+                        <strong>{label}</strong>
+                        <p>{description}</p>
+                        <code translate="no">{mode}</code>
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+
+                {pendingNetworkMode ? (
+                  <div className="network-mode-confirmation" role="alert">
+                    <TriangleAlert size={18} aria-hidden="true" />
+                    <div>
+                      <strong>
+                        Clear {draft.networkPolicy.domainExceptions.length}{" "}
+                        {domainActionPast}{" "}
+                        {draft.networkPolicy.domainExceptions.length === 1
+                          ? "domain"
+                          : "domains"}
+                        ?
+                      </strong>
+                      <p>
+                        Switching to{" "}
+                        {pendingNetworkMode === "block-all"
+                          ? "Block by default"
+                          : "Allow by default"}{" "}
+                        cannot safely reinterpret the current exceptions.
+                      </p>
+                      <div className="network-mode-confirmation-actions">
+                        <button
+                          type="button"
+                          onClick={() => setPendingNetworkMode(null)}
+                        >
+                          Keep current mode
+                        </button>
+                        <button
+                          type="button"
+                          className="is-primary"
+                          onClick={confirmNetworkModeChange}
+                        >
+                          Switch & clear domains
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+
                 <div className="settings-card domain-card">
                   <header>
                     <div>
-                      <strong>Allowed domains</strong>
-                      <p>HTTPS traffic to these destinations is allowed.</p>
+                      <strong>{domainListTitle}</strong>
+                      <p id="network-domain-description">
+                        {domainDescription}
+                      </p>
                     </div>
-                    <Globe2 size={18} />
+                    <span
+                      className={`domain-action-badge ${
+                        blocksByDefault ? "is-allow" : "is-block"
+                      }`}
+                    >
+                      {blocksByDefault ? (
+                        <Globe2 size={14} aria-hidden="true" />
+                      ) : (
+                        <LockKeyhole size={14} aria-hidden="true" />
+                      )}
+                      {blocksByDefault ? "Allow exceptions" : "Block exceptions"}
+                    </span>
                   </header>
-                  <div className="domain-list">
-                    {draft.networkPolicy.allowedDomains.map((domain) => (
-                      <span key={domain}>
-                        {domain}
-                        <button
-                          type="button"
-                          aria-label={`Remove ${domain}`}
-                          onClick={() =>
-                            setDraft((current) => ({
-                              ...current,
-                              networkPolicy: {
-                                ...current.networkPolicy,
-                                allowedDomains:
-                                  current.networkPolicy.allowedDomains.filter(
-                                    (item) => item !== domain,
-                                  ),
-                              },
-                            }))
-                          }
-                        >
-                          <X size={12} />
-                        </button>
-                      </span>
-                    ))}
-                  </div>
+                  {draft.networkPolicy.domainExceptions.length > 0 ? (
+                    <div className="domain-list">
+                      {draft.networkPolicy.domainExceptions.map((domain) => (
+                        <span key={domain}>
+                          <code title={domain} translate="no">
+                            {domain}
+                          </code>
+                          <button
+                            type="button"
+                            aria-label={`Remove ${domain}`}
+                            onClick={() => {
+                              setDraft((current) => ({
+                                ...current,
+                                networkPolicy: {
+                                  ...current.networkPolicy,
+                                  domainExceptions:
+                                    current.networkPolicy.domainExceptions.filter(
+                                      (item) => item !== domain,
+                                    ),
+                                },
+                              }));
+                              setDomainError("");
+                              setPendingNetworkMode(null);
+                            }}
+                          >
+                            <X size={12} aria-hidden="true" />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="domain-empty-state">{domainEmptyState}</p>
+                  )}
                   <div className="add-domain-row">
+                    <label
+                      className="sr-only"
+                      htmlFor="network-domain-exception"
+                    >
+                      Domain to {domainAction}
+                    </label>
                     <input
-                      name="allowed-domain"
+                      id="network-domain-exception"
+                      name="network-domain-exception"
                       autoComplete="off"
                       spellCheck={false}
                       value={newDomain}
-                      onChange={(event) => setNewDomain(event.target.value)}
+                      aria-invalid={domainError ? "true" : undefined}
+                      aria-describedby={
+                        domainError
+                          ? "network-domain-error"
+                          : "network-domain-description"
+                      }
+                      onChange={(event) => {
+                        setNewDomain(event.target.value);
+                        setDomainError("");
+                      }}
                       onKeyDown={(event) => {
                         if (event.key === "Enter") {
                           event.preventDefault();
                           addDomain();
                         }
                       }}
-                      placeholder="example.com…"
+                      placeholder="example.com or *.example.com…"
                     />
                     <button type="button" onClick={addDomain}>
-                      <Plus size={14} /> Add
+                      <Plus size={14} aria-hidden="true" />{" "}
+                      {blocksByDefault ? "Allow domain" : "Block domain"}
                     </button>
                   </div>
+                  {domainError ? (
+                    <p
+                      id="network-domain-error"
+                      className="domain-input-error"
+                      role="alert"
+                    >
+                      {domainError}
+                    </p>
+                  ) : null}
                 </div>
-                <div className="setting-row">
-                  <div>
-                    <strong>Log denied requests</strong>
-                    <p>Surface denied egress as Sandbox0 audit events.</p>
-                  </div>
-                  <Toggle
-                    label="Log denied requests"
-                    checked={draft.networkPolicy.logDeniedRequests}
-                    onChange={(checked) =>
-                      setDraft((current) => ({
-                        ...current,
-                        networkPolicy: {
-                          ...current.networkPolicy,
-                          logDeniedRequests: checked,
-                        },
-                      }))
-                    }
-                  />
-                </div>
+                <p className="network-audit-note">
+                  <ShieldCheck size={14} aria-hidden="true" />
+                  Network decisions appear in Environment Audit. Audit
+                  collection is an Environment capability, not a policy toggle.
+                </p>
               </SettingsSection>
             ) : null}
 
@@ -1345,6 +1490,8 @@ export function EnvironmentSettings({
               <>
                 <Check size={14} /> Saved
               </>
+            ) : pendingNetworkMode ? (
+              <>Confirm or cancel the pending Network mode change.</>
             ) : activeTab === "audit" ? (
               hasUnsavedChanges ? (
                 <>Pending Environment changes will be saved when you finish.</>
@@ -1353,6 +1500,8 @@ export function EnvironmentSettings({
               )
             ) : activeTab === "skills" || activeTab === "mcp" ? (
               <>{draft.codingAgent.label} changes are saved immediately.</>
+            ) : activeTab === "network" ? (
+              <>Network changes apply to every Session in this Environment.</>
             ) : (
               <>Changes apply to future Session forks.</>
             )}
@@ -1366,6 +1515,7 @@ export function EnvironmentSettings({
                   saving ||
                   deleting ||
                   deleteConfirming ||
+                  pendingNetworkMode !== null ||
                   (hasUnsavedChanges && !draft.name.trim())
                 }
                 onClick={() => {
@@ -1396,7 +1546,11 @@ export function EnvironmentSettings({
                   type="button"
                   className="button-primary"
                   disabled={
-                    saving || deleting || deleteConfirming || !draft.name.trim()
+                    saving ||
+                    deleting ||
+                    deleteConfirming ||
+                    pendingNetworkMode !== null ||
+                    !draft.name.trim()
                   }
                   onClick={() => void saveAndClose()}
                 >

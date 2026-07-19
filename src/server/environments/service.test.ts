@@ -11,8 +11,7 @@ const environment = {
   status: "ready",
   networkPolicy: {
     mode: "allow-all",
-    allowedDomains: [],
-    logDeniedRequests: true,
+    domainExceptions: [],
   },
 } as unknown as Environment;
 
@@ -68,9 +67,8 @@ test("pending Environment reconciliation is coalesced within one server", async 
 test("applies a changed network policy to the shared Environment Sandbox", async () => {
   const applied: Environment["networkPolicy"][] = [];
   const nextPolicy: Environment["networkPolicy"] = {
-    mode: "restricted",
-    allowedDomains: ["github.com"],
-    logDeniedRequests: true,
+    mode: "block-all",
+    domainExceptions: ["github.com"],
   };
   const store = {
     async getEnvironment() {

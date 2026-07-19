@@ -156,9 +156,8 @@ export interface HarnessAccount {
 }
 
 export interface NetworkPolicy {
-  mode: "restricted" | "allow-all" | "block-all";
-  allowedDomains: string[];
-  logDeniedRequests: boolean;
+  mode: "allow-all" | "block-all";
+  domainExceptions: string[];
 }
 
 export interface EnvironmentFunction {

@@ -93,6 +93,147 @@ test("loads the live workspace and Environment credential surface", async ({
   expect(browserErrors).toEqual([]);
 });
 
+test("configures Sandbox0 network modes through safe domain exceptions", async ({
+  page,
+  request,
+}) => {
+  const environment = await readyEnvironment(request);
+  test.skip(!environment, "A ready Environment is required for this check.");
+  if (!environment) return;
+
+  const browserErrors: string[] = [];
+  let submittedNetworkPolicy: unknown;
+  page.on("console", (message) => {
+    if (message.type() === "error") browserErrors.push(message.text());
+  });
+  page.on("pageerror", (error) => browserErrors.push(error.message));
+
+  await page.route("**/api/v1/bootstrap**", async (route) => {
+    const response = await route.fetch();
+    const body = (await response.json()) as ApiEnvelope<SandpiBootstrap>;
+    const routedEnvironment = body.data.environments.find(
+      (candidate) => candidate.id === environment.id,
+    );
+    if (routedEnvironment) {
+      routedEnvironment.networkPolicy = {
+        mode: "block-all",
+        domainExceptions: [],
+      };
+    }
+    await route.fulfill({ response, json: body });
+  });
+  await page.route(
+    `**/api/v1/environments/${encodeURIComponent(environment.id)}`,
+    async (route) => {
+      if (route.request().method() !== "PUT") {
+        await route.continue();
+        return;
+      }
+      const body = route.request().postDataJSON() as {
+        networkPolicy: unknown;
+      };
+      submittedNetworkPolicy = body.networkPolicy;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          data: {
+            ...environment,
+            ...body,
+            revision: environment.revision + 1,
+          },
+        }),
+      });
+    },
+  );
+
+  await page.goto(
+    `/?team=${encodeURIComponent(environment.teamId)}&environment=${encodeURIComponent(environment.id)}&new=1`,
+  );
+  await page
+    .getByRole("button", { name: `${environment.name} settings` })
+    .last()
+    .click();
+  const settingsDialog = page.getByRole("dialog", {
+    name: `${environment.name} settings`,
+  });
+  await settingsDialog.getByRole("button", { name: "Network" }).click();
+
+  const blockByDefault = settingsDialog.getByRole("radio", {
+    name: /Block by default/,
+  });
+  const allowByDefault = settingsDialog.getByRole("radio", {
+    name: /Allow by default/,
+  });
+  await expect(blockByDefault).toBeChecked();
+  await expect(
+    settingsDialog.getByText("Allowed domains", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    settingsDialog.getByText(
+      "No exceptions. All outbound destinations are blocked.",
+    ),
+  ).toBeVisible();
+  await expect(settingsDialog.getByText("Restricted")).toHaveCount(0);
+  await expect(settingsDialog.getByText("Log denied requests")).toHaveCount(0);
+
+  const domainInput = settingsDialog.getByLabel("Domain to allow");
+  await domainInput.fill("https://github.com");
+  await settingsDialog.getByRole("button", { name: "Allow domain" }).click();
+  await expect(
+    settingsDialog.getByRole("alert").getByText(/without a URL, path, or port/),
+  ).toBeVisible();
+
+  await domainInput.fill("GitHub.COM.");
+  await settingsDialog.getByRole("button", { name: "Allow domain" }).click();
+  await expect(settingsDialog.getByText("github.com", { exact: true })).toBeVisible();
+
+  await settingsDialog
+    .getByText("Allow by default", { exact: true })
+    .click();
+  await expect(
+    settingsDialog.getByRole("alert").getByText("Clear 1 allowed domain?"),
+  ).toBeVisible();
+  await settingsDialog
+    .getByRole("button", { name: "Keep current mode" })
+    .click();
+  await expect(blockByDefault).toBeChecked();
+  await expect(settingsDialog.getByText("github.com", { exact: true })).toBeVisible();
+
+  await settingsDialog
+    .getByText("Allow by default", { exact: true })
+    .click();
+  await settingsDialog
+    .getByRole("button", { name: "Switch & clear domains" })
+    .click();
+  await expect(allowByDefault).toBeChecked();
+  await expect(
+    settingsDialog.getByText("Blocked domains", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    settingsDialog.getByText(
+      "No exceptions. All outbound destinations are allowed.",
+    ),
+  ).toBeVisible();
+
+  const blockedDomainInput = settingsDialog.getByLabel("Domain to block");
+  await blockedDomainInput.fill("Telemetry.Example.dev");
+  await settingsDialog.getByRole("button", { name: "Block domain" }).click();
+  await expect(
+    settingsDialog.getByText("telemetry.example.dev", { exact: true }),
+  ).toBeVisible();
+  await settingsDialog.getByRole("button", { name: "Save changes" }).click();
+
+  await expect
+    .poll(() => submittedNetworkPolicy)
+    .toEqual({
+      mode: "allow-all",
+      domainExceptions: ["telemetry.example.dev"],
+    });
+  await expect(settingsDialog).toBeHidden();
+  expect(browserErrors).toEqual([]);
+});
+
 test("requires an exact Environment name before permanent deletion", async ({
   page,
   request,

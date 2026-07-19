@@ -51,6 +51,7 @@ test("migration history contains every durable Sandpi boundary", async () => {
       "0024_environment_idle_pause_30_minutes",
       "0025_environment_runtime_authority",
       "0026_environment_runtime_authority_comments",
+      "0027_environment_network_policy",
     ],
   );
 
@@ -218,4 +219,13 @@ test("migration history contains every durable Sandpi boundary", async () => {
     runtimeAuthorityCommentsSql,
     /generation whose ephemeral credential was materialized/,
   );
+
+  const environmentNetworkPolicySql = migrations[26]?.sql ?? "";
+  assert.match(environmentNetworkPolicySql, /'domainExceptions'/);
+  assert.match(
+    environmentNetworkPolicySql,
+    /network_policy->>'mode' = 'allow-all'/,
+  );
+  assert.match(environmentNetworkPolicySql, /ELSE 'block-all'/);
+  assert.doesNotMatch(environmentNetworkPolicySql, /restricted'\s+THEN/);
 });
