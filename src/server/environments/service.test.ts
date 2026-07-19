@@ -173,9 +173,9 @@ test("deletes Environment-owned resources before removing metadata", async () =>
   await service.delete("user-test", environment.id);
 
   assert.deepEqual(steps, [
+    "workers",
     "lock",
     "prepare",
-    "workers",
     "resources",
     "metadata",
     "logged",

@@ -62,7 +62,21 @@ Web today; iOS / Android / HarmonyOS later
   because historical `ThreadItem`s do not retain every tool execution. The
   conversation snapshot is sent first; persisted Activity arrives in a
   separate, revision-scoped SSE event so a slow Volume read cannot leave the
-  conversation loading.
+  conversation loading. Environment recovery initializes only the shared
+  harness transport and never bulk-reads or attaches product Threads. A
+  reconnect reads only its selected persisted Thread; Codex attaches that
+  Thread lazily only when the Session starts or interrupts a Turn. Delayed
+  best-effort repair considers only non-archived Sessions whose scalar control
+  state is exceptionally still running, active or stale-pending. That repair
+  uses a metadata-only native read, never loads replies, and gives fresh pending
+  Turns a distributed grace. Repair is abortable, retries transient failures
+  with capped backoff, and slowly rechecks exceptional active state. Request
+  submission is serialized with Environment lifecycle transitions, but response
+  waiting is non-blocking and cannot wake an Environment that paused afterward.
+  A Session can be archived only once its control projection is idle, so hidden
+  Sessions neither receive background reads nor pin Environment idle pause.
+  Startup recovery is likewise limited to visible active or pending Session
+  control state; ordinary waiting and archived Sessions remain lazy.
 - **Native harness boundary:** shared code owns Sandbox lifecycle, durable
   transport, files, terminal, signed Environment Audit and metrics. Environment
   Audit is harness-agnostic Sandbox evidence. Each harness owns its native
@@ -72,6 +86,20 @@ Web today; iOS / Android / HarmonyOS later
   `model/list` from the authenticated native app-server and passes the selected
   model back through `turn/start`; Sandpi does not publish or maintain a
   separate Codex model catalog.
+- **Runtime authority:** Sandbox0 is authoritative for the live Sandbox,
+  Supervisor attempt and runtime generation. PostgreSQL records only the last
+  credential-hydrated Codex epoch for recovery/CAS and keeps independent
+  decoder coordinates for Supervisor journal replay. Every native input is
+  fenced against Sandbox0's current epoch before it can be accepted. Workspace
+  and Terminal use a harness-neutral shared lifecycle admission and do not wait
+  for Codex initialization; warm access performs no extra recovery probe, while
+  a paused or disconnected runtime is repaired only after the native operation
+  reports it, with portal repair serialized under the exclusive lifecycle lock.
+  A live Terminal extends only an already-running idle deadline through a
+  throttled protocol heartbeat. Codex response timeouts begin after input
+  submission, and input delivery itself is bounded; an epoch loss after
+  delivery starts is reconciled from native state rather than replaying a
+  mutation.
 - **Time contract:** public API timestamps use Unix seconds, with fractional
   seconds when the source has millisecond precision. Clients render all times
   through the user's global time-zone preference; its default `auto` value uses
@@ -375,6 +403,10 @@ runtime and reconciles a native refresh during runtime recovery. The
 Environment owner still has terminal and agent execution in that Sandbox and
 must be treated as able to export their own provider credential, just as with a
 local Codex installation.
+
+If Workspace or Supervisor repair pauses the Sandbox after an early credential
+write, Sandpi re-materializes the credential in Sandbox0's final runtime
+generation before initializing app-server.
 
 Sandpi never sends this credential to Sandbox0's deployment API as an API key;
 the Sandbox0 host and key remain independent deployment-level server secrets.

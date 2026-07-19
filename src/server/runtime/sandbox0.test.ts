@@ -208,11 +208,13 @@ test("uses Sandbox0 runtime access to auto-resume a paused Environment", async (
   let workspaceAccesses = 0;
   let lifecycleWaits = 0;
   let explicitResumes = 0;
+  const operations: string[] = [];
   const sandbox = {
     async listFiles(path: string) {
       assert.equal(path, "/workspace");
+      operations.push("workspace");
       workspaceAccesses += 1;
-      if (workspaceAccesses === 1) {
+      if (paused) {
         throw new APIError({
           statusCode: 503,
           code: "unavailable",
@@ -221,9 +223,21 @@ test("uses Sandbox0 runtime access to auto-resume a paused Environment", async (
       }
       return [];
     },
-    async mkdir() {},
-    async writeFile() {},
+    async mkdir() {
+      if (paused) {
+        throw new APIError({
+          statusCode: 503,
+          code: "unavailable",
+          message: "sandbox is waking up",
+        });
+      }
+      operations.push("credential-mkdir");
+    },
+    async writeFile() {
+      operations.push("credential-write");
+    },
     async cmd() {
+      operations.push("command");
       return { exitCode: 0 };
     },
     async getSession(sessionId: string) {
@@ -292,11 +306,581 @@ test("uses Sandbox0 runtime access to auto-resume a paused Environment", async (
     '{"tokens":{"access_token":"test"}}',
   );
 
-  assert.equal(workspaceAccesses, 2);
+  assert.equal(workspaceAccesses, 1);
   assert.equal(lifecycleWaits, 1);
   assert.equal(explicitResumes, 0);
   assert.equal(recovered.runtimeGeneration, 2);
   assert.equal(recovered.sandboxRestarted, true);
+  assert.ok(
+    operations.indexOf("credential-write") < operations.indexOf("workspace"),
+  );
+});
+
+test("rehydrates the Codex credential after missing Supervisor repair restarts the Sandbox", async () => {
+  let paused = false;
+  let runtimeGeneration = 1;
+  let supervisorReads = 0;
+  let credentialGeneration: number | undefined;
+  const credentialWrites: number[] = [];
+  const operations: string[] = [];
+  const sandbox = {
+    async listFiles(path: string) {
+      assert.equal(path, "/workspace");
+      operations.push("workspace");
+      if (paused) {
+        throw new APIError({
+          statusCode: 503,
+          code: "unavailable",
+          message: "sandbox is waking up",
+        });
+      }
+      return [];
+    },
+    async mkdir() {},
+    async writeFile() {
+      credentialGeneration = runtimeGeneration;
+      credentialWrites.push(runtimeGeneration);
+      operations.push(`credential-${runtimeGeneration}`);
+    },
+    async cmd(name: string) {
+      operations.push(
+        name.startsWith("chmod ") ? `chmod-${runtimeGeneration}` : name,
+      );
+      return { exitCode: 0 };
+    },
+    async getSession(sessionId: string) {
+      assert.equal(sessionId, "supervisor-environment");
+      supervisorReads += 1;
+      if (supervisorReads === 1) {
+        throw new APIError({
+          statusCode: 404,
+          code: "not_found",
+          message: "session not found",
+        });
+      }
+      return {
+        id: sessionId,
+        attempt: { id: "attempt-recovered" },
+        runtimeGeneration,
+      };
+    },
+  };
+  const runtime = runtimeWithClient({
+    sandboxes: {
+      sandbox() {
+        return sandbox;
+      },
+      async get() {
+        return {
+          status: paused ? "paused" : "running",
+          paused,
+          runtimeGeneration,
+        };
+      },
+      async pauseAndWait() {
+        operations.push("pause");
+        paused = true;
+        credentialGeneration = undefined;
+      },
+      async waitForLifecycle(
+        _sandboxId: string,
+        predicate: (value: {
+          status: string;
+          paused: boolean;
+          runtimeGeneration: number;
+        }) => boolean | Promise<boolean>,
+      ) {
+        paused = false;
+        runtimeGeneration = 2;
+        const running = {
+          status: "running",
+          paused: false,
+          runtimeGeneration,
+        };
+        assert.equal(await predicate(running), true);
+        return running;
+      },
+    },
+  });
+  const coordinates: EnvironmentRuntimeRecord = {
+    id: environment.id,
+    sandboxId: environment.sandboxId,
+    workspaceVolumeId: environment.workspaceVolumeId,
+    supervisorSessionId: "supervisor-environment",
+    attemptId: "attempt-before-repair",
+    runtimeGeneration: 1,
+    decoder: {
+      supervisorCursor: 0,
+      tailBase64: "",
+      runtimeGeneration: 1,
+    },
+  };
+
+  const recovered = await runtime.ensureCodexEnvironmentRuntime(
+    coordinates,
+    '{"tokens":{"access_token":"test"}}',
+  );
+
+  assert.deepEqual(credentialWrites, [1, 2]);
+  assert.equal(credentialGeneration, recovered.runtimeGeneration);
+  assert.ok(operations.indexOf("pause") < operations.indexOf("credential-2"));
+  assert.deepEqual(recovered, {
+    supervisorSessionId: "supervisor-environment",
+    attemptId: "attempt-recovered",
+    runtimeGeneration: 2,
+    sandboxRestarted: true,
+  });
+});
+
+test("rehydrates the Codex credential after Workspace transport repair", async () => {
+  let paused = false;
+  let runtimeGeneration = 1;
+  let workspaceAccesses = 0;
+  let credentialGeneration: number | undefined;
+  const credentialWrites: number[] = [];
+  const sandbox = {
+    async listFiles(path: string) {
+      assert.equal(path, "/workspace");
+      workspaceAccesses += 1;
+      if (workspaceAccesses === 1) {
+        throw new Error("transport endpoint is not connected");
+      }
+      if (paused) {
+        throw new APIError({
+          statusCode: 503,
+          code: "unavailable",
+          message: "sandbox is waking up",
+        });
+      }
+      return [];
+    },
+    async mkdir() {},
+    async writeFile() {
+      credentialGeneration = runtimeGeneration;
+      credentialWrites.push(runtimeGeneration);
+    },
+    async cmd() {
+      return { exitCode: 0 };
+    },
+    async getSession(sessionId: string) {
+      assert.equal(sessionId, "supervisor-environment");
+      return {
+        id: sessionId,
+        attempt: { id: "attempt-recovered" },
+        runtimeGeneration,
+      };
+    },
+  };
+  const runtime = runtimeWithClient({
+    sandboxes: {
+      sandbox() {
+        return sandbox;
+      },
+      async get() {
+        return {
+          status: paused ? "paused" : "running",
+          paused,
+          runtimeGeneration,
+        };
+      },
+      async pauseAndWait() {
+        paused = true;
+        credentialGeneration = undefined;
+      },
+      async waitForLifecycle(
+        _sandboxId: string,
+        predicate: (value: {
+          status: string;
+          paused: boolean;
+          runtimeGeneration: number;
+        }) => boolean | Promise<boolean>,
+      ) {
+        paused = false;
+        runtimeGeneration = 2;
+        const running = {
+          status: "running",
+          paused: false,
+          runtimeGeneration,
+        };
+        assert.equal(await predicate(running), true);
+        return running;
+      },
+    },
+  });
+  const coordinates: EnvironmentRuntimeRecord = {
+    id: environment.id,
+    sandboxId: environment.sandboxId,
+    workspaceVolumeId: environment.workspaceVolumeId,
+    supervisorSessionId: "supervisor-environment",
+    attemptId: "attempt-before-repair",
+    runtimeGeneration: 1,
+    decoder: {
+      supervisorCursor: 0,
+      tailBase64: "",
+      runtimeGeneration: 1,
+    },
+  };
+
+  const recovered = await runtime.ensureCodexEnvironmentRuntime(
+    coordinates,
+    '{"tokens":{"access_token":"test"}}',
+  );
+
+  assert.deepEqual(credentialWrites, [1, 2]);
+  assert.equal(credentialGeneration, recovered.runtimeGeneration);
+  assert.equal(recovered.runtimeGeneration, 2);
+  assert.equal(recovered.sandboxRestarted, true);
+});
+
+test("rejects a credential write whose post-write Sandbox generation changed", async () => {
+  let runtimeGeneration = 1;
+  let lifecycleReads = 0;
+  let credentialGeneration: number | undefined;
+  let workspaceAccesses = 0;
+  const sandbox = {
+    async mkdir() {},
+    async writeFile() {
+      credentialGeneration = runtimeGeneration;
+    },
+    async cmd() {
+      return { exitCode: 0 };
+    },
+    async listFiles() {
+      workspaceAccesses += 1;
+      return [];
+    },
+  };
+  const runtime = runtimeWithClient({
+    sandboxes: {
+      sandbox() {
+        return sandbox;
+      },
+      async get() {
+        lifecycleReads += 1;
+        if (lifecycleReads === 2) {
+          runtimeGeneration = 2;
+          credentialGeneration = undefined;
+        }
+        return {
+          status: "running",
+          paused: false,
+          runtimeGeneration,
+        };
+      },
+    },
+  });
+  const coordinates: EnvironmentRuntimeRecord = {
+    id: environment.id,
+    sandboxId: environment.sandboxId,
+    workspaceVolumeId: environment.workspaceVolumeId,
+    supervisorSessionId: "supervisor-environment",
+    attemptId: "attempt-before-restart",
+    runtimeGeneration: 1,
+    decoder: {
+      supervisorCursor: 0,
+      tailBase64: "",
+      runtimeGeneration: 1,
+    },
+  };
+
+  await assert.rejects(
+    runtime.ensureCodexEnvironmentRuntime(
+      coordinates,
+      '{"tokens":{"access_token":"test"}}',
+    ),
+    (error: unknown) => {
+      assert.equal(
+        (error as { code?: string }).code,
+        "codex_runtime_epoch_changed",
+      );
+      return true;
+    },
+  );
+  assert.equal(credentialGeneration, undefined);
+  assert.equal(workspaceAccesses, 0);
+});
+
+test("does not swallow an unrelated Supervisor attempt conflict", async () => {
+  const conflict = new APIError({
+    statusCode: 409,
+    code: "session_conflict",
+    message: "the Supervisor specification is invalid",
+  });
+  let supervisorReads = 0;
+  const stoppedSupervisor = {
+    id: "supervisor-environment",
+    attempt: {
+      id: "attempt-stopped",
+      finishedAt: new Date("2026-07-19T00:00:00.000Z"),
+    },
+    runtimeGeneration: 1,
+  };
+  const sandbox = {
+    async mkdir() {},
+    async writeFile() {},
+    async cmd() {
+      return { exitCode: 0 };
+    },
+    async listFiles() {
+      return [];
+    },
+    async getSession() {
+      supervisorReads += 1;
+      return stoppedSupervisor;
+    },
+    async createSessionAttempt() {
+      throw conflict;
+    },
+  };
+  const runtime = runtimeWithClient({
+    sandboxes: {
+      sandbox() {
+        return sandbox;
+      },
+      async get() {
+        return {
+          status: "running",
+          paused: false,
+          runtimeGeneration: 1,
+        };
+      },
+    },
+  });
+  const coordinates: EnvironmentRuntimeRecord = {
+    id: environment.id,
+    sandboxId: environment.sandboxId,
+    workspaceVolumeId: environment.workspaceVolumeId,
+    supervisorSessionId: "supervisor-environment",
+    attemptId: "attempt-stopped",
+    runtimeGeneration: 1,
+    decoder: {
+      supervisorCursor: 0,
+      tailBase64: "",
+      runtimeGeneration: 1,
+    },
+  };
+
+  await assert.rejects(
+    runtime.ensureCodexEnvironmentRuntime(coordinates, "{}"),
+    (error: unknown) => {
+      assert.equal(
+        (error as { code?: string }).code,
+        "sandbox0_session_conflict",
+      );
+      return true;
+    },
+  );
+  assert.equal(supervisorReads, 2);
+});
+
+test("accepts a Supervisor attempt conflict only after Sandbox0 proves the live race winner", async () => {
+  const conflict = new APIError({
+    statusCode: 409,
+    code: "session_conflict",
+    message: "a concurrent recovery already started the attempt",
+  });
+  let supervisorReads = 0;
+  const sandbox = {
+    async mkdir() {},
+    async writeFile() {},
+    async cmd() {
+      return { exitCode: 0 };
+    },
+    async listFiles() {
+      return [];
+    },
+    async getSession() {
+      supervisorReads += 1;
+      if (supervisorReads === 1) {
+        return {
+          id: "supervisor-environment",
+          attempt: {
+            id: "attempt-stopped",
+            finishedAt: new Date("2026-07-19T00:00:00.000Z"),
+          },
+          runtimeGeneration: 1,
+        };
+      }
+      return {
+        id: "supervisor-environment",
+        attempt: { id: "attempt-race-winner" },
+        runtimeGeneration: 1,
+      };
+    },
+    async createSessionAttempt() {
+      throw conflict;
+    },
+  };
+  const runtime = runtimeWithClient({
+    sandboxes: {
+      sandbox() {
+        return sandbox;
+      },
+      async get() {
+        return {
+          status: "running",
+          paused: false,
+          runtimeGeneration: 1,
+        };
+      },
+    },
+  });
+  const coordinates: EnvironmentRuntimeRecord = {
+    id: environment.id,
+    sandboxId: environment.sandboxId,
+    workspaceVolumeId: environment.workspaceVolumeId,
+    supervisorSessionId: "supervisor-environment",
+    attemptId: "attempt-stopped",
+    runtimeGeneration: 1,
+    decoder: {
+      supervisorCursor: 0,
+      tailBase64: "",
+      runtimeGeneration: 1,
+    },
+  };
+
+  assert.deepEqual(
+    await runtime.ensureCodexEnvironmentRuntime(coordinates, "{}"),
+    {
+      supervisorSessionId: "supervisor-environment",
+      attemptId: "attempt-race-winner",
+      runtimeGeneration: 1,
+      sandboxRestarted: false,
+    },
+  );
+  assert.equal(supervisorReads, 2);
+});
+
+test("restores harness-neutral access without starting Codex", async () => {
+  let workspaceAccesses = 0;
+  let lifecycleWaits = 0;
+  let lifecycleReads = 0;
+  let codexMutations = 0;
+  const sandbox = {
+    async listFiles(path: string) {
+      assert.equal(path, "/workspace");
+      workspaceAccesses += 1;
+      if (workspaceAccesses === 1) {
+        throw new APIError({
+          statusCode: 503,
+          code: "unavailable",
+          message: "sandbox is waking up",
+        });
+      }
+      return [];
+    },
+    async mkdir() {
+      codexMutations += 1;
+    },
+    async writeFile() {
+      codexMutations += 1;
+    },
+    async createSession() {
+      codexMutations += 1;
+      return {};
+    },
+  };
+  const runtime = runtimeWithClient({
+    sandboxes: {
+      sandbox() {
+        return sandbox;
+      },
+      async get() {
+        lifecycleReads += 1;
+        return {
+          status: "running",
+          paused: false,
+          runtimeGeneration: 2,
+        };
+      },
+      async waitForLifecycle(
+        _sandboxId: string,
+        predicate: (value: {
+          status: string;
+          paused: boolean;
+          runtimeGeneration: number;
+        }) => boolean | Promise<boolean>,
+      ) {
+        lifecycleWaits += 1;
+        const running = {
+          status: "running",
+          paused: false,
+          runtimeGeneration: 2,
+        };
+        assert.equal(await predicate(running), true);
+        return running;
+      },
+    },
+  });
+  const coordinates: EnvironmentRuntimeRecord = {
+    id: environment.id,
+    sandboxId: environment.sandboxId,
+    workspaceVolumeId: environment.workspaceVolumeId,
+    runtimeGeneration: 1,
+    decoder: {
+      supervisorCursor: 0,
+      tailBase64: "",
+      runtimeGeneration: 1,
+    },
+  };
+
+  await runtime.ensureEnvironmentRuntimeAccess(coordinates);
+
+  assert.equal(workspaceAccesses, 2);
+  assert.equal(lifecycleWaits, 1);
+  assert.equal(lifecycleReads, 1);
+  assert.equal(codexMutations, 0);
+});
+
+test("repairs a disconnected Workspace portal for harness-neutral access", async () => {
+  let workspaceAccesses = 0;
+  let pauses = 0;
+  let lifecycleReads = 0;
+  const runtime = runtimeWithClient({
+    sandboxes: {
+      sandbox() {
+        return {
+          async listFiles(path: string) {
+            assert.equal(path, "/workspace");
+            workspaceAccesses += 1;
+            if (workspaceAccesses === 1) {
+              throw new Error("transport endpoint is not connected");
+            }
+            return [];
+          },
+        };
+      },
+      async get() {
+        lifecycleReads += 1;
+        return {
+          status: "running",
+          paused: false,
+          runtimeGeneration: 2,
+        };
+      },
+      async pauseAndWait(sandboxId: string) {
+        assert.equal(sandboxId, "sandbox-environment");
+        pauses += 1;
+      },
+    },
+  });
+  const coordinates: EnvironmentRuntimeRecord = {
+    id: environment.id,
+    sandboxId: environment.sandboxId,
+    workspaceVolumeId: environment.workspaceVolumeId,
+    runtimeGeneration: 1,
+    decoder: {
+      supervisorCursor: 0,
+      tailBase64: "",
+      runtimeGeneration: 1,
+    },
+  };
+
+  await runtime.ensureEnvironmentRuntimeAccess(coordinates);
+
+  assert.equal(workspaceAccesses, 2);
+  assert.equal(pauses, 1);
+  assert.equal(lifecycleReads, 2);
 });
 
 test("starts one Environment-scoped Codex app-server with native state on the Volume", async () => {
@@ -338,7 +922,11 @@ test("starts one Environment-scoped Codex app-server with native state on the Vo
         return sandbox;
       },
       async get() {
-        return { status: "running", paused: false };
+        return {
+          status: "running",
+          paused: false,
+          runtimeGeneration: 3,
+        };
       },
     },
   });
@@ -406,6 +994,25 @@ test("retries safe Sandbox0 reads after transient transport failures", async () 
   assert.equal(calls, 3);
 });
 
+test("stops retrying safe Sandbox0 reads when their signal is aborted", async () => {
+  const controller = new AbortController();
+  let calls = 0;
+  const fetchWithRetry = createSandbox0FetchWithRetry(async () => {
+    calls += 1;
+    controller.abort();
+    throw sandbox0FetchTimeout();
+  });
+
+  await assert.rejects(
+    fetchWithRetry("http://sandbox0.invalid/resource", {
+      method: "GET",
+      signal: controller.signal,
+    }),
+    { name: "AbortError" },
+  );
+  assert.equal(calls, 1);
+});
+
 test("does not replay a generic Sandbox0 mutation", async () => {
   let calls = 0;
   const fetchWithRetry = createSandbox0FetchWithRetry(async () => {
@@ -430,7 +1037,10 @@ test("retries transient Supervisor writes without duplicating input", async () =
         return {
           async getSession() {
             sessionReads += 1;
-            return { attempt: { id: "attempt-retry" } };
+            return {
+              attempt: { id: "attempt-retry" },
+              runtimeGeneration: 1,
+            };
           },
           async writeSessionInput(_sessionId: string, request: unknown) {
             inputWrites += 1;
@@ -447,6 +1057,7 @@ test("retries transient Supervisor writes without duplicating input", async () =
     sandboxId: environment.sandboxId,
     workspaceVolumeId: environment.workspaceVolumeId,
     supervisorSessionId: "supervisor-environment",
+    attemptId: "attempt-retry",
     runtimeGeneration: 1,
     decoder: {
       supervisorCursor: 0,
@@ -466,6 +1077,218 @@ test("retries transient Supervisor writes without duplicating input", async () =
   assert.deepEqual(requests[0], requests[1]);
 });
 
+test("rejects stale Supervisor coordinates before writing input", async () => {
+  const coordinates: EnvironmentRuntimeRecord = {
+    id: environment.id,
+    sandboxId: environment.sandboxId,
+    workspaceVolumeId: environment.workspaceVolumeId,
+    supervisorSessionId: "supervisor-environment",
+    attemptId: "attempt-current",
+    runtimeGeneration: 7,
+    decoder: {
+      supervisorCursor: 0,
+      tailBase64: "",
+      runtimeGeneration: 7,
+    },
+  };
+  const actualEpochs = [
+    {
+      attempt: { id: "attempt-replaced" },
+      runtimeGeneration: coordinates.runtimeGeneration,
+    },
+    {
+      attempt: { id: coordinates.attemptId },
+      runtimeGeneration: coordinates.runtimeGeneration + 1,
+    },
+  ];
+
+  for (const actualEpoch of actualEpochs) {
+    let inputWrites = 0;
+    const runtime = runtimeWithClient({
+      sandboxes: {
+        sandbox() {
+          return {
+            async getSession() {
+              return actualEpoch;
+            },
+            async writeSessionInput() {
+              inputWrites += 1;
+              return { accepted: true };
+            },
+          };
+        },
+      },
+    });
+
+    await assert.rejects(
+      runtime.writeCodexMessage(
+        coordinates,
+        { id: 1, method: "thread/read", params: {} },
+        "00000000-0000-4000-8000-000000000010",
+      ),
+      (error: unknown) => {
+        assert.equal((error as { statusCode?: number }).statusCode, 409);
+        assert.equal(
+          (error as { code?: string }).code,
+          "codex_runtime_epoch_changed",
+        );
+        return true;
+      },
+    );
+    assert.equal(inputWrites, 0);
+  }
+});
+
+test("maps an expected-attempt input conflict to safe epoch recovery", async () => {
+  let inputWrites = 0;
+  const runtime = runtimeWithClient({
+    sandboxes: {
+      sandbox() {
+        return {
+          async getSession() {
+            return {
+              attempt: { id: "attempt-current" },
+              runtimeGeneration: 7,
+            };
+          },
+          async writeSessionInput() {
+            inputWrites += 1;
+            throw new APIError({
+              statusCode: 409,
+              code: "session_conflict",
+              message: "session attempt mismatch",
+            });
+          },
+        };
+      },
+    },
+  });
+  const coordinates: EnvironmentRuntimeRecord = {
+    id: environment.id,
+    sandboxId: environment.sandboxId,
+    workspaceVolumeId: environment.workspaceVolumeId,
+    supervisorSessionId: "supervisor-environment",
+    attemptId: "attempt-current",
+    runtimeGeneration: 7,
+    decoder: {
+      supervisorCursor: 0,
+      tailBase64: "",
+      attemptId: "attempt-current",
+      runtimeGeneration: 7,
+    },
+  };
+
+  await assert.rejects(
+    runtime.writeCodexMessage(
+      coordinates,
+      { id: 1, method: "thread/read", params: {} },
+      "00000000-0000-4000-8000-000000000011",
+    ),
+    (error: unknown) => {
+      assert.equal(
+        (error as { code?: string }).code,
+        "codex_runtime_epoch_changed",
+      );
+      return true;
+    },
+  );
+  assert.equal(inputWrites, 1);
+});
+
+test("uses abortable generated APIs for cancellable Supervisor writes", async () => {
+  const controller = new AbortController();
+  let highLevelSessionReads = 0;
+  let highLevelInputWrites = 0;
+  let generatedSessionReads = 0;
+  let generatedInputWrites = 0;
+  const runtime = runtimeWithClient({
+    apispec: {
+      sessions: {
+        async apiV1SandboxesIdSessionsSessionIdGet(
+          request: { id: string; sessionId: string },
+          init: RequestInit,
+        ) {
+          generatedSessionReads += 1;
+          assert.deepEqual(request, {
+            id: "sandbox-environment",
+            sessionId: "supervisor-environment",
+          });
+          assert.equal(init.signal, controller.signal);
+          return {
+            success: true,
+            data: {
+              attempt: { id: "attempt-abortable" },
+              runtimeGeneration: 1,
+            },
+          };
+        },
+        async apiV1SandboxesIdSessionsSessionIdInputsPost(
+          request: {
+            id: string;
+            sessionId: string;
+            executionSessionInputRequest: {
+              expectedAttemptId: string;
+            };
+          },
+          init: RequestInit,
+        ) {
+          generatedInputWrites += 1;
+          assert.equal(request.id, "sandbox-environment");
+          assert.equal(request.sessionId, "supervisor-environment");
+          assert.equal(
+            request.executionSessionInputRequest.expectedAttemptId,
+            "attempt-abortable",
+          );
+          assert.equal(init.signal, controller.signal);
+          controller.abort();
+          throw sandbox0FetchTimeout();
+        },
+      },
+    },
+    sandboxes: {
+      sandbox() {
+        return {
+          async getSession() {
+            highLevelSessionReads += 1;
+            throw new Error("cancellable reads must use the generated API");
+          },
+          async writeSessionInput() {
+            highLevelInputWrites += 1;
+            throw new Error("cancellable writes must use the generated API");
+          },
+        };
+      },
+    },
+  });
+  const coordinates: EnvironmentRuntimeRecord = {
+    id: environment.id,
+    sandboxId: environment.sandboxId,
+    workspaceVolumeId: environment.workspaceVolumeId,
+    supervisorSessionId: "supervisor-environment",
+    attemptId: "attempt-abortable",
+    runtimeGeneration: 1,
+    decoder: {
+      supervisorCursor: 0,
+      tailBase64: "",
+      runtimeGeneration: 1,
+    },
+  };
+
+  await assert.rejects(
+    runtime.writeCodexMessage(
+      coordinates,
+      { id: 3, method: "thread/read", params: {} },
+      "00000000-0000-4000-8000-000000000003",
+      controller.signal,
+    ),
+    { name: "AbortError" },
+  );
+  assert.equal(generatedSessionReads, 1);
+  assert.equal(generatedInputWrites, 1);
+  assert.equal(highLevelSessionReads, 0);
+  assert.equal(highLevelInputWrites, 0);
+});
+
 test("reports exhausted Sandbox0 transport failures as retryable unavailability", async () => {
   let sessionReads = 0;
   let inputWrites = 0;
@@ -475,7 +1298,10 @@ test("reports exhausted Sandbox0 transport failures as retryable unavailability"
         return {
           async getSession() {
             sessionReads += 1;
-            return { attempt: { id: "attempt-unavailable" } };
+            return {
+              attempt: { id: "attempt-unavailable" },
+              runtimeGeneration: 1,
+            };
           },
           async writeSessionInput() {
             inputWrites += 1;
@@ -490,6 +1316,7 @@ test("reports exhausted Sandbox0 transport failures as retryable unavailability"
     sandboxId: environment.sandboxId,
     workspaceVolumeId: environment.workspaceVolumeId,
     supervisorSessionId: "supervisor-environment",
+    attemptId: "attempt-unavailable",
     runtimeGeneration: 1,
     decoder: {
       supervisorCursor: 0,

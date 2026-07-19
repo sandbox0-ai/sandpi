@@ -31,6 +31,7 @@ import {
 
 import { Inspector, type InspectorTab } from "@/components/inspector";
 import { MarkdownContent } from "@/components/markdown-content";
+import type { WorkspaceFileNavigationRequest } from "@/components/workspace-ide";
 import { SessionActionsMenu } from "@/components/session-actions-menu";
 import {
   codexModelOptionsFromNativeResult,
@@ -101,6 +102,11 @@ interface ConversationProps {
   onToggleTerminal: () => void;
   onOpenSettings: (tab?: "general" | "audit") => void;
   onOpenInspector: (tab: InspectorTab) => void;
+  workspaceNavigationRequest?: WorkspaceFileNavigationRequest;
+  onOpenWorkspacePath: (path: string) => void;
+  onWorkspaceNavigationHandled: (
+    request: WorkspaceFileNavigationRequest,
+  ) => void;
   onSessionChange: (session: CodexSession) => void;
   onDerivedSessionCreated: (session: CodexSession) => void;
   onForkSession: (sessionId: string) => void;
@@ -137,6 +143,9 @@ export function CodexConversation({
   onToggleTerminal,
   onOpenSettings,
   onOpenInspector,
+  workspaceNavigationRequest,
+  onOpenWorkspacePath,
+  onWorkspaceNavigationHandled,
   onSessionChange,
   onDerivedSessionCreated,
   onForkSession,
@@ -172,6 +181,7 @@ export function CodexConversation({
   const [nativeStreamEpoch, setNativeStreamEpoch] = useState(0);
   const [nativeStreamReady, setNativeStreamReady] = useState(false);
   const [nativeHistoryError, setNativeHistoryError] = useState("");
+  const [nativeHistoryWaitLong, setNativeHistoryWaitLong] = useState(false);
   const [activityClock, setActivityClock] = useState(() => Date.now());
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
@@ -222,6 +232,15 @@ export function CodexConversation({
   useEffect(() => {
     sessionRef.current = session;
   }, [session]);
+
+  useEffect(() => {
+    setNativeHistoryWaitLong(false);
+    if (!nativeHistoryLoading) return;
+    const timer = window.setTimeout(() => {
+      setNativeHistoryWaitLong(true);
+    }, 2_000);
+    return () => window.clearTimeout(timer);
+  }, [nativeHistoryLoading, session.id]);
 
   useEffect(() => {
     pendingTurnStartedAtRef.current = null;
@@ -676,10 +695,7 @@ export function CodexConversation({
   }
 
   function openMarkdownWorkspacePath(path: string) {
-    const url = new URL(window.location.href);
-    url.searchParams.set("path", path);
-    window.history.replaceState(window.history.state, "", url);
-    onOpenInspector("files");
+    onOpenWorkspacePath(path);
   }
 
   function renderTimelineEntry(entry: CodexTimelineEntry) {
@@ -948,8 +964,16 @@ export function CodexConversation({
                   <LoaderCircle size={18} aria-hidden="true" />
                 </span>
                 <span className="conversation-runtime-loading-copy">
-                  <strong>{ui.loadingConversation}</strong>
-                  <small>{ui.loadingConversationBody}</small>
+                  <strong>
+                    {nativeHistoryWaitLong
+                      ? ui.wakingConversation
+                      : ui.loadingConversation}
+                  </strong>
+                  <small>
+                    {nativeHistoryWaitLong
+                      ? ui.wakingConversationBody
+                      : ui.loadingConversationBody}
+                  </small>
                 </span>
               </div>
             ) : null}
@@ -1228,6 +1252,8 @@ export function CodexConversation({
           environment={environment}
           session={session}
           activeTab={inspectorTab}
+          workspaceNavigationRequest={workspaceNavigationRequest}
+          onWorkspaceNavigationHandled={onWorkspaceNavigationHandled}
           onTabChange={onInspectorTabChange}
           onClose={onToggleInspector}
           sessionActivity={{

@@ -6,6 +6,7 @@ import {
   isWorkspaceInternalPath,
   normalizeWorkspacePath,
   userVisibleWorkspacePath,
+  workspaceFileParentDirectories,
   WORKSPACE_INTERNAL_ROOT,
 } from "./workspace-path-policy";
 
@@ -40,4 +41,27 @@ test("normalizes user-facing Workspace paths without admitting paths outside Wor
   assert.equal(userVisibleWorkspacePath("/etc/passwd"), undefined);
   assert.equal(userVisibleWorkspacePath("/workspace/.sandpi-other"), "/workspace/.sandpi-other");
   assert.equal(userVisibleWorkspacePath("/workspace/project/.sandpi"), "/workspace/project/.sandpi");
+});
+
+test("returns the lazy tree directories needed to reveal a Workspace file", () => {
+  assert.deepEqual(
+    workspaceFileParentDirectories("/workspace/app/globals.css"),
+    ["/workspace/app"],
+  );
+  assert.deepEqual(
+    workspaceFileParentDirectories("/workspace/packages/web/src/page.tsx"),
+    [
+      "/workspace/packages",
+      "/workspace/packages/web",
+      "/workspace/packages/web/src",
+    ],
+  );
+  assert.deepEqual(
+    workspaceFileParentDirectories("/workspace/package.json"),
+    [],
+  );
+  assert.deepEqual(
+    workspaceFileParentDirectories("/workspace/.sandpi/state"),
+    [],
+  );
 });

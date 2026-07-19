@@ -182,6 +182,9 @@ const copy = {
       loadingConversation: "Loading conversation…",
       loadingConversationBody:
         "Restoring the latest native Codex session state.",
+      wakingConversation: "Restoring the Codex runtime…",
+      wakingConversationBody:
+        "This Environment may be resuming from an idle checkpoint. Files and Terminal remain available independently.",
       attachFile: "Attach file",
       mentionFile: "Mention file",
       attachedImages: "Attached images",
@@ -510,6 +513,9 @@ const copy = {
       loadingConversation: "正在加载对话…",
       loadingConversationBody:
         "正在恢复最新的 Codex 原生会话状态。",
+      wakingConversation: "正在恢复 Codex 运行时…",
+      wakingConversationBody:
+        "环境可能正在从空闲检查点恢复；文件和终端可独立打开，不必等待对话就绪。",
       attachFile: "附加文件",
       mentionFile: "引用文件",
       attachedImages: "已附加图片",

@@ -36,6 +36,7 @@ import {
 } from "@/server/store";
 import {
   decodeCodexSupervisorEvents,
+  type CodexDecoderState,
   type DecodedCodexRecord,
   type SupervisorOutputEvent,
 } from "./jsonl";
@@ -49,8 +50,14 @@ const STREAM_RECONNECT_DELAY_MS = 250;
 const STREAM_BATCH_DELAY_MS = 20;
 const STREAM_BATCH_MAX_EVENTS = 128;
 const RPC_TIMEOUT_MS = 30_000;
+const RPC_SUBMISSION_TIMEOUT_MS = 30_000;
 const RUNTIME_RECOVERY_LOCK_TIMEOUT_MS = 130_000;
 const RUNTIME_RECOVERY_LOCK_RETRY_MS = 250;
+const EXCEPTIONAL_PENDING_TURN_GRACE_MS = 10 * 60_000;
+const EXCEPTIONAL_SESSION_RETRY_BASE_MS = 1_000;
+const EXCEPTIONAL_SESSION_RETRY_MAX_MS = 30_000;
+const EXCEPTIONAL_SESSION_ACTIVE_RECHECK_MS = 30_000;
+const EXCEPTIONAL_SESSION_REQUEST_TIMEOUT_MS = 5_000;
 const MAX_RPC_RESPONSES_PER_ENVIRONMENT = 512;
 const MAX_LIVE_NOTIFICATIONS_PER_SESSION = 1_000;
 const CODEX_ENVIRONMENT_CWD = "/workspace";
@@ -75,11 +82,38 @@ interface RpcWaiter {
   promise: Promise<Record<string, unknown>>;
   resolve(response: Record<string, unknown>): void;
   reject(error: unknown): void;
+  armTimeout(): void;
+  markDeliveryStarted(): void;
+  rejectForRuntimeEpochChange(): void;
+}
+
+interface PreparedRpcRequest extends RpcWaiter {
+  dispose(): void;
 }
 
 interface RpcAnchor {
   sessionId: string;
   liveCursor: number;
+}
+
+interface NativeSessionAttachmentState {
+  epoch: string;
+  threads: Map<string, Promise<void>>;
+}
+
+interface ExceptionalSessionReconciliation {
+  epoch: string;
+  task: Promise<void>;
+  rerunRequested: boolean;
+  rerunDelayMs?: number;
+  retryAttempt: number;
+  nextRetryAttempt: number;
+  pendingTurnRequests: Map<string, string>;
+  controller: AbortController;
+}
+
+interface DeferredExceptionalSessionReconciliation {
+  pendingTurnRequests: Map<string, string>;
 }
 
 export type CodexLiveUpdate =
@@ -157,6 +191,20 @@ export class CodexService {
   private readonly rpcWaiters = new Map<string, Set<RpcWaiter>>();
   private readonly requestOwners = new Map<string, string>();
   private readonly nativeOwners = new Map<string, string>();
+  private readonly nativeSessionAttachments = new Map<
+    string,
+    NativeSessionAttachmentState
+  >();
+  private readonly exceptionalSessionReconciliations = new Map<
+    string,
+    ExceptionalSessionReconciliation
+  >();
+  private readonly exceptionalSessionTasks = new Set<Promise<void>>();
+  private readonly deferredExceptionalSessionReconciliations = new Map<
+    string,
+    DeferredExceptionalSessionReconciliation
+  >();
+  private readonly interactiveEnvironmentOperations = new Map<string, number>();
   private readonly live = new Map<string, LiveNotificationState>();
   private readonly events = new EventEmitter();
   private readonly startupRecoveries = new Set<Promise<void>>();
@@ -170,13 +218,21 @@ export class CodexService {
     private readonly options: {
       streamReconnectDelayMs?: number;
       streamBatchDelayMs?: number;
+      rpcTimeoutMs?: number;
+      rpcSubmissionTimeoutMs?: number;
+      exceptionalSessionRecoveryDelayMs?: number;
+      exceptionalPendingTurnGraceMs?: number;
+      exceptionalSessionRetryBaseMs?: number;
+      exceptionalSessionActiveRecheckMs?: number;
+      exceptionalSessionRequestTimeoutMs?: number;
     } = {},
   ) {
     this.events.setMaxListeners(0);
   }
 
   async resumeWorkers() {
-    const environmentIds = await this.store.activeEnvironmentRuntimeIds();
+    const environmentIds =
+      await this.store.environmentRuntimeRecoveryCandidateIds();
     const recoveries: Promise<void>[] = [];
     for (const environmentId of environmentIds) {
       const recovery = this.recoverEnvironmentRuntime(environmentId)
@@ -238,6 +294,10 @@ export class CodexService {
       }
       await this.store.markSessionNativeReady(sessionId, nativeSessionId);
       this.rememberNativeOwner(input.environment.id, nativeSessionId, sessionId);
+      this.rememberNativeSessionAttached(
+        environmentRuntime,
+        nativeSessionId,
+      );
       await this.startTurn({
         userId: input.userId,
         sessionId,
@@ -369,6 +429,10 @@ export class CodexService {
       }
       await this.store.markSessionNativeReady(childSessionId, nativeSessionId);
       this.rememberNativeOwner(environment.id, nativeSessionId, childSessionId);
+      this.rememberNativeSessionAttached(
+        environmentRuntime,
+        nativeSessionId,
+      );
       this.ensureEnvironmentWorker(environment.id);
       return childSessionId;
     } catch (error) {
@@ -750,68 +814,106 @@ export class CodexService {
       input.userId,
       input.sessionId,
     );
-    const submission = turnSubmissionCoordinates(input.sessionId);
-    // Persist pending delivery while holding the same Environment advisory
-    // lock used by idle pause. If pause won first, the following native runtime
-    // access auto-resumes it; if Turn admission won first, pause observes work.
-    await this.store.beginSessionTurn(
-      input.userId,
-      input.sessionId,
-      input.modelId,
-      submission,
-    );
+    const releaseInteractiveOperation =
+      this.retainInteractiveEnvironmentOperation(
+        sessionRuntime.environmentId,
+      );
     try {
-      const environmentRuntime = await this.environmentRuntimeForSession(
+      const submission = turnSubmissionCoordinates(input.sessionId);
+      // Persist pending delivery while holding the same Environment advisory
+      // lock used by idle pause. If pause won first, the following native
+      // runtime access auto-resumes it; if Turn admission won first, pause
+      // observes work.
+      await this.store.beginSessionTurn(
         input.userId,
         input.sessionId,
+        input.modelId,
+        submission,
       );
-      await this.store.markTurnSubmitted(
-        input.sessionId,
-        submission.requestId,
-      );
-      const response = await this.requestCodex(
-        sessionRuntime.environmentId,
-        environmentRuntime,
-        {
-          method: "turn/start",
-          id: submission.requestId,
-          params: {
-            threadId: sessionRuntime.nativeSessionId,
-            clientUserMessageId: submission.clientMessageId,
-            input: nativeCodexTurnInput(input.text, input.images),
-            ...(input.modelId ? { model: input.modelId } : {}),
-          },
-        },
-        input.sessionId,
-        submission.stableInputId,
-      );
-      if (response.error) {
-        await this.store.abandonTurn(input.sessionId, submission.requestId);
-        throw new HttpError(
-          502,
-          "codex_turn_start_failed",
-          rpcErrorMessage(response.error),
+      let turnDeliveryAttempted = false;
+      let environmentRuntime: StoredEnvironmentRuntime | undefined;
+      try {
+        environmentRuntime = await this.environmentRuntimeForSession(
+          input.userId,
+          input.sessionId,
         );
-      }
-      const nativeTurnId = turnIdFromRpcResponse(response);
-      if (nativeTurnId) {
-        await this.store.markTurnAccepted(
+        await this.ensureNativeSessionAttached(
+          environmentRuntime,
+          sessionRuntime,
+        );
+        await this.store.markTurnSubmitted(
           input.sessionId,
           submission.requestId,
-          nativeTurnId,
         );
-      }
-      this.ensureEnvironmentWorker(sessionRuntime.environmentId);
-      return { requestId: submission.requestId, nativeTurnId };
-    } catch (error) {
-      if (isRpcTimeout(error)) {
-        // Delivery is ambiguous after a transport timeout. Native events and
-        // thread/read remain authoritative, so retain the pending coordinates.
+        turnDeliveryAttempted = true;
+        const response = await this.requestCodex(
+          sessionRuntime.environmentId,
+          environmentRuntime,
+          {
+            method: "turn/start",
+            id: submission.requestId,
+            params: {
+              threadId: sessionRuntime.nativeSessionId,
+              clientUserMessageId: submission.clientMessageId,
+              input: nativeCodexTurnInput(input.text, input.images),
+              ...(input.modelId ? { model: input.modelId } : {}),
+            },
+          },
+          input.sessionId,
+          submission.stableInputId,
+        );
+        if (response.error) {
+          throw new HttpError(
+            502,
+            "codex_turn_start_failed",
+            rpcErrorMessage(response.error),
+          );
+        }
+        const nativeTurnId = turnIdFromRpcResponse(response);
+        if (nativeTurnId) {
+          await this.store.markTurnAccepted(
+            input.sessionId,
+            submission.requestId,
+            nativeTurnId,
+          );
+        }
         this.ensureEnvironmentWorker(sessionRuntime.environmentId);
-        return { requestId: submission.requestId };
+        return { requestId: submission.requestId, nativeTurnId };
+      } catch (error) {
+        if (turnDeliveryAttempted && isAmbiguousTurnDelivery(error)) {
+          // Delivery is ambiguous after a response timeout or after the
+          // accepted input's runtime epoch disappears. Native events and
+          // thread/read remain authoritative, so retain pending coordinates
+          // and never replay the mutation automatically.
+          this.ensureEnvironmentWorker(sessionRuntime.environmentId);
+          if (environmentRuntime) {
+            try {
+              const currentRuntime = await this.store.environmentRuntime(
+                sessionRuntime.environmentId,
+              );
+              this.scheduleExceptionalSessionReconciliation(currentRuntime, {
+                delayMs: 0,
+                pendingTurnRequests: new Map([
+                  [input.sessionId, submission.requestId],
+                ]),
+              });
+            } catch (reconciliationError) {
+              this.logger.warn(
+                {
+                  environmentId: sessionRuntime.environmentId,
+                  error: errorMessage(reconciliationError),
+                },
+                "Ambiguous Codex Turn reconciliation deferred",
+              );
+            }
+          }
+          return { requestId: submission.requestId };
+        }
+        await this.store.abandonTurn(input.sessionId, submission.requestId);
+        throw error;
       }
-      await this.store.abandonTurn(input.sessionId, submission.requestId);
-      throw error;
+    } finally {
+      releaseInteractiveOperation();
     }
   }
 
@@ -877,7 +979,7 @@ export class CodexService {
       sessionId,
     );
     const requestId = rpcId("thread-read", sessionId);
-    const response = await this.requestCodex(
+    const read = await this.requestCodexWithRuntime(
       sessionRuntime.environmentId,
       environmentRuntime,
       {
@@ -890,11 +992,12 @@ export class CodexService {
       },
       sessionId,
     );
+    const { response, runtime: responseRuntime } = read;
     if (response.error) {
       throw nativeSessionUnavailable(response.error);
     }
     const thread = threadFromRpcResponse(response);
-    if (!thread) {
+    if (!thread || thread.id !== sessionRuntime.nativeSessionId) {
       throw new HttpError(
         502,
         "codex_thread_read_failed",
@@ -908,11 +1011,35 @@ export class CodexService {
     );
     const activity = this.readCodexRolloutActivity(
       sessionRuntime.environmentId,
-      environmentRuntime,
+      responseRuntime,
       sessionRuntime.nativeSessionId,
       thread.path,
       signal,
     );
+    const activeNativeTurnId = thread.turns.find(
+      (turn) => turn.status === "inProgress",
+    )?.id;
+    const nativeIdle = ["idle", "notLoaded"].includes(thread.status.type);
+    await this.store.reconcileNativeSessionState({
+      sessionId,
+      nativeSessionId: sessionRuntime.nativeSessionId,
+      historyRevision: sessionRuntime.historyRevision,
+      runtimeVersion: sessionRuntime.version,
+      environmentId: responseRuntime.id,
+      environmentSupervisorSessionId:
+        responseRuntime.supervisorSessionId,
+      environmentAttemptId: responseRuntime.attemptId,
+      environmentRuntimeGeneration: responseRuntime.runtimeGeneration,
+      activeNativeTurnId,
+      clearPendingWhenNativeIdle: nativeIdle,
+      clearPendingStartedBefore: nativeIdle
+        ? new Date(
+            Date.now() -
+              (this.options.exceptionalPendingTurnGraceMs ??
+                EXCEPTIONAL_PENDING_TURN_GRACE_MS),
+          )
+        : undefined,
+    });
     const latest = await this.store.sessionRuntime(sessionId);
     const forkableTurnIds = thread.turns
       .filter((turn) => turn.status !== "inProgress")
@@ -1047,63 +1174,43 @@ export class CodexService {
         "The active native Turn changed before it could be interrupted.",
       );
     }
-    const environmentRuntime = await this.environmentRuntimeForSession(
-      input.userId,
-      input.sessionId,
-    );
-    const response = await this.requestCodex(
-      sessionRuntime.environmentId,
-      environmentRuntime,
-      {
-        method: "turn/interrupt",
-        id: rpcId("turn-interrupt", input.sessionId),
-        params: {
-          threadId: sessionRuntime.nativeSessionId,
-          turnId: input.turnId,
-        },
-      },
-      input.sessionId,
-    );
-    if (response.error) {
-      throw new HttpError(
-        502,
-        "codex_turn_interrupt_failed",
-        rpcErrorMessage(response.error),
+    const releaseInteractiveOperation =
+      this.retainInteractiveEnvironmentOperation(
+        sessionRuntime.environmentId,
       );
-    }
-    return { turnId: input.turnId, status: "interrupting" as const };
-  }
-
-  async withRuntimeRecovery<T>(
-    userId: string,
-    sessionId: string,
-    operation: (runtime: StoredEnvironmentRuntime) => Promise<T>,
-  ) {
-    const session = await this.store.getSession(userId, sessionId);
-    return this.withEnvironmentRuntimeRecovery(
-      userId,
-      session.environmentId,
-      operation,
-    );
-  }
-
-  async withEnvironmentRuntimeRecovery<T>(
-    userId: string,
-    environmentId: string,
-    operation: (runtime: StoredEnvironmentRuntime) => Promise<T>,
-  ) {
-    const environment = await this.store.getEnvironment(userId, environmentId);
-    let runtime = await this.ensureEnvironmentRuntimeForUser(userId, environment);
-    let result: T;
     try {
-      result = await operation(runtime);
-    } catch (error) {
-      if (!isRecoverableRuntimeError(error)) throw error;
-      runtime = await this.recoverEnvironmentRuntime(environmentId);
-      result = await operation(runtime);
+      const environmentRuntime = await this.environmentRuntimeForSession(
+        input.userId,
+        input.sessionId,
+      );
+      await this.ensureNativeSessionAttached(
+        environmentRuntime,
+        sessionRuntime,
+      );
+      const response = await this.requestCodex(
+        sessionRuntime.environmentId,
+        environmentRuntime,
+        {
+          method: "turn/interrupt",
+          id: rpcId("turn-interrupt", input.sessionId),
+          params: {
+            threadId: sessionRuntime.nativeSessionId,
+            turnId: input.turnId,
+          },
+        },
+        input.sessionId,
+      );
+      if (response.error) {
+        throw new HttpError(
+          502,
+          "codex_turn_interrupt_failed",
+          rpcErrorMessage(response.error),
+        );
+      }
+      return { turnId: input.turnId, status: "interrupting" as const };
+    } finally {
+      releaseInteractiveOperation();
     }
-    await this.reconcileEnvironmentAfterRuntimeAccess(environmentId);
-    return result;
   }
 
   ensureWorker(sessionId: string) {
@@ -1114,7 +1221,32 @@ export class CodexService {
   }
 
   suspendEnvironmentWorker(environmentId: string) {
+    this.deferredExceptionalSessionReconciliations.delete(environmentId);
+    this.cancelExceptionalSessionReconciliation(environmentId);
     this.workers.get(environmentId)?.abort();
+  }
+
+  /**
+   * Unarchiving can expose control state whose live event was missed while the
+   * Session was hidden. Queue metadata-only repair without loading its replies.
+   */
+  async scheduleSessionControlStateRepair(sessionId: string) {
+    try {
+      const session = await this.store.sessionRuntime(sessionId);
+      const runtime = await this.store.environmentRuntime(session.environmentId);
+      if (
+        runtime.desiredState === "running" &&
+        runtime.observedState === "running"
+      ) {
+        this.scheduleExceptionalSessionReconciliation(runtime, { delayMs: 0 });
+      }
+    } catch (error) {
+      if (this.closed) return;
+      this.logger.warn(
+        { sessionId, error: errorMessage(error) },
+        "Codex Session control-state repair could not be scheduled",
+      );
+    }
   }
 
   private ensureEnvironmentWorker(environmentId: string) {
@@ -1162,25 +1294,33 @@ export class CodexService {
     if (decoded.state.supervisorCursor === stored.decoder.supervisorCursor) {
       return stored;
     }
-    const transitions = controlTransitions(decoded.records);
+    const records = decoded.records.filter((record) =>
+      codexRecordBelongsToRuntime(stored, record),
+    );
+    const epochChanged = environmentDecoderEpochChanged(stored, decoded.state);
+    const transitions = controlTransitions(records);
     const committed = await this.store.commitEnvironmentTransport(
       stored.id,
       stored.supervisorSessionId,
+      stored.attemptId,
+      stored.runtimeGeneration,
       stored.decoder,
       decoded.state,
-      transitions,
+      epochChanged ? [] : transitions,
     );
     if (!committed) throw new EnvironmentEventStreamSupersededError();
 
     const next = {
       ...stored,
       decoder: decoded.state,
-      attemptId: decoded.state.attemptId,
-      runtimeGeneration: decoded.state.runtimeGeneration,
       version: stored.version + 1,
     };
+    if (epochChanged) {
+      this.rejectEnvironmentRpcWaitersForEpochChange(stored.id);
+      throw codexRuntimeEpochLostAfterSubmission();
+    }
 
-    for (const record of decoded.records) {
+    for (const record of records) {
       this.cacheRpcRecord(stored.id, record.message);
       if (!isTranscriptNotification(record.message)) continue;
       const nativeSessionId = notificationThreadId(record.message);
@@ -1254,18 +1394,36 @@ export class CodexService {
   async close() {
     this.closed = true;
     for (const controller of this.workers.values()) controller.abort();
+    const exceptionalTasks = [...this.exceptionalSessionTasks];
+    const activeReconciliations = [
+      ...this.exceptionalSessionReconciliations.values(),
+    ];
+    this.exceptionalSessionReconciliations.clear();
+    for (const reconciliation of activeReconciliations) {
+      reconciliation.controller.abort();
+    }
+    for (const waiters of this.rpcWaiters.values()) {
+      for (const waiter of waiters) {
+        waiter.reject(new Error("Codex service closed"));
+      }
+    }
     await Promise.allSettled(this.workerTasks.values());
     await Promise.allSettled(this.startupRecoveries);
     await Promise.allSettled(this.recovering.values());
     await Promise.allSettled(this.credentialSyncs.values());
-    for (const waiters of this.rpcWaiters.values()) {
-      for (const waiter of waiters) waiter.reject(new Error("Codex service closed"));
-    }
+    await Promise.allSettled(exceptionalTasks);
     this.workers.clear();
     this.workerTasks.clear();
+    this.initializing.clear();
     this.rpcWaiters.clear();
     this.rpcResponses.clear();
     this.rpcAnchors.clear();
+    this.requestOwners.clear();
+    this.nativeOwners.clear();
+    this.nativeSessionAttachments.clear();
+    this.exceptionalSessionTasks.clear();
+    this.deferredExceptionalSessionReconciliations.clear();
+    this.interactiveEnvironmentOperations.clear();
   }
 
   private async ensureEnvironmentRuntimeForUser(
@@ -1277,7 +1435,8 @@ export class CodexService {
       current.desiredState === "running" &&
       current.observedState === "running" &&
       current.supervisorSessionId &&
-      current.attemptId
+      current.attemptId &&
+      this.initializing.has(environmentProtocolKey(current))
     ) {
       await this.ensureProtocolInitialized(current);
       return current;
@@ -1325,57 +1484,67 @@ export class CodexService {
 
   private async performEnvironmentRecovery(environmentId: string) {
     const deadline = Date.now() + RUNTIME_RECOVERY_LOCK_TIMEOUT_MS;
+    const credential =
+      await this.credentials.credentialForEnvironmentRuntime(environmentId);
     while (!this.closed) {
-      const locked = await this.store.withEnvironmentLifecycleLock(
-        environmentId,
-        () => this.reconcileEnvironmentRuntime(environmentId),
-      );
-      if (locked.acquired) return locked.value;
-      if (Date.now() >= deadline) {
-        throw new HttpError(
-          503,
-          "environment_lifecycle_busy",
-          "The Environment lifecycle is still changing. Try again shortly.",
+      try {
+        const locked = await this.store.withEnvironmentLifecycleLock(
+          environmentId,
+          (lockedStore) =>
+            this.reconcileEnvironmentRuntime(
+              environmentId,
+              credential,
+              lockedStore ?? this.store,
+            ),
         );
+        if (locked.acquired) {
+          await this.credentials.markCredentialMaterialized(
+            environmentId,
+            credential,
+          );
+          await this.ensureProtocolInitialized(locked.value);
+          this.scheduleExceptionalSessionReconciliation(locked.value);
+          return locked.value;
+        }
+        if (Date.now() >= deadline) {
+          throw new HttpError(
+            503,
+            "environment_lifecycle_busy",
+            "The Environment lifecycle is still changing. Try again shortly.",
+          );
+        }
+        // Pause owns the same distributed lock through checkpoint commit. Wait
+        // for it to finish, then let a supported Sandbox0 access auto-resume the
+        // runtime; Sandpi never sends a competing explicit resume request.
+        await delay(RUNTIME_RECOVERY_LOCK_RETRY_MS);
+      } catch (error) {
+        if (!isRuntimeRecoveryRestartError(error)) throw error;
+        this.forgetEnvironmentProtocolReadiness(environmentId);
+        if (Date.now() >= deadline) throw error;
       }
-      // Pause owns the same distributed lock through checkpoint commit. Wait
-      // for it to finish, then let a supported Sandbox0 access auto-resume the
-      // runtime; Sandpi never sends a competing explicit resume request.
-      await delay(RUNTIME_RECOVERY_LOCK_RETRY_MS);
     }
     throw new Error("Codex service is closed");
   }
 
-  private async reconcileEnvironmentRuntime(environmentId: string) {
-    const current = await this.store.environmentRuntime(environmentId);
-    let credential = await this.credentials.credentialForEnvironmentRuntime(
-      environmentId,
-    );
-    try {
-      const runtimeAuth = await this.runtime.readCodexEnvironmentCredential(current);
-      const authoritative = await this.credentials.syncCredentialFromRuntime(
-        environmentId,
-        runtimeAuth,
-      );
-      if (authoritative) credential = authoritative;
-    } catch {
-      // /dev/shm is expected to be empty after a Sandbox runtime restart.
-    }
+  private async reconcileEnvironmentRuntime(
+    environmentId: string,
+    credential: CodexCredentialMaterial,
+    lockedStore: SandpiStore,
+  ) {
+    const current = await lockedStore.environmentRuntime(environmentId);
     const recovered = await this.runtime.ensureCodexEnvironmentRuntime(
       current,
       credential.authJson,
     );
-    const ready = await this.store.recordCodexEnvironmentRuntime(
+    const ready = await lockedStore.recordCodexEnvironmentRuntime(
       environmentId,
       recovered,
     );
-    await this.credentials.markCredentialMaterialized(environmentId, credential);
     // A recovered Supervisor can have a new Session journal or process
     // attempt. Replace the upstream stream before issuing native RPCs so their
     // retained responses are consumed by the new coordinates.
+    this.forgetEnvironmentProtocolReadiness(environmentId);
     this.restartEnvironmentWorker(environmentId);
-    await this.ensureProtocolInitialized(ready);
-    await this.resumeEnvironmentNativeSessions(ready);
     return ready;
   }
 
@@ -1399,72 +1568,6 @@ export class CodexService {
     // shared lifecycle lock then makes Sandpi's runtime projection match the
     // native generation before this request is considered complete.
     await this.recoverEnvironmentRuntime(environmentId);
-  }
-
-  /**
-   * A fresh Codex app-server can read persisted rollouts, but Thread execution
-   * is native-runtime state. Reattach every product Session after Environment
-   * recovery and derive only the refresh-safe active-Turn projection from the
-   * native response; conversation content remains exclusively in Codex.
-   */
-  private async resumeEnvironmentNativeSessions(
-    runtime: StoredEnvironmentRuntime,
-  ) {
-    const sessions = await this.store.sessionRuntimesForEnvironment(runtime.id);
-    for (const session of sessions) {
-      if (!session.nativeSessionId) continue;
-      this.rememberNativeOwner(
-        runtime.id,
-        session.nativeSessionId,
-        session.sessionId,
-      );
-      try {
-        const response = await this.requestCodex(
-          runtime.id,
-          runtime,
-          {
-            method: "thread/resume",
-            id: rpcId("thread-resume", session.sessionId),
-            params: {
-              threadId: session.nativeSessionId,
-              ...threadConfiguration(session.modelId),
-            },
-          },
-          session.sessionId,
-        );
-        if (response.error) throw nativeSessionUnavailable(response.error);
-        const thread = threadFromRpcResponse(response);
-        if (!thread) {
-          throw new HttpError(
-            502,
-            "codex_thread_resume_failed",
-            "Codex returned an invalid native Session resume response.",
-          );
-        }
-        const activeNativeTurnId = thread.turns.find(
-          (turn) => turn.status === "inProgress",
-        )?.id;
-        await this.store.reconcileNativeSessionState({
-          sessionId: session.sessionId,
-          nativeSessionId: session.nativeSessionId,
-          historyRevision: session.historyRevision,
-          activeNativeTurnId,
-        });
-      } catch (error) {
-        this.logger.warn(
-          {
-            environmentId: runtime.id,
-            sessionId: session.sessionId,
-            error: errorMessage(error),
-          },
-          "Codex native Session could not be resumed",
-        );
-        this.publishInvalidation(session.sessionId, "native-session-resume-failed", {
-          message:
-            "The shared Codex runtime recovered, but this native Session could not be reattached yet.",
-        });
-      }
-    }
   }
 
   private captureEnvironmentCredential(runtime: StoredEnvironmentRuntime) {
@@ -1501,6 +1604,565 @@ export class CodexService {
     return sync;
   }
 
+  /**
+   * Only stale-looking active delivery state receives background repair. It is
+   * outside the blocking Environment recovery path, delayed behind interactive
+   * operations, and never considers archived or ordinary waiting Sessions.
+   */
+  private scheduleExceptionalSessionReconciliation(
+    runtime: StoredEnvironmentRuntime,
+    options: {
+      delayMs?: number;
+      pendingTurnRequests?: ReadonlyMap<string, string>;
+      retryAttempt?: number;
+    } = {},
+  ) {
+    if (this.closed) return;
+    const epoch = environmentRuntimeEpoch(runtime);
+    const current = this.exceptionalSessionReconciliations.get(runtime.id);
+    if (current?.epoch === epoch) {
+      let addedTarget = false;
+      for (const [sessionId, requestId] of
+        options.pendingTurnRequests ?? []) {
+        addedTarget ||= current.pendingTurnRequests.get(sessionId) !== requestId;
+        current.pendingTurnRequests.set(sessionId, requestId);
+      }
+      current.rerunRequested = true;
+      current.rerunDelayMs = Math.min(
+        current.rerunDelayMs ?? Number.POSITIVE_INFINITY,
+        options.delayMs ??
+          (addedTarget
+            ? 0
+            : (this.options.exceptionalSessionRecoveryDelayMs ?? 500)),
+      );
+      // An explicit earlier deadline (especially a precise ambiguous-delivery
+      // request) must not wait behind another Session's long grace timer.
+      if (addedTarget || options.delayMs !== undefined) {
+        current.controller.abort();
+      }
+      return;
+    }
+    const pendingTurnRequests = new Map(current?.pendingTurnRequests);
+    for (const [sessionId, requestId] of options.pendingTurnRequests ?? []) {
+      pendingTurnRequests.set(sessionId, requestId);
+    }
+    current?.controller.abort();
+    const reconciliation: ExceptionalSessionReconciliation = {
+      epoch,
+      task: Promise.resolve(),
+      rerunRequested: false,
+      retryAttempt: options.retryAttempt ?? 0,
+      nextRetryAttempt: options.retryAttempt ?? 0,
+      pendingTurnRequests,
+      controller: new AbortController(),
+    };
+    reconciliation.task = this.reconcileExceptionalSessions(
+      runtime,
+      reconciliation,
+      options.delayMs ?? (pendingTurnRequests.size > 0 ? 0 : undefined),
+    )
+      .catch((error) => {
+        if (this.closed || reconciliation.controller.signal.aborted) return;
+        this.requestExceptionalSessionRetry(reconciliation);
+        this.logger.warn(
+          { environmentId: runtime.id, error: errorMessage(error) },
+          "Exceptional Codex Session reconciliation deferred",
+        );
+      })
+      .finally(() => {
+        this.exceptionalSessionTasks.delete(reconciliation.task);
+        if (
+          this.exceptionalSessionReconciliations.get(runtime.id) ===
+          reconciliation
+        ) {
+          this.exceptionalSessionReconciliations.delete(runtime.id);
+          if (reconciliation.rerunRequested && !this.closed) {
+            this.scheduleExceptionalSessionReconciliation(runtime, {
+              delayMs: reconciliation.rerunDelayMs,
+              pendingTurnRequests: reconciliation.pendingTurnRequests,
+              retryAttempt: reconciliation.nextRetryAttempt,
+            });
+          }
+        }
+      });
+    this.exceptionalSessionTasks.add(reconciliation.task);
+    this.exceptionalSessionReconciliations.set(runtime.id, reconciliation);
+  }
+
+  private async reconcileExceptionalSessions(
+    runtime: StoredEnvironmentRuntime,
+    reconciliation: ExceptionalSessionReconciliation,
+    requestedDelayMs?: number,
+  ) {
+    await delay(
+      requestedDelayMs ??
+        this.options.exceptionalSessionRecoveryDelayMs ??
+        500,
+      reconciliation.controller.signal,
+    );
+    if (!this.isCurrentExceptionalReconciliation(runtime.id, reconciliation)) {
+      return;
+    }
+    await this.waitForEnvironmentRpcIdle(runtime.id, reconciliation);
+    if (!this.isCurrentExceptionalReconciliation(runtime.id, reconciliation)) {
+      return;
+    }
+    const sessions =
+      await this.store.nativeSessionRecoveryCandidatesForEnvironment(
+        runtime.id,
+      );
+    reconciliation.nextRetryAttempt = 0;
+    for (const [sessionId, requestId] of
+      reconciliation.pendingTurnRequests) {
+      const candidate = sessions.find(
+        (session) => session.sessionId === sessionId,
+      );
+      if (!candidate || candidate.pendingTurnRequestId !== requestId) {
+        reconciliation.pendingTurnRequests.delete(sessionId);
+      }
+    }
+    for (const session of sessions) {
+      if (
+        !session.nativeSessionId ||
+        !this.isCurrentExceptionalReconciliation(runtime.id, reconciliation)
+      ) {
+        continue;
+      }
+      const pendingTurnRequestId = session.pendingTurnRequestId;
+      const targetedPendingTurn =
+        pendingTurnRequestId !== undefined &&
+        reconciliation.pendingTurnRequests.get(session.sessionId) ===
+          pendingTurnRequestId;
+      if (session.pendingTurnPhase && !targetedPendingTurn) {
+        // Process-local interactive leases do not cover another Sandpi
+        // replica. Defer fresh DB delivery state unless this process owns the
+        // exact turn/start request that already reached an ambiguous timeout.
+        const pendingDelayMs = exceptionalPendingTurnDelayMs(
+          session.pendingTurnStartedAt,
+          this.options.exceptionalPendingTurnGraceMs ??
+            EXCEPTIONAL_PENDING_TURN_GRACE_MS,
+        );
+        if (pendingDelayMs > 0) {
+          this.requestExceptionalSessionRerun(
+            reconciliation,
+            pendingDelayMs,
+          );
+          continue;
+        }
+      }
+      const nativeSessionId = session.nativeSessionId;
+      await this.waitForEnvironmentRpcIdle(runtime.id, reconciliation);
+      if (!this.isCurrentExceptionalReconciliation(runtime.id, reconciliation)) {
+        return;
+      }
+      try {
+        await this.reconcileExceptionalSession(
+          runtime,
+          reconciliation,
+          session,
+          nativeSessionId,
+          targetedPendingTurn,
+        );
+      } catch (error) {
+        if (
+          this.closed ||
+          reconciliation.controller.signal.aborted ||
+          isAbortError(error)
+        ) {
+          return;
+        }
+        this.requestExceptionalSessionRetry(reconciliation);
+        this.logger.warn(
+          {
+            environmentId: runtime.id,
+            sessionId: session.sessionId,
+            error: errorMessage(error),
+          },
+          "Exceptional Codex Session could not be reconciled",
+        );
+      }
+    }
+  }
+
+  private async reconcileExceptionalSession(
+    runtime: StoredEnvironmentRuntime,
+    reconciliation: ExceptionalSessionReconciliation,
+    session: StoredSessionRuntime,
+    nativeSessionId: string,
+    targetedPendingTurn: boolean,
+  ) {
+    const submitted = await this.requestExceptionalSessionRead(
+      runtime.id,
+      reconciliation,
+      session.sessionId,
+      nativeSessionId,
+    );
+    if (!submitted) return;
+    const { response, runtime: latestRuntime } = submitted;
+    if (response.error) throw nativeSessionUnavailable(response.error);
+    const thread = threadFromRpcResponse(response);
+    if (!thread || thread.id !== nativeSessionId) {
+      throw new HttpError(
+        502,
+        "codex_thread_read_failed",
+        "Codex returned an invalid native Session snapshot.",
+      );
+    }
+    if (!this.isCurrentExceptionalReconciliation(runtime.id, reconciliation)) {
+      return;
+    }
+    const currentRuntime = await this.store.environmentRuntime(runtime.id);
+    if (environmentRuntimeEpoch(currentRuntime) !== reconciliation.epoch) {
+      this.handoffExceptionalSessionReconciliation(
+        currentRuntime,
+        reconciliation,
+      );
+      return;
+    }
+    if (
+      currentRuntime.desiredState !== "running" ||
+      currentRuntime.observedState !== "running"
+    ) {
+      return;
+    }
+    if (!["idle", "notLoaded"].includes(thread.status.type)) {
+      if (thread.status.type === "active") {
+        this.requestExceptionalSessionRerun(
+          reconciliation,
+          this.options.exceptionalSessionActiveRecheckMs ??
+            EXCEPTIONAL_SESSION_ACTIVE_RECHECK_MS,
+        );
+      } else {
+        this.requestExceptionalSessionRetry(reconciliation);
+      }
+      return;
+    }
+    const projectionChanged =
+      session.activeNativeTurnId !== undefined ||
+      Boolean(session.pendingTurnPhase) ||
+      session.sessionStatus !== "waiting";
+    const reconciled = await this.store.reconcileNativeSessionState({
+      sessionId: session.sessionId,
+      nativeSessionId,
+      historyRevision: session.historyRevision,
+      runtimeVersion: session.version,
+      environmentId: latestRuntime.id,
+      environmentSupervisorSessionId: latestRuntime.supervisorSessionId,
+      environmentAttemptId: latestRuntime.attemptId,
+      environmentRuntimeGeneration: latestRuntime.runtimeGeneration,
+      activeNativeTurnId: undefined,
+      clearPendingWhenNativeIdle: true,
+      clearPendingRequestId: targetedPendingTurn
+        ? session.pendingTurnRequestId
+        : undefined,
+      clearPendingStartedBefore: targetedPendingTurn
+        ? undefined
+        : new Date(
+            Date.now() -
+              (this.options.exceptionalPendingTurnGraceMs ??
+                EXCEPTIONAL_PENDING_TURN_GRACE_MS),
+          ),
+      requireUnarchived: true,
+    });
+    if (reconciled && projectionChanged) {
+      this.publishInvalidation(
+        session.sessionId,
+        "native-session-state-reconciled",
+        {
+          message:
+            "Codex execution state was repaired from the native Thread.",
+        },
+      );
+    } else if (!reconciled) {
+      this.requestExceptionalSessionRetry(reconciliation);
+    }
+  }
+
+  /**
+   * Serializes only the native read submission with pause/delete/recovery.
+   * Waiting for app-server must stay outside the lifecycle lock so a missing
+   * response cannot block an Environment transition.
+   */
+  private async requestExceptionalSessionRead(
+    environmentId: string,
+    reconciliation: ExceptionalSessionReconciliation,
+    sessionId: string,
+    nativeSessionId: string,
+  ): Promise<
+    | {
+        response: Record<string, unknown>;
+        runtime: StoredEnvironmentRuntime;
+      }
+    | undefined
+  > {
+    const requestSignal = AbortSignal.any([
+      reconciliation.controller.signal,
+      AbortSignal.timeout(
+        this.options.exceptionalSessionRequestTimeoutMs ??
+          EXCEPTIONAL_SESSION_REQUEST_TIMEOUT_MS,
+      ),
+    ]);
+    const message = {
+      method: "thread/read",
+      id: rpcId("thread-reconcile", sessionId),
+      params: {
+        threadId: nativeSessionId,
+        includeTurns: false,
+      },
+    };
+    const locked = await this.store.withEnvironmentLifecycleLock(
+      environmentId,
+      async (lockedStore) => {
+        if (
+          !this.isCurrentExceptionalReconciliation(
+            environmentId,
+            reconciliation,
+          )
+        ) {
+          return undefined;
+        }
+        const runtime = await (lockedStore ?? this.store).environmentRuntime(
+          environmentId,
+        );
+        if (
+          !this.isCurrentExceptionalReconciliation(
+            environmentId,
+            reconciliation,
+          )
+        ) {
+          return undefined;
+        }
+        if (environmentRuntimeEpoch(runtime) !== reconciliation.epoch) {
+          this.handoffExceptionalSessionReconciliation(
+            runtime,
+            reconciliation,
+          );
+          return undefined;
+        }
+        if (
+          runtime.desiredState !== "running" ||
+          runtime.observedState !== "running"
+        ) {
+          return undefined;
+        }
+        const request = this.prepareCodexRequest(
+          environmentId,
+          message,
+          undefined,
+          requestSignal,
+        );
+        await this.submitPreparedCodexRequest(
+          runtime,
+          message,
+          message.id,
+          request,
+          requestSignal,
+        );
+        return { request, runtime };
+      },
+    );
+    if (!locked.acquired) {
+      if (
+        this.isCurrentExceptionalReconciliation(
+          environmentId,
+          reconciliation,
+        )
+      ) {
+        this.requestExceptionalSessionRetry(reconciliation);
+      }
+      return undefined;
+    }
+    if (!locked.value) return undefined;
+
+    const { request, runtime } = locked.value;
+    try {
+      const response = await request.promise;
+      if (reconciliation.controller.signal.aborted) {
+        throw codexBackgroundRequestCancelled();
+      }
+      // This path is deliberately lifecycle-neutral. A pause may win after
+      // submission; its response must never wake or recover the Environment.
+      return { response, runtime };
+    } finally {
+      request.dispose();
+    }
+  }
+
+  private async waitForEnvironmentRpcIdle(
+    environmentId: string,
+    reconciliation: ExceptionalSessionReconciliation,
+  ) {
+    while (
+      this.isCurrentExceptionalReconciliation(environmentId, reconciliation) &&
+      (this.hasEnvironmentRpcWaiters(environmentId) ||
+        (this.interactiveEnvironmentOperations.get(environmentId) ?? 0) > 0)
+    ) {
+      await delay(25, reconciliation.controller.signal);
+    }
+  }
+
+  private retainInteractiveEnvironmentOperation(environmentId: string) {
+    const cancelled =
+      this.cancelExceptionalSessionReconciliation(environmentId);
+    if (cancelled) {
+      const deferred =
+        this.deferredExceptionalSessionReconciliations.get(environmentId) ?? {
+          pendingTurnRequests: new Map<string, string>(),
+        };
+      for (const [sessionId, requestId] of cancelled.pendingTurnRequests) {
+        deferred.pendingTurnRequests.set(sessionId, requestId);
+      }
+      this.deferredExceptionalSessionReconciliations.set(
+        environmentId,
+        deferred,
+      );
+    }
+    this.interactiveEnvironmentOperations.set(
+      environmentId,
+      (this.interactiveEnvironmentOperations.get(environmentId) ?? 0) + 1,
+    );
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const remaining =
+        (this.interactiveEnvironmentOperations.get(environmentId) ?? 1) - 1;
+      if (remaining > 0) {
+        this.interactiveEnvironmentOperations.set(environmentId, remaining);
+      } else {
+        this.interactiveEnvironmentOperations.delete(environmentId);
+        const deferred =
+          this.deferredExceptionalSessionReconciliations.get(environmentId);
+        if (deferred) {
+          this.deferredExceptionalSessionReconciliations.delete(environmentId);
+          this.rescheduleExceptionalSessionReconciliation(
+            environmentId,
+            deferred,
+          );
+        }
+      }
+    };
+  }
+
+  private cancelExceptionalSessionReconciliation(environmentId: string) {
+    const reconciliation =
+      this.exceptionalSessionReconciliations.get(environmentId);
+    if (!reconciliation) return undefined;
+    this.exceptionalSessionReconciliations.delete(environmentId);
+    reconciliation.controller.abort();
+    return reconciliation;
+  }
+
+  private rescheduleExceptionalSessionReconciliation(
+    environmentId: string,
+    deferred: DeferredExceptionalSessionReconciliation,
+  ) {
+    if (this.closed) return;
+    const reschedule = this.store
+      .environmentRuntime(environmentId)
+      .then((runtime) => {
+        if (!this.closed) {
+          this.scheduleExceptionalSessionReconciliation(runtime, {
+            delayMs: deferred.pendingTurnRequests.size > 0 ? 0 : undefined,
+            pendingTurnRequests: deferred.pendingTurnRequests,
+          });
+        }
+      })
+      .catch((error) => {
+        if (this.closed) return;
+        this.logger.warn(
+          { environmentId, error: errorMessage(error) },
+          "Exceptional Codex Session reconciliation could not be rescheduled",
+        );
+      })
+      .finally(() => {
+        this.exceptionalSessionTasks.delete(reschedule);
+      });
+    this.exceptionalSessionTasks.add(reschedule);
+  }
+
+  private requestExceptionalSessionRerun(
+    reconciliation: ExceptionalSessionReconciliation,
+    delayMs: number,
+  ) {
+    reconciliation.rerunRequested = true;
+    reconciliation.rerunDelayMs = Math.min(
+      reconciliation.rerunDelayMs ?? Number.POSITIVE_INFINITY,
+      Math.max(0, delayMs),
+    );
+  }
+
+  private requestExceptionalSessionRetry(
+    reconciliation: ExceptionalSessionReconciliation,
+  ) {
+    const baseMs =
+      this.options.exceptionalSessionRetryBaseMs ??
+      EXCEPTIONAL_SESSION_RETRY_BASE_MS;
+    const delayMs = Math.min(
+      baseMs * 2 ** Math.min(reconciliation.retryAttempt, 10),
+      EXCEPTIONAL_SESSION_RETRY_MAX_MS,
+    );
+    reconciliation.nextRetryAttempt = Math.max(
+      reconciliation.nextRetryAttempt,
+      reconciliation.retryAttempt + 1,
+    );
+    this.requestExceptionalSessionRerun(reconciliation, delayMs);
+  }
+
+  private handoffExceptionalSessionReconciliation(
+    runtime: StoredEnvironmentRuntime,
+    reconciliation: ExceptionalSessionReconciliation,
+  ) {
+    if (
+      runtime.desiredState !== "running" ||
+      runtime.observedState !== "running" ||
+      environmentRuntimeEpoch(runtime) === reconciliation.epoch
+    ) {
+      return;
+    }
+    this.scheduleExceptionalSessionReconciliation(runtime, {
+      delayMs: 0,
+      pendingTurnRequests: reconciliation.pendingTurnRequests,
+    });
+  }
+
+  private hasEnvironmentRpcWaiters(environmentId: string) {
+    const prefix = `${environmentId}\0`;
+    for (const key of this.rpcWaiters.keys()) {
+      if (key.startsWith(prefix)) return true;
+    }
+    return false;
+  }
+
+  private rejectEnvironmentRpcWaitersForEpochChange(environmentId: string) {
+    const prefix = `${environmentId}\0`;
+    for (const [key, waiters] of this.rpcWaiters) {
+      if (!key.startsWith(prefix)) continue;
+      for (const waiter of [...waiters]) {
+        waiter.rejectForRuntimeEpochChange();
+      }
+    }
+  }
+
+  private forgetEnvironmentProtocolReadiness(environmentId: string) {
+    const prefix = `${environmentId}\0`;
+    for (const key of this.initializing.keys()) {
+      if (key.startsWith(prefix)) this.initializing.delete(key);
+    }
+  }
+
+  private isCurrentExceptionalReconciliation(
+    environmentId: string,
+    reconciliation: ExceptionalSessionReconciliation,
+  ) {
+    return (
+      !this.closed &&
+      !reconciliation.controller.signal.aborted &&
+      this.exceptionalSessionReconciliations.get(environmentId) ===
+        reconciliation
+    );
+  }
+
   private ensureProtocolInitialized(runtime: StoredEnvironmentRuntime) {
     if (!runtime.supervisorSessionId || !runtime.attemptId) {
       throw new HttpError(
@@ -1509,20 +2171,27 @@ export class CodexService {
         "The Environment Codex runtime is not ready.",
       );
     }
-    const key = `${runtime.id}:${runtime.attemptId}`;
+    const key = environmentProtocolKey(runtime);
     const active = this.initializing.get(key);
     if (active) return active;
     const initialize = (async () => {
-      const response = await this.requestCodex(runtime.id, runtime, {
-        method: "initialize",
-        // Sandpi may restart while the app-server attempt keeps running. The
-        // Supervisor input journal deduplicates stable ids, so each process
-        // needs a fresh request id to receive a new initialize response.
-        id: rpcId("initialize", runtime.id),
-        params: {
-          clientInfo: { name: "sandpi", title: "Sandpi", version: "0.1.0" },
+      const response = await this.requestCodex(
+        runtime.id,
+        runtime,
+        {
+          method: "initialize",
+          // Sandpi may restart while the app-server attempt keeps running. The
+          // Supervisor input journal deduplicates stable ids, so each process
+          // needs a fresh request id to receive a new initialize response.
+          id: rpcId("initialize", runtime.id),
+          params: {
+            clientInfo: { name: "sandpi", title: "Sandpi", version: "0.1.0" },
+          },
         },
-      });
+        undefined,
+        undefined,
+        false,
+      );
       if (response.error && !isAlreadyInitializedError(response.error)) {
         throw new HttpError(
           502,
@@ -1554,6 +2223,94 @@ export class CodexService {
     return runtime as StoredSessionRuntime & { nativeSessionId: string };
   }
 
+  /**
+   * Loaded Threads belong to one app-server attempt, not to the Environment
+   * Sandbox generation alone. Session execution attaches only the requested
+   * native Thread and shares one in-flight resume between concurrent callers.
+   */
+  private ensureNativeSessionAttached(
+    runtime: StoredEnvironmentRuntime,
+    session: StoredSessionRuntime & { nativeSessionId: string },
+  ) {
+    const state = this.nativeSessionAttachmentState(runtime);
+    const active = state.threads.get(session.nativeSessionId);
+    if (active) return active;
+
+    this.rememberNativeOwner(
+      runtime.id,
+      session.nativeSessionId,
+      session.sessionId,
+    );
+    const attachment = this.attachNativeSession(runtime, session);
+    state.threads.set(session.nativeSessionId, attachment);
+    void attachment.catch(() => {
+      const current = this.nativeSessionAttachments.get(runtime.id);
+      if (
+        current === state &&
+        current.threads.get(session.nativeSessionId) === attachment
+      ) {
+        current.threads.delete(session.nativeSessionId);
+      }
+    });
+    return attachment;
+  }
+
+  private async attachNativeSession(
+    runtime: StoredEnvironmentRuntime,
+    session: StoredSessionRuntime & { nativeSessionId: string },
+  ) {
+    const response = await this.requestCodex(
+      runtime.id,
+      runtime,
+      {
+        method: "thread/resume",
+        id: rpcId("thread-resume", session.sessionId),
+        params: {
+          threadId: session.nativeSessionId,
+          ...threadConfiguration(session.modelId),
+        },
+      },
+    );
+    if (response.error) throw nativeSessionAttachFailed(response.error);
+    const thread = threadFromRpcResponse(response);
+    if (!thread || thread.id !== session.nativeSessionId) {
+      throw new HttpError(
+        502,
+        "codex_thread_resume_failed",
+        "Codex returned an invalid native Session resume response.",
+      );
+    }
+  }
+
+  private rememberNativeSessionAttached(
+    runtime: StoredEnvironmentRuntime,
+    nativeSessionId: string,
+  ) {
+    this.nativeSessionAttachmentState(runtime).threads.set(
+      nativeSessionId,
+      Promise.resolve(),
+    );
+  }
+
+  private nativeSessionAttachmentState(runtime: StoredEnvironmentRuntime) {
+    if (!runtime.supervisorSessionId || !runtime.attemptId) {
+      throw new HttpError(
+        409,
+        "codex_runtime_not_ready",
+        "The Environment Codex runtime is not ready.",
+      );
+    }
+    const epoch = environmentRuntimeEpoch(runtime);
+    const current = this.nativeSessionAttachments.get(runtime.id);
+    if (current?.epoch === epoch) return current;
+    const next: NativeSessionAttachmentState = {
+      epoch,
+      threads: new Map(),
+    };
+    this.nativeSessionAttachments.set(runtime.id, next);
+    return next;
+  }
+
   private async readNativeThread(
     environmentRuntime: StoredEnvironmentRuntime,
     sessionRuntime: StoredSessionRuntime & { nativeSessionId: string },
@@ -1571,7 +2328,7 @@ export class CodexService {
     );
     if (response.error) throw nativeSessionUnavailable(response.error);
     const thread = threadFromRpcResponse(response);
-    if (!thread) {
+    if (!thread || thread.id !== sessionRuntime.nativeSessionId) {
       throw new HttpError(
         502,
         "codex_thread_read_failed",
@@ -1583,11 +2340,125 @@ export class CodexService {
 
   private async requestCodex(
     environmentId: string,
-    runtime: EnvironmentRuntimeRecord,
+    runtime: StoredEnvironmentRuntime,
     message: Record<string, unknown>,
     ownerSessionId?: string,
     stableInputId?: string,
+    recoverEpochDrift = true,
   ) {
+    const result = await this.requestCodexWithRuntime(
+      environmentId,
+      runtime,
+      message,
+      ownerSessionId,
+      stableInputId,
+      recoverEpochDrift,
+    );
+    return result.response;
+  }
+
+  private async requestCodexWithRuntime(
+    environmentId: string,
+    runtime: StoredEnvironmentRuntime,
+    message: Record<string, unknown>,
+    ownerSessionId?: string,
+    stableInputId?: string,
+    recoverEpochDrift = true,
+  ) {
+    let currentRuntime = runtime;
+    for (let attempt = 0; ; attempt += 1) {
+      const request = this.prepareCodexRequest(
+        environmentId,
+        message,
+        ownerSessionId,
+      );
+      try {
+        try {
+          await this.submitPreparedCodexRequestWithRuntimeAdmission(
+            environmentId,
+            currentRuntime,
+            message,
+            stableInputId,
+            request,
+          );
+        } catch (error) {
+          request.reject(error);
+        }
+        const response = await request.promise;
+        const submittedRuntime = currentRuntime;
+        await this.reconcileEnvironmentAfterRuntimeAccess(environmentId);
+        return { response, runtime: submittedRuntime };
+      } catch (error) {
+        if (
+          !recoverEpochDrift ||
+          attempt > 0 ||
+          !isPreInputRuntimeEpochError(error)
+        ) {
+          throw error;
+        }
+        currentRuntime = await this.recoverEnvironmentRuntime(environmentId);
+      } finally {
+        request.dispose();
+      }
+    }
+  }
+
+  private async submitPreparedCodexRequestWithRuntimeAdmission(
+    environmentId: string,
+    runtime: EnvironmentRuntimeRecord,
+    message: Record<string, unknown>,
+    stableInputId: string | undefined,
+    request: PreparedRpcRequest,
+  ) {
+    const deadline = Date.now() + RUNTIME_RECOVERY_LOCK_TIMEOUT_MS;
+    while (!this.closed) {
+      const locked = await this.store.withEnvironmentRuntimeAccessLock(
+        environmentId,
+        async (lockedStore) => {
+          const scopedStore = lockedStore ?? this.store;
+          const current = await scopedStore.environmentRuntime(environmentId);
+          if (
+            current.desiredState !== "running" ||
+            current.observedState !== "running" ||
+            environmentRuntimeEpoch(current) !== environmentRuntimeEpoch(runtime)
+          ) {
+            throw codexRuntimeEpochChanged();
+          }
+          const submitted = await this.submitPreparedCodexRequest(
+            runtime,
+            message,
+            stableInputId,
+            request,
+            AbortSignal.timeout(
+              this.options.rpcSubmissionTimeoutMs ??
+                RPC_SUBMISSION_TIMEOUT_MS,
+            ),
+          );
+          if (submitted) {
+            await scopedStore.recordEnvironmentRuntimeAccess(environmentId);
+          }
+        },
+      );
+      if (locked.acquired) return;
+      if (Date.now() >= deadline) {
+        throw new HttpError(
+          503,
+          "environment_lifecycle_busy",
+          "The Environment lifecycle is still changing. Try again shortly.",
+        );
+      }
+      await delay(RUNTIME_RECOVERY_LOCK_RETRY_MS);
+    }
+    throw new Error("Codex service is closed");
+  }
+
+  private prepareCodexRequest(
+    environmentId: string,
+    message: Record<string, unknown>,
+    ownerSessionId?: string,
+    signal?: AbortSignal,
+  ): PreparedRpcRequest {
+    if (this.closed) throw new Error("Codex service is closed");
     const requestId = message.id;
     if (typeof requestId !== "string") {
       throw new Error("A Codex RPC request must have a string id");
@@ -1601,28 +2472,67 @@ export class CodexService {
       this.requestOwners.set(rpcKey(environmentId, requestId), ownerSessionId);
     }
     const waiter = this.registerRpcWaiter(environmentId, requestId);
+    // Background cancellation can reject while writeCodexMessage is still
+    // pending inside the short lifecycle-lock section. Mark the Promise
+    // handled immediately; callers still await the original rejecting Promise.
+    void waiter.promise.catch(() => undefined);
+    const abort = () =>
+      waiter.reject(signal?.reason ?? codexBackgroundRequestCancelled());
+    if (signal?.aborted) abort();
+    else signal?.addEventListener("abort", abort, { once: true });
+    return {
+      ...waiter,
+      dispose: () => signal?.removeEventListener("abort", abort),
+    };
+  }
+
+  private async submitPreparedCodexRequest(
+    runtime: EnvironmentRuntimeRecord,
+    message: Record<string, unknown>,
+    stableInputId: string | undefined,
+    request: PreparedRpcRequest,
+    signal?: AbortSignal,
+  ) {
+    const requestId = message.id;
+    if (typeof requestId !== "string") {
+      throw new Error("A Codex RPC request must have a string id");
+    }
     try {
+      request.markDeliveryStarted();
       await this.runtime.writeCodexMessage(
         runtime,
         message,
         stableInputId ?? requestId,
+        signal,
       );
+      request.armTimeout();
+      return true;
     } catch (error) {
-      waiter.reject(error);
-      return waiter.promise;
+      request.reject(
+        signal?.aborted && signal.reason?.name === "TimeoutError"
+          ? codexInputDeliveryTimeout()
+          : error,
+      );
+      return false;
     }
-    const response = await waiter.promise;
-    await this.reconcileEnvironmentAfterRuntimeAccess(environmentId);
-    return response;
   }
 
   private registerRpcWaiter(environmentId: string, requestId: string): RpcWaiter {
     const cached = this.takeRpcResponse(environmentId, requestId);
     if (cached) {
-      return { promise: Promise.resolve(cached), resolve() {}, reject() {} };
+      return {
+        promise: Promise.resolve(cached),
+        resolve() {},
+        reject() {},
+        armTimeout() {},
+        markDeliveryStarted() {},
+        rejectForRuntimeEpochChange() {},
+      };
     }
     const key = rpcKey(environmentId, requestId);
     let settled = false;
+    let deliveryStarted = false;
+    let timer: NodeJS.Timeout | undefined;
     let resolvePromise!: (response: Record<string, unknown>) => void;
     let rejectPromise!: (error: unknown) => void;
     const promise = new Promise<Record<string, unknown>>((resolve, reject) => {
@@ -1630,7 +2540,7 @@ export class CodexService {
       rejectPromise = reject;
     });
     const cleanup = () => {
-      clearTimeout(timer);
+      if (timer) clearTimeout(timer);
       const waiters = this.rpcWaiters.get(key);
       waiters?.delete(waiter);
       if (waiters?.size === 0) this.rpcWaiters.delete(key);
@@ -1649,17 +2559,30 @@ export class CodexService {
         cleanup();
         rejectPromise(error);
       },
+      armTimeout: () => {
+        if (settled || timer) return;
+        timer = setTimeout(() => {
+          waiter.reject(
+            new HttpError(
+              504,
+              "codex_rpc_timeout",
+              `Codex did not answer ${requestId.split(":", 1)[0]} in time.`,
+            ),
+          );
+        }, this.options.rpcTimeoutMs ?? RPC_TIMEOUT_MS);
+        timer.unref();
+      },
+      markDeliveryStarted: () => {
+        deliveryStarted = true;
+      },
+      rejectForRuntimeEpochChange: () => {
+        waiter.reject(
+          deliveryStarted
+            ? codexRuntimeEpochLostAfterSubmission()
+            : codexRuntimeEpochChanged(),
+        );
+      },
     };
-    const timer = setTimeout(() => {
-      waiter.reject(
-        new HttpError(
-          504,
-          "codex_rpc_timeout",
-          `Codex did not answer ${requestId.split(":", 1)[0]} in time.`,
-        ),
-      );
-    }, RPC_TIMEOUT_MS);
-    timer.unref();
     const waiters = this.rpcWaiters.get(key) ?? new Set<RpcWaiter>();
     waiters.add(waiter);
     this.rpcWaiters.set(key, waiters);
@@ -1865,7 +2788,7 @@ export class CodexService {
           await this.invalidateEnvironmentSessions(
             environmentId,
             "supervisor-journal-gap",
-            "Live execution events expired; the next reconnect reloads each native Codex Session.",
+            "Live execution events expired; each open Session will refresh its native Thread lazily.",
           );
           consecutiveFailures = 0;
           continue;
@@ -1877,19 +2800,21 @@ export class CodexService {
         );
         if (isRecoverableRuntimeError(error)) {
           if (!(await this.store.environmentWantsRunning(environmentId))) break;
-          try {
-            await this.recoverEnvironmentRuntime(environmentId);
-            await this.invalidateEnvironmentSessions(
-              environmentId,
-              "environment-runtime-recovered",
-              "The shared Codex runtime restarted; native Sessions will be reloaded.",
-            );
-            consecutiveFailures = 0;
-          } catch (recoveryError) {
-            this.logger.warn(
-              { environmentId, error: errorMessage(recoveryError) },
-              "Codex Environment recovery failed",
-            );
+          if (!this.recovering.has(environmentId)) {
+            try {
+              await this.recoverEnvironmentRuntime(environmentId);
+              await this.invalidateEnvironmentSessions(
+                environmentId,
+                "environment-runtime-recovered",
+                "The shared Codex runtime restarted; open Sessions will refresh lazily.",
+              );
+              consecutiveFailures = 0;
+            } catch (recoveryError) {
+              this.logger.warn(
+                { environmentId, error: errorMessage(recoveryError) },
+                "Codex Environment recovery failed",
+              );
+            }
           }
         }
       } finally {
@@ -2240,6 +3165,14 @@ function nativeSessionUnavailable(error: unknown) {
   );
 }
 
+function nativeSessionAttachFailed(error: unknown) {
+  return new HttpError(
+    503,
+    "codex_native_session_attach_failed",
+    `Codex could not attach this Session for execution. Retry the operation. Native error: ${rpcErrorMessage(error)}`,
+  );
+}
+
 function rpcErrorMessage(error: unknown) {
   const record = objectRecord(error);
   return record && "message" in record
@@ -2251,8 +3184,14 @@ function isAlreadyInitializedError(error: unknown) {
   return rpcErrorMessage(error).toLowerCase().includes("already initialized");
 }
 
-function isRpcTimeout(error: unknown) {
-  return error instanceof HttpError && error.code === "codex_rpc_timeout";
+function isAmbiguousTurnDelivery(error: unknown) {
+  return (
+    error instanceof HttpError &&
+    (error.code === "codex_rpc_timeout" ||
+      error.code === "codex_input_delivery_timeout" ||
+      error.code === "codex_runtime_epoch_lost_after_submit" ||
+      error.code === "sandbox0_unavailable")
+  );
 }
 
 function isRecoverableRuntimeError(error: unknown) {
@@ -2261,9 +3200,52 @@ function isRecoverableRuntimeError(error: unknown) {
   return (
     error instanceof HttpError &&
     (error.code === "supervisor_not_running" ||
+      error.code === "codex_runtime_epoch_changed" ||
+      error.code === "codex_runtime_epoch_lost_after_submit" ||
       error.code === "codex_runtime_not_ready" ||
       (error.code.startsWith("sandbox0_") &&
         [404, 409, 503].includes(error.statusCode)))
+  );
+}
+
+function isPreInputRuntimeEpochError(error: unknown) {
+  return (
+    error instanceof HttpError &&
+    (error.code === "codex_runtime_epoch_changed" ||
+      error.code === "supervisor_not_running" ||
+      error.code === "codex_runtime_not_ready")
+  );
+}
+
+function isRuntimeRecoveryRestartError(error: unknown) {
+  return (
+    isPreInputRuntimeEpochError(error) ||
+    (error instanceof HttpError &&
+      error.code === "codex_runtime_epoch_lost_after_submit")
+  );
+}
+
+function codexRuntimeEpochChanged() {
+  return new HttpError(
+    409,
+    "codex_runtime_epoch_changed",
+    "The Codex runtime changed before this request was submitted. Sandpi is reconnecting it.",
+  );
+}
+
+function codexRuntimeEpochLostAfterSubmission() {
+  return new HttpError(
+    503,
+    "codex_runtime_epoch_lost_after_submit",
+    "The Codex runtime changed while this request was in flight. Sandpi will reconcile native state without replaying the request.",
+  );
+}
+
+function codexInputDeliveryTimeout() {
+  return new HttpError(
+    504,
+    "codex_input_delivery_timeout",
+    "Codex input delivery did not finish in time. Sandpi will reconcile native state without replaying the request.",
   );
 }
 
@@ -2332,6 +3314,50 @@ function rpcKey(environmentId: string, requestId: string) {
 
 function nativeOwnerKey(environmentId: string, nativeSessionId: string) {
   return `${environmentId}\0${nativeSessionId}`;
+}
+
+function environmentRuntimeEpoch(runtime: EnvironmentRuntimeRecord) {
+  return [
+    runtime.supervisorSessionId ?? "",
+    runtime.attemptId ?? "",
+    runtime.runtimeGeneration,
+  ].join("\0");
+}
+
+function environmentProtocolKey(runtime: EnvironmentRuntimeRecord) {
+  return `${runtime.id}\0${environmentRuntimeEpoch(runtime)}`;
+}
+
+function environmentDecoderEpochChanged(
+  runtime: EnvironmentRuntimeRecord,
+  decoder: CodexDecoderState,
+) {
+  return (
+    decoder.attemptId !== undefined &&
+    (decoder.attemptId !== runtime.attemptId ||
+      decoder.runtimeGeneration !== runtime.runtimeGeneration)
+  );
+}
+
+function codexRecordBelongsToRuntime(
+  runtime: EnvironmentRuntimeRecord,
+  record: DecodedCodexRecord,
+) {
+  return (
+    record.attemptId === runtime.attemptId &&
+    record.runtimeGeneration === runtime.runtimeGeneration
+  );
+}
+
+function exceptionalPendingTurnDelayMs(
+  pendingTurnStartedAt: Date | undefined,
+  graceMs: number,
+) {
+  if (!pendingTurnStartedAt) return graceMs;
+  const startedAtMs = pendingTurnStartedAt.getTime();
+  if (!Number.isFinite(startedAtMs)) return graceMs;
+  const elapsedMs = Math.max(0, Date.now() - startedAtMs);
+  return Math.max(0, graceMs - elapsedMs);
 }
 
 function objectRecord(value: unknown): Record<string, unknown> | undefined {
@@ -2430,6 +3456,10 @@ function expiredEventCursorEarliest(error: unknown) {
   return Number.isSafeInteger(earliest) && earliest > 0
     ? earliest
     : undefined;
+}
+
+function codexBackgroundRequestCancelled() {
+  return new DOMException("Codex background request cancelled", "AbortError");
 }
 
 function isAbortError(error: unknown) {

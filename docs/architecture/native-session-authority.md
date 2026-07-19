@@ -68,6 +68,52 @@ credential body. The Environment owner and its coding agents have execution in
 the same Sandbox and must still be treated as able to inspect their own native
 credential, just as with a local harness.
 
+Recovery may speculatively materialize that credential before Workspace health
+checks so app-server can start early. If Workspace or Supervisor repair then
+pauses the Sandbox, Sandpi materializes it again in the final Sandbox0 runtime
+generation before admitting protocol initialization; `/dev/shm` never survives
+that native lifecycle transition.
+
+## Runtime authority and cold access
+
+Sandbox0 is the authority for the live Sandbox lifecycle, Supervisor attempt
+and runtime generation. Sandpi's `environment_runtime.attempt_id` and
+`runtime_generation` are an observation of the last Sandbox0 epoch for which
+Sandpi materialized the ephemeral credential. They are recovery and
+compare-and-swap coordinates, not a second runtime state machine and not proof
+that a process is still live. Protocol initialization is a process-local lease.
+The Supervisor decoder persists its replay coordinates separately, so merely
+observing an event from a newer attempt cannot promote that attempt to
+credential-ready.
+
+Every Codex input first reads the current Supervisor from Sandbox0 and compares
+its attempt and generation with the credential-hydrated coordinates. A mismatch
+before delivery performs one Environment recovery before retrying the same
+logical request id. Once delivery starts, an epoch loss is instead ambiguous:
+Sandpi never replays the mutation and an uncertain `turn/start` is reconciled
+from the native Thread. Sandbox0's expected-attempt receipt remains the final
+fence for a pause that lands between that read and the input write. Input
+delivery has its own abortable deadline, while the response deadline is armed
+only after submission; Sandbox wake-up, credential materialization and
+lifecycle lock waiting are not counted as Codex response time.
+
+Files, the Web IDE, its watcher and Terminal are Environment capabilities rather
+than Codex capabilities. They enter a shared PostgreSQL advisory lock keyed by
+Environment, which permits concurrent user access while excluding pause,
+delete and harness recovery. Their warm path executes the requested native
+operation directly with no health probe. Only a native wake-up or disconnected
+Workspace portal invokes harness-neutral Sandbox recovery and one retry. A
+Workspace portal repair releases shared admission and owns the exclusive
+lifecycle lock because rebuilding FUSE can pause the Sandbox.
+Successful access records a fresh idle window but never changes the
+credential-hydrated Codex epoch. It therefore cannot start a Supervisor or wait
+for app-server initialization. A live Terminal uses protocol ping/pong and a
+throttled shared-lock heartbeat to extend only an already-running
+Environment; it cannot project a paused Sandbox back to running. The UI also
+changes its long-running
+conversation status after two seconds to explain that an idle checkpoint may
+be restoring and that Files and Terminal remain independently available.
+
 ## Start, resume and event routing
 
 Creating a Sandpi Session calls native `thread/start`; it does not claim or fork
@@ -75,12 +121,56 @@ a Sandbox0 resource. Subsequent Turns call `turn/start` with that native Thread
 id. Codex app-server can own many Threads, so one Environment Supervisor is
 sufficient.
 
-When Sandpi starts or recovers an Environment app-server, it initializes that
-one transport and calls native `thread/resume` for every referenced Thread.
-Each resume response repairs only the Session's active-Turn/status projection;
-the returned conversation remains native and is not written to PostgreSQL. A
-failure to resume one Thread does not replace it or invent a new conversation,
-and does not prevent other Threads in the Environment from reattaching.
+When Sandpi starts or recovers an Environment app-server, it restores and
+initializes only that shared transport. It does not bulk-read or resume product
+Threads. Conversation reconnect reads the selected persisted Thread directly
+with `thread/read(includeTurns: true)`, including when an archived Session is
+explicitly opened, and repairs only that Session's scalar active-Turn/status
+projection.
+
+Environment recovery also schedules a delayed, non-blocking control-state
+repair. Its PostgreSQL query includes only non-archived Sessions still projected
+as running, active or pending, waits behind interactive Turn operations, and
+uses metadata-only `thread/read(includeTurns: false)` rather than
+`thread/resume`. It never loads replies or reconstructs rollout history. An idle
+or unloaded native Thread can clear abandoned pending delivery only when both
+the app-server epoch and Session runtime version still match. Fresh pending
+delivery receives a ten-minute distributed grace so another Sandpi replica
+cannot clear a Turn that is still being attached or submitted; the exact request
+from an ambiguous `turn/start` timeout can be repaired immediately after its
+interactive operation releases its lease. Active native Threads preserve the
+existing pending and active-Turn projection. Ordinary waiting Sessions and
+archived Sessions are never inspected by this repair.
+
+The background read holds the Environment lifecycle advisory lock only while it
+rechecks the native epoch and submits `thread/read`; it releases the lock before
+waiting for the response. The submission itself has a short abortable deadline,
+so pause, delete and server shutdown cannot remain trapped behind a stalled
+Sandbox0 write. That response path is lifecycle-neutral, so a pause that wins
+after submission is never reversed by Session repair. Transient discovery,
+transport and native errors retry with capped backoff; an active exceptional
+Thread receives a slow metadata-only recheck so a lost completion event cannot
+pin the Environment indefinitely. A new exact timeout target or explicit
+unarchive repair wakes any longer pending grace timer.
+
+Archiving is allowed only after the Session's native control projection is idle.
+The archive transaction uses the same Environment-runtime, Session-runtime,
+Session-metadata lock order as Turn admission. Archived Sessions can therefore
+be excluded both from background repair and from the idle-pause guard without
+pausing hidden work, and Turn admission rejects an archived Session until it is
+unarchived. Unarchive schedules metadata-only control repair, while explicitly
+opening an archived Session still reads that one conversation and can repair
+sufficiently old pending scalar state.
+
+Operations that require a loaded Thread, currently `turn/start` and
+`turn/interrupt`, attach only their target Session with
+`thread/resume`. Concurrent callers share one attachment per native Thread and
+app-server attempt; a new Supervisor Session, process attempt or Sandbox runtime
+generation invalidates that process-local attachment state.
+`thread/start` and `thread/fork` already return loaded Threads and mark their
+results attached without an extra resume. A failed attachment remains local to
+that Session and can be retried; it never delays Environment recovery or
+unrelated and archived Sessions.
 
 The Environment decoder extracts only scalar control transitions from
 `turn/started` and `turn/completed` for refresh-safe button/status state. The

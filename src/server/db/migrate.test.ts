@@ -49,6 +49,8 @@ test("migration history contains every durable Sandpi boundary", async () => {
       "0022_environment_runtime",
       "0023_environment_lifecycle",
       "0024_environment_idle_pause_30_minutes",
+      "0025_environment_runtime_authority",
+      "0026_environment_runtime_authority_comments",
     ],
   );
 
@@ -200,4 +202,20 @@ test("migration history contains every durable Sandpi boundary", async () => {
   assert.match(idlePausePolicySql, /INTERVAL '27 minutes'/);
   assert.match(idlePausePolicySql, /desired_state IN \('running', 'paused'\)/);
   assert.match(idlePausePolicySql, /observed_state = 'running'/);
+
+  const runtimeAuthoritySql = migrations[24]?.sql ?? "";
+  assert.match(runtimeAuthoritySql, /decoder_attempt_id TEXT/);
+  assert.match(runtimeAuthoritySql, /decoder_runtime_generation BIGINT/);
+  assert.match(runtimeAuthoritySql, /SET decoder_attempt_id = attempt_id/);
+  assert.match(runtimeAuthoritySql, /Sandbox0 remains authoritative/);
+
+  const runtimeAuthorityCommentsSql = migrations[25]?.sql ?? "";
+  assert.match(
+    runtimeAuthorityCommentsSql,
+    /attempt whose ephemeral credential was materialized/,
+  );
+  assert.match(
+    runtimeAuthorityCommentsSql,
+    /generation whose ephemeral credential was materialized/,
+  );
 });

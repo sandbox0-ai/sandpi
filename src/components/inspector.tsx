@@ -17,7 +17,10 @@ import {
   InteractiveMetricChart,
   type MetricChartSeries,
 } from "@/components/metric-chart";
-import { WorkspaceIde } from "@/components/workspace-ide";
+import {
+  WorkspaceIde,
+  type WorkspaceFileNavigationRequest,
+} from "@/components/workspace-ide";
 import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
 import { getOperationUiCopy, type OperationLanguage } from "@/lib/operation-ui";
 import {
@@ -49,6 +52,10 @@ interface InspectorProps {
   environment: Environment;
   session?: CodingSession;
   sessionActivity?: InspectorSessionActivity;
+  workspaceNavigationRequest?: WorkspaceFileNavigationRequest;
+  onWorkspaceNavigationHandled?: (
+    request: WorkspaceFileNavigationRequest,
+  ) => void;
   activeTab: InspectorTab;
   onTabChange: (tab: InspectorTab) => void;
   onClose: () => void;
@@ -277,6 +284,8 @@ export function Inspector({
   environment,
   session,
   sessionActivity,
+  workspaceNavigationRequest,
+  onWorkspaceNavigationHandled,
   activeTab,
   onTabChange,
   onClose,
@@ -467,6 +476,8 @@ export function Inspector({
             session={session}
             variant="embedded"
             initialSnapshot={ideSnapshot}
+            navigationRequest={workspaceNavigationRequest}
+            onNavigationHandled={onWorkspaceNavigationHandled}
           />
         </div>
       ) : null}

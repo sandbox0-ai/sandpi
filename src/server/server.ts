@@ -32,6 +32,7 @@ import { createDatabasePool } from "@/server/db/pool";
 import { seedCommunityDefaults } from "@/server/db/seed";
 import { EnvironmentService } from "@/server/environments/service";
 import { EnvironmentLifecycleService } from "@/server/environments/lifecycle-service";
+import { EnvironmentRuntimeAccessService } from "@/server/environments/runtime-access-service";
 import { CodexEnvironmentAuthService } from "@/server/harnesses/codex/auth-service";
 import { CodexAuthStore } from "@/server/harnesses/codex/auth-store";
 import {
@@ -53,6 +54,7 @@ import {
 } from "@/server/request-origin";
 import { SecretBox } from "@/server/secrets";
 import { SandpiStore } from "@/server/store";
+import { TerminalHeartbeat } from "@/server/terminal-heartbeat";
 import { TerminalInputQueue } from "@/server/terminal-input-queue";
 
 const SESSION_COOKIE = "sandpi_session";
@@ -135,6 +137,7 @@ export async function createSandpiServer(
   );
   const environments = new EnvironmentService(store, runtime, app.log);
   const lifecycle = new EnvironmentLifecycleService(store, runtime, app.log);
+  const runtimeAccess = new EnvironmentRuntimeAccessService(store, runtime);
   const codex = new CodexService(store, runtime, app.log, codexAuth);
   lifecycle.setBeforePause((environmentId) =>
     codex.suspendEnvironmentWorker(environmentId),
@@ -202,6 +205,7 @@ export async function createSandpiServer(
     config,
     store,
     runtime,
+    runtimeAccess,
     codex,
     codexAuth,
     environments,
@@ -312,6 +316,7 @@ function registerApiRoutes(
     config: SandpiConfig;
     store: SandpiStore;
     runtime: RuntimeAdapter;
+    runtimeAccess: EnvironmentRuntimeAccessService;
     codex: CodexService;
     codexAuth: CodexEnvironmentAuthService;
     environments: EnvironmentService;
@@ -594,13 +599,17 @@ function registerApiRoutes(
         })
         .refine((value) => Object.keys(value).length > 0)
         .parse(request.body);
-      return {
-        data: await services.store.setSessionMetadata(
-          request.principal.userId,
+      const data = await services.store.setSessionMetadata(
+        request.principal.userId,
+        request.params.sessionId,
+        body,
+      );
+      if (body.archived === false) {
+        await services.codex.scheduleSessionControlStateRepair(
           request.params.sessionId,
-          body,
-        ),
-      };
+        );
+      }
+      return { data };
     },
   );
   app.post<{ Params: { sessionId: string } }>(
@@ -718,9 +727,9 @@ function registerApiRoutes(
     "/api/v1/sessions/:sessionId/events",
     async (request, reply) => {
       await services.store.getSession(request.principal.userId, request.params.sessionId);
-      // The initial native thread/read auto-resumes the Environment through
-      // Sandbox0 and starts its Supervisor stream. Starting a worker before it
-      // race an intentional idle pause and trigger a duplicate recovery.
+      // The selected Session's initial thread/read wakes the Environment and
+      // starts its Supervisor stream. Starting a worker before that lazy read
+      // could race an intentional idle pause and duplicate recovery.
       return streamHarnessEvents(request, reply, services.codex);
     },
   );
@@ -729,7 +738,7 @@ function registerApiRoutes(
     async (request) => {
       const requestedPath = queryString(request, "path") ?? "/workspace";
       return {
-        data: await services.codex.withEnvironmentRuntimeRecovery(
+        data: await services.runtimeAccess.withRuntimeAccess(
           request.principal.userId,
           request.params.environmentId,
           (runtime) => services.runtime.listFiles(runtime, requestedPath),
@@ -742,7 +751,7 @@ function registerApiRoutes(
     async (request) => {
       const filePath = queryString(request, "path");
       if (!filePath) throw new HttpError(400, "path_required", "File path is required.");
-      const content = await services.codex.withEnvironmentRuntimeRecovery(
+      const content = await services.runtimeAccess.withRuntimeAccess(
         request.principal.userId,
         request.params.environmentId,
         (runtime) => services.runtime.readFile(runtime, filePath),
@@ -760,7 +769,7 @@ function registerApiRoutes(
   app.get<{ Params: { environmentId: string } }>(
     "/api/v1/environments/:environmentId/ide",
     async (request) => {
-      const data = await services.codex.withEnvironmentRuntimeRecovery(
+      const data = await services.runtimeAccess.withRuntimeAccess(
         request.principal.userId,
         request.params.environmentId,
         async (runtime) => {
@@ -794,7 +803,7 @@ function registerApiRoutes(
         throw new HttpError(400, "path_required", "File path is required.");
       }
       return {
-        data: await services.codex.withEnvironmentRuntimeRecovery(
+        data: await services.runtimeAccess.withRuntimeAccess(
           request.principal.userId,
           request.params.environmentId,
           (runtime) => services.runtime.readWorkspaceIdeFile(runtime, filePath),
@@ -813,20 +822,15 @@ function registerApiRoutes(
       const input = workspaceIdeWriteSchema.parse(request.body);
       const content = Buffer.from(input.content, "base64");
       return {
-        data: await services.codex.withEnvironmentRuntimeRecovery(
+        data: await services.runtimeAccess.withRuntimeAccess(
           request.principal.userId,
           request.params.environmentId,
-          () =>
-            services.store.withWorkspaceFileWrite(
-              request.principal.userId,
-              request.params.environmentId,
-              (runtime) =>
-                services.runtime.writeWorkspaceIdeFile(
-                  runtime,
-                  filePath,
-                  content,
-                  input.baseRevision,
-                ),
+          (runtime) =>
+            services.runtime.writeWorkspaceIdeFile(
+              runtime,
+              filePath,
+              content,
+              input.baseRevision,
             ),
         ),
       };
@@ -840,7 +844,7 @@ function registerApiRoutes(
         | Awaited<ReturnType<RuntimeAdapter["watchWorkspaceFiles"]>>
         | undefined;
       try {
-        watcher = await services.codex.withEnvironmentRuntimeRecovery(
+        watcher = await services.runtimeAccess.withRuntimeAccess(
           request.principal.userId,
           request.params.environmentId,
           (runtime) => services.runtime.watchWorkspaceFiles(runtime),
@@ -920,22 +924,26 @@ function registerApiRoutes(
     async (socket, request) => {
       let terminal: Awaited<ReturnType<RuntimeAdapter["openTerminal"]>> | undefined;
       let inputQueue: TerminalInputQueue<z.infer<typeof terminalInputSchema>> | undefined;
+      let heartbeat: TerminalHeartbeat | undefined;
+      let cleanedUp = false;
+      const cleanup = () => {
+        if (cleanedUp) return;
+        cleanedUp = true;
+        heartbeat?.stop();
+        inputQueue?.close();
+        terminal?.close();
+      };
       try {
         const after = Number(queryString(request, "after") ?? 0);
-        const opened = await services.codex.withEnvironmentRuntimeRecovery(
+        const opened = await services.runtimeAccess.withRuntimeAccess(
           request.principal.userId,
           request.params.environmentId,
           async (runtime) => ({
             runtime,
-            terminal: await services.store.withTerminalAccess(
-              request.principal.userId,
-              request.params.environmentId,
-              () =>
-                services.runtime.openTerminal(
-                  runtime,
-                  Number.isFinite(after) ? after : 0,
-                  queryString(request, "terminalSessionId"),
-                ),
+            terminal: await services.runtime.openTerminal(
+              runtime,
+              Number.isFinite(after) ? after : 0,
+              queryString(request, "terminalSessionId"),
             ),
           }),
         );
@@ -1002,6 +1010,25 @@ function registerApiRoutes(
             replayReset: terminal.replayReset,
           }),
         );
+        heartbeat = new TerminalHeartbeat(
+          socket,
+          () =>
+            services.runtimeAccess.touchRunningRuntime(
+              request.params.environmentId,
+            ),
+          {
+            onTouchError: (error) => {
+              request.log.debug(
+                {
+                  err: error,
+                  environmentId: request.params.environmentId,
+                },
+                "Environment terminal heartbeat could not extend idle access",
+              );
+            },
+          },
+        );
+        heartbeat.start();
         socket.on("message", (raw) => {
           try {
             inputQueue?.enqueue(
@@ -1015,17 +1042,15 @@ function registerApiRoutes(
             }
           }
         });
-        socket.on("close", () => {
-          inputQueue?.close();
-          terminal?.close();
-        });
+        socket.on("close", cleanup);
         for await (const message of terminal.messages) {
           if (socket.readyState !== socket.OPEN) break;
           socket.send(JSON.stringify(message));
         }
+        if (socket.readyState === socket.OPEN) {
+          socket.close(1011, "Terminal stream ended");
+        }
       } catch (error) {
-        inputQueue?.close();
-        terminal?.close();
         const normalized = normalizeError(error);
         request.log.warn(
           {
@@ -1050,6 +1075,8 @@ function registerApiRoutes(
             "Terminal connection failed",
           );
         }
+      } finally {
+        cleanup();
       }
     },
   );

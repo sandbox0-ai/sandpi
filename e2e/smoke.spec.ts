@@ -778,6 +778,289 @@ test("keeps Codex Session Activity native and Environment Audit separate", async
   expect(browserErrors).toEqual([]);
 });
 
+test("opens nested Agent file links and restores the selected file", async ({
+  page,
+  request,
+}) => {
+  const workspace = await activeWorkspace(request);
+  test.skip(!workspace, "An active Session is required for this check.");
+  if (!workspace) return;
+  const { environment, session } = workspace;
+  test.skip(session.harness !== "codex", "A Codex Session is required.");
+  const now = Date.now() / 1_000;
+  const nativeThreadId = "thread-e2e-workspace-links";
+  const nativeTurnId = "turn-e2e-workspace-links";
+  const globalsPath = "/workspace/app/globals.css";
+  const pagePath = "/workspace/app/page.tsx";
+  const directoryRequests: string[] = [];
+  const fileRequests: string[] = [];
+  const browserErrors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") browserErrors.push(message.text());
+  });
+  page.on("pageerror", (error) => browserErrors.push(error.message));
+
+  const nativeSnapshot: CodexNativeSnapshot = {
+    protocol: "codex-app-server",
+    nativeSessionId: nativeThreadId,
+    historyRevision: 1,
+    modelId: "e2e-workspace-links-model",
+    sessionStatus: "waiting",
+    forkableTurnIds: [nativeTurnId],
+    activity: {
+      source: "codex-rollout",
+      availability: "available",
+      error: null,
+      records: [],
+    },
+    thread: {
+      id: nativeThreadId,
+      createdAt: now - 5,
+      updatedAt: now,
+      status: { type: "idle" },
+      turns: [
+        {
+          id: nativeTurnId,
+          itemsView: "full",
+          status: "completed",
+          error: null,
+          startedAt: now - 5,
+          completedAt: now,
+          durationMs: 5_000,
+          items: [
+            {
+              type: "userMessage",
+              id: "workspace-links-user",
+              clientId: null,
+              content: [
+                {
+                  type: "text",
+                  text: "Create the app files.",
+                  text_elements: [],
+                },
+              ],
+            },
+            {
+              type: "agentMessage",
+              id: "workspace-links-agent",
+              text:
+                `Open [globals.css](${globalsPath}) or ` +
+                `[page.tsx](${pagePath}).`,
+              phase: "final_answer",
+              memoryCitation: null,
+            },
+          ],
+        },
+      ],
+    },
+  };
+  const ideSnapshot: WorkspaceIdeSnapshot = {
+    refreshedAt: now,
+    files: [
+      {
+        id: "workspace",
+        name: "workspace",
+        path: "/workspace",
+        kind: "folder",
+        children: [
+          {
+            id: "app",
+            name: "app",
+            path: "/workspace/app",
+            kind: "folder",
+          },
+        ],
+      },
+    ],
+    git: { repositories: [] },
+  };
+  const files = new Map<string, WorkspaceIdeFile>([
+    [
+      globalsPath,
+      {
+        path: globalsPath,
+        name: "globals.css",
+        revision: `sha256:${"e".repeat(43)}`,
+        encoding: "base64",
+        content: Buffer.from("body { color: tomato; }\n").toString("base64"),
+        kind: "text",
+        editable: true,
+        size: "24 B",
+        modifiedAt: now,
+        lineChanges: [],
+      },
+    ],
+    [
+      pagePath,
+      {
+        path: pagePath,
+        name: "page.tsx",
+        revision: `sha256:${"f".repeat(43)}`,
+        encoding: "base64",
+        content: Buffer.from(
+          "export default function Page() { return <main>Hello</main>; }\n",
+        ).toString("base64"),
+        kind: "text",
+        editable: true,
+        size: "63 B",
+        modifiedAt: now,
+        lineChanges: [],
+      },
+    ],
+  ]);
+
+  await page.route("**/api/v1/sessions/**/events", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "text/event-stream",
+      headers: { "Cache-Control": "no-cache" },
+      body: `event: snapshot\ndata: ${JSON.stringify(nativeSnapshot)}\n\n`,
+    });
+  });
+  await page.route("**/api/v1/sessions/**/models", async (route) => {
+    await route.fulfill({
+      json: {
+        data: {
+          data: [
+            {
+              id: nativeSnapshot.modelId,
+              displayName: "E2E workspace links model",
+              isDefault: true,
+            },
+          ],
+        },
+        meta: { availability: "available", source: "codex" },
+      },
+    });
+  });
+  await page.route("**/api/v1/environments/**/ide/file?*", async (route) => {
+    const filePath = new URL(route.request().url()).searchParams.get("path");
+    if (!filePath || !files.has(filePath)) {
+      await route.fulfill({
+        status: 404,
+        json: {
+          error: {
+            code: "workspace_file_not_found",
+            message: "File not found.",
+          },
+        },
+      });
+      return;
+    }
+    fileRequests.push(filePath);
+    await route.fulfill({ json: { data: files.get(filePath) } });
+  });
+  await page.route("**/api/v1/environments/**/files?*", async (route) => {
+    const directoryPath = new URL(route.request().url()).searchParams.get(
+      "path",
+    );
+    if (directoryPath) directoryRequests.push(directoryPath);
+    const listing: WorkspaceDirectoryListing = {
+      path: "/workspace/app",
+      refreshedAt: now,
+      entries: [...files.values()].map((file) => ({
+        id: file.name,
+        name: file.name,
+        path: file.path,
+        kind: "file",
+        size: file.size,
+        modifiedAt: file.modifiedAt,
+      })),
+    };
+    await route.fulfill({ json: { data: listing } });
+  });
+  await page.route("**/api/v1/environments/**/ide", async (route) => {
+    await route.fulfill({ json: { data: ideSnapshot } });
+  });
+  await page.routeWebSocket(
+    (url) =>
+      url.pathname ===
+      `/api/v1/environments/${encodeURIComponent(environment.id)}/ide/events`,
+    (socket) => {
+      socket.send(JSON.stringify({ type: "ready", at: now }));
+    },
+  );
+
+  await page.goto(
+    `/?team=${encodeURIComponent(environment.teamId)}&environment=${encodeURIComponent(environment.id)}&session=${encodeURIComponent(session.id)}`,
+  );
+  await expect(page.getByText("Loading conversation…")).toBeHidden();
+
+  await page.locator(`[data-workspace-path="${globalsPath}"]`).click();
+  const inspectorViews = page.getByRole("navigation", {
+    name: "Inspector views",
+  });
+  const openFiles = page.getByRole("tablist", { name: "Open files" });
+  const workspaceTree = page.getByRole("complementary", {
+    name: "Workspace files",
+  });
+  const globalsTab = openFiles.getByRole("tab", { name: /globals\.css/ });
+  await expect(inspectorViews).toBeVisible();
+  await expect(globalsTab).toHaveAttribute("aria-selected", "true");
+  await expect(
+    page.getByText("workspace / app/globals.css", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByLabel("globals.css", { exact: true })).toBeVisible();
+  await expect(
+    workspaceTree.locator(`button[title="${globalsPath}"]`),
+  ).toHaveAttribute("aria-current", "page");
+  await expect(
+    workspaceTree.locator('button[title="/workspace/app"]'),
+  ).toHaveAttribute("aria-expanded", "true");
+  await expect
+    .poll(() => new URL(page.url()).searchParams.get("path"))
+    .toBe(globalsPath);
+  await expect.poll(() => directoryRequests).toContain("/workspace/app");
+  await expect.poll(() => fileRequests).toContain(globalsPath);
+
+  await page.locator(`[data-workspace-path="${pagePath}"]`).click();
+  const pageTab = openFiles.getByRole("tab", { name: /page\.tsx/ });
+  await expect(pageTab).toHaveAttribute("aria-selected", "true");
+  await expect(globalsTab).toHaveAttribute("aria-selected", "false");
+  await expect(openFiles.getByRole("tab")).toHaveCount(2);
+  await expect(
+    page.getByText("workspace / app/page.tsx", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByLabel("page.tsx", { exact: true })).toBeVisible();
+  await expect(
+    workspaceTree.locator(`button[title="${pagePath}"]`),
+  ).toHaveAttribute("aria-current", "page");
+  await expect
+    .poll(() => new URL(page.url()).searchParams.get("path"))
+    .toBe(pagePath);
+  await expect.poll(() => fileRequests).toContain(pagePath);
+  expect(new Set(directoryRequests)).toEqual(new Set(["/workspace/app"]));
+
+  await inspectorViews
+    .getByRole("button", { name: "Activity", exact: true })
+    .click();
+  await inspectorViews
+    .getByRole("button", { name: "Files", exact: true })
+    .click();
+  await expect(
+    page.getByRole("tablist", { name: "Open files" }).getByRole("tab", {
+      name: /page\.tsx/,
+    }),
+  ).toHaveAttribute("aria-selected", "true");
+
+  await page.reload();
+  await expect(page.getByText("Loading conversation…")).toBeHidden();
+  await expect(
+    page.getByRole("navigation", { name: "Inspector views" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("tablist", { name: "Open files" }).getByRole("tab", {
+      name: /page\.tsx/,
+    }),
+  ).toHaveAttribute("aria-selected", "true");
+  await expect(
+    page
+      .getByRole("complementary", { name: "Workspace files" })
+      .locator(`button[title="${pagePath}"]`),
+  ).toHaveAttribute("aria-current", "page");
+  expect(browserErrors).toEqual([]);
+});
+
 test("reconciles agent-created files while the native volume watch is unavailable", async ({
   page,
   request,
@@ -1368,6 +1651,14 @@ test("renders the dedicated live Web IDE with Git state and changed lines", asyn
   await page.route("**/api/v1/environments/**/ide", async (route) => {
     await route.fulfill({ json: { data: snapshot } });
   });
+  await page.routeWebSocket(
+    (url) =>
+      url.pathname ===
+      `/api/v1/environments/${encodeURIComponent(environment.id)}/ide/events`,
+    (socket) => {
+      socket.send(JSON.stringify({ type: "ready", at: now }));
+    },
+  );
 
   await page.goto(
     `/ide/?team=${encodeURIComponent(environment.teamId)}&environment=${encodeURIComponent(environment.id)}&new=1`,
@@ -1388,10 +1679,13 @@ test("renders the dedicated live Web IDE with Git state and changed lines", asyn
   await expect(
     page.locator('button[title="/workspace/src/demo.ts"]'),
   ).toBeVisible();
-  await expect.poll(() => directoryLoads).toBe(1);
+  await expect.poll(() => directoryLoads).toBeGreaterThan(0);
+  await page.waitForTimeout(600);
+  const directoryLoadsBeforeToggle = directoryLoads;
   await sourceFolder.click();
   await sourceFolder.click();
-  await expect.poll(() => directoryLoads).toBe(1);
+  await page.waitForTimeout(200);
+  expect(directoryLoads).toBe(directoryLoadsBeforeToggle);
   await expect(page.getByText('const transport = "websocket";')).toBeVisible();
   await expect(page.locator(".sandpi-line-modified")).toHaveCount(1);
   await expect(page.locator(".sandpi-line-added")).toHaveCount(1);

@@ -1,6 +1,7 @@
 "use client";
 
 import type { InspectorTab } from "@/components/inspector";
+import type { WorkspaceFileNavigationRequest } from "@/components/workspace-ide";
 import { CodexConversation } from "@/harnesses/codex/conversation";
 import { isCodexSession } from "@/harnesses/codex/types";
 import type { OperationLanguage, SendShortcut } from "@/lib/operation-ui";
@@ -21,6 +22,11 @@ interface ConversationProps {
   onToggleTerminal: () => void;
   onOpenSettings: (tab?: "general" | "audit") => void;
   onOpenInspector: (tab: InspectorTab) => void;
+  workspaceNavigationRequest?: WorkspaceFileNavigationRequest;
+  onOpenWorkspacePath: (path: string) => void;
+  onWorkspaceNavigationHandled: (
+    request: WorkspaceFileNavigationRequest,
+  ) => void;
   onSessionChange: (session: CodingSession) => void;
   onDerivedSessionCreated: (session: CodingSession) => void;
   onForkSession: (sessionId: string) => void;

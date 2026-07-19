@@ -85,9 +85,10 @@ export class EnvironmentLifecycleService {
     const policyCandidates =
       await this.store.environmentLifecyclePolicyCandidateIds(limit);
     for (const environmentId of policyCandidates) {
-      await this.store.withEnvironmentLifecycleLock(environmentId, async () => {
+      await this.store.withEnvironmentLifecycleLock(environmentId, async (lockedStore) => {
+        const scopedStore = lockedStore ?? this.store;
         const runtime =
-          await this.store.prepareEnvironmentLifecyclePolicy(environmentId);
+          await scopedStore.prepareEnvironmentLifecyclePolicy(environmentId);
         if (!runtime) return;
         const target = runtime.hardExpiresAt;
         if (!target) return;
@@ -102,7 +103,7 @@ export class EnvironmentLifecycleService {
             runtime,
             remainingSeconds,
           );
-          await this.store.recordEnvironmentLifecyclePolicy(
+          await scopedStore.recordEnvironmentLifecyclePolicy(
             environmentId,
             runtime.sandboxId,
             configured.hardExpiresAt,
@@ -116,7 +117,7 @@ export class EnvironmentLifecycleService {
             "Environment Sandbox lifecycle policy applied",
           );
         } catch (error) {
-          await this.store.recordEnvironmentLifecycleError(
+          await scopedStore.recordEnvironmentLifecycleError(
             environmentId,
             runtime.sandboxId,
             errorMessage(error),
@@ -132,8 +133,9 @@ export class EnvironmentLifecycleService {
     const pauseCandidates =
       await this.store.environmentIdlePauseCandidateIds(limit);
     for (const environmentId of pauseCandidates) {
-      await this.store.withEnvironmentLifecycleLock(environmentId, async () => {
-        const runtime = await this.store.prepareEnvironmentIdlePause(
+      await this.store.withEnvironmentLifecycleLock(environmentId, async (lockedStore) => {
+        const scopedStore = lockedStore ?? this.store;
+        const runtime = await scopedStore.prepareEnvironmentIdlePause(
           environmentId,
         );
         if (!runtime) return;
@@ -143,13 +145,13 @@ export class EnvironmentLifecycleService {
           // the intentional pause as a runtime failure that needs recovery.
           this.beforePause?.(environmentId);
           await this.runtime.pauseEnvironment(runtime, this.controller.signal);
-          await this.store.recordEnvironmentPaused(
+          await scopedStore.recordEnvironmentPaused(
             environmentId,
             runtime.sandboxId,
           );
           this.logger.info({ environmentId }, "Idle Environment Sandbox paused");
         } catch (error) {
-          await this.store.recordEnvironmentPauseFailure(
+          await scopedStore.recordEnvironmentPauseFailure(
             environmentId,
             runtime.sandboxId,
             errorMessage(error),

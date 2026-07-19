@@ -11,6 +11,7 @@ import {
   SandboxRuntimeMetricName,
   SandboxRuntimeMetricStatistic,
   models,
+  runtime as generatedRuntime,
   type SandboxMetrics,
 } from "sandbox0";
 
@@ -434,10 +435,22 @@ export class Sandbox0Runtime implements RuntimeAdapter {
   }
 
   /**
+   * Repairs only the native Environment access surface. Workspace and
+   * Terminal requests call this after their first direct access proves that a
+   * paused Sandbox or disconnected FUSE portal needs recovery.
+   */
+  async ensureEnvironmentRuntimeAccess(runtime: EnvironmentRuntimeRecord) {
+    try {
+      await this.ensureSandboxWorkspaceAccess(runtime.sandboxId);
+    } catch (error) {
+      throw translateSandbox0Error(error);
+    }
+  }
+
+  /**
    * Reconciles one Environment with its shared native Sandbox0 runtime.
-   * A Sandbox can remain control-plane `running` after its FUSE mount becomes
-   * disconnected, while a lost Supervisor can be recreated because every
-   * native Codex Thread is persisted under the Environment Workspace Volume.
+   * A lost Supervisor can be recreated because every native Codex Thread is
+   * persisted under the Environment Workspace Volume.
    */
   async ensureCodexEnvironmentRuntime(
     runtime: EnvironmentRuntimeRecord,
@@ -446,32 +459,19 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     let sandboxRestarted = false;
     try {
       const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
-      let lifecycle = await this.client.sandboxes.get(runtime.sandboxId);
-
-      try {
-        // This runtime API is the wake-up boundary. Sandbox0 serializes access
-        // with pause and restores a paused auto-resume Sandbox. A gateway may
-        // answer `sandbox is waking up` while that native transition commits;
-        // observe it and retry this same access instead of calling resume.
-        await this.withSandboxAutoResume(runtime.sandboxId, () =>
-          sandbox.listFiles("/workspace"),
+      // /dev/shm is intentionally outside both rootfs and Volume snapshots.
+      // Make credential installation the wake-up boundary so the restarted
+      // Supervisor can leave its credential wait as soon as Sandbox0 restores
+      // the process, before Workspace/FUSE health checks complete.
+      let credentialRuntimeGeneration =
+        await this.materializeCodexEnvironmentCredential(
+          runtime.sandboxId,
+          sandbox,
+          authJson,
         );
-        lifecycle = await this.client.sandboxes.get(runtime.sandboxId);
-      } catch (error) {
-        if (!isWorkspaceTransportDisconnected(error)) throw error;
-        lifecycle = await this.client.sandboxes.get(runtime.sandboxId);
-        if (!lifecycle.paused && lifecycle.status !== "paused") {
-          await this.client.sandboxes.pauseAndWait(runtime.sandboxId, {
-            timeoutMs: 120_000,
-          });
-        }
-        // A second supported runtime access lets Sandbox0 auto-resume the
-        // checkpoint; Sandpi never owns a separate resume state machine.
-        await this.withSandboxAutoResume(runtime.sandboxId, () =>
-          sandbox.listFiles("/workspace"),
-        );
-        lifecycle = await this.client.sandboxes.get(runtime.sandboxId);
-      }
+      let lifecycle = await this.ensureSandboxWorkspaceAccess(
+        runtime.sandboxId,
+      );
       sandboxRestarted =
         runtime.runtimeGeneration > 0 &&
         lifecycle.runtimeGeneration !== runtime.runtimeGeneration;
@@ -509,13 +509,22 @@ export class Sandbox0Runtime implements RuntimeAdapter {
         }
       }
 
-      // /dev/shm is intentionally outside both rootfs and Volume snapshots and
-      // must be re-materialized after every Sandbox runtime generation change.
-      await installCodexCredential(
-        sandbox,
-        ENVIRONMENT_CODEX_AUTH_FILE,
-        authJson,
-      );
+      if (credentialRuntimeGeneration !== lifecycle.runtimeGeneration) {
+        // Workspace and Supervisor repair are allowed to pause the Sandbox
+        // after the speculative early hydration above. /dev/shm is empty in
+        // the resumed runtime, so hydrate the final Sandbox0 generation before
+        // app-server initialization can be admitted.
+        credentialRuntimeGeneration =
+          await this.materializeCodexEnvironmentCredential(
+            runtime.sandboxId,
+            sandbox,
+            authJson,
+          );
+        if (credentialRuntimeGeneration !== lifecycle.runtimeGeneration) {
+          throw codexRuntimeEpochChanged();
+        }
+      }
+
       await prepareEnvironmentCodexHome(sandbox);
 
       supervisor ??= await this.createCodexSupervisor(
@@ -527,8 +536,26 @@ export class Sandbox0Runtime implements RuntimeAdapter {
         try {
           supervisor = await sandbox.createSessionAttempt(supervisor.id, true);
         } catch (error) {
-          // runtimeRecovery can win this race immediately after Sandbox resume.
+          // runtimeRecovery can win this race immediately after Sandbox
+          // resume. Accept a conflict only when Sandbox0 now proves that the
+          // same Supervisor has a live attempt; other 409s remain actionable.
           if (!(error instanceof APIError) || error.statusCode !== 409) throw error;
+          let raced;
+          try {
+            raced = await sandbox.getSession(supervisor.id);
+          } catch (readError) {
+            if (
+              isMissingResource(readError) ||
+              isWorkspaceTransportDisconnected(readError)
+            ) {
+              throw codexRuntimeEpochChanged(
+                "The Codex Supervisor changed while its process attempt was being recovered.",
+              );
+            }
+            throw readError;
+          }
+          if (!hasLiveAttempt(raced)) throw error;
+          supervisor = raced;
         }
       }
       const running = hasLiveAttempt(supervisor)
@@ -545,6 +572,21 @@ export class Sandbox0Runtime implements RuntimeAdapter {
         );
       }
 
+      if (credentialRuntimeGeneration !== running.runtimeGeneration) {
+        // An out-of-band Sandbox0 lifecycle change can still land between the
+        // Workspace check and final Supervisor observation. Re-hydrate that
+        // authoritative generation instead of trusting Sandpi's prior view.
+        credentialRuntimeGeneration =
+          await this.materializeCodexEnvironmentCredential(
+            runtime.sandboxId,
+            sandbox,
+            authJson,
+          );
+        if (credentialRuntimeGeneration !== running.runtimeGeneration) {
+          throw codexRuntimeEpochChanged();
+        }
+      }
+
       return {
         supervisorSessionId: running.id,
         attemptId: running.attempt.id,
@@ -553,6 +595,71 @@ export class Sandbox0Runtime implements RuntimeAdapter {
       };
     } catch (error) {
       throw translateSandbox0Error(error);
+    }
+  }
+
+  /**
+   * Returns Sandbox0's authoritative generation after the ephemeral
+   * credential write, allowing later repair to prove whether /dev/shm survived.
+   */
+  private async materializeCodexEnvironmentCredential(
+    sandboxId: string,
+    sandbox: ReturnType<Client["sandboxes"]["sandbox"]>,
+    authJson: string,
+  ) {
+    // Wake first, then fence the actual credential write on both sides. A
+    // write followed by a Sandbox restart and only then a generation read must
+    // never be mistaken for hydration of the new empty /dev/shm.
+    await this.withSandboxAutoResume(sandboxId, () =>
+      sandbox.mkdir(path.posix.dirname(ENVIRONMENT_CODEX_AUTH_FILE), true),
+    );
+    const before = await this.client.sandboxes.get(sandboxId);
+    await this.withSandboxAutoResume(sandboxId, () =>
+      installCodexCredential(
+        sandbox,
+        ENVIRONMENT_CODEX_AUTH_FILE,
+        authJson,
+      ),
+    );
+    const after = await this.client.sandboxes.get(sandboxId);
+    if (before.runtimeGeneration !== after.runtimeGeneration) {
+      throw codexRuntimeEpochChanged(
+        "The Sandbox runtime changed while the Codex credential was being materialized.",
+      );
+    }
+    return after.runtimeGeneration;
+  }
+
+  /**
+   * Uses Workspace access as Sandbox0's native wake-up boundary and repairs a
+   * stale FUSE portal with one pause/checkpoint cycle. This is shared by
+   * harness-neutral access and harness-specific runtime reconciliation.
+   */
+  private async ensureSandboxWorkspaceAccess(sandboxId: string) {
+    const sandbox = this.client.sandboxes.sandbox(sandboxId);
+    try {
+      // Sandbox0 serializes access with pause and restores a paused
+      // auto-resume Sandbox. A gateway may answer `sandbox is waking up`
+      // while that native transition commits; observe it instead of calling
+      // the explicit resume endpoint.
+      await this.withSandboxAutoResume(sandboxId, () =>
+        sandbox.listFiles("/workspace"),
+      );
+      return await this.client.sandboxes.get(sandboxId);
+    } catch (error) {
+      if (!isWorkspaceTransportDisconnected(error)) throw error;
+      const lifecycle = await this.client.sandboxes.get(sandboxId);
+      if (!lifecycle.paused && lifecycle.status !== "paused") {
+        await this.client.sandboxes.pauseAndWait(sandboxId, {
+          timeoutMs: 120_000,
+        });
+      }
+      // A second supported runtime access lets Sandbox0 auto-resume the
+      // checkpoint; Sandpi never owns a separate resume state machine.
+      await this.withSandboxAutoResume(sandboxId, () =>
+        sandbox.listFiles("/workspace"),
+      );
+      return this.client.sandboxes.get(sandboxId);
     }
   }
 
@@ -607,19 +714,27 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     runtime: EnvironmentRuntimeRecord,
     message: unknown,
     stableInputId = randomUUID(),
+    signal?: AbortSignal,
   ) {
+    signal?.throwIfAborted();
     const coordinates = requireCodexSupervisor(runtime);
-    await this.writeSupervisorMessage(coordinates, message, stableInputId);
+    await this.writeSupervisorMessage(
+      coordinates,
+      message,
+      stableInputId,
+      signal,
+    );
   }
 
   private async writeSupervisorMessage(
-    runtime: Pick<CodexAuthRuntime, "sandboxId" | "supervisorSessionId">,
+    runtime: CodexAuthRuntime,
     message: unknown,
     stableInputId: string,
+    signal?: AbortSignal,
   ) {
     try {
       const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
-      const supervisor = await this.getSupervisorSession(runtime);
+      const supervisor = await this.getSupervisorSession(runtime, signal);
       if (!supervisor.attempt) {
         throw new HttpError(
           409,
@@ -627,32 +742,79 @@ export class Sandbox0Runtime implements RuntimeAdapter {
           "The Codex Supervisor Session has no running attempt.",
         );
       }
+      if (
+        supervisor.attempt.id !== runtime.attemptId ||
+        supervisor.runtimeGeneration !== runtime.runtimeGeneration
+      ) {
+        throw codexRuntimeEpochChanged(
+          "The Codex Supervisor runtime changed. Refresh the Environment runtime before retrying.",
+        );
+      }
       const data = Buffer.from(`${JSON.stringify(message)}\n`, "utf8");
       const request = {
-        inputId: codexSupervisorInputId(stableInputId, supervisor.attempt.id),
-        expectedAttemptId: supervisor.attempt.id,
+        inputId: codexSupervisorInputId(stableInputId, runtime.attemptId),
+        expectedAttemptId: runtime.attemptId,
         dataBase64: data.toString("base64"),
       };
       // Supervisor input receipts deduplicate the same input id and content.
       // Retrying an ambiguous transport failure is therefore safe as long as
       // every attempt reuses this exact request.
-      await retrySandbox0Transport(() =>
-        sandbox.writeSessionInput(runtime.supervisorSessionId, request),
+      // The SDK convenience methods do not accept RequestInit, so cancellable
+      // background work uses the public generated API with the same payload.
+      await retrySandbox0Transport(
+        () =>
+          signal
+            ? generatedData(
+                this.client.apispec.sessions.apiV1SandboxesIdSessionsSessionIdInputsPost(
+                  {
+                    id: runtime.sandboxId,
+                    sessionId: runtime.supervisorSessionId,
+                    executionSessionInputRequest: request,
+                  },
+                  { signal },
+                ),
+                "write session input returned empty response",
+              )
+            : sandbox.writeSessionInput(runtime.supervisorSessionId, request),
+        signal,
       );
     } catch (error) {
-      throw translateSandbox0Error(error);
+      const translated = await translateGeneratedSandbox0Error(error);
+      if (
+        translated instanceof HttpError &&
+        translated.statusCode === 409 &&
+        translated.message.toLowerCase().includes("attempt mismatch")
+      ) {
+        throw codexRuntimeEpochChanged(
+          "The Codex Supervisor runtime changed before input was accepted.",
+        );
+      }
+      throw translated;
     }
   }
 
   private async getSupervisorSession(
     runtime: Pick<CodexAuthRuntime, "sandboxId" | "supervisorSessionId">,
+    signal?: AbortSignal,
   ) {
     try {
+      if (signal) {
+        return await generatedData(
+          this.client.apispec.sessions.apiV1SandboxesIdSessionsSessionIdGet(
+            {
+              id: runtime.sandboxId,
+              sessionId: runtime.supervisorSessionId,
+            },
+            { signal },
+          ),
+          "get session returned empty response",
+        );
+      }
       return await this.client.sandboxes
         .sandbox(runtime.sandboxId)
         .getSession(runtime.supervisorSessionId);
     } catch (error) {
-      throw translateSandbox0Error(error);
+      throw await translateGeneratedSandbox0Error(error);
     }
   }
 
@@ -1409,7 +1571,7 @@ function codexSupervisorInputId(stableInputId: string, attemptId: string) {
 }
 
 function requireCodexSupervisor(runtime: EnvironmentRuntimeRecord) {
-  if (!runtime.supervisorSessionId) {
+  if (!runtime.supervisorSessionId || !runtime.attemptId) {
     throw new HttpError(
       409,
       "codex_runtime_not_ready",
@@ -1419,7 +1581,15 @@ function requireCodexSupervisor(runtime: EnvironmentRuntimeRecord) {
   return {
     sandboxId: runtime.sandboxId,
     supervisorSessionId: runtime.supervisorSessionId,
+    attemptId: runtime.attemptId,
+    runtimeGeneration: runtime.runtimeGeneration,
   };
+}
+
+function codexRuntimeEpochChanged(
+  message = "The Codex Supervisor runtime changed during credential recovery.",
+) {
+  return new HttpError(409, "codex_runtime_epoch_changed", message);
 }
 
 async function prepareEnvironmentCodexHome(
@@ -1877,16 +2047,21 @@ function translateSandbox0Error(error: unknown) {
   return error;
 }
 
-async function retrySandbox0Transport<T>(operation: () => Promise<T>) {
+async function retrySandbox0Transport<T>(
+  operation: () => Promise<T>,
+  signal?: AbortSignal,
+) {
   for (let attempt = 0; ; attempt += 1) {
+    signal?.throwIfAborted();
     try {
       return await operation();
     } catch (error) {
+      signal?.throwIfAborted();
       const delayMs = SANDBOX0_TRANSPORT_RETRY_DELAYS_MS[attempt];
       if (!isSandbox0TransportError(error) || delayMs === undefined) {
         throw error;
       }
-      await delay(delayMs);
+      await abortableDelay(delayMs, signal);
     }
   }
 }
@@ -1902,7 +2077,10 @@ export function createSandbox0FetchWithRetry(
     if (method !== "GET" && method !== "HEAD" && method !== "OPTIONS") {
       return fetchImplementation(input, init);
     }
-    return retrySandbox0Transport(() => fetchImplementation(input, init));
+    return retrySandbox0Transport(
+      () => fetchImplementation(input, init),
+      init?.signal ?? (input instanceof Request ? input.signal : undefined),
+    );
   };
 }
 
@@ -1951,6 +2129,62 @@ function isSandbox0TransportError(error: unknown, seen = new Set<unknown>()): bo
     return true;
   }
   return isSandbox0TransportError(candidate.cause, seen);
+}
+
+async function generatedData<T>(
+  response: Promise<{ data?: T }>,
+  message: string,
+) {
+  const value = await response;
+  if (value.data === undefined) throw new Error(message);
+  return value.data;
+}
+
+async function translateGeneratedSandbox0Error(error: unknown) {
+  if (error instanceof generatedRuntime.ResponseError) {
+    return translateSandbox0Error(
+      await apiErrorFromGeneratedResponse(error.response),
+    );
+  }
+  return translateSandbox0Error(error);
+}
+
+async function apiErrorFromGeneratedResponse(response: Response) {
+  const requestId =
+    response.headers.get("x-request-id") ??
+    response.headers.get("x-requestid") ??
+    undefined;
+  const retryAfterHeader = response.headers.get("retry-after");
+  const retryAfter =
+    retryAfterHeader && /^\d+$/.test(retryAfterHeader.trim())
+      ? Number.parseInt(retryAfterHeader, 10)
+      : undefined;
+  let body: string | undefined;
+  let code = "unexpected_response";
+  let message = response.statusText || "request failed";
+  let details: unknown;
+  try {
+    body = (await response.text()) || undefined;
+    if (body) {
+      const payload = JSON.parse(body) as {
+        error?: { code?: string; message?: string; details?: unknown };
+      };
+      code = payload.error?.code ?? code;
+      message = payload.error?.message ?? message;
+      details = payload.error?.details;
+    }
+  } catch {
+    // Preserve the HTTP status when the upstream error body is not JSON.
+  }
+  return new APIError({
+    statusCode: response.status,
+    code,
+    message,
+    details,
+    requestId,
+    body,
+    retryAfter,
+  });
 }
 
 function translateWorkspaceFileError(error: unknown) {

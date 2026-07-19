@@ -126,22 +126,25 @@ export class EnvironmentService {
       );
     }
 
+    // Device-login cleanup may query PostgreSQL. Run it before acquiring the
+    // session advisory lock so the lock callback can stay on one connection.
+    await this.beforeDelete?.(userId, environmentId);
     const deadline = Date.now() + 130_000;
     while (Date.now() < deadline) {
       const result = await this.store.withEnvironmentLifecycleLock(
         environmentId,
-        async () => {
-          const resources = await this.store.prepareEnvironmentDeletion(
+        async (lockedStore) => {
+          const scopedStore = lockedStore ?? this.store;
+          const resources = await scopedStore.prepareEnvironmentDeletion(
             userId,
             environmentId,
           );
           try {
-            await this.beforeDelete?.(userId, environmentId);
             await this.runtime.deleteEnvironmentResources(resources);
-            await this.store.deleteEnvironmentMetadata(userId, environmentId);
+            await scopedStore.deleteEnvironmentMetadata(userId, environmentId);
             this.logger.info({ environmentId }, "Environment deleted");
           } catch (error) {
-            await this.store.recordEnvironmentDeletionFailure(
+            await scopedStore.recordEnvironmentDeletionFailure(
               environmentId,
               errorMessage(error),
             );

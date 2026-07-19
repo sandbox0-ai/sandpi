@@ -181,7 +181,7 @@ export type CodexThreadStatus =
       activeFlags: Array<"waitingOnApproval" | "waitingOnUserInput">;
     };
 
-/** Native app-server Thread returned by thread/read(includeTurns=true). */
+/** Native app-server Thread; metadata-only reads return an empty turns array. */
 export interface CodexThread {
   id: string;
   sessionId?: string;

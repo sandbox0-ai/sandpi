@@ -15,6 +15,7 @@ import {
   CodexService,
   type CodexCredentialProvider,
 } from "./service";
+import type { SupervisorOutputEvent } from "./jsonl";
 
 const logger = {
   debug() {},
@@ -64,6 +65,7 @@ function session(
   id: string,
   nativeSessionId: string,
   status: CodingSession["status"] = "waiting",
+  archived = false,
 ): CodingSession {
   return {
     id,
@@ -72,7 +74,7 @@ function session(
     status,
     unread: false,
     pinned: false,
-    archived: false,
+    archived,
     harness: "codex",
     harnessLabel: "Codex",
     harnessState: {
@@ -117,6 +119,26 @@ function completedTurn(id: string): CodexThread["turns"][number] {
   };
 }
 
+function supervisorOutputEvent(
+  seq: number,
+  messages: readonly Record<string, unknown>[],
+  coordinates: { attemptId: string; runtimeGeneration: number } = {
+    attemptId: "attempt-environment-test",
+    runtimeGeneration: 1,
+  },
+): SupervisorOutputEvent {
+  return {
+    seq,
+    ...coordinates,
+    type: "output",
+    stream: "stdout",
+    dataBase64: Buffer.from(
+      `${messages.map((message) => JSON.stringify(message)).join("\n")}\n`,
+    ).toString("base64"),
+    occurredAt: "2026-07-16T00:00:00.000Z",
+  };
+}
+
 interface Fixture {
   service: CodexService;
   sessions: Map<string, CodingSession>;
@@ -131,7 +153,43 @@ interface Fixture {
     path: string;
     nativeSessionId: string;
   }>;
-  enqueue(messages: Record<string, unknown>[]): void;
+  exceptionalCandidateQueryCount(): number;
+  lifecycleLockActive(): boolean;
+  runtimeRecoveryCount(): number;
+  reconciledEnvironmentEpochs(): Array<{
+    supervisorSessionId?: string;
+    attemptId?: string;
+    runtimeGeneration: number;
+  }>;
+  setRuntimeState(input: {
+    desiredState: StoredEnvironmentRuntime["desiredState"];
+    observedState: StoredEnvironmentRuntime["observedState"];
+  }): void;
+  recoverRuntimeAs(input: {
+    supervisorSessionId?: string;
+    attemptId: string;
+    runtimeGeneration: number;
+  }): void;
+  replaceAuthoritativeRuntime(input: {
+    supervisorSessionId?: string;
+    attemptId: string;
+    runtimeGeneration: number;
+  }): void;
+  replaceRuntimeEpoch(input: {
+    supervisorSessionId: string;
+    attemptId: string;
+    runtimeGeneration: number;
+  }): void;
+  scheduleExceptionalRepair(
+    sessionId: string,
+    requestId: string,
+    delayMs: number,
+  ): void;
+  enqueue(
+    messages: Record<string, unknown>[],
+    coordinates?: { attemptId: string; runtimeGeneration: number },
+  ): void;
+  commitEvents(events: readonly SupervisorOutputEvent[]): Promise<void>;
   disconnectStreams(): void;
   close(): Promise<void>;
 }
@@ -144,12 +202,59 @@ async function eventually(check: () => boolean, message: string) {
   }
 }
 
+async function waitForPromiseOrAbort(
+  promise: Promise<void>,
+  signal?: AbortSignal,
+) {
+  if (!signal) return promise;
+  if (signal.aborted) throw signal.reason;
+  await new Promise<void>((resolve, reject) => {
+    const abort = () => {
+      signal.removeEventListener("abort", abort);
+      reject(signal.reason);
+    };
+    signal.addEventListener("abort", abort, { once: true });
+    void promise.then(
+      () => {
+        signal.removeEventListener("abort", abort);
+        resolve();
+      },
+      (error) => {
+        signal.removeEventListener("abort", abort);
+        reject(error);
+      },
+    );
+  });
+}
+
 function fixture(input: {
-  sessions?: Array<{ id: string; nativeSessionId: string }>;
+  sessions?: Array<{
+    id: string;
+    nativeSessionId: string;
+    archived?: boolean;
+    status?: CodingSession["status"];
+    activeNativeTurnId?: string;
+    pendingTurnPhase?: StoredSessionRuntime["pendingTurnPhase"];
+    pendingTurnStartedAt?: Date;
+  }>;
   streamErrors?: Error[];
+  rpcTimeoutMs?: number;
+  rpcSubmissionTimeoutMs?: number;
+  exceptionalSessionRecoveryDelayMs?: number;
+  exceptionalPendingTurnGraceMs?: number;
+  exceptionalSessionRetryBaseMs?: number;
+  exceptionalSessionActiveRecheckMs?: number;
+  exceptionalSessionRequestTimeoutMs?: number;
+  exceptionalCandidateErrors?: Error[];
+  environmentRecoveryDelay?: Promise<void>;
+  environmentRecoveryErrors?: Error[];
+  runtimeAccessLockDelay?: Promise<void>;
+  lifecycleLockResults?: boolean[];
   onRequest?: (
     message: Record<string, unknown>,
-  ) => Record<string, unknown> | undefined;
+  ) => Record<string, unknown> | null | undefined;
+  writeDelays?: Record<string, Promise<void>>;
+  authoritativeEpochFence?: boolean;
   rollouts?: Record<string, string | Error | Promise<string>>;
 } = {}): Fixture {
   const initial = input.sessions ?? [
@@ -157,13 +262,41 @@ function fixture(input: {
     { id: "session-two", nativeSessionId: "thread-two" },
   ];
   const sessions = new Map(
-    initial.map(({ id, nativeSessionId }) => [id, session(id, nativeSessionId)]),
-  );
-  const sessionRuntimes = new Map(
-    initial.map(({ id, nativeSessionId }) => [
+    initial.map(({ id, nativeSessionId, archived, status }) => [
       id,
-      sessionRuntime(id, nativeSessionId),
+      session(id, nativeSessionId, status, archived),
     ]),
+  );
+  const sessionRuntimes = new Map<string, StoredSessionRuntime>(
+    initial.map(({
+      id,
+      nativeSessionId,
+      activeNativeTurnId,
+      pendingTurnPhase,
+      pendingTurnStartedAt,
+      status,
+    }) => {
+      const runtime = sessionRuntime(id, nativeSessionId);
+      return [
+        id,
+        {
+          ...runtime,
+          activeNativeTurnId,
+          pendingTurnRequestId: pendingTurnPhase
+            ? `request-${id}`
+            : undefined,
+          pendingTurnClientMessageId: pendingTurnPhase
+            ? `message-${id}`
+            : undefined,
+          pendingTurnStableInputId: pendingTurnPhase
+            ? `input-${id}`
+            : undefined,
+          pendingTurnPhase,
+          pendingTurnStartedAt,
+          sessionStatus: status ?? runtime.sessionStatus,
+        },
+      ] as [string, StoredSessionRuntime];
+    }),
   );
   let environmentRuntime: StoredEnvironmentRuntime = {
     id: environment.id,
@@ -193,17 +326,43 @@ function fixture(input: {
   const streamStarts: number[] = [];
   const writes: Fixture["writes"] = [];
   const lifecycleLocks: string[] = [];
+  const lifecycleLockResults = [...(input.lifecycleLockResults ?? [])];
+  const exceptionalCandidateErrors = [
+    ...(input.exceptionalCandidateErrors ?? []),
+  ];
   const rolloutReads: Fixture["rolloutReads"] = [];
+  let exceptionalCandidateQueries = 0;
+  let lifecycleLockDepth = 0;
+  let runtimeRecoveries = 0;
+  const environmentRecoveryErrors = [
+    ...(input.environmentRecoveryErrors ?? []),
+  ];
+  const reconciledEnvironmentEpochs: Array<{
+    supervisorSessionId?: string;
+    attemptId?: string;
+    runtimeGeneration: number;
+  }> = [];
+  let recoveryCoordinates = {
+    supervisorSessionId: environment.supervisorSessionId,
+    attemptId: "attempt-environment-test",
+    runtimeGeneration: 1,
+    sandboxRestarted: false,
+  };
+  let newSessionSequence = 0;
   let childSequence = 0;
   let lastStartedThreadId: string | undefined;
   let lastStartedTurnId: string | undefined;
 
-  const enqueue = (messages: Record<string, unknown>[]) => {
+  const enqueue = (
+    messages: Record<string, unknown>[],
+    coordinates?: { attemptId: string; runtimeGeneration: number },
+  ) => {
     const seq = events.length + 1;
     events.push({
       seq,
-      runtimeGeneration: 1,
-      attemptId: "attempt-environment-test",
+      runtimeGeneration:
+        coordinates?.runtimeGeneration ?? environmentRuntime.runtimeGeneration,
+      attemptId: coordinates?.attemptId ?? environmentRuntime.attemptId,
       type: "output",
       stream: "stdout",
       dataBase64: Buffer.from(
@@ -255,7 +414,10 @@ function fixture(input: {
       return { id, result: { turn: { id: lastStartedTurnId } } };
     }
     if (message.method === "thread/read") {
-      const params = message.params as { threadId: string };
+      const params = message.params as {
+        threadId: string;
+        includeTurns?: boolean;
+      };
       const turns =
         params.threadId === lastStartedThreadId && lastStartedTurnId
           ? [
@@ -275,8 +437,10 @@ function fixture(input: {
             path:
               `/workspace/.sandpi/harnesses/codex/sessions/2026/07/18/` +
               `rollout-test-${params.threadId}.jsonl`,
-            status: { type: "idle" },
-            turns,
+            status: turns.some((turn) => turn.status === "inProgress")
+              ? { type: "active", activeFlags: [] }
+              : { type: "idle" },
+            turns: params.includeTurns === false ? [] : turns,
           },
         },
       };
@@ -309,7 +473,7 @@ function fixture(input: {
     async environmentRuntime() {
       return environmentRuntime;
     },
-    async activeEnvironmentRuntimeIds() {
+    async environmentRuntimeRecoveryCandidateIds() {
       return [environment.id];
     },
     async environmentWantsRunning() {
@@ -320,26 +484,80 @@ function fixture(input: {
       operation: () => Promise<unknown>,
     ) {
       lifecycleLocks.push(environmentId);
-      return { acquired: true, value: await operation() };
+      if (lifecycleLockResults.shift() === false) {
+        return { acquired: false };
+      }
+      lifecycleLockDepth += 1;
+      try {
+        return { acquired: true, value: await operation() };
+      } finally {
+        lifecycleLockDepth -= 1;
+      }
     },
-    async sessionRuntimesForEnvironment() {
-      return [...sessionRuntimes.values()].filter(
-        (candidate) => candidate.nativeSessionId,
-      );
+    async withEnvironmentRuntimeAccessLock(
+      _environmentId: string,
+      operation: () => Promise<unknown>,
+    ) {
+      if (input.runtimeAccessLockDelay) {
+        await input.runtimeAccessLockDelay;
+      }
+      return { acquired: true as const, value: await operation() };
     },
-    async recordCodexEnvironmentRuntime() {
+    async recordEnvironmentRuntimeAccess() {
+      return environmentRuntime;
+    },
+    async nativeSessionRecoveryCandidatesForEnvironment(
+      requestedEnvironmentId: string,
+    ) {
+      exceptionalCandidateQueries += 1;
+      const candidateError = exceptionalCandidateErrors.shift();
+      if (candidateError) throw candidateError;
+      return [...sessionRuntimes.values()].filter((candidate) => {
+        const candidateSession = sessions.get(candidate.sessionId);
+        return (
+          candidate.environmentId === requestedEnvironmentId &&
+          candidateSession?.archived === false &&
+          candidateSession.status !== "failed" &&
+          Boolean(candidate.nativeSessionId) &&
+          (Boolean(candidate.activeNativeTurnId) ||
+            Boolean(candidate.pendingTurnPhase) ||
+            (candidateSession.status === "running" &&
+              !candidate.activeNativeTurnId &&
+              !candidate.pendingTurnPhase))
+        );
+      });
+    },
+    async recordCodexEnvironmentRuntime(
+      _environmentId: string,
+      recovered: Awaited<
+        ReturnType<RuntimeAdapter["ensureCodexEnvironmentRuntime"]>
+      >,
+    ) {
+      environmentRuntime = {
+        ...environmentRuntime,
+        supervisorSessionId: recovered.supervisorSessionId,
+        attemptId: recovered.attemptId,
+        runtimeGeneration: recovered.runtimeGeneration,
+        desiredState: "running",
+        observedState: "running",
+        version: environmentRuntime.version + 1,
+      };
       return environmentRuntime;
     },
     async commitEnvironmentTransport(
       environmentId: string,
       supervisorSessionId: string,
+      attemptId: string | undefined,
+      runtimeGeneration: number,
       before: StoredEnvironmentRuntime["decoder"],
       after: StoredEnvironmentRuntime["decoder"],
       transitions: CodexControlTransition[],
     ) {
       assert.equal(environmentId, environment.id);
-      assert.equal(supervisorSessionId, environment.supervisorSessionId);
+      assert.equal(supervisorSessionId, environmentRuntime.supervisorSessionId);
       if (
+        environmentRuntime.attemptId !== attemptId ||
+        environmentRuntime.runtimeGeneration !== runtimeGeneration ||
         environmentRuntime.decoder.supervisorCursor !==
           before.supervisorCursor ||
         environmentRuntime.decoder.tailBase64 !== before.tailBase64
@@ -349,8 +567,6 @@ function fixture(input: {
       environmentRuntime = {
         ...environmentRuntime,
         decoder: after,
-        attemptId: after.attemptId,
-        runtimeGeneration: after.runtimeGeneration,
         version: environmentRuntime.version + 1,
       };
       for (const transition of transitions) {
@@ -400,6 +616,22 @@ function fixture(input: {
     async sessionIdsForEnvironment() {
       return [...sessions.keys()];
     },
+    async createSessionMetadata(options: {
+      title: string;
+      modelId?: string;
+    }) {
+      const id = `session-new-${++newSessionSequence}`;
+      sessions.set(id, session(id, "", "paused"));
+      sessions.set(id, {
+        ...sessions.get(id)!,
+        title: options.title,
+      });
+      sessionRuntimes.set(id, {
+        ...sessionRuntime(id, undefined),
+        modelId: options.modelId,
+      });
+      return id;
+    },
     async createForkSessionMetadata(options: {
       source: CodingSession;
       title?: string;
@@ -437,37 +669,193 @@ function fixture(input: {
       sessionId: string;
       nativeSessionId: string;
       historyRevision: number;
+      runtimeVersion: number;
+      environmentId: string;
+      environmentSupervisorSessionId?: string;
+      environmentAttemptId?: string;
+      environmentRuntimeGeneration: number;
       activeNativeTurnId?: string;
+      clearPendingWhenNativeIdle?: boolean;
+      clearPendingRequestId?: string;
+      clearPendingStartedBefore?: Date;
+      requireUnarchived?: boolean;
     }) {
+      reconciledEnvironmentEpochs.push({
+        supervisorSessionId: options.environmentSupervisorSessionId,
+        attemptId: options.environmentAttemptId,
+        runtimeGeneration: options.environmentRuntimeGeneration,
+      });
       const current = sessionRuntimes.get(options.sessionId)!;
+      const currentSession = sessions.get(options.sessionId)!;
       if (
         current.nativeSessionId !== options.nativeSessionId ||
-        current.historyRevision !== options.historyRevision
+        current.historyRevision !== options.historyRevision ||
+        current.version !== options.runtimeVersion ||
+        environmentRuntime.id !== options.environmentId ||
+        environmentRuntime.supervisorSessionId !==
+          options.environmentSupervisorSessionId ||
+        environmentRuntime.attemptId !== options.environmentAttemptId ||
+        environmentRuntime.runtimeGeneration !==
+          options.environmentRuntimeGeneration ||
+        (options.requireUnarchived === true && currentSession.archived)
       ) {
         return false;
       }
+      const pendingRecoveryEligible =
+        (options.clearPendingRequestId !== undefined &&
+          current.pendingTurnRequestId === options.clearPendingRequestId) ||
+        (options.clearPendingStartedBefore !== undefined &&
+          current.pendingTurnStartedAt !== undefined &&
+          current.pendingTurnStartedAt.getTime() <=
+            options.clearPendingStartedBefore.getTime());
+      const clearPending =
+        options.clearPendingWhenNativeIdle === true &&
+        !options.activeNativeTurnId &&
+        Boolean(current.pendingTurnPhase) &&
+        pendingRecoveryEligible;
+      const activeChanged =
+        current.activeNativeTurnId !== options.activeNativeTurnId;
       sessionRuntimes.set(options.sessionId, {
         ...current,
         activeNativeTurnId: options.activeNativeTurnId,
-        sessionStatus: options.activeNativeTurnId ? "running" : "waiting",
+        pendingTurnRequestId: clearPending
+          ? undefined
+          : current.pendingTurnRequestId,
+        pendingTurnClientMessageId: clearPending
+          ? undefined
+          : current.pendingTurnClientMessageId,
+        pendingTurnStableInputId: clearPending
+          ? undefined
+          : current.pendingTurnStableInputId,
+        pendingTurnPhase: clearPending
+          ? undefined
+          : current.pendingTurnPhase,
+        pendingTurnNativeTurnId: clearPending
+          ? undefined
+          : current.pendingTurnNativeTurnId,
+        pendingTurnStartedAt: clearPending
+          ? undefined
+          : current.pendingTurnStartedAt,
+        sessionStatus:
+          options.activeNativeTurnId ||
+          (!clearPending && current.pendingTurnPhase)
+            ? "running"
+            : "waiting",
+        version: current.version + (activeChanged || clearPending ? 1 : 0),
       });
       sessions.set(options.sessionId, {
         ...sessions.get(options.sessionId)!,
-        status: options.activeNativeTurnId ? "running" : "waiting",
+        status:
+          options.activeNativeTurnId ||
+          (!clearPending && current.pendingTurnPhase)
+            ? "running"
+            : "waiting",
       });
       return true;
+    },
+    async beginSessionTurn(
+      _userId: string,
+      sessionId: string,
+      modelId: string | undefined,
+      submission: {
+        requestId: string;
+        clientMessageId: string;
+        stableInputId: string;
+      },
+    ) {
+      const current = sessionRuntimes.get(sessionId)!;
+      const currentSession = sessions.get(sessionId)!;
+      if (
+        currentSession.archived ||
+        currentSession.status !== "waiting" ||
+        !current.nativeSessionId ||
+        current.activeNativeTurnId ||
+        current.pendingTurnPhase
+      ) {
+        throw new HttpError(
+          409,
+          currentSession.archived
+            ? "session_archived"
+            : "session_turn_in_progress",
+          currentSession.archived
+            ? "Unarchive this Session before starting a Codex Turn."
+            : "Wait for the current Codex Turn to finish.",
+        );
+      }
+      sessionRuntimes.set(sessionId, {
+        ...current,
+        modelId: modelId ?? current.modelId,
+        pendingTurnRequestId: submission.requestId,
+        pendingTurnClientMessageId: submission.clientMessageId,
+        pendingTurnStableInputId: submission.stableInputId,
+        pendingTurnPhase: "prepared",
+        pendingTurnStartedAt: new Date(),
+        sessionStatus: "running",
+        version: current.version + 1,
+      });
+      sessions.set(sessionId, { ...currentSession, status: "running" });
+    },
+    async markTurnSubmitted(sessionId: string, requestId: string) {
+      const current = sessionRuntimes.get(sessionId)!;
+      if (
+        current.pendingTurnRequestId !== requestId ||
+        current.pendingTurnPhase !== "prepared"
+      ) {
+        return;
+      }
+      sessionRuntimes.set(sessionId, {
+        ...current,
+        pendingTurnPhase: "submitted",
+        version: current.version + 1,
+      });
+    },
+    async markTurnAccepted(
+      sessionId: string,
+      requestId: string,
+      nativeTurnId: string,
+    ) {
+      const current = sessionRuntimes.get(sessionId)!;
+      if (current.pendingTurnRequestId !== requestId) return;
+      sessionRuntimes.set(sessionId, {
+        ...current,
+        pendingTurnPhase: "accepted",
+        pendingTurnNativeTurnId: nativeTurnId,
+        activeNativeTurnId: current.activeNativeTurnId ?? nativeTurnId,
+        version: current.version + 1,
+      });
+    },
+    async abandonTurn(sessionId: string, requestId: string) {
+      const current = sessionRuntimes.get(sessionId)!;
+      if (current.pendingTurnRequestId !== requestId) return;
+      sessionRuntimes.set(sessionId, {
+        ...current,
+        pendingTurnRequestId: undefined,
+        pendingTurnClientMessageId: undefined,
+        pendingTurnStableInputId: undefined,
+        pendingTurnPhase: undefined,
+        pendingTurnNativeTurnId: undefined,
+        pendingTurnStartedAt: undefined,
+        activeNativeTurnId: undefined,
+        sessionStatus: "waiting",
+        version: current.version + 1,
+      });
+      sessions.set(sessionId, {
+        ...sessions.get(sessionId)!,
+        status: "waiting",
+      });
     },
   } as unknown as SandpiStore;
 
   const runtime = {
     mode: "sandbox0",
     async ensureCodexEnvironmentRuntime() {
-      return {
-        supervisorSessionId: environment.supervisorSessionId,
-        attemptId: "attempt-environment-test",
-        runtimeGeneration: 1,
-        sandboxRestarted: false,
-      };
+      runtimeRecoveries += 1;
+      const recoveryError = environmentRecoveryErrors.shift();
+      if (recoveryError) throw recoveryError;
+      if (input.environmentRecoveryDelay) {
+        await input.environmentRecoveryDelay;
+      }
+      return recoveryCoordinates;
     },
     async readCodexEnvironmentCredential() {
       return "{}";
@@ -476,10 +864,29 @@ function fixture(input: {
     async writeCodexMessage(
       runtime: StoredEnvironmentRuntime,
       value: unknown,
+      _stableInputId?: string,
+      signal?: AbortSignal,
     ) {
       const message = value as Record<string, unknown>;
+      if (
+        input.authoritativeEpochFence &&
+        (runtime.supervisorSessionId !==
+          recoveryCoordinates.supervisorSessionId ||
+          runtime.attemptId !== recoveryCoordinates.attemptId ||
+          runtime.runtimeGeneration !== recoveryCoordinates.runtimeGeneration)
+      ) {
+        throw new HttpError(
+          409,
+          "codex_runtime_epoch_changed",
+          "The authoritative Sandbox0 runtime changed.",
+        );
+      }
       writes.push({ environmentId: runtime.id, message });
-      const response = input.onRequest?.(message) ?? defaultResponse(message);
+      const writeDelay = input.writeDelays?.[String(message.method)];
+      if (writeDelay) await waitForPromiseOrAbort(writeDelay, signal);
+      const configured = input.onRequest?.(message);
+      const response =
+        configured === undefined ? defaultResponse(message) : configured;
       if (response) enqueue([response]);
     },
     async watchCodexEvents(
@@ -555,7 +962,22 @@ function fixture(input: {
     runtime,
     logger,
     credentials,
-    { streamReconnectDelayMs: 5, streamBatchDelayMs: 1 },
+    {
+      streamReconnectDelayMs: 5,
+      streamBatchDelayMs: 1,
+      rpcTimeoutMs: input.rpcTimeoutMs,
+      rpcSubmissionTimeoutMs: input.rpcSubmissionTimeoutMs,
+      exceptionalSessionRecoveryDelayMs:
+        input.exceptionalSessionRecoveryDelayMs,
+      exceptionalPendingTurnGraceMs:
+        input.exceptionalPendingTurnGraceMs,
+      exceptionalSessionRetryBaseMs:
+        input.exceptionalSessionRetryBaseMs,
+      exceptionalSessionActiveRecheckMs:
+        input.exceptionalSessionActiveRecheckMs,
+      exceptionalSessionRequestTimeoutMs:
+        input.exceptionalSessionRequestTimeoutMs,
+    },
   );
   return {
     service,
@@ -565,7 +987,98 @@ function fixture(input: {
     lifecycleLocks,
     streamStarts,
     rolloutReads,
+    exceptionalCandidateQueryCount: () => exceptionalCandidateQueries,
+    lifecycleLockActive: () => lifecycleLockDepth > 0,
+    runtimeRecoveryCount: () => runtimeRecoveries,
+    reconciledEnvironmentEpochs: () => [...reconciledEnvironmentEpochs],
+    setRuntimeState: ({ desiredState, observedState }) => {
+      environmentRuntime = {
+        ...environmentRuntime,
+        desiredState,
+        observedState,
+        version: environmentRuntime.version + 1,
+      };
+    },
+    recoverRuntimeAs: ({
+      supervisorSessionId,
+      attemptId,
+      runtimeGeneration,
+    }) => {
+      recoveryCoordinates = {
+        ...recoveryCoordinates,
+        supervisorSessionId:
+          supervisorSessionId ?? recoveryCoordinates.supervisorSessionId,
+        attemptId,
+        runtimeGeneration,
+      };
+      environmentRuntime = {
+        ...environmentRuntime,
+        desiredState: "running",
+        observedState: "paused",
+        version: environmentRuntime.version + 1,
+      };
+    },
+    replaceAuthoritativeRuntime: ({
+      supervisorSessionId,
+      attemptId,
+      runtimeGeneration,
+    }) => {
+      recoveryCoordinates = {
+        ...recoveryCoordinates,
+        supervisorSessionId:
+          supervisorSessionId ?? recoveryCoordinates.supervisorSessionId,
+        attemptId,
+        runtimeGeneration,
+      };
+    },
+    replaceRuntimeEpoch: ({
+      supervisorSessionId,
+      attemptId,
+      runtimeGeneration,
+    }) => {
+      environmentRuntime = {
+        ...environmentRuntime,
+        supervisorSessionId,
+        attemptId,
+        runtimeGeneration,
+        decoder: {
+          supervisorCursor: 0,
+          tailBase64: "",
+          attemptId,
+          runtimeGeneration,
+        },
+        version: environmentRuntime.version + 1,
+      };
+    },
+    scheduleExceptionalRepair: (sessionId, requestId, delayMs) => {
+      const schedule = (
+        service as unknown as {
+          scheduleExceptionalSessionReconciliation(
+            runtime: StoredEnvironmentRuntime,
+            options: {
+              delayMs: number;
+              pendingTurnRequests: ReadonlyMap<string, string>;
+            },
+          ): void;
+        }
+      ).scheduleExceptionalSessionReconciliation;
+      schedule.call(service, environmentRuntime, {
+        delayMs,
+        pendingTurnRequests: new Map([[sessionId, requestId]]),
+      });
+    },
     enqueue,
+    commitEvents: async (values) => {
+      const commit = (
+        service as unknown as {
+          commitEnvironmentEvents(
+            runtime: StoredEnvironmentRuntime,
+            events: readonly SupervisorOutputEvent[],
+          ): Promise<StoredEnvironmentRuntime>;
+        }
+      ).commitEnvironmentEvents;
+      await commit.call(service, environmentRuntime, values);
+    },
     disconnectStreams: () => {
       for (const stream of [...activeStreams]) stream.close();
     },
@@ -597,6 +1110,60 @@ test("uses one Environment app-server for multiple native Sessions", async () =>
       context.writes.filter((write) => write.message.method === "model/list")
         .length,
       2,
+    );
+    assert.equal(
+      context.writes.filter((write) => write.message.method === "thread/resume")
+        .length,
+      0,
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("retries an epoch change raised inside Environment lifecycle recovery", async () => {
+  const context = fixture({
+    environmentRecoveryErrors: [
+      new HttpError(
+        409,
+        "codex_runtime_epoch_changed",
+        "The Sandbox changed during credential hydration.",
+      ),
+    ],
+  });
+  try {
+    assert.deepEqual(await context.service.listModels("user", "session-one"), {
+      data: [{ id: "gpt-test" }],
+    });
+    assert.equal(context.runtimeRecoveryCount(), 2);
+    assert.equal(context.lifecycleLocks.length, 2);
+  } finally {
+    await context.close();
+  }
+});
+
+test("starts the first Turn on a newly created loaded Thread without resume", async () => {
+  const context = fixture();
+  try {
+    const sessionId = await context.service.createSession({
+      userId: "user",
+      environment,
+      title: "New native Session",
+      prompt: "Start here",
+      images: [],
+      modelId: "gpt-test",
+    });
+
+    assert.equal(context.sessions.get(sessionId)?.title, "New native Session");
+    assert.deepEqual(
+      context.writes
+        .filter(({ message }) =>
+          ["thread/start", "thread/resume", "turn/start"].includes(
+            String(message.method),
+          ),
+        )
+        .map(({ message }) => message.method),
+      ["thread/start", "turn/start"],
     );
   } finally {
     await context.close();
@@ -825,31 +1392,1808 @@ test("scopes a non-string native rollout path to Activity", async () => {
   }
 });
 
-test("reattaches every native Session when the Environment runtime recovers", async () => {
-  const context = fixture();
+test("rejects a native snapshot returned for a different Thread", async () => {
+  const context = fixture({
+    onRequest(message) {
+      if (message.method !== "thread/read") return undefined;
+      return {
+        id: message.id,
+        result: {
+          thread: {
+            id: "thread-other",
+            status: { type: "idle" },
+            turns: [completedTurn("turn-other")],
+          },
+        },
+      };
+    },
+  });
+  try {
+    await assert.rejects(
+      context.service.readNativeSnapshot("user", "session-one"),
+      (error: unknown) =>
+        error instanceof HttpError &&
+        error.code === "codex_thread_read_failed",
+    );
+    assert.equal(
+      context.sessionRuntimes.get("session-one")?.activeNativeTurnId,
+      undefined,
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("recovers only the Environment protocol and leaves native Sessions detached", async () => {
+  const context = fixture({
+    sessions: [
+      { id: "session-one", nativeSessionId: "thread-one" },
+      { id: "session-two", nativeSessionId: "thread-two" },
+      {
+        id: "session-archived",
+        nativeSessionId: "thread-archived",
+        archived: true,
+      },
+    ],
+  });
   try {
     await context.service.resumeWorkers();
 
     assert.deepEqual(context.lifecycleLocks, [environment.id]);
 
-    const methods = context.writes.map((write) => write.message.method);
+    let methods = context.writes.map((write) => write.message.method);
     assert.equal(methods.filter((method) => method === "initialize").length, 1);
-    assert.equal(methods.filter((method) => method === "thread/resume").length, 2);
+    assert.equal(methods.filter((method) => method === "thread/resume").length, 0);
+
+    assert.equal(
+      (
+        await context.service.readNativeSnapshot("user", "session-one")
+      ).thread.id,
+      "thread-one",
+    );
+    assert.equal(
+      (
+        await context.service.readNativeSnapshot("user", "session-archived")
+      ).thread.id,
+      "thread-archived",
+    );
+
+    methods = context.writes.map((write) => write.message.method);
+    assert.equal(methods.filter((method) => method === "thread/read").length, 2);
+    assert.equal(methods.filter((method) => method === "thread/resume").length, 0);
+  } finally {
+    await context.close();
+  }
+});
+
+test("explicitly opening an archived Session repairs only stale scalar state", async () => {
+  const context = fixture({
+    sessions: [
+      {
+        id: "session-archived",
+        nativeSessionId: "thread-archived",
+        archived: true,
+        status: "running",
+        pendingTurnPhase: "submitted",
+        pendingTurnStartedAt: new Date("2026-07-15T00:00:00.000Z"),
+      },
+    ],
+    exceptionalPendingTurnGraceMs: 500,
+  });
+  try {
+    await context.service.readNativeSnapshot("user", "session-archived");
+
+    assert.equal(
+      context.sessionRuntimes.get("session-archived")?.pendingTurnPhase,
+      undefined,
+    );
+    assert.equal(context.sessions.get("session-archived")?.status, "waiting");
+    assert.equal(context.exceptionalCandidateQueryCount(), 0);
+    const reads = context.writes.filter(
+      ({ message }) => message.method === "thread/read",
+    );
+    assert.equal(reads.length, 1);
+    assert.equal(
+      (reads[0]?.message.params as { includeTurns?: boolean }).includeTurns,
+      true,
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("does not start a Turn in an archived Session", async () => {
+  const context = fixture({
+    sessions: [
+      {
+        id: "session-archived",
+        nativeSessionId: "thread-archived",
+        archived: true,
+      },
+    ],
+  });
+  try {
+    await assert.rejects(
+      context.service.startTurn({
+        userId: "user",
+        sessionId: "session-archived",
+        text: "Do not run hidden work",
+        images: [],
+      }),
+      (error: unknown) =>
+        error instanceof HttpError && error.code === "session_archived",
+    );
+    assert.equal(
+      context.writes.some(
+        ({ message }) =>
+          message.method === "thread/resume" ||
+          message.method === "turn/start",
+      ),
+      false,
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("repairs only exceptional non-archived Session state without blocking Environment recovery", async () => {
+  const context = fixture({
+    sessions: [
+      {
+        id: "session-stale",
+        nativeSessionId: "thread-stale",
+        status: "running",
+        pendingTurnPhase: "submitted",
+        pendingTurnStartedAt: new Date("2026-07-15T00:00:00.000Z"),
+      },
+      {
+        id: "session-archived",
+        nativeSessionId: "thread-archived",
+        archived: true,
+        status: "running",
+        pendingTurnPhase: "submitted",
+        pendingTurnStartedAt: new Date("2026-07-15T00:00:00.000Z"),
+      },
+      {
+        id: "session-waiting",
+        nativeSessionId: "thread-waiting",
+      },
+    ],
+    exceptionalSessionRecoveryDelayMs: 0,
+    onRequest(message) {
+      if (message.method === "thread/read") return null;
+      return undefined;
+    },
+  });
+  try {
+    await context.service.resumeWorkers();
+    await eventually(
+      () =>
+        context.writes.filter(
+          ({ message }) => message.method === "thread/read",
+        ).length === 1,
+      "exceptional reconciliation did not start after Environment recovery",
+    );
+
+    assert.equal(context.exceptionalCandidateQueryCount(), 1);
+    assert.equal(
+      context.writes.filter(
+        ({ message }) => message.method === "thread/resume",
+      ).length,
+      0,
+    );
+    const read = context.writes.find(
+      ({ message }) => message.method === "thread/read",
+    )?.message;
+    assert.equal(
+      (read?.params as { threadId?: string } | undefined)?.threadId,
+      "thread-stale",
+    );
+    assert.equal(
+      (read?.params as { includeTurns?: boolean } | undefined)?.includeTurns,
+      false,
+    );
+    assert.equal(
+      context.lifecycleLockActive(),
+      false,
+      "the lifecycle lock must be released before waiting for thread/read",
+    );
+    context.enqueue([
+      {
+        id: read?.id,
+        result: {
+          thread: {
+            id: "thread-stale",
+            status: { type: "idle" },
+            turns: [],
+          },
+        },
+      },
+    ]);
+    await eventually(
+      () =>
+        context.sessionRuntimes.get("session-stale")?.pendingTurnPhase ===
+        undefined,
+      "idle native Thread did not clear stale pending delivery state",
+    );
+
+    assert.equal(context.sessions.get("session-stale")?.status, "waiting");
+    assert.equal(
+      context.service
+        .listLiveNotifications("session-stale")
+        .some(
+          (update) =>
+            update.kind === "invalidation" &&
+            update.reason === "native-session-state-reconciled",
+        ),
+      true,
+    );
+    assert.equal(
+      context.sessionRuntimes.get("session-archived")?.pendingTurnPhase,
+      "submitted",
+    );
+    assert.equal(context.sessions.get("session-waiting")?.status, "waiting");
+    assert.equal(
+      context.writes.filter(
+        ({ message }) => message.method === "thread/read",
+      ).length,
+      1,
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("defers fresh pending Turn repair across replicas until its grace expires", async () => {
+  const context = fixture({
+    sessions: [
+      {
+        id: "session-fresh",
+        nativeSessionId: "thread-fresh",
+        status: "running",
+        pendingTurnPhase: "prepared",
+        pendingTurnStartedAt: new Date(),
+      },
+    ],
+    exceptionalSessionRecoveryDelayMs: 0,
+    exceptionalPendingTurnGraceMs: 500,
+  });
+  try {
+    await context.service.resumeWorkers();
+    await eventually(
+      () => context.exceptionalCandidateQueryCount() === 1,
+      "fresh pending Turn was not considered for deferred repair",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    assert.equal(
+      context.writes.filter(
+        ({ message }) => message.method === "thread/read",
+      ).length,
+      0,
+    );
+    assert.equal(
+      context.sessionRuntimes.get("session-fresh")?.pendingTurnPhase,
+      "prepared",
+    );
+
+    await eventually(
+      () =>
+        context.writes.filter(
+          ({ message }) => message.method === "thread/read",
+        ).length === 1,
+      "pending Turn was not repaired after its distributed grace",
+    );
+    await eventually(
+      () =>
+        context.sessionRuntimes.get("session-fresh")?.pendingTurnPhase ===
+        undefined,
+      "eligible pending Turn state was not cleared from an idle native Thread",
+    );
+    assert.ok(context.exceptionalCandidateQueryCount() >= 2);
+  } finally {
+    await context.close();
+  }
+});
+
+test("an explicit control repair wakes an existing distributed grace timer", async () => {
+  const context = fixture({
+    sessions: [
+      {
+        id: "session-fresh",
+        nativeSessionId: "thread-fresh",
+        status: "running",
+        pendingTurnPhase: "prepared",
+        pendingTurnStartedAt: new Date(),
+      },
+    ],
+    exceptionalSessionRecoveryDelayMs: 0,
+    exceptionalPendingTurnGraceMs: 5_000,
+  });
+  try {
+    await context.service.resumeWorkers();
+    await eventually(
+      () => context.exceptionalCandidateQueryCount() === 1,
+      "fresh pending Turn did not enter its grace timer",
+    );
+
+    await context.service.scheduleSessionControlStateRepair("session-fresh");
+    await eventually(
+      () => context.exceptionalCandidateQueryCount() >= 2,
+      "explicit repair did not wake the existing grace timer",
+    );
+    assert.equal(
+      context.writes.filter(
+        ({ message }) => message.method === "thread/read",
+      ).length,
+      0,
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("retries exceptional candidate discovery after a transient failure", async () => {
+  const context = fixture({
+    sessions: [
+      {
+        id: "session-stale",
+        nativeSessionId: "thread-stale",
+        status: "running",
+        pendingTurnPhase: "submitted",
+        pendingTurnStartedAt: new Date("2026-07-15T00:00:00.000Z"),
+      },
+    ],
+    exceptionalSessionRecoveryDelayMs: 0,
+    exceptionalSessionRetryBaseMs: 5,
+    exceptionalCandidateErrors: [new Error("temporary database failure")],
+  });
+  try {
+    await context.service.resumeWorkers();
+    await eventually(
+      () => context.exceptionalCandidateQueryCount() >= 2,
+      "failed candidate discovery was not retried",
+    );
+    await eventually(
+      () =>
+        context.sessionRuntimes.get("session-stale")?.pendingTurnPhase ===
+        undefined,
+      "retried reconciliation did not clear stale control state",
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("rechecks an active native Thread until missed completion state is repaired", async () => {
+  let reads = 0;
+  const context = fixture({
+    sessions: [
+      {
+        id: "session-active",
+        nativeSessionId: "thread-active",
+        status: "running",
+        activeNativeTurnId: "turn-active",
+      },
+    ],
+    exceptionalSessionRecoveryDelayMs: 0,
+    exceptionalSessionActiveRecheckMs: 5,
+    onRequest(message) {
+      if (message.method !== "thread/read") return undefined;
+      reads += 1;
+      return {
+        id: message.id,
+        result: {
+          thread: {
+            id: "thread-active",
+            status:
+              reads === 1
+                ? { type: "active", activeFlags: [] }
+                : { type: "idle" },
+            turns: [],
+          },
+        },
+      };
+    },
+  });
+  try {
+    await context.service.resumeWorkers();
+    await eventually(
+      () => reads >= 2,
+      "active native Thread was not rechecked",
+    );
+    await eventually(
+      () =>
+        context.sessionRuntimes.get("session-active")?.activeNativeTurnId ===
+        undefined,
+      "missed native completion was not repaired",
+    );
+    assert.equal(context.sessions.get("session-active")?.status, "waiting");
+  } finally {
+    await context.close();
+  }
+});
+
+test("metadata-only repair preserves an active native Thread without loading replies", async () => {
+  const context = fixture({
+    sessions: [
+      {
+        id: "session-active",
+        nativeSessionId: "thread-active",
+        status: "running",
+        activeNativeTurnId: "turn-active",
+      },
+    ],
+    exceptionalSessionRecoveryDelayMs: 0,
+    onRequest(message) {
+      if (message.method !== "thread/read") return undefined;
+      return {
+        id: message.id,
+        result: {
+          thread: {
+            id: "thread-active",
+            status: { type: "active", activeFlags: [] },
+            turns: [],
+          },
+        },
+      };
+    },
+  });
+  try {
+    await context.service.resumeWorkers();
+    await eventually(
+      () =>
+        context.writes.some(
+          ({ message }) => message.method === "thread/read",
+        ),
+      "active native Thread was not checked",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 25));
+
+    const read = context.writes.find(
+      ({ message }) => message.method === "thread/read",
+    )?.message;
+    assert.equal(
+      (read?.params as { includeTurns?: boolean } | undefined)?.includeTurns,
+      false,
+    );
+    assert.equal(
+      context.sessionRuntimes.get("session-active")?.activeNativeTurnId,
+      "turn-active",
+    );
+    assert.equal(context.sessions.get("session-active")?.status, "running");
     assert.deepEqual(
-      context.writes
-        .filter((write) => write.message.method === "thread/resume")
-        .map(
-          (write) =>
-            (write.message.params as { threadId: string }).threadId,
-        )
-        .sort(),
-      ["thread-one", "thread-two"],
+      context.service.listLiveNotifications("session-active"),
+      [],
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("defers exceptional Session reads when the Environment lifecycle lock is busy", async () => {
+  const context = fixture({
+    sessions: [
+      {
+        id: "session-stale",
+        nativeSessionId: "thread-stale",
+        status: "running",
+        pendingTurnPhase: "submitted",
+        pendingTurnStartedAt: new Date("2026-07-15T00:00:00.000Z"),
+      },
+    ],
+    exceptionalSessionRecoveryDelayMs: 50,
+    lifecycleLockResults: [true, false],
+  });
+  try {
+    await context.service.resumeWorkers();
+    await eventually(
+      () => context.lifecycleLocks.length === 2,
+      "exceptional reconciliation did not try the lifecycle lock",
+    );
+
+    assert.equal(context.exceptionalCandidateQueryCount(), 1);
+    assert.equal(
+      context.writes.filter(
+        ({ message }) => message.method === "thread/read",
+      ).length,
+      0,
+    );
+    assert.equal(context.lifecycleLockActive(), false);
+    context.service.suspendEnvironmentWorker(environment.id);
+  } finally {
+    await context.close();
+  }
+});
+
+test("does not submit exceptional Session reads after the Environment is paused", async () => {
+  const context = fixture({
+    sessions: [
+      {
+        id: "session-stale",
+        nativeSessionId: "thread-stale",
+        status: "running",
+        pendingTurnPhase: "submitted",
+        pendingTurnStartedAt: new Date("2026-07-15T00:00:00.000Z"),
+      },
+    ],
+    exceptionalSessionRecoveryDelayMs: 25,
+  });
+  try {
+    await context.service.resumeWorkers();
+    context.setRuntimeState({
+      desiredState: "paused",
+      observedState: "paused",
+    });
+    await eventually(
+      () => context.exceptionalCandidateQueryCount() === 1,
+      "exceptional reconciliation did not inspect its candidates",
+    );
+
+    assert.equal(context.lifecycleLocks.length, 2);
+    assert.equal(
+      context.writes.filter(
+        ({ message }) => message.method === "thread/read",
+      ).length,
+      0,
+    );
+    assert.equal(
+      context.sessionRuntimes.get("session-stale")?.pendingTurnPhase,
+      "submitted",
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("a submitted exceptional Session read cannot wake a subsequently paused Environment", async () => {
+  const context = fixture({
+    sessions: [
+      {
+        id: "session-stale",
+        nativeSessionId: "thread-stale",
+        status: "running",
+        pendingTurnPhase: "submitted",
+        pendingTurnStartedAt: new Date("2026-07-15T00:00:00.000Z"),
+      },
+    ],
+    exceptionalSessionRecoveryDelayMs: 0,
+    onRequest(message) {
+      if (message.method === "thread/read") return null;
+      return undefined;
+    },
+  });
+  try {
+    await context.service.resumeWorkers();
+    await eventually(
+      () =>
+        context.writes.some(
+          ({ message }) => message.method === "thread/read",
+        ),
+      "exceptional reconciliation did not submit thread/read",
+    );
+    const read = context.writes.find(
+      ({ message }) => message.method === "thread/read",
+    )?.message;
+    assert.equal(context.lifecycleLockActive(), false);
+
+    context.setRuntimeState({
+      desiredState: "paused",
+      observedState: "paused",
+    });
+    context.enqueue([
+      {
+        id: read?.id,
+        result: {
+          thread: {
+            id: "thread-stale",
+            status: { type: "idle" },
+            turns: [],
+          },
+        },
+      },
+    ]);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    assert.equal(context.runtimeRecoveryCount(), 1);
+    assert.equal(
+      context.sessionRuntimes.get("session-stale")?.pendingTurnPhase,
+      "submitted",
+    );
+    assert.equal(
+      context.service
+        .listLiveNotifications("session-stale")
+        .some(
+          (update) =>
+            update.kind === "invalidation" &&
+            update.reason === "native-session-state-reconciled",
+        ),
+      false,
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("cancelling an exceptional Session read while submission is pending is handled", async () => {
+  let releaseWrite: (() => void) | undefined;
+  const blockedWrite = new Promise<void>((resolve) => {
+    releaseWrite = resolve;
+  });
+  const context = fixture({
+    sessions: [
+      {
+        id: "session-stale",
+        nativeSessionId: "thread-stale",
+        status: "running",
+        pendingTurnPhase: "submitted",
+        pendingTurnStartedAt: new Date("2026-07-15T00:00:00.000Z"),
+      },
+    ],
+    exceptionalSessionRecoveryDelayMs: 0,
+    writeDelays: { "thread/read": blockedWrite },
+  });
+  try {
+    await context.service.resumeWorkers();
+    await eventually(
+      () =>
+        context.writes.some(
+          ({ message }) => message.method === "thread/read",
+        ),
+      "exceptional reconciliation did not begin its native submission",
+    );
+    assert.equal(context.lifecycleLockActive(), true);
+
+    context.service.suspendEnvironmentWorker(environment.id);
+    await eventually(
+      () => !context.lifecycleLockActive(),
+      "cancelled native submission did not abort and release the lifecycle lock",
+    );
+    assert.equal(
+      context.sessionRuntimes.get("session-stale")?.pendingTurnPhase,
+      "submitted",
+    );
+  } finally {
+    releaseWrite?.();
+    await context.close();
+  }
+});
+
+test("close aborts a blocked background submission and releases its lifecycle lock", async () => {
+  let releaseWrite: (() => void) | undefined;
+  const blockedWrite = new Promise<void>((resolve) => {
+    releaseWrite = resolve;
+  });
+  const context = fixture({
+    sessions: [
+      {
+        id: "session-stale",
+        nativeSessionId: "thread-stale",
+        status: "running",
+        pendingTurnPhase: "submitted",
+        pendingTurnStartedAt: new Date("2026-07-15T00:00:00.000Z"),
+      },
+    ],
+    exceptionalSessionRecoveryDelayMs: 0,
+    exceptionalSessionRequestTimeoutMs: 5_000,
+    writeDelays: { "thread/read": blockedWrite },
+  });
+  await context.service.resumeWorkers();
+  await eventually(
+    () => context.lifecycleLockActive(),
+    "background native submission did not acquire the lifecycle lock",
+  );
+
+  let closeTimer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const closed = await Promise.race([
+      context.close().then(() => true),
+      new Promise<false>((resolve) => {
+        closeTimer = setTimeout(() => resolve(false), 250);
+      }),
+    ]);
+    assert.equal(closed, true);
+    assert.equal(context.lifecycleLockActive(), false);
+  } finally {
+    releaseWrite?.();
+    if (closeTimer) clearTimeout(closeTimer);
+  }
+});
+
+test("interactive requests still reconcile an Environment paused after submission", async () => {
+  const context = fixture({
+    onRequest(message) {
+      if (message.method === "model/list") return null;
+      return undefined;
+    },
+  });
+  try {
+    const listing = context.service.listModels("user", "session-one");
+    await eventually(
+      () =>
+        context.writes.some(
+          ({ message }) => message.method === "model/list",
+        ),
+      "interactive model/list was not submitted",
+    );
+    const request = context.writes.find(
+      ({ message }) => message.method === "model/list",
+    )?.message;
+    context.setRuntimeState({
+      desiredState: "paused",
+      observedState: "paused",
+    });
+    context.enqueue([
+      {
+        id: request?.id,
+        result: {
+          data: [{ id: "gpt-test" }],
+          nextCursor: null,
+        },
+      },
+    ]);
+
+    assert.deepEqual(await listing, { data: [{ id: "gpt-test" }] });
+    // The first recovery establishes this process's protocol-ready lease; the
+    // second reconciles the pause that won after input submission.
+    assert.equal(context.runtimeRecoveryCount(), 2);
+  } finally {
+    await context.close();
+  }
+});
+
+test("recovers a Sandbox0 epoch changed outside Sandpi before submitting once", async () => {
+  const context = fixture({ authoritativeEpochFence: true });
+  try {
+    await context.service.resumeWorkers();
+    assert.equal(context.runtimeRecoveryCount(), 1);
+    context.replaceAuthoritativeRuntime({
+      attemptId: "attempt-environment-external",
+      runtimeGeneration: 2,
+    });
+
+    assert.deepEqual(
+      await context.service.listModels("user", "session-one"),
+      { data: [{ id: "gpt-test" }] },
+    );
+    assert.equal(context.runtimeRecoveryCount(), 2);
+    assert.equal(
+      context.writes.filter(({ message }) => message.method === "model/list")
+        .length,
+      1,
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("a recovery-owned worker reconnects without waiting on its own recovery", async () => {
+  const context = fixture({
+    streamErrors: [
+      new HttpError(
+        503,
+        "sandbox0_unavailable",
+        "The Supervisor stream is not ready yet.",
+      ),
+    ],
+    rpcTimeoutMs: 250,
+  });
+  try {
+    await context.service.resumeWorkers();
+    assert.equal(context.runtimeRecoveryCount(), 1);
+
+    assert.deepEqual(
+      await context.service.listModels("user", "session-one"),
+      { data: [{ id: "gpt-test" }] },
+    );
+    assert.equal(context.runtimeRecoveryCount(), 1);
+    assert.ok(context.streamStarts.length >= 2);
+  } finally {
+    await context.close();
+  }
+});
+
+test("does not replay a Turn after its submitted runtime epoch is lost", async () => {
+  const context = fixture({
+    onRequest(message) {
+      if (message.method === "turn/start") return null;
+      return undefined;
+    },
+    exceptionalSessionRecoveryDelayMs: 0,
+  });
+  try {
+    await context.service.resumeWorkers();
+    const started = context.service.startTurn({
+      userId: "user",
+      sessionId: "session-one",
+      text: "Run once",
+      images: [],
+    });
+    await eventually(
+      () =>
+        context.writes.some(
+          ({ message }) => message.method === "turn/start",
+        ),
+      "turn/start was not submitted",
+    );
+
+    context.replaceAuthoritativeRuntime({
+      attemptId: "attempt-environment-next",
+      runtimeGeneration: 2,
+    });
+    context.enqueue(
+      [
+        {
+          method: "runtime/restarted",
+          params: {},
+        },
+      ],
+      {
+        attemptId: "attempt-environment-next",
+        runtimeGeneration: 2,
+      },
+    );
+
+    const result = await started;
+    assert.equal(typeof result.requestId, "string");
+    assert.equal(result.nativeTurnId, undefined);
+    assert.equal(
+      context.writes.filter(
+        ({ message }) => message.method === "turn/start",
+      ).length,
+      1,
+    );
+    await eventually(
+      () =>
+        context.writes.some(
+          ({ message }) => message.method === "thread/read",
+        ),
+      "ambiguous Turn delivery did not schedule native reconciliation",
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("filters stale records when one Supervisor batch returns to the current epoch", async () => {
+  const context = fixture();
+  try {
+    await context.commitEvents([
+      supervisorOutputEvent(
+        1,
+        [
+          {
+            method: "turn/started",
+            params: {
+              threadId: "thread-one",
+              turn: { id: "turn-stale" },
+            },
+          },
+        ],
+        { attemptId: "attempt-stale", runtimeGeneration: 0 },
+      ),
+      supervisorOutputEvent(2, [
+        {
+          method: "turn/started",
+          params: {
+            threadId: "thread-two",
+            turn: { id: "turn-current" },
+          },
+        },
+      ]),
+    ]);
+
+    assert.equal(
+      context.sessionRuntimes.get("session-one")?.activeNativeTurnId,
+      undefined,
+    );
+    assert.equal(
+      context.sessionRuntimes.get("session-two")?.activeNativeTurnId,
+      "turn-current",
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("uses the runtime that actually submitted a recovered native snapshot", async () => {
+  const context = fixture({ authoritativeEpochFence: true });
+  try {
+    await context.service.resumeWorkers();
+    context.replaceAuthoritativeRuntime({
+      attemptId: "attempt-environment-next",
+      runtimeGeneration: 2,
+    });
+
+    await context.service.readNativeSnapshot("user", "session-one");
+
+    assert.deepEqual(context.reconciledEnvironmentEpochs().at(-1), {
+      supervisorSessionId: environment.supervisorSessionId,
+      attemptId: "attempt-environment-next",
+      runtimeGeneration: 2,
+    });
+  } finally {
+    await context.close();
+  }
+});
+
+test("starts the Codex RPC timeout only after input submission", async () => {
+  let releaseWrite: (() => void) | undefined;
+  const blockedWrite = new Promise<void>((resolve) => {
+    releaseWrite = resolve;
+  });
+  const context = fixture({
+    rpcTimeoutMs: 5,
+    writeDelays: { "model/list": blockedWrite },
+  });
+  try {
+    await context.service.resumeWorkers();
+    const listing = context.service.listModels("user", "session-one");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    releaseWrite?.();
+
+    assert.deepEqual(await listing, { data: [{ id: "gpt-test" }] });
+  } finally {
+    releaseWrite?.();
+    await context.close();
+  }
+});
+
+test("bounds input delivery without replaying an ambiguously submitted Turn", async () => {
+  const blockedWrite = new Promise<void>(() => undefined);
+  const context = fixture({
+    rpcSubmissionTimeoutMs: 5,
+    writeDelays: { "turn/start": blockedWrite },
+    exceptionalSessionRecoveryDelayMs: 0,
+  });
+  try {
+    await context.service.resumeWorkers();
+    const result = await context.service.startTurn({
+      userId: "user",
+      sessionId: "session-one",
+      text: "Do not replay",
+      images: [],
+    });
+
+    assert.equal(typeof result.requestId, "string");
+    assert.equal(result.nativeTurnId, undefined);
+    assert.equal(
+      context.writes.filter(
+        ({ message }) => message.method === "turn/start",
+      ).length,
+      1,
+    );
+    await eventually(
+      () =>
+        context.writes.some(
+          ({ message }) => message.method === "thread/read",
+        ),
+      "timed-out input delivery did not enter native reconciliation",
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("closes promptly while exceptional native reconciliation is waiting", async () => {
+  const context = fixture({
+    sessions: [
+      {
+        id: "session-stale",
+        nativeSessionId: "thread-stale",
+        status: "running",
+        activeNativeTurnId: "turn-stale",
+      },
+    ],
+    exceptionalSessionRecoveryDelayMs: 0,
+    onRequest(message) {
+      if (message.method === "thread/read") return null;
+      return undefined;
+    },
+  });
+
+  await context.service.resumeWorkers();
+  await eventually(
+    () =>
+      context.writes.some(
+        ({ message }) => message.method === "thread/read",
+    ),
+    "exceptional reconciliation did not begin",
+  );
+  let closeTimer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const closed = await Promise.race([
+      context.close().then(() => true),
+      new Promise<false>((resolve) => {
+        closeTimer = setTimeout(() => resolve(false), 250);
+      }),
+    ]);
+    assert.equal(closed, true);
+  } finally {
+    if (closeTimer) clearTimeout(closeTimer);
+  }
+});
+
+test("closes promptly while startup initialization is waiting", async () => {
+  const context = fixture({
+    onRequest(message) {
+      if (message.method === "initialize") return null;
+      return undefined;
+    },
+  });
+
+  const recovery = context.service.resumeWorkers();
+  await eventually(
+    () =>
+      context.writes.some(
+        ({ message }) => message.method === "initialize",
+      ),
+    "Environment startup did not reach protocol initialization",
+  );
+  let closeTimer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const closed = await Promise.race([
+      context.close().then(() => true),
+      new Promise<false>((resolve) => {
+        closeTimer = setTimeout(() => resolve(false), 250);
+      }),
+    ]);
+    assert.equal(closed, true);
+    await recovery;
+  } finally {
+    if (closeTimer) clearTimeout(closeTimer);
+  }
+});
+
+test("closing during slow Environment recovery prevents a new initialize waiter", async () => {
+  let releaseRecovery: (() => void) | undefined;
+  const recoveryDelay = new Promise<void>((resolve) => {
+    releaseRecovery = resolve;
+  });
+  const context = fixture({ environmentRecoveryDelay: recoveryDelay });
+  const startup = context.service.resumeWorkers();
+  await eventually(
+    () => context.runtimeRecoveryCount() === 1,
+    "Environment recovery did not begin",
+  );
+
+  let closeTimer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const closing = context.close();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    releaseRecovery?.();
+    const closed = await Promise.race([
+      closing.then(() => true),
+      new Promise<false>((resolve) => {
+        closeTimer = setTimeout(() => resolve(false), 250);
+      }),
+    ]);
+
+    assert.equal(closed, true);
+    await startup;
+    assert.equal(
+      context.writes.filter(
+        ({ message }) => message.method === "initialize",
+      ).length,
+      0,
+    );
+  } finally {
+    releaseRecovery?.();
+    if (closeTimer) clearTimeout(closeTimer);
+  }
+});
+
+test("suspending an Environment cancels delayed Session reconciliation", async () => {
+  const context = fixture({
+    sessions: [
+      {
+        id: "session-stale",
+        nativeSessionId: "thread-stale",
+        status: "running",
+        pendingTurnPhase: "submitted",
+      },
+    ],
+    exceptionalSessionRecoveryDelayMs: 25,
+  });
+  try {
+    await context.service.resumeWorkers();
+    context.service.suspendEnvironmentWorker(environment.id);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    assert.equal(context.exceptionalCandidateQueryCount(), 0);
+    assert.equal(
+      context.writes.filter(
+        ({ message }) => message.method === "thread/read",
+      ).length,
+      0,
+    );
+    assert.equal(
+      context.sessionRuntimes.get("session-stale")?.pendingTurnPhase,
+      "submitted",
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("defers exceptional reconciliation until interactive Turn admission finishes", async () => {
+  const context = fixture({
+    sessions: [
+      { id: "session-one", nativeSessionId: "thread-one" },
+      { id: "session-two", nativeSessionId: "thread-two" },
+    ],
+    exceptionalSessionRecoveryDelayMs: 0,
+    exceptionalPendingTurnGraceMs: 0,
+    onRequest(message) {
+      if (message.method === "thread/resume") return null;
+      return undefined;
+    },
+  });
+  context.recoverRuntimeAs({
+    attemptId: "attempt-environment-test-2",
+    runtimeGeneration: 2,
+  });
+  try {
+    const starting = context.service.startTurn({
+      userId: "user",
+      sessionId: "session-one",
+      text: "Recover and start",
+      images: [],
+    });
+    await eventually(
+      () =>
+        context.writes.filter(
+          ({ message }) => message.method === "thread/resume",
+        ).length === 1,
+      "Turn admission did not reach lazy attachment",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.equal(context.exceptionalCandidateQueryCount(), 0);
+    assert.equal(
+      context.writes.filter(
+        ({ message }) => message.method === "thread/read",
+      ).length,
+      0,
+    );
+
+    const resume = context.writes.find(
+      ({ message }) => message.method === "thread/resume",
+    )?.message;
+    context.enqueue([
+      {
+        id: resume?.id,
+        result: {
+          thread: {
+            id: "thread-one",
+            status: { type: "idle" },
+            turns: [completedTurn("turn-before-start")],
+          },
+        },
+      },
+    ]);
+    await starting;
+    await eventually(
+      () => context.exceptionalCandidateQueryCount() === 1,
+      "exceptional reconciliation did not resume after Turn admission",
+    );
+    await eventually(
+      () =>
+        context.writes.filter(
+          ({ message }) => message.method === "thread/read",
+        ).length === 1,
+      "active Session was not authoritatively checked after recovery",
+    );
+    assert.equal(
+      context.sessionRuntimes.get("session-one")?.pendingTurnPhase,
+      "accepted",
+    );
+    assert.equal(context.sessions.get("session-one")?.status, "running");
+  } finally {
+    await context.close();
+  }
+});
+
+test("interactive Turn admission preempts and then reschedules a background Session read", async () => {
+  const context = fixture({
+    sessions: [
+      { id: "session-one", nativeSessionId: "thread-one" },
+      {
+        id: "session-two",
+        nativeSessionId: "thread-two",
+        status: "running",
+        activeNativeTurnId: "turn-stale",
+      },
+    ],
+    exceptionalSessionRecoveryDelayMs: 0,
+    onRequest(message) {
+      if (
+        message.method === "thread/read" &&
+        (message.params as { threadId?: string }).threadId === "thread-two"
+      ) {
+        return null;
+      }
+      return undefined;
+    },
+  });
+  try {
+    await context.service.resumeWorkers();
+    await eventually(
+      () =>
+        context.writes.some(
+          ({ message }) =>
+            message.method === "thread/read" &&
+            (message.params as { threadId?: string }).threadId ===
+              "thread-two",
+        ),
+      "background reconciliation did not reach the stale Session",
+    );
+
+    await context.service.startTurn({
+      userId: "user",
+      sessionId: "session-one",
+      text: "Interactive work takes priority",
+      images: [],
+    });
+    assert.equal(
+      context.writes.filter(
+        ({ message }) => message.method === "turn/start",
+      ).length,
+      1,
+    );
+    await eventually(
+      () => context.exceptionalCandidateQueryCount() >= 2,
+      "preempted exceptional reconciliation was not rescheduled",
+    );
+    await eventually(
+      () =>
+        context.writes.filter(
+          ({ message }) =>
+            message.method === "thread/read" &&
+            (message.params as { threadId?: string }).threadId ===
+              "thread-two",
+        ).length >= 2,
+      "rescheduled reconciliation did not revisit the stale Session",
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("repairs only the selected Session projection from its native snapshot", async () => {
+  const context = fixture({
+    sessions: [
+      {
+        id: "session-one",
+        nativeSessionId: "thread-one",
+        status: "running",
+        activeNativeTurnId: "turn-stale-one",
+      },
+      {
+        id: "session-two",
+        nativeSessionId: "thread-two",
+        status: "running",
+        activeNativeTurnId: "turn-stale-two",
+      },
+    ],
+  });
+  try {
+    const snapshot = await context.service.readNativeSnapshot(
+      "user",
+      "session-one",
+    );
+
+    assert.equal(snapshot.sessionStatus, "waiting");
+    assert.equal(
+      context.sessionRuntimes.get("session-one")?.activeNativeTurnId,
+      undefined,
+    );
+    assert.equal(
+      context.sessionRuntimes.get("session-two")?.activeNativeTurnId,
+      "turn-stale-two",
+    );
+    assert.equal(context.sessions.get("session-two")?.status, "running");
+    assert.equal(
+      context.writes.filter(
+        ({ message }) => message.method === "thread/resume",
+      ).length,
+      0,
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("lazily attaches only the native Session that starts a Turn", async () => {
+  const context = fixture({
+    sessions: [
+      { id: "session-one", nativeSessionId: "thread-one" },
+      { id: "session-two", nativeSessionId: "thread-two" },
+      {
+        id: "session-archived",
+        nativeSessionId: "thread-archived",
+        archived: true,
+      },
+    ],
+  });
+  try {
+    await context.service.resumeWorkers();
+    const started = await context.service.startTurn({
+      userId: "user",
+      sessionId: "session-one",
+      text: "Continue",
+      images: [],
+    });
+
+    assert.match(started.nativeTurnId ?? "", /^turn-new-/);
+    const nativeMethods = context.writes.filter(({ message }) =>
+      ["thread/resume", "turn/start"].includes(String(message.method)),
+    );
+    assert.deepEqual(
+      nativeMethods.map(({ message }) => message.method),
+      ["thread/resume", "turn/start"],
+    );
+    const resumeParams = nativeMethods[0]?.message.params as
+      | Record<string, unknown>
+      | undefined;
+    assert.equal(resumeParams?.threadId, "thread-one");
+    assert.equal(resumeParams?.model, "gpt-test");
+    assert.equal("excludeTurns" in (resumeParams ?? {}), false);
+    assert.equal(
+      context.writes.some(
+        ({ message }) =>
+          message.method === "thread/resume" &&
+          ["thread-two", "thread-archived"].includes(
+            String((message.params as { threadId?: string }).threadId),
+          ),
+      ),
+      false,
+    );
+    await context.service.interruptActiveTurn({
+      userId: "user",
+      sessionId: "session-one",
+      turnId: started.nativeTurnId!,
+    });
+    assert.equal(
+      context.writes.filter(
+        ({ message }) => message.method === "thread/resume",
+      ).length,
+      1,
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("deduplicates concurrent lazy attachment within one app-server attempt", async () => {
+  const context = fixture({
+    sessions: [
+      {
+        id: "session-one",
+        nativeSessionId: "thread-one",
+        status: "running",
+        activeNativeTurnId: "turn-active",
+      },
+    ],
+    onRequest(message) {
+      if (message.method === "thread/resume") return null;
+      return undefined;
+    },
+  });
+  try {
+    const first = context.service.interruptActiveTurn({
+      userId: "user",
+      sessionId: "session-one",
+      turnId: "turn-active",
+    });
+    const second = context.service.interruptActiveTurn({
+      userId: "user",
+      sessionId: "session-one",
+      turnId: "turn-active",
+    });
+    await eventually(
+      () =>
+        context.writes.filter(
+          ({ message }) => message.method === "thread/resume",
+        ).length === 1,
+      "concurrent interrupts did not share one native attachment",
+    );
+    const resume = context.writes.find(
+      ({ message }) => message.method === "thread/resume",
+    )?.message;
+    assert.equal(typeof resume?.id, "string");
+    context.enqueue([
+      {
+        id: resume?.id,
+        result: {
+          thread: {
+            id: "thread-one",
+            status: { type: "active" },
+            turns: [
+              {
+                ...completedTurn("turn-active"),
+                status: "inProgress",
+                completedAt: null,
+                durationMs: null,
+              },
+            ],
+          },
+        },
+      },
+    ]);
+
+    await Promise.all([first, second]);
+    assert.equal(
+      context.writes.filter(
+        ({ message }) => message.method === "thread/resume",
+      ).length,
+      1,
+    );
+    assert.equal(
+      context.writes.filter(
+        ({ message }) => message.method === "turn/interrupt",
+      ).length,
+      2,
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("invalidates a lazy attachment when app-server epoch coordinates change", async () => {
+  const context = fixture();
+  try {
+    const started = await context.service.startTurn({
+      userId: "user",
+      sessionId: "session-one",
+      text: "Start",
+      images: [],
+    });
+    assert.equal(
+      context.writes.filter(
+        ({ message }) => message.method === "thread/resume",
+      ).length,
+      1,
+    );
+
+    context.recoverRuntimeAs({
+      attemptId: "attempt-environment-test-2",
+      runtimeGeneration: 1,
+    });
+    await context.service.interruptActiveTurn({
+      userId: "user",
+      sessionId: "session-one",
+      turnId: started.nativeTurnId!,
+    });
+    assert.equal(
+      context.writes.filter(
+        ({ message }) => message.method === "thread/resume",
+      ).length,
+      2,
+    );
+
+    context.recoverRuntimeAs({
+      attemptId: "attempt-environment-test-2",
+      runtimeGeneration: 2,
+    });
+    await context.service.interruptActiveTurn({
+      userId: "user",
+      sessionId: "session-one",
+      turnId: started.nativeTurnId!,
+    });
+    assert.equal(
+      context.writes.filter(
+        ({ message }) => message.method === "thread/resume",
+      ).length,
+      3,
+    );
+
+    context.recoverRuntimeAs({
+      supervisorSessionId: "supervisor-environment-test-2",
+      attemptId: "attempt-environment-test-2",
+      runtimeGeneration: 2,
+    });
+    await context.service.interruptActiveTurn({
+      userId: "user",
+      sessionId: "session-one",
+      turnId: started.nativeTurnId!,
+    });
+    assert.equal(
+      context.writes.filter(
+        ({ message }) => message.method === "thread/resume",
+      ).length,
+      4,
+    );
+
+  } finally {
+    await context.close();
+  }
+});
+
+test("retries a failed lazy attachment without delivering the Turn early", async () => {
+  let resumes = 0;
+  const context = fixture({
+    onRequest(message) {
+      if (message.method !== "thread/resume") return undefined;
+      resumes += 1;
+      if (resumes === 1) {
+        return {
+          id: message.id,
+          error: { code: -32602, message: "thread is closing; retry" },
+        };
+      }
+      return undefined;
+    },
+  });
+  try {
+    await assert.rejects(
+      context.service.startTurn({
+        userId: "user",
+        sessionId: "session-one",
+        text: "First attempt",
+        images: [],
+      }),
+      (error: unknown) =>
+        error instanceof HttpError &&
+        error.code === "codex_native_session_attach_failed",
+    );
+    assert.equal(
+      context.writes.filter(
+        ({ message }) => message.method === "turn/start",
+      ).length,
+      0,
+    );
+    assert.equal(
+      context.sessionRuntimes.get("session-one")?.pendingTurnPhase,
+      undefined,
+    );
+    assert.equal(context.sessions.get("session-one")?.status, "waiting");
+
+    await context.service.startTurn({
+      userId: "user",
+      sessionId: "session-one",
+      text: "Second attempt",
+      images: [],
+    });
+    assert.equal(resumes, 2);
+    assert.equal(
+      context.writes.filter(
+        ({ message }) => message.method === "turn/start",
+      ).length,
+      1,
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("rejects a lazy attachment returned for a different Thread", async () => {
+  const context = fixture({
+    onRequest(message) {
+      if (message.method !== "thread/resume") return undefined;
+      return {
+        id: message.id,
+        result: {
+          thread: {
+            id: "thread-other",
+            status: { type: "idle" },
+            turns: [],
+          },
+        },
+      };
+    },
+  });
+  try {
+    await assert.rejects(
+      context.service.startTurn({
+        userId: "user",
+        sessionId: "session-one",
+        text: "Do not deliver to another Thread",
+        images: [],
+      }),
+      (error: unknown) =>
+        error instanceof HttpError &&
+        error.code === "codex_thread_resume_failed",
+    );
+    assert.equal(
+      context.writes.filter(
+        ({ message }) => message.method === "turn/start",
+      ).length,
+      0,
+    );
+    assert.equal(context.sessions.get("session-one")?.status, "waiting");
+  } finally {
+    await context.close();
+  }
+});
+
+test("abandons pending Turn admission when lazy attachment times out", async () => {
+  const context = fixture({
+    rpcTimeoutMs: 10,
+    onRequest(message) {
+      if (message.method === "thread/resume") return null;
+      return undefined;
+    },
+  });
+  try {
+    await assert.rejects(
+      context.service.startTurn({
+        userId: "user",
+        sessionId: "session-one",
+        text: "Do not deliver this early",
+        images: [],
+      }),
+      (error: unknown) =>
+        error instanceof HttpError && error.code === "codex_rpc_timeout",
+    );
+    assert.equal(
+      context.writes.filter(
+        ({ message }) => message.method === "turn/start",
+      ).length,
+      0,
+    );
+    assert.equal(
+      context.sessionRuntimes.get("session-one")?.pendingTurnPhase,
+      undefined,
+    );
+    assert.equal(context.sessions.get("session-one")?.status, "waiting");
+  } finally {
+    await context.close();
+  }
+});
+
+test("reconciles ambiguous Turn delivery lazily after its RPC timeout", async () => {
+  const context = fixture({
+    rpcTimeoutMs: 10,
+    exceptionalSessionRecoveryDelayMs: 0,
+    onRequest(message) {
+      if (message.method === "turn/start") return null;
+      return undefined;
+    },
+  });
+  try {
+    const result = await context.service.startTurn({
+      userId: "user",
+      sessionId: "session-one",
+      text: "The delivery response may be lost",
+      images: [],
+    });
+
+    assert.equal(result.nativeTurnId, undefined);
+    await eventually(
+      () =>
+        context.writes.filter(
+          ({ message }) => message.method === "thread/read",
+        ).length === 1,
+      "ambiguous Turn delivery did not schedule a native state read",
+    );
+    await eventually(
+      () =>
+        context.sessionRuntimes.get("session-one")?.pendingTurnPhase ===
+        undefined,
+      "idle native Thread did not release ambiguous Turn delivery state",
+    );
+    assert.equal(context.sessions.get("session-one")?.status, "waiting");
+    assert.equal(
+      context.service
+        .listLiveNotifications("session-one")
+        .some(
+          (update) =>
+            update.kind === "invalidation" &&
+            update.reason === "native-session-state-reconciled",
+        ),
+      true,
+    );
+    assert.equal(
+      context.writes.filter(
+        ({ message }) => message.method === "thread/resume",
+      ).length,
+      1,
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("interactive preemption preserves another Session's exact timeout repair", async () => {
+  let sessionOneReads = 0;
+  const context = fixture({
+    rpcTimeoutMs: 30,
+    exceptionalSessionRecoveryDelayMs: 0,
+    exceptionalPendingTurnGraceMs: 5_000,
+    exceptionalSessionRetryBaseMs: 5,
+    onRequest(message) {
+      if (
+        message.method === "turn/start" &&
+        (message.params as { threadId?: string }).threadId === "thread-one"
+      ) {
+        return null;
+      }
+      if (
+        message.method === "thread/read" &&
+        (message.params as { threadId?: string }).threadId === "thread-one"
+      ) {
+        sessionOneReads += 1;
+        if (sessionOneReads === 1) return null;
+      }
+      return undefined;
+    },
+  });
+  try {
+    await context.service.startTurn({
+      userId: "user",
+      sessionId: "session-one",
+      text: "Response may be lost",
+      images: [],
+    });
+    await eventually(
+      () => sessionOneReads === 1,
+      "exact timeout repair did not begin",
+    );
+
+    await context.service.startTurn({
+      userId: "user",
+      sessionId: "session-two",
+      text: "Preempt the background repair",
+      images: [],
+    });
+    await eventually(
+      () => sessionOneReads >= 2,
+      "preempted exact timeout repair was not rescheduled",
+    );
+    await eventually(
+      () =>
+        context.sessionRuntimes.get("session-one")?.pendingTurnPhase ===
+        undefined,
+      "exact timeout ownership was lost to the ordinary pending grace",
     );
     assert.ok(
-      [...context.sessionRuntimes.values()].every(
-        (runtime) => runtime.sessionStatus === "waiting",
-      ),
+      sessionOneReads >= 2,
+      "the exact request must remain targeted across interactive preemption",
     );
+  } finally {
+    await context.close();
+  }
+});
+
+test("hands an exact timeout repair to a newer app-server epoch", async () => {
+  const context = fixture({
+    sessions: [
+      {
+        id: "session-fresh",
+        nativeSessionId: "thread-fresh",
+        status: "running",
+        pendingTurnPhase: "submitted",
+        pendingTurnStartedAt: new Date(),
+      },
+    ],
+    exceptionalPendingTurnGraceMs: 5_000,
+  });
+  try {
+    context.scheduleExceptionalRepair(
+      "session-fresh",
+      "request-session-fresh",
+      25,
+    );
+    context.replaceRuntimeEpoch({
+      supervisorSessionId: "supervisor-environment-next",
+      attemptId: "attempt-environment-next",
+      runtimeGeneration: 2,
+    });
+
+    await eventually(
+      () =>
+        context.writes.some(
+          ({ message }) => message.method === "thread/read",
+        ),
+      "new app-server epoch did not inherit the exact repair",
+    );
+    await eventually(
+      () =>
+        context.sessionRuntimes.get("session-fresh")?.pendingTurnPhase ===
+        undefined,
+      "epoch handoff lost the exact request to ordinary pending grace",
+    );
+    assert.ok(context.exceptionalCandidateQueryCount() >= 2);
   } finally {
     await context.close();
   }
@@ -1110,6 +3454,18 @@ test("forks a product Session only through Codex thread/fork", async () => {
       context.writes.filter((write) => write.message.method === "thread/fork")
         .length,
       1,
+    );
+    await context.service.startTurn({
+      userId: "user",
+      sessionId: childId,
+      text: "Continue the fork",
+      images: [],
+    });
+    assert.equal(
+      context.writes.filter(
+        (write) => write.message.method === "thread/resume",
+      ).length,
+      0,
     );
     assert.ok(
       context.writes.every(

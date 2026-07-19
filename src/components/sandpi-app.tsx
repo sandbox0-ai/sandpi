@@ -6,6 +6,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 
@@ -20,6 +21,7 @@ import { NewEnvironmentDialog } from "@/components/new-environment-dialog";
 import { NewSessionWorkspace } from "@/components/new-session-workspace";
 import { Sidebar } from "@/components/sidebar";
 import { TerminalDock } from "@/components/terminal-dock";
+import type { WorkspaceFileNavigationRequest } from "@/components/workspace-ide";
 import {
   applyClientPreferences,
   CLIENT_PREFERENCES_CHANGED_EVENT,
@@ -29,6 +31,7 @@ import {
 import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
 import { visibleSessionsForEnvironment } from "@/lib/session-list";
 import { environmentsForTeam, sessionsForTeam } from "@/lib/team";
+import { userVisibleWorkspacePath } from "@/lib/workspace-path-policy";
 import type {
   CodingSession,
   Environment,
@@ -45,8 +48,12 @@ function replaceWorkspaceUrl(
   sessionId?: string,
 ) {
   const url = new URL(window.location.href);
+  const previousEnvironmentId = url.searchParams.get("environment");
   url.searchParams.set("team", teamId);
   url.searchParams.set("environment", environmentId);
+  if (previousEnvironmentId !== environmentId) {
+    url.searchParams.delete("path");
+  }
   if (sessionId) {
     url.searchParams.set("session", sessionId);
     url.searchParams.delete("new");
@@ -63,6 +70,7 @@ function replaceTeamUrl(teamId: string) {
   url.searchParams.delete("environment");
   url.searchParams.delete("session");
   url.searchParams.delete("new");
+  url.searchParams.delete("path");
   window.history.replaceState(window.history.state, "", url);
 }
 
@@ -93,6 +101,10 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("files");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [workspaceNavigationRequest, setWorkspaceNavigationRequest] =
+    useState<WorkspaceFileNavigationRequest>();
+  const workspaceNavigationRequestIdRef = useRef(0);
+  const restoredWorkspaceNavigationRef = useRef(false);
 
   const hydrateSession = useCallback(async (sessionId: string) => {
     try {
@@ -190,6 +202,58 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
       ),
     [selectedEnvironmentId, selectedSessionId, teamSessions],
   );
+
+  const openWorkspacePath = useCallback(
+    (requestedPath: string) => {
+      const path = userVisibleWorkspacePath(requestedPath);
+      if (!path || !selectedEnvironment) return;
+      workspaceNavigationRequestIdRef.current += 1;
+      setWorkspaceNavigationRequest({
+        environmentId: selectedEnvironment.id,
+        path,
+        requestId: workspaceNavigationRequestIdRef.current,
+      });
+      const url = new URL(window.location.href);
+      url.searchParams.set("path", path);
+      window.history.replaceState(window.history.state, "", url);
+      setInspectorTab("files");
+      setInspectorOpen(true);
+    },
+    [selectedEnvironment],
+  );
+
+  const handleWorkspaceNavigationHandled = useCallback(
+    (handled: WorkspaceFileNavigationRequest) => {
+      setWorkspaceNavigationRequest((current) =>
+        current?.environmentId === handled.environmentId &&
+        current.requestId === handled.requestId
+          ? undefined
+          : current,
+      );
+    },
+    [],
+  );
+
+  useEffect(() => {
+    setWorkspaceNavigationRequest((current) =>
+      current?.environmentId === selectedEnvironment?.id ? current : undefined,
+    );
+  }, [selectedEnvironment?.id]);
+
+  useEffect(() => {
+    if (
+      restoredWorkspaceNavigationRef.current ||
+      !selectedEnvironment ||
+      !selectedSession
+    ) {
+      return;
+    }
+    restoredWorkspaceNavigationRef.current = true;
+    const requestedPath = new URLSearchParams(window.location.search).get(
+      "path",
+    );
+    if (requestedPath) openWorkspacePath(requestedPath);
+  }, [openWorkspacePath, selectedEnvironment, selectedSession]);
 
   useEffect(() => {
     if (!environments.some((environment) => environment.status === "updating")) {
@@ -760,6 +824,9 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
             setInspectorTab(tab);
             setInspectorOpen(true);
           }}
+          workspaceNavigationRequest={workspaceNavigationRequest}
+          onOpenWorkspacePath={openWorkspacePath}
+          onWorkspaceNavigationHandled={handleWorkspaceNavigationHandled}
           onSessionChange={handleSessionChange}
           onDerivedSessionCreated={handleSessionCreated}
           onForkSession={handleForkSession}

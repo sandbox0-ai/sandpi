@@ -48,7 +48,11 @@ import {
   workspaceGitChanges,
   workspaceRepositoryLabel,
 } from "@/lib/workspace-git";
-import { userVisibleWorkspacePath } from "@/lib/workspace-path-policy";
+import {
+  userVisibleWorkspacePath,
+  workspaceFileParentDirectories,
+  WORKSPACE_ROOT,
+} from "@/lib/workspace-path-policy";
 import type {
   CodingSession,
   Environment,
@@ -64,6 +68,12 @@ import type {
 
 import styles from "./workspace-ide.module.css";
 
+export interface WorkspaceFileNavigationRequest {
+  environmentId: string;
+  path: string;
+  requestId: number;
+}
+
 interface WorkspaceIdeProps {
   language: OperationLanguage;
   timeZone: string;
@@ -72,6 +82,8 @@ interface WorkspaceIdeProps {
   session?: CodingSession;
   variant: "embedded" | "standalone";
   initialSnapshot?: WorkspaceIdeSnapshot;
+  navigationRequest?: WorkspaceFileNavigationRequest;
+  onNavigationHandled?: (request: WorkspaceFileNavigationRequest) => void;
 }
 
 interface DocumentState {
@@ -361,6 +373,7 @@ function IdeFileTree({
   changes,
   repositories,
   selectedPath,
+  revealRequest,
   onOpen,
   loadedDirectories,
   loadingDirectories,
@@ -373,6 +386,7 @@ function IdeFileTree({
   changes: Map<string, WorkspaceGitFileChange>;
   repositories: Map<string, WorkspaceGitRepository>;
   selectedPath: string;
+  revealRequest?: { path: string; requestId: number };
   onOpen: (path: string) => void;
   loadedDirectories: ReadonlySet<string>;
   loadingDirectories: ReadonlySet<string>;
@@ -384,6 +398,7 @@ function IdeFileTree({
   const [expanded, setExpanded] = useState<Record<string, boolean>>({
     "/workspace": true,
   });
+  const selectedRowRef = useRef<HTMLButtonElement | null>(null);
   const changedDescendants = useMemo(() => {
     const counts = new Map<string, number>();
     for (const changedPath of changes.keys()) {
@@ -395,6 +410,33 @@ function IdeFileTree({
     }
     return counts;
   }, [changes]);
+
+  useEffect(() => {
+    if (!revealRequest) return;
+    const parentDirectories = workspaceFileParentDirectories(
+      revealRequest.path,
+    );
+    setExpanded((current) => {
+      if (parentDirectories.every((path) => current[path])) return current;
+      const next = { ...current };
+      for (const path of parentDirectories) next[path] = true;
+      return next;
+    });
+  }, [revealRequest]);
+
+  useEffect(() => {
+    if (
+      !revealRequest ||
+      revealRequest.path !== selectedPath ||
+      !selectedRowRef.current
+    ) {
+      return;
+    }
+    const frame = window.requestAnimationFrame(() => {
+      selectedRowRef.current?.scrollIntoView({ block: "nearest" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [expanded, files, revealRequest, selectedPath]);
 
   function render(items: WorkspaceFile[], depth: number) {
     return items.map((file) => {
@@ -410,9 +452,14 @@ function IdeFileTree({
         <div key={file.path}>
           <button
             type="button"
+            ref={file.path === selectedPath ? selectedRowRef : undefined}
             className={`${styles.treeRow} ${
               file.path === selectedPath ? styles.selected : ""
             } ${change?.kind === "deleted" ? styles.deletedFile : ""}`}
+            aria-current={
+              !folder && file.path === selectedPath ? "page" : undefined
+            }
+            aria-expanded={folder ? isExpanded : undefined}
             style={{ paddingLeft: `${7 + depth * 13}px` }}
             title={file.path}
             onClick={() => {
@@ -498,6 +545,8 @@ export function WorkspaceIde({
   session,
   variant,
   initialSnapshot,
+  navigationRequest,
+  onNavigationHandled,
 }: WorkspaceIdeProps) {
   const ui = copy[language];
   const [snapshot, setSnapshot] = useState<WorkspaceIdeSnapshot | undefined>(
@@ -527,13 +576,32 @@ export function WorkspaceIde({
   const documentsRef = useRef(documents);
   const environmentIdRef = useRef(environment.id);
   const directoryListingsRef = useRef(directoryListings);
-  const directoryRequestsRef = useRef(new Map<string, Promise<void>>());
+  const directoryRequestsRef = useRef(
+    new Map<string, { promise: Promise<void>; token: symbol }>(),
+  );
   const openPathsRef = useRef(openPaths);
   const pendingPathsRef = useRef(new Set<string>());
   const refreshTimerRef = useRef<number | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
+  const environmentGenerationRef = useRef(0);
+  const selectedPathEnvironmentRef = useRef(environment.id);
+  const handledNavigationRequestRef = useRef("");
+  const initialNavigationGenerationRef = useRef(-1);
+  const revealRequestIdRef = useRef(0);
+  const resetIdentityRef = useRef<{
+    environmentId: string;
+    initialSnapshot: WorkspaceIdeSnapshot | undefined;
+  } | null>(null);
+  const [revealRequest, setRevealRequest] = useState<{
+    path: string;
+    requestId: number;
+  }>();
 
-  environmentIdRef.current = environment.id;
+  if (environmentIdRef.current !== environment.id) {
+    environmentIdRef.current = environment.id;
+    environmentGenerationRef.current += 1;
+    selectedPathEnvironmentRef.current = "";
+  }
 
   useEffect(() => {
     documentsRef.current = documents;
@@ -555,7 +623,7 @@ export function WorkspaceIde({
         return Promise.resolve();
       }
       const inFlight = directoryRequestsRef.current.get(directoryPath);
-      if (inFlight) return inFlight;
+      if (inFlight) return inFlight.promise;
 
       setLoadingDirectories((current) => {
         const next = new Set(current);
@@ -570,6 +638,8 @@ export function WorkspaceIde({
       });
 
       const environmentId = environment.id;
+      const environmentGeneration = environmentGenerationRef.current;
+      const requestToken = Symbol(directoryPath);
       const task = (async () => {
         try {
           const query = new URLSearchParams({ path: directoryPath });
@@ -578,7 +648,12 @@ export function WorkspaceIde({
           >(
             `/api/v1/environments/${encodeURIComponent(environmentId)}/files?${query.toString()}`,
           );
-          if (environmentIdRef.current !== environmentId) return;
+          if (
+            environmentIdRef.current !== environmentId ||
+            environmentGenerationRef.current !== environmentGeneration
+          ) {
+            return;
+          }
           const responsePath = userVisibleWorkspacePath(response.data.path);
           if (!responsePath || responsePath !== directoryPath) {
             throw new Error(
@@ -592,7 +667,12 @@ export function WorkspaceIde({
           directoryListingsRef.current = next;
           setDirectoryListings(next);
         } catch (cause) {
-          if (environmentIdRef.current !== environmentId) return;
+          if (
+            environmentIdRef.current !== environmentId ||
+            environmentGenerationRef.current !== environmentGeneration
+          ) {
+            return;
+          }
           const next = { ...directoryListingsRef.current };
           delete next[directoryPath];
           directoryListingsRef.current = next;
@@ -603,8 +683,16 @@ export function WorkspaceIde({
               cause instanceof Error ? cause.message : "Folder unavailable",
           }));
         } finally {
-          directoryRequestsRef.current.delete(directoryPath);
-          if (environmentIdRef.current === environmentId) {
+          if (
+            directoryRequestsRef.current.get(directoryPath)?.token ===
+            requestToken
+          ) {
+            directoryRequestsRef.current.delete(directoryPath);
+          }
+          if (
+            environmentIdRef.current === environmentId &&
+            environmentGenerationRef.current === environmentGeneration
+          ) {
             setLoadingDirectories((current) => {
               const next = new Set(current);
               next.delete(directoryPath);
@@ -613,7 +701,10 @@ export function WorkspaceIde({
           }
         }
       })();
-      directoryRequestsRef.current.set(directoryPath, task);
+      directoryRequestsRef.current.set(directoryPath, {
+        promise: task,
+        token: requestToken,
+      });
       return task;
     },
     [environment.id],
@@ -623,6 +714,8 @@ export function WorkspaceIde({
     async (filePath: string, reason: "open" | "external" | "reload" = "open") => {
       const visiblePath = userVisibleWorkspacePath(filePath);
       if (!visiblePath) return;
+      const environmentId = environment.id;
+      const environmentGeneration = environmentGenerationRef.current;
       setDocuments((current) => ({
         ...current,
         [visiblePath]: {
@@ -634,11 +727,19 @@ export function WorkspaceIde({
       try {
         const query = new URLSearchParams({ path: visiblePath });
         const response = await apiFetch<ApiEnvelope<WorkspaceIdeFile>>(
-          `/api/v1/environments/${encodeURIComponent(environment.id)}/ide/file?${query.toString()}`,
+          `/api/v1/environments/${encodeURIComponent(environmentId)}/ide/file?${query.toString()}`,
         );
+        if (
+          environmentIdRef.current !== environmentId ||
+          environmentGenerationRef.current !== environmentGeneration
+        ) {
+          return;
+        }
         const responsePath = userVisibleWorkspacePath(response.data.path);
         if (!responsePath || responsePath !== visiblePath) {
-          throw new Error("Workspace returned an internal or unexpected file path.");
+          throw new Error(
+            "Workspace returned an internal or unexpected file path.",
+          );
         }
         const responseData = { ...response.data, path: responsePath };
         setDocuments((current) => ({
@@ -664,6 +765,12 @@ export function WorkspaceIde({
                 },
         }));
       } catch (cause) {
+        if (
+          environmentIdRef.current !== environmentId ||
+          environmentGenerationRef.current !== environmentGeneration
+        ) {
+          return;
+        }
         setDocuments((current) => ({
           ...current,
           [visiblePath]: {
@@ -680,11 +787,17 @@ export function WorkspaceIde({
   const refreshSnapshot = useCallback(
     async (silent = false, refreshLoadedDirectories = false) => {
       if (!silent) setLoading(true);
+      const environmentGeneration = environmentGenerationRef.current;
       try {
         const response = await apiFetch<ApiEnvelope<WorkspaceIdeSnapshot>>(
           `/api/v1/environments/${encodeURIComponent(environment.id)}/ide`,
         );
-        if (environmentIdRef.current !== environment.id) return;
+        if (
+          environmentIdRef.current !== environment.id ||
+          environmentGenerationRef.current !== environmentGeneration
+        ) {
+          return;
+        }
         const nextListings = {
           ...directoryListingsRef.current,
           "/workspace": rootEntries(response.data),
@@ -701,19 +814,39 @@ export function WorkspaceIde({
           );
         }
       } catch (cause) {
-        if (!silent) {
+        if (
+          !silent &&
+          environmentIdRef.current === environment.id &&
+          environmentGenerationRef.current === environmentGeneration
+        ) {
           setError(
             cause instanceof Error ? cause.message : "Workspace unavailable",
           );
         }
       } finally {
-        if (!silent) setLoading(false);
+        if (
+          !silent &&
+          environmentIdRef.current === environment.id &&
+          environmentGenerationRef.current === environmentGeneration
+        ) {
+          setLoading(false);
+        }
       }
     },
     [environment.id, loadDirectory],
   );
 
   useEffect(() => {
+    if (
+      resetIdentityRef.current?.environmentId === environment.id &&
+      resetIdentityRef.current.initialSnapshot === initialSnapshot
+    ) {
+      return;
+    }
+    resetIdentityRef.current = {
+      environmentId: environment.id,
+      initialSnapshot,
+    };
     setSnapshot(initialSnapshot);
     const nextListings: WorkspaceDirectoryListings = initialSnapshot
       ? { "/workspace": rootEntries(initialSnapshot) }
@@ -723,9 +856,15 @@ export function WorkspaceIde({
     directoryRequestsRef.current.clear();
     setLoadingDirectories(new Set());
     setDirectoryErrors({});
+    documentsRef.current = {};
     setDocuments({});
+    openPathsRef.current = [];
     setOpenPaths([]);
     setSelectedPath("");
+    selectedPathEnvironmentRef.current = environment.id;
+    handledNavigationRequestRef.current = "";
+    initialNavigationGenerationRef.current = -1;
+    setRevealRequest(undefined);
     setError("");
     if (initialSnapshot) setLoading(false);
     else void refreshSnapshot();
@@ -800,28 +939,71 @@ export function WorkspaceIde({
       setOpenPaths((current) =>
         current.includes(visiblePath) ? current : [...current, visiblePath],
       );
+      selectedPathEnvironmentRef.current = environment.id;
       setSelectedPath(visiblePath);
-      if (!documents[visiblePath]?.data && !documents[visiblePath]?.loading) {
+      const document = documentsRef.current[visiblePath];
+      if (!document?.data && !document?.loading) {
         void loadDocument(visiblePath);
       }
     },
-    [documents, loadDocument],
+    [environment.id, loadDocument],
+  );
+
+  const revealWorkspaceFile = useCallback(
+    (filePath: string) => {
+      const visiblePath = userVisibleWorkspacePath(filePath);
+      if (!visiblePath) return;
+      revealRequestIdRef.current += 1;
+      setRevealRequest({
+        path: visiblePath,
+        requestId: revealRequestIdRef.current,
+      });
+      if (visiblePath !== WORKSPACE_ROOT) openFile(visiblePath);
+      void Promise.all(
+        workspaceFileParentDirectories(visiblePath).map((directoryPath) =>
+          loadDirectory(directoryPath),
+        ),
+      );
+    },
+    [loadDirectory, openFile],
   );
 
   useEffect(() => {
+    if (!snapshot || !navigationRequest) return;
+    if (navigationRequest.environmentId !== environment.id) return;
+    const requestKey = `${navigationRequest.environmentId}:${navigationRequest.requestId}:${navigationRequest.path}`;
+    if (handledNavigationRequestRef.current === requestKey) return;
+    handledNavigationRequestRef.current = requestKey;
+    const requestedPath = userVisibleWorkspacePath(navigationRequest.path);
+    if (requestedPath) revealWorkspaceFile(requestedPath);
+    onNavigationHandled?.(navigationRequest);
+  }, [
+    environment.id,
+    navigationRequest,
+    onNavigationHandled,
+    revealWorkspaceFile,
+    snapshot,
+  ]);
+
+  useEffect(() => {
     if (!snapshot || selectedPath) return;
+    if (navigationRequest?.environmentId === environment.id) return;
+    const environmentGeneration = environmentGenerationRef.current;
+    if (initialNavigationGenerationRef.current === environmentGeneration) {
+      return;
+    }
+    initialNavigationGenerationRef.current = environmentGeneration;
     const requestedPathValue =
       typeof window === "undefined"
         ? ""
         : new URLSearchParams(window.location.search).get("path") ?? "";
     const requestedPath = userVisibleWorkspacePath(requestedPathValue) ?? "";
     const firstFile = allFiles.find((file) => file.kind === "file")?.path;
+    if (requestedPath) {
+      revealWorkspaceFile(requestedPath);
+      return;
+    }
     const initialPath =
-      (requestedPath &&
-      (allFiles.some((file) => file.path === requestedPath) ||
-        changesByPath.has(requestedPath))
-        ? requestedPath
-        : undefined) ??
       gitChanges.find(
         (change) =>
           change.kind !== "deleted" && change.kind !== "untracked",
@@ -832,15 +1014,17 @@ export function WorkspaceIde({
     if (initialPath) openFile(initialPath);
   }, [
     allFiles,
-    changesByPath,
+    environment.id,
     gitChanges,
+    navigationRequest,
     openFile,
+    revealWorkspaceFile,
     selectedPath,
     snapshot,
   ]);
 
   useEffect(() => {
-    if (variant !== "standalone") return;
+    if (selectedPathEnvironmentRef.current !== environment.id) return;
     const url = new URL(window.location.href);
     const requestedPath = url.searchParams.get("path");
     const visibleSelectedPath = selectedPath
@@ -855,7 +1039,7 @@ export function WorkspaceIde({
       return;
     }
     window.history.replaceState(window.history.state, "", url);
-  }, [selectedPath, variant]);
+  }, [environment.id, selectedPath]);
 
   useEffect(() => {
     let disposed = false;
@@ -1210,6 +1394,7 @@ export function WorkspaceIde({
                 changes={changesByPath}
                 repositories={repositoriesByRoot}
                 selectedPath={selectedPath}
+                revealRequest={revealRequest}
                 onOpen={openFile}
                 loadedDirectories={loadedDirectories}
                 loadingDirectories={loadingDirectories}

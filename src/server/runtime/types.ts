@@ -90,6 +90,14 @@ export interface RuntimeAdapter {
     runtime: EnvironmentRuntimeRecord,
     signal?: AbortSignal,
   ): Promise<void>;
+  /**
+   * Restores the harness-neutral Environment runtime surface after a
+   * Workspace or Terminal operation proves that native access is unavailable.
+   * Callers must not use this as a warm-path health probe.
+   */
+  ensureEnvironmentRuntimeAccess(
+    runtime: EnvironmentRuntimeRecord,
+  ): Promise<void>;
   ensureCodexEnvironmentRuntime(
     runtime: EnvironmentRuntimeRecord,
     authJson: string,
@@ -120,6 +128,7 @@ export interface RuntimeAdapter {
     runtime: EnvironmentRuntimeRecord,
     message: unknown,
     stableInputId?: string,
+    signal?: AbortSignal,
   ): Promise<void>;
   watchCodexEvents(
     runtime: EnvironmentRuntimeRecord,

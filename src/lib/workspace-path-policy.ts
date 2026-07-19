@@ -44,6 +44,20 @@ export function userVisibleWorkspacePath(candidate: string) {
     : undefined;
 }
 
+/** Parent directories that must be loaded to reveal a file in the lazy Workspace tree. */
+export function workspaceFileParentDirectories(candidate: string) {
+  const normalized = userVisibleWorkspacePath(candidate);
+  if (!normalized || normalized === WORKSPACE_ROOT) return [];
+  const components = normalized
+    .slice(`${WORKSPACE_ROOT}/`.length)
+    .split("/")
+    .slice(0, -1);
+  return components.map(
+    (_, index) =>
+      `${WORKSPACE_ROOT}/${components.slice(0, index + 1).join("/")}`,
+  );
+}
+
 /**
  * Shared file-tree visibility rule. Dot-directories and generated dependency
  * trees are hidden, while root-level dot-files such as `.env` remain visible.

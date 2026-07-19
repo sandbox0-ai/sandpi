@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { Pool, QueryResultRow } from "pg";
+import type { Pool, PoolClient, QueryResultRow } from "pg";
 
 import type { CodexHarnessState } from "@/harnesses/codex/types";
 import type {
@@ -178,6 +178,8 @@ interface EnvironmentRuntimeRow extends QueryResultRow {
   stdout_tail: string;
   attempt_id: string | null;
   runtime_generation: string | number;
+  decoder_attempt_id?: string | null;
+  decoder_runtime_generation?: string | number;
   desired_state: StoredEnvironmentRuntime["desiredState"];
   observed_state: StoredEnvironmentRuntime["observedState"];
   provisioning_error: string | null;
@@ -252,6 +254,27 @@ const ENVIRONMENT_LIFECYCLE_LOCK_NAMESPACE = 1_907_424_101;
 
 export class SandpiStore {
   constructor(private readonly pool: Pool) {}
+
+  /**
+   * Builds a lock-scoped Store whose direct queries and nested transactions
+   * reuse the advisory-lock connection. A callback must not consume a second
+   * pool connection while it pins the first one: enough concurrent lock
+   * holders could otherwise exhaust the pool and wait on themselves forever.
+   */
+  private onClient(client: PoolClient) {
+    const query = client.query.bind(client);
+    const scopedClient = {
+      query,
+      release() {},
+    };
+    const scopedPool = {
+      query,
+      async connect() {
+        return scopedClient;
+      },
+    };
+    return new SandpiStore(scopedPool as unknown as Pool);
+  }
 
   async getBootstrap(
     userId: string,
@@ -481,6 +504,7 @@ export class SandpiStore {
        SET sandbox_id = NULL, supervisor_session_id = NULL,
            terminal_session_id = NULL, attempt_id = NULL,
            supervisor_cursor = 0, stdout_tail = '', runtime_generation = 0,
+           decoder_attempt_id = NULL, decoder_runtime_generation = 0,
            lifecycle_policy_version = 0, sandbox_hard_expires_at = NULL,
            idle_pause_due_at = NULL, lifecycle_error = NULL, paused_at = NULL
        WHERE environment_id = $1 AND sandbox_id = $2`,
@@ -717,13 +741,59 @@ export class SandpiStore {
   }
 
   /**
+   * Records a successful user runtime access and grants it a fresh idle
+   * window. Sandbox0 remains authoritative for the native lifecycle; these
+   * fields are only Sandpi's desired/observed projection.
+   */
+  async recordEnvironmentRuntimeAccess(environmentId: string) {
+    await this.pool.query(
+      `UPDATE environment_runtime
+       SET desired_state = 'running',
+           observed_state = 'running',
+           idle_pause_due_at = GREATEST(
+             COALESCE(idle_pause_due_at, NOW()),
+             NOW() + ($2::BIGINT * INTERVAL '1 millisecond')
+           ),
+           lifecycle_error = NULL,
+           paused_at = NULL,
+           version = version + 1
+       WHERE environment_id = $1
+         AND desired_state <> 'terminated'`,
+      [environmentId, ENVIRONMENT_IDLE_PAUSE_DELAY_MS],
+    );
+    return this.environmentRuntime(environmentId);
+  }
+
+  /**
+   * Extends an already-running Environment's idle window without projecting a
+   * paused Sandbox back to running. This is used only for live connection
+   * heartbeats that do not themselves prove Sandbox0 auto-resumed.
+   */
+  async touchRunningEnvironmentRuntime(environmentId: string) {
+    const result = await this.pool.query(
+      `UPDATE environment_runtime
+       SET idle_pause_due_at = GREATEST(
+             COALESCE(idle_pause_due_at, NOW()),
+             NOW() + ($2::BIGINT * INTERVAL '1 millisecond')
+           ),
+           version = version + 1
+       WHERE environment_id = $1
+         AND desired_state = 'running'
+         AND observed_state = 'running'
+       RETURNING environment_id`,
+      [environmentId, ENVIRONMENT_IDLE_PAUSE_DELAY_MS],
+    );
+    return Boolean(result.rowCount);
+  }
+
+  /**
    * Elects one Sandpi server for an Environment lifecycle transition. The
    * session-scoped lock survives ordinary transactions and is automatically
    * released by PostgreSQL if the worker process or connection disappears.
    */
   async withEnvironmentLifecycleLock<T>(
     environmentId: string,
-    operation: () => Promise<T>,
+    operation: (store: SandpiStore) => Promise<T>,
   ): Promise<{ acquired: false } | { acquired: true; value: T }> {
     const client = await this.pool.connect();
     let acquired = false;
@@ -734,11 +804,48 @@ export class SandpiStore {
       );
       acquired = result.rows[0]?.acquired === true;
       if (!acquired) return { acquired: false };
-      return { acquired: true, value: await operation() };
+      return {
+        acquired: true,
+        value: await operation(this.onClient(client)),
+      };
     } finally {
       if (acquired) {
         await client
           .query("SELECT pg_advisory_unlock($1, hashtext($2))", [
+            ENVIRONMENT_LIFECYCLE_LOCK_NAMESPACE,
+            environmentId,
+          ])
+          .catch(() => undefined);
+      }
+      client.release();
+    }
+  }
+
+  /**
+   * Serializes a user runtime operation with pause, recovery, and deletion
+   * while still allowing independent Workspace requests to run concurrently.
+   */
+  async withEnvironmentRuntimeAccessLock<T>(
+    environmentId: string,
+    operation: (store: SandpiStore) => Promise<T>,
+  ): Promise<{ acquired: false } | { acquired: true; value: T }> {
+    const client = await this.pool.connect();
+    let acquired = false;
+    try {
+      const result = await client.query<{ acquired: boolean }>(
+        "SELECT pg_try_advisory_lock_shared($1, hashtext($2)) AS acquired",
+        [ENVIRONMENT_LIFECYCLE_LOCK_NAMESPACE, environmentId],
+      );
+      acquired = result.rows[0]?.acquired === true;
+      if (!acquired) return { acquired: false };
+      return {
+        acquired: true,
+        value: await operation(this.onClient(client)),
+      };
+    } finally {
+      if (acquired) {
+        await client
+          .query("SELECT pg_advisory_unlock_shared($1, hashtext($2))", [
             ENVIRONMENT_LIFECYCLE_LOCK_NAMESPACE,
             environmentId,
           ])
@@ -851,6 +958,7 @@ export class SandpiStore {
            JOIN session_runtime session_state
              ON session_state.session_id = session.id
            WHERE session.environment_id = runtime.environment_id
+             AND session.archived = FALSE
              AND (
                session.status IN ('provisioning', 'running')
                OR session_state.active_native_turn_id IS NOT NULL
@@ -903,14 +1011,27 @@ export class SandpiStore {
     return result.rows[0]?.desired_state === "running";
   }
 
-  async activeEnvironmentRuntimeIds() {
+  async environmentRuntimeRecoveryCandidateIds() {
     const result = await this.pool.query<{ environment_id: string }>(
       `SELECT runtime.environment_id
        FROM environment_runtime runtime
        JOIN environments environment ON environment.id = runtime.environment_id
        WHERE environment.status = 'ready'
          AND runtime.desired_state = 'running'
-         AND runtime.sandbox_id IS NOT NULL`,
+         AND runtime.sandbox_id IS NOT NULL
+         AND EXISTS (
+           SELECT 1
+           FROM sessions session
+           JOIN session_runtime session_state
+             ON session_state.session_id = session.id
+           WHERE session.environment_id = runtime.environment_id
+             AND session.archived = FALSE
+             AND (
+               session.status IN ('provisioning', 'running')
+               OR session_state.active_native_turn_id IS NOT NULL
+               OR session_state.pending_turn_phase IS NOT NULL
+             )
+         )`,
     );
     return result.rows.map((row) => row.environment_id);
   }
@@ -929,6 +1050,14 @@ export class SandpiStore {
            stdout_tail = CASE
              WHEN supervisor_session_id IS DISTINCT FROM $2 THEN ''
              ELSE stdout_tail
+           END,
+           decoder_attempt_id = CASE
+             WHEN supervisor_session_id IS DISTINCT FROM $2 THEN $3
+             ELSE decoder_attempt_id
+           END,
+           decoder_runtime_generation = CASE
+             WHEN supervisor_session_id IS DISTINCT FROM $2 THEN $4
+             ELSE decoder_runtime_generation
            END,
            attempt_id = $3, runtime_generation = $4,
            idle_pause_due_at = CASE
@@ -965,6 +1094,8 @@ export class SandpiStore {
   async commitEnvironmentTransport(
     environmentId: string,
     supervisorSessionId: string,
+    attemptId: string | undefined,
+    runtimeGeneration: number,
     before: CodexDecoderState,
     after: CodexDecoderState,
     transitions: readonly CodexControlTransition[],
@@ -974,15 +1105,22 @@ export class SandpiStore {
       await client.query("BEGIN");
       const committed = await client.query(
         `UPDATE environment_runtime
-         SET supervisor_cursor = $4, stdout_tail = $5,
-             attempt_id = $6, runtime_generation = $7,
+         SET supervisor_cursor = $6, stdout_tail = $7,
+             decoder_attempt_id = $8,
+             decoder_runtime_generation = $9,
              last_event_at = NOW(), version = version + 1
          WHERE environment_id = $1 AND supervisor_session_id = $2
-           AND supervisor_cursor = $3
+           AND attempt_id IS NOT DISTINCT FROM $3
+           AND runtime_generation = $4
+           AND supervisor_cursor = $5
+           AND desired_state = 'running'
+           AND observed_state = 'running'
          RETURNING environment_id`,
         [
           environmentId,
           supervisorSessionId,
+          attemptId ?? null,
+          runtimeGeneration,
           before.supervisorCursor,
           after.supervisorCursor,
           after.tailBase64,
@@ -1272,38 +1410,140 @@ export class SandpiStore {
 
   /**
    * Reconciles the scalar active-Turn projection from one authoritative native
-   * Thread response. This repairs both branch-switch races and app-server
-   * restarts without copying the native transcript into PostgreSQL.
+   * Thread response. The runtime version compare-and-swap prevents a snapshot
+   * from overwriting a concurrent Turn admission or native event.
    */
   async reconcileNativeSessionState(input: {
     sessionId: string;
     nativeSessionId: string;
     historyRevision: number;
+    runtimeVersion: number;
+    environmentId: string;
+    environmentSupervisorSessionId?: string;
+    environmentAttemptId?: string;
+    environmentRuntimeGeneration: number;
     activeNativeTurnId?: string;
+    clearPendingWhenNativeIdle?: boolean;
+    clearPendingRequestId?: string;
+    clearPendingStartedBefore?: Date;
+    requireUnarchived?: boolean;
   }) {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
-      const reconciled = await client.query(
-        `UPDATE session_runtime
-         SET active_native_turn_id = $4, version = version + 1
-         WHERE session_id = $1 AND native_session_id = $2
-           AND history_revision = $3
-         RETURNING session_id`,
+      const environment = await client.query<{ environment_id: string }>(
+        `SELECT environment_id
+         FROM environment_runtime
+         WHERE environment_id = $1
+           AND supervisor_session_id IS NOT DISTINCT FROM $2
+           AND attempt_id IS NOT DISTINCT FROM $3
+           AND runtime_generation = $4
+           AND desired_state = 'running'
+           AND observed_state = 'running'
+         FOR SHARE`,
+        [
+          input.environmentId,
+          input.environmentSupervisorSessionId ?? null,
+          input.environmentAttemptId ?? null,
+          input.environmentRuntimeGeneration,
+        ],
+      );
+      if (!environment.rowCount) {
+        await client.query("ROLLBACK");
+        return false;
+      }
+      const current = await client.query<{
+        active_native_turn_id: string | null;
+        pending_turn_request_id: string | null;
+        pending_turn_phase: TurnSubmissionPhase | null;
+        pending_turn_started_at: Date | null;
+      }>(
+        `SELECT runtime.active_native_turn_id,
+                runtime.pending_turn_request_id,
+                runtime.pending_turn_phase,
+                runtime.pending_turn_started_at
+         FROM session_runtime runtime
+         JOIN sessions session ON session.id = runtime.session_id
+         WHERE runtime.session_id = $1 AND runtime.native_session_id = $2
+           AND runtime.history_revision = $3 AND runtime.version = $4
+           AND session.environment_id = $5
+         FOR UPDATE OF runtime`,
         [
           input.sessionId,
           input.nativeSessionId,
           input.historyRevision,
-          input.activeNativeTurnId ?? null,
+          input.runtimeVersion,
+          input.environmentId,
         ],
       );
-      if (!reconciled.rowCount) {
+      const projection = current.rows[0];
+      if (!projection) {
         await client.query("ROLLBACK");
         return false;
       }
+      // Lock order is Environment runtime, Session runtime, then Session
+      // metadata. Rechecking archived under the final row lock prevents a
+      // background repair selected before an archive from mutating it later.
+      const session = await client.query(
+        `SELECT id FROM sessions
+         WHERE id = $1 AND environment_id = $2
+           AND ($3::BOOLEAN = FALSE OR archived = FALSE)
+         FOR UPDATE`,
+        [
+          input.sessionId,
+          input.environmentId,
+          input.requireUnarchived ?? false,
+        ],
+      );
+      if (!session.rowCount) {
+        await client.query("ROLLBACK");
+        return false;
+      }
+      const activeNativeTurnId = input.activeNativeTurnId ?? null;
+      const pendingRecoveryEligible =
+        (input.clearPendingRequestId !== undefined &&
+          projection.pending_turn_request_id ===
+            input.clearPendingRequestId) ||
+        (input.clearPendingStartedBefore !== undefined &&
+          projection.pending_turn_started_at !== null &&
+          projection.pending_turn_started_at.getTime() <=
+            input.clearPendingStartedBefore.getTime());
+      const clearPending =
+        input.clearPendingWhenNativeIdle === true &&
+        activeNativeTurnId === null &&
+        projection.pending_turn_phase !== null &&
+        pendingRecoveryEligible;
+      if (clearPending) {
+        await client.query(
+          `UPDATE session_runtime
+           SET active_native_turn_id = NULL,
+               pending_turn_request_id = NULL,
+               pending_turn_client_message_id = NULL,
+               pending_turn_stable_input_id = NULL,
+               pending_turn_phase = NULL,
+               pending_turn_native_turn_id = NULL,
+               pending_turn_started_at = NULL,
+               version = version + 1
+           WHERE session_id = $1`,
+          [input.sessionId],
+        );
+      } else if (projection.active_native_turn_id !== activeNativeTurnId) {
+        await client.query(
+          `UPDATE session_runtime
+           SET active_native_turn_id = $2, version = version + 1
+           WHERE session_id = $1`,
+          [input.sessionId, activeNativeTurnId],
+        );
+      }
+      const status =
+        activeNativeTurnId ||
+        (!clearPending && projection.pending_turn_phase)
+          ? "running"
+          : "waiting";
       await client.query(
-        `UPDATE sessions SET status = $2 WHERE id = $1`,
-        [input.sessionId, input.activeNativeTurnId ? "running" : "waiting"],
+        `UPDATE sessions SET status = $2
+         WHERE id = $1 AND status <> 'failed' AND status IS DISTINCT FROM $2`,
+        [input.sessionId, status],
       );
       await client.query("COMMIT");
       return true;
@@ -1351,19 +1591,30 @@ export class SandpiStore {
 
   async sessionIdsForEnvironment(environmentId: string) {
     const result = await this.pool.query<{ id: string }>(
-      `SELECT id FROM sessions WHERE environment_id = $1 AND status <> 'failed'`,
+      `SELECT id FROM sessions
+       WHERE environment_id = $1 AND status <> 'failed' AND archived = FALSE`,
       [environmentId],
     );
     return result.rows.map((row) => row.id);
   }
 
-  async sessionRuntimesForEnvironment(environmentId: string) {
+  async nativeSessionRecoveryCandidatesForEnvironment(environmentId: string) {
     const result = await this.pool.query<SessionRuntimeRow>(
       `${SESSION_RUNTIME_SELECT}
        WHERE session.environment_id = $1
+         AND session.archived = FALSE
          AND session.status <> 'failed'
          AND runtime.native_session_id IS NOT NULL
-       ORDER BY runtime.created_at, runtime.session_id`,
+         AND (
+           runtime.active_native_turn_id IS NOT NULL
+           OR runtime.pending_turn_phase IS NOT NULL
+           OR (
+             session.status = 'running'
+             AND runtime.active_native_turn_id IS NULL
+             AND runtime.pending_turn_phase IS NULL
+           )
+         )
+       ORDER BY runtime.updated_at, runtime.session_id`,
       [environmentId],
     );
     return result.rows.map(sessionRuntimeFromRow);
@@ -1414,6 +1665,26 @@ export class SandpiStore {
           await client.query("ROLLBACK");
           retry = true;
         } else {
+          // Keep the row-lock order aligned with native event commits and
+          // snapshot reconciliation: Environment runtime, Session runtime,
+          // then Session metadata.
+          await client.query(
+            `UPDATE environment_runtime
+             SET desired_state = 'running', lifecycle_error = NULL,
+                 version = version + 1
+             WHERE environment_id = $1`,
+            [environmentId],
+          );
+          const metadata = await client.query<{ archived: boolean }>(
+            "SELECT archived FROM sessions WHERE id = $1",
+            [sessionId],
+          );
+          if (metadata.rows[0]?.archived) {
+            throw conflict(
+              "session_archived",
+              "Unarchive this Session before starting a Codex Turn.",
+            );
+          }
           // Once pending delivery is durable, an idle worker must observe it
           // and defer pause before any native harness write occurs.
           const result = await client.query(
@@ -1428,6 +1699,7 @@ export class SandpiStore {
              FROM sessions session
              WHERE runtime.session_id = $1 AND session.id = runtime.session_id
                AND session.status = 'waiting'
+               AND session.archived = FALSE
                AND runtime.native_session_id IS NOT NULL
                AND runtime.active_native_turn_id IS NULL
                AND runtime.pending_turn_phase IS NULL
@@ -1450,13 +1722,6 @@ export class SandpiStore {
           await client.query(
             "UPDATE sessions SET status = 'running' WHERE id = $1",
             [sessionId],
-          );
-          await client.query(
-            `UPDATE environment_runtime
-             SET desired_state = 'running', lifecycle_error = NULL,
-                 version = version + 1
-             WHERE environment_id = $1`,
-            [environmentId],
           );
           await client.query("COMMIT");
         }
@@ -1509,7 +1774,7 @@ export class SandpiStore {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
-      await client.query(
+      const abandoned = await client.query(
         `UPDATE session_runtime
          SET pending_turn_request_id = NULL,
              pending_turn_client_message_id = NULL,
@@ -1519,14 +1784,17 @@ export class SandpiStore {
              pending_turn_started_at = NULL,
              active_native_turn_id = NULL,
              version = version + 1
-         WHERE session_id = $1 AND pending_turn_request_id = $2`,
+         WHERE session_id = $1 AND pending_turn_request_id = $2
+         RETURNING session_id`,
         [sessionId, requestId],
       );
-      await client.query(
-        `UPDATE sessions SET status = 'waiting'
-         WHERE id = $1 AND status = 'running'`,
-        [sessionId],
-      );
+      if (abandoned.rowCount) {
+        await client.query(
+          `UPDATE sessions SET status = 'waiting'
+           WHERE id = $1 AND status = 'running'`,
+          [sessionId],
+        );
+      }
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK");
@@ -1547,6 +1815,10 @@ export class SandpiStore {
     },
   ) {
     await this.getSession(userId, sessionId);
+    if (changes.archived === true) {
+      await this.archiveIdleSession(sessionId, changes);
+      return this.getSession(userId, sessionId);
+    }
     const result = await this.pool.query(
       `UPDATE sessions
        SET title = COALESCE($2, title), pinned = COALESCE($3, pinned),
@@ -1564,12 +1836,78 @@ export class SandpiStore {
     return this.getSession(userId, sessionId);
   }
 
-  async withWorkspaceFileWrite<T>(
-    userId: string,
-    environmentId: string,
-    operation: (runtime: StoredEnvironmentRuntime) => Promise<T>,
+  private async archiveIdleSession(
+    sessionId: string,
+    changes: {
+      title?: string;
+      pinned?: boolean;
+      unread?: boolean;
+    },
   ) {
-    return operation(await this.getEnvironmentRuntime(userId, environmentId));
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const owner = await client.query<{ environment_id: string }>(
+        "SELECT environment_id FROM sessions WHERE id = $1",
+        [sessionId],
+      );
+      const environmentId = owner.rows[0]?.environment_id;
+      if (!environmentId) {
+        throw notFound("session_not_found", "Session not found.");
+      }
+      // Match Turn/event/reconciliation lock order so archive cannot cross a
+      // concurrent delivery boundary: Environment, Session runtime, metadata.
+      await client.query(
+        `SELECT environment_id FROM environment_runtime
+         WHERE environment_id = $1 FOR SHARE`,
+        [environmentId],
+      );
+      const runtime = await client.query<{
+        active_native_turn_id: string | null;
+        pending_turn_phase: TurnSubmissionPhase | null;
+      }>(
+        `SELECT active_native_turn_id, pending_turn_phase
+         FROM session_runtime WHERE session_id = $1 FOR UPDATE`,
+        [sessionId],
+      );
+      const metadata = await client.query<{ status: string }>(
+        "SELECT status FROM sessions WHERE id = $1 FOR UPDATE",
+        [sessionId],
+      );
+      const state = runtime.rows[0];
+      const status = metadata.rows[0]?.status;
+      if (
+        !state ||
+        !status ||
+        status === "provisioning" ||
+        status === "running" ||
+        state.active_native_turn_id !== null ||
+        state.pending_turn_phase !== null
+      ) {
+        throw conflict(
+          "session_archive_in_progress",
+          "Wait for the current Codex Turn to finish before archiving this Session.",
+        );
+      }
+      await client.query(
+        `UPDATE sessions
+         SET title = COALESCE($2, title), pinned = COALESCE($3, pinned),
+             archived = TRUE, unread = COALESCE($4, unread)
+         WHERE id = $1`,
+        [
+          sessionId,
+          changes.title ?? null,
+          changes.pinned ?? null,
+          changes.unread ?? null,
+        ],
+      );
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async withTerminalAccess<T>(
@@ -1818,8 +2156,10 @@ function environmentRuntimeFromRow(
     decoder: {
       supervisorCursor: Number(row.supervisor_cursor),
       tailBase64: row.stdout_tail,
-      attemptId: row.attempt_id ?? undefined,
-      runtimeGeneration: Number(row.runtime_generation),
+      attemptId: row.decoder_attempt_id ?? row.attempt_id ?? undefined,
+      runtimeGeneration: Number(
+        row.decoder_runtime_generation ?? row.runtime_generation,
+      ),
     },
     version: Number(row.version),
     desiredState: row.desired_state,
