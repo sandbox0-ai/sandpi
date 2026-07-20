@@ -39,6 +39,8 @@ import {
   codexNativeStreamFailure,
 } from "@/server/harnesses/codex/native-stream";
 import { CodexService } from "@/server/harnesses/codex/service";
+import { CodexMcpIntegrationService } from "@/server/mcp/integration-service";
+import { EnvironmentMcpIntegrationStore } from "@/server/mcp/integration-store";
 import {
   MAX_CODEX_INPUT_BASE64_LENGTH,
   MAX_CODEX_INPUT_IMAGES,
@@ -74,6 +76,7 @@ const codexMcpServerInputSchema = z
     defaultToolsApprovalMode: z
       .enum(["auto", "prompt", "writes", "approve"])
       .optional(),
+    scopes: z.array(z.string().trim().min(1).max(200)).max(128).default([]),
     enabledTools: z.array(z.string().trim().min(1).max(200)).max(256).default([]),
     disabledTools: z.array(z.string().trim().min(1).max(200)).max(256).default([]),
   })
@@ -93,10 +96,37 @@ const codexMcpServerInputSchema = z
       });
     }
   });
+const codexMcpDefinitionMetadataSchema = z.object({
+  presetId: z.string().trim().min(1).max(128).optional(),
+  authMode: z.enum(["none", "oauth", "bearer", "header"]).optional(),
+  networkApproved: z.boolean().default(false),
+});
+const codexMcpDefinitionSchema = z.intersection(
+  codexMcpServerInputSchema,
+  codexMcpDefinitionMetadataSchema,
+);
+const codexMcpCredentialSchema = z.object({
+  method: z.enum(["bearer", "header"]),
+  secret: z
+    .string()
+    .min(1)
+    .max(65_536)
+    .refine((value) => !/[\u0000\r\n]/.test(value), {
+      message: "MCP credentials cannot contain NUL, CR, or LF characters.",
+    }),
+  headerName: z.string().trim().min(1).max(256).optional(),
+  valueTemplate: z.string().trim().min(1).max(256).optional(),
+  presetId: z.string().trim().min(1).max(128).optional(),
+});
+const codexMcpOAuthLoginSchema = z.object({
+  presetId: z.string().trim().min(1).max(128).optional(),
+  scopes: z.array(z.string().trim().min(1).max(200)).max(128).default([]),
+});
 
 export interface SandpiServerOptions {
   config?: SandpiConfig;
   pool?: Pool;
+  advisoryLockPool?: Pool;
   runtime?: RuntimeAdapter;
 }
 
@@ -114,6 +144,15 @@ export async function createSandpiServer(
   const ownsPool = !options.pool;
   const pool =
     options.pool ?? createDatabasePool({ connectionString: config.databaseUrl });
+  const ownsAdvisoryLockPool = !options.pool && !options.advisoryLockPool;
+  const advisoryLockPool =
+    options.advisoryLockPool ??
+    (options.pool
+      ? pool
+      : createDatabasePool({
+          connectionString: config.databaseUrl,
+          application_name: "sandpi-advisory-locks",
+        }));
   await migrateDatabase(pool);
   if (config.auth.mode === "admin") {
     await seedCommunityDefaults(pool);
@@ -125,7 +164,7 @@ export async function createSandpiServer(
     requestIdHeader: "x-request-id",
     genReqId: (request) => request.headers["x-request-id"]?.toString() || randomUUID(),
   });
-  const store = new SandpiStore(pool);
+  const store = new SandpiStore(pool, advisoryLockPool);
   const runtime = options.runtime ?? createRuntime(config);
   const secretBox = config.secretKey ? new SecretBox(config.secretKey) : undefined;
   const codexAuth = new CodexEnvironmentAuthService(
@@ -135,15 +174,31 @@ export async function createSandpiServer(
     secretBox,
     app.log,
   );
-  const environments = new EnvironmentService(store, runtime, app.log);
   const lifecycle = new EnvironmentLifecycleService(store, runtime, app.log);
   const runtimeAccess = new EnvironmentRuntimeAccessService(store, runtime);
   const codex = new CodexService(store, runtime, app.log, codexAuth);
-  lifecycle.setBeforePause((environmentId) =>
-    codex.suspendEnvironmentWorker(environmentId),
+  const codexMcp = new CodexMcpIntegrationService(
+    store,
+    new EnvironmentMcpIntegrationStore(pool),
+    runtime,
+    codex,
+    app.log,
   );
-  environments.setBeforeDelete(async (userId, environmentId) => {
+  codex.setMcpNotificationHandler(codexMcp);
+  const environments = new EnvironmentService(
+    store,
+    runtime,
+    app.log,
+    (input) => codexMcp.applyUserNetworkPolicy(input),
+  );
+  lifecycle.setBeforePause(async (environmentId, lockedStore) => {
+    await codex.flushEnvironmentCredentials(environmentId, lockedStore);
     codex.suspendEnvironmentWorker(environmentId);
+  });
+  environments.setBeforeDelete(async (userId, environmentId) => {
+    await codex.flushEnvironmentCredentials(environmentId);
+    codex.suspendEnvironmentWorker(environmentId);
+    await codexMcp.cleanupEnvironment(userId, environmentId);
     await codexAuth.cancelEnvironmentDeviceLogin(userId, environmentId);
   });
   const oidcIdentity =
@@ -207,6 +262,7 @@ export async function createSandpiServer(
     runtime,
     runtimeAccess,
     codex,
+    codexMcp,
     codexAuth,
     environments,
   });
@@ -231,12 +287,16 @@ export async function createSandpiServer(
     await lifecycle.close();
     await codexAuth.close();
     await codex.close();
+    if (ownsAdvisoryLockPool) await advisoryLockPool.end();
     if (ownsPool) await pool.end();
   });
 
   await environments.reconcilePending();
   await lifecycle.start();
   await codexAuth.resumePending();
+  void codexMcp.reconcilePending().catch((error) => {
+    app.log.warn({ err: error }, "MCP integration reconciliation deferred");
+  });
   // Runtime recovery is Environment-scoped and may wait for Sandbox0
   // scheduling. Keep API readiness independent so one slow/failed Sandbox
   // cannot hold the entire Sandpi server offline during startup.
@@ -318,11 +378,18 @@ function registerApiRoutes(
     runtime: RuntimeAdapter;
     runtimeAccess: EnvironmentRuntimeAccessService;
     codex: CodexService;
+    codexMcp: CodexMcpIntegrationService;
     codexAuth: CodexEnvironmentAuthService;
     environments: EnvironmentService;
   },
 ) {
   const deployment = deploymentSummary(services.config, services.runtime);
+  app.addHook("onSend", async (request, reply, payload) => {
+    if (request.url.includes("/harnesses/codex/mcp")) {
+      reply.header("Cache-Control", "no-store");
+    }
+    return payload;
+  });
 
   app.get("/api/v1/bootstrap", async (request) => ({
     data: await services.store.getBootstrap(
@@ -471,7 +538,7 @@ function registerApiRoutes(
   app.get<{ Params: { environmentId: string } }>(
     "/api/v1/environments/:environmentId/harnesses/codex/mcp-servers",
     async (request) => ({
-      data: await services.codex.listEnvironmentMcpServers(
+      data: await services.codexMcp.listEnvironmentMcpServers(
         request.principal.userId,
         request.params.environmentId,
       ),
@@ -485,36 +552,42 @@ function registerApiRoutes(
           z.object({
             name: z.string().trim().regex(/^[A-Za-z0-9_-]{1,64}$/),
           }),
-          codexMcpServerInputSchema,
+          codexMcpDefinitionSchema,
         )
         .parse(request.body);
-      const { name, ...server } = body;
-      const data = await services.codex.createEnvironmentMcpServer({
+      const { name, presetId, authMode, networkApproved, ...server } = body;
+      const data = await services.codexMcp.createEnvironmentMcpServer({
         userId: request.principal.userId,
         environmentId: request.params.environmentId,
         name,
         server,
+        metadata: { presetId, authMode, networkApproved },
       });
       return reply.status(201).send({ data });
     },
   );
   app.put<{ Params: { environmentId: string; name: string } }>(
     "/api/v1/environments/:environmentId/harnesses/codex/mcp-servers/:name",
-    async (request) => ({
-      data: await services.codex.updateEnvironmentMcpServer({
-        userId: request.principal.userId,
-        environmentId: request.params.environmentId,
-        name: request.params.name,
-        server: codexMcpServerInputSchema.parse(request.body),
-      }),
-    }),
+    async (request) => {
+      const body = codexMcpDefinitionSchema.parse(request.body);
+      const { presetId, authMode, networkApproved, ...server } = body;
+      return {
+        data: await services.codexMcp.updateEnvironmentMcpServer({
+          userId: request.principal.userId,
+          environmentId: request.params.environmentId,
+          name: request.params.name,
+          server,
+          metadata: { presetId, authMode, networkApproved },
+        }),
+      };
+    },
   );
   app.put<{ Params: { environmentId: string; name: string } }>(
     "/api/v1/environments/:environmentId/harnesses/codex/mcp-servers/:name/enabled",
     async (request) => {
       const body = z.object({ enabled: z.boolean() }).parse(request.body);
       return {
-        data: await services.codex.setEnvironmentMcpServerEnabled({
+        data: await services.codexMcp.setEnvironmentMcpServerEnabled({
           userId: request.principal.userId,
           environmentId: request.params.environmentId,
           name: request.params.name,
@@ -526,11 +599,84 @@ function registerApiRoutes(
   app.delete<{ Params: { environmentId: string; name: string } }>(
     "/api/v1/environments/:environmentId/harnesses/codex/mcp-servers/:name",
     async (request) => ({
-      data: await services.codex.deleteEnvironmentMcpServer({
+      data: await services.codexMcp.deleteEnvironmentMcpServer({
         userId: request.principal.userId,
         environmentId: request.params.environmentId,
         name: request.params.name,
       }),
+    }),
+  );
+  app.put<{ Params: { environmentId: string; name: string } }>(
+    "/api/v1/environments/:environmentId/harnesses/codex/mcp-servers/:name/credential",
+    async (request) => ({
+      data: await services.codexMcp.putEnvironmentMcpCredential({
+        userId: request.principal.userId,
+        environmentId: request.params.environmentId,
+        name: request.params.name,
+        credential: codexMcpCredentialSchema.parse(request.body),
+      }),
+    }),
+  );
+  app.delete<{ Params: { environmentId: string; name: string } }>(
+    "/api/v1/environments/:environmentId/harnesses/codex/mcp-servers/:name/credential",
+    async (request) => ({
+      data: await services.codexMcp.deleteEnvironmentMcpCredential({
+        userId: request.principal.userId,
+        environmentId: request.params.environmentId,
+        name: request.params.name,
+      }),
+    }),
+  );
+  app.post<{ Params: { environmentId: string; name: string } }>(
+    "/api/v1/environments/:environmentId/harnesses/codex/mcp-servers/:name/oauth/login",
+    async (request, reply) => {
+      const data = await services.codexMcp.startEnvironmentMcpOAuth({
+        userId: request.principal.userId,
+        environmentId: request.params.environmentId,
+        name: request.params.name,
+        login: codexMcpOAuthLoginSchema.parse(request.body),
+      });
+      return reply.status(201).send({ data });
+    },
+  );
+  app.post<{ Params: { environmentId: string; name: string } }>(
+    "/api/v1/environments/:environmentId/harnesses/codex/mcp-servers/:name/oauth/logout",
+    async (request) => ({
+      data: await services.codexMcp.logoutEnvironmentMcpOAuth({
+        userId: request.principal.userId,
+        environmentId: request.params.environmentId,
+        name: request.params.name,
+      }),
+    }),
+  );
+  app.post<{ Params: { environmentId: string; name: string } }>(
+    "/api/v1/environments/:environmentId/harnesses/codex/mcp-servers/:name/test",
+    async (request) => ({
+      data: await services.codexMcp.testEnvironmentMcpServer({
+        userId: request.principal.userId,
+        environmentId: request.params.environmentId,
+        name: request.params.name,
+      }),
+    }),
+  );
+  app.get<{ Params: { environmentId: string; flowId: string } }>(
+    "/api/v1/environments/:environmentId/harnesses/codex/mcp-oauth-flows/:flowId",
+    async (request) => ({
+      data: await services.codexMcp.getEnvironmentMcpOAuthFlow(
+        request.principal.userId,
+        request.params.environmentId,
+        request.params.flowId,
+      ),
+    }),
+  );
+  app.delete<{ Params: { environmentId: string; flowId: string } }>(
+    "/api/v1/environments/:environmentId/harnesses/codex/mcp-oauth-flows/:flowId",
+    async (request) => ({
+      data: await services.codexMcp.cancelEnvironmentMcpOAuthFlow(
+        request.principal.userId,
+        request.params.environmentId,
+        request.params.flowId,
+      ),
     }),
   );
 

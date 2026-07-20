@@ -3,6 +3,9 @@
 import {
   AlertTriangle,
   ExternalLink,
+  KeyRound,
+  Link2,
+  LogOut,
   Pencil,
   Plus,
   RefreshCw,
@@ -11,12 +14,17 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 
 import type {
   CodexEnvironmentSkill,
   CodexMcpApprovalMode,
+  CodexMcpCredentialInput,
+  CodexMcpCredentialMutation,
   CodexMcpInventory,
+  CodexMcpOAuthFlow,
+  CodexMcpOAuthLoginInput,
+  CodexMcpRemoteAuthMethod,
   CodexMcpServer,
   CodexMcpServerInput,
   CodexMcpTransport,
@@ -28,6 +36,14 @@ import {
   codexMcpInputFromPreset,
   type CodexMcpPreset,
 } from "@/harnesses/codex/mcp-catalog";
+import {
+  codexMcpConnectionState,
+  isTerminalCodexMcpOAuthFlow,
+  mergeCodexMcpOAuthFlow,
+  reduceCodexMcpConnectionStates,
+  safeCodexMcpOAuthAuthorizationUrl,
+  type CodexMcpConnectionState,
+} from "@/harnesses/codex/mcp-status";
 import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
 
 interface CodexEnvironmentSettingsProps {
@@ -204,6 +220,15 @@ interface McpDraft extends CodexMcpServerInput {
   argsText: string;
   enabledToolsText: string;
   disabledToolsText: string;
+  authMethod: CodexMcpRemoteAuthMethod;
+  initialAuthMethod: CodexMcpRemoteAuthMethod;
+  credentialMutation: CodexMcpCredentialMutation;
+  hasStoredCredential: boolean;
+  secret: string;
+  headerName: string;
+  valueTemplate: string;
+  scopesText: string;
+  networkApprovedFor: string;
 }
 
 const emptyMcpDraft = (): McpDraft => ({
@@ -220,9 +245,25 @@ const emptyMcpDraft = (): McpDraft => ({
   disabledTools: [],
   enabledToolsText: "",
   disabledToolsText: "",
+  authMethod: "none",
+  initialAuthMethod: "none",
+  credentialMutation: "keep",
+  hasStoredCredential: false,
+  secret: "",
+  headerName: "",
+  valueTemplate: "",
+  scopesText: "",
+  networkApprovedFor: "",
 });
 
-function mcpDraft(server: CodexMcpServer): McpDraft {
+function mcpDraft(
+  server: CodexMcpServer,
+  preset?: CodexMcpPreset,
+): McpDraft {
+  const authMethod = server.authMode ?? mcpAuthMethod(server, preset);
+  const hasStoredCredential =
+    server.credentialState === "key-configured" ||
+    server.authStatus === "bearerToken";
   return {
     name: server.name,
     transport: server.transport,
@@ -239,11 +280,26 @@ function mcpDraft(server: CodexMcpServer): McpDraft {
     disabledTools: server.disabledTools,
     enabledToolsText: server.enabledTools.join(", "),
     disabledToolsText: server.disabledTools.join(", "),
+    presetId: server.presetId ?? preset?.id,
+    authMethod,
+    initialAuthMethod: authMethod,
+    credentialMutation: hasStoredCredential ? "keep" : "replace",
+    hasStoredCredential,
+    secret: "",
+    headerName: preset?.auth.headerName ?? "",
+    valueTemplate: preset?.auth.valueTemplate ?? "",
+    scopesText:
+      server.scopes?.join(", ") ?? preset?.auth.scopes?.join(", ") ?? "",
+    networkApprovedFor: server.url ?? "",
   };
 }
 
 function mcpPresetDraft(preset: CodexMcpPreset): McpDraft {
   const input = codexMcpInputFromPreset(preset);
+  const authMethod =
+    preset.auth.requirement === "optional"
+      ? "none"
+      : (preset.auth.methods[0] ?? "none");
   return {
     ...input,
     name: preset.name,
@@ -251,6 +307,16 @@ function mcpPresetDraft(preset: CodexMcpPreset): McpDraft {
     argsText: input.args.join("\n"),
     enabledToolsText: input.enabledTools.join(", "),
     disabledToolsText: input.disabledTools.join(", "),
+    authMethod,
+    initialAuthMethod: authMethod,
+    credentialMutation:
+      authMethod === "bearer" || authMethod === "header" ? "replace" : "keep",
+    hasStoredCredential: false,
+    secret: "",
+    headerName: preset.auth.headerName ?? "",
+    valueTemplate: preset.auth.valueTemplate ?? "",
+    scopesText: preset.auth.scopes?.join(", ") ?? "",
+    networkApprovedFor: "",
   };
 }
 
@@ -264,6 +330,13 @@ export function CodexMcpSettings({
   const [removeConfirmName, setRemoveConfirmName] = useState("");
   const [draft, setDraft] = useState<McpDraft | null>(null);
   const [editingName, setEditingName] = useState("");
+  const [connectionStates, dispatchConnection] = useReducer(
+    reduceCodexMcpConnectionStates,
+    {},
+  );
+  const [oauthFlow, setOauthFlow] = useState<CodexMcpOAuthFlow | null>(null);
+  const [oauthPopupBlocked, setOauthPopupBlocked] = useState(false);
+  const [oauthFlowBusy, setOauthFlowBusy] = useState(false);
   const [error, setError] = useState("");
   const selectedPreset = draft?.presetId
     ? CODEX_MCP_PRESETS.find((preset) => preset.id === draft.presetId)
@@ -277,6 +350,29 @@ export function CodexMcpSettings({
         `/api/v1/environments/${encodeURIComponent(environmentId)}/harnesses/codex/mcp-servers`,
       );
       setInventory(response.data);
+      dispatchConnection({
+        type: "inventory",
+        servers: response.data.servers,
+      });
+      const activeOAuthFlow = response.data.activeOAuthFlow;
+      if (
+        activeOAuthFlow &&
+        !isTerminalCodexMcpOAuthFlow(activeOAuthFlow)
+      ) {
+        setOauthFlow((current) =>
+          mergeCodexMcpOAuthFlow(current, activeOAuthFlow),
+        );
+        dispatchConnection({
+          type: "checking",
+          serverName: activeOAuthFlow.serverName,
+        });
+        setOauthPopupBlocked(false);
+      } else {
+        setOauthFlow((current) =>
+          current && isTerminalCodexMcpOAuthFlow(current) ? current : null,
+        );
+        setOauthPopupBlocked(false);
+      }
     } catch (loadError) {
       setError(errorMessage(loadError, "Could not load Codex MCP servers."));
     } finally {
@@ -288,6 +384,83 @@ export function CodexMcpSettings({
   useEffect(() => {
     void load();
   }, [load]);
+
+  const testServer = useCallback(
+    async (serverName: string) => {
+      dispatchConnection({ type: "checking", serverName });
+      setError("");
+      try {
+        await apiFetch<ApiEnvelope<unknown>>(
+          `/api/v1/environments/${encodeURIComponent(environmentId)}/harnesses/codex/mcp-servers/${encodeURIComponent(serverName)}/test`,
+          { method: "POST" },
+        );
+        await load();
+      } catch (testError) {
+        const message = errorMessage(
+          testError,
+          "Could not connect to the MCP server.",
+        );
+        dispatchConnection({ type: "failed", serverName, error: message });
+        setError(message);
+      }
+    },
+    [environmentId, load],
+  );
+
+  useEffect(() => {
+    if (
+      !oauthFlow ||
+      isTerminalCodexMcpOAuthFlow(oauthFlow)
+    ) {
+      return;
+    }
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      try {
+        const response = await apiFetch<ApiEnvelope<CodexMcpOAuthFlow>>(
+          `/api/v1/environments/${encodeURIComponent(environmentId)}/harnesses/codex/mcp-oauth-flows/${encodeURIComponent(oauthFlow.id)}`,
+        );
+        if (cancelled) return;
+        setOauthFlow((current) =>
+          mergeCodexMcpOAuthFlow(current, response.data),
+        );
+        if (response.data.status === "completed") {
+          dispatchConnection({
+            type: "oauth-completed",
+            serverName: response.data.serverName,
+          });
+          await testServer(response.data.serverName);
+        } else if (
+          response.data.status === "failed" ||
+          response.data.status === "expired" ||
+          response.data.status === "cancelled"
+        ) {
+          const message =
+            response.data.error ??
+            `OAuth authorization ${response.data.status}.`;
+          dispatchConnection({
+            type: "failed",
+            serverName: response.data.serverName,
+            error: message,
+          });
+          setError(message);
+        }
+      } catch (pollError) {
+        if (!cancelled) {
+          setError(
+            errorMessage(pollError, "Could not refresh OAuth authorization."),
+          );
+          setOauthFlow((current) =>
+            current?.id === oauthFlow.id ? { ...current } : current,
+          );
+        }
+      }
+    }, 1_500);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [environmentId, oauthFlow, testServer]);
 
   async function saveServer() {
     if (!draft || busyName) return;
@@ -304,8 +477,42 @@ export function CodexMcpSettings({
       setError("A Streamable HTTP server requires a URL.");
       return;
     }
+    if (
+      draft.transport === "streamable-http" &&
+      selectedPreset?.auth.requirement === "required" &&
+      draft.authMethod === "none"
+    ) {
+      setError(`${selectedPreset.title} requires authentication.`);
+      return;
+    }
+    if (
+      draft.transport === "streamable-http" &&
+      (draft.authMethod === "bearer" || draft.authMethod === "header") &&
+      draft.credentialMutation === "replace" &&
+      !draft.secret
+    ) {
+      setError("Enter a new API key or token. Stored credentials are never shown.");
+      return;
+    }
+    if (
+      draft.transport === "streamable-http" &&
+      draft.authMethod === "header" &&
+      draft.credentialMutation === "replace" &&
+      !draft.headerName.trim()
+    ) {
+      setError("A custom API-key credential requires a header name.");
+      return;
+    }
+    if (
+      draft.transport === "streamable-http" &&
+      draft.networkApprovedFor !== draft.url?.trim()
+    ) {
+      setError("Review and authorize the remote MCP credential destination.");
+      return;
+    }
     setBusyName(name);
     setError("");
+    let definitionSaved = false;
     try {
       const body: CodexMcpServerInput = {
         transport: draft.transport,
@@ -317,6 +524,7 @@ export function CodexMcpSettings({
         startupTimeoutSec: optionalPositiveInteger(draft.startupTimeoutSec),
         toolTimeoutSec: optionalPositiveInteger(draft.toolTimeoutSec),
         defaultToolsApprovalMode: draft.defaultToolsApprovalMode,
+        scopes: commaSeparatedValues(draft.scopesText),
         enabledTools: commaSeparatedValues(draft.enabledToolsText),
         disabledTools: commaSeparatedValues(draft.disabledToolsText),
       };
@@ -327,14 +535,89 @@ export function CodexMcpSettings({
           : `/api/v1/environments/${encodeURIComponent(environmentId)}/harnesses/codex/mcp-servers/${encodeURIComponent(editingName)}`,
         {
           method: create ? "POST" : "PUT",
-          body: JSON.stringify(create ? { name, ...body } : body),
+          body: JSON.stringify(
+            create
+              ? {
+                  name,
+                  presetId: draft.presetId,
+                  authMode: draft.authMethod,
+                  networkApproved: true,
+                  ...body,
+                }
+              : {
+                  presetId: draft.presetId,
+                  authMode: draft.authMethod,
+                  networkApproved: true,
+                  ...body,
+                },
+          ),
         },
       );
+      definitionSaved = true;
       setInventory(response.data);
+      dispatchConnection({
+        type: "inventory",
+        servers: response.data.servers,
+      });
+      if (
+        draft.transport === "streamable-http" &&
+        draft.initialAuthMethod === "oauth" &&
+        draft.authMethod !== "oauth"
+      ) {
+        await apiFetch<ApiEnvelope<unknown>>(
+          `/api/v1/environments/${encodeURIComponent(environmentId)}/harnesses/codex/mcp-servers/${encodeURIComponent(name)}/oauth/logout`,
+          { method: "POST" },
+        );
+      }
+      if (
+        draft.transport === "streamable-http" &&
+        (draft.authMethod === "bearer" || draft.authMethod === "header") &&
+        draft.credentialMutation === "replace"
+      ) {
+        const credential: CodexMcpCredentialInput = {
+          method: draft.authMethod,
+          secret: draft.secret,
+          headerName:
+            draft.authMethod === "header"
+              ? draft.headerName.trim() || undefined
+              : undefined,
+          valueTemplate:
+            draft.authMethod === "header"
+              ? draft.valueTemplate || undefined
+              : undefined,
+          presetId: draft.presetId,
+        };
+        await apiFetch<ApiEnvelope<unknown>>(
+          `/api/v1/environments/${encodeURIComponent(environmentId)}/harnesses/codex/mcp-servers/${encodeURIComponent(name)}/credential`,
+          {
+            method: "PUT",
+            body: JSON.stringify(credential),
+          },
+        );
+      } else if (
+        draft.transport === "streamable-http" &&
+        draft.credentialMutation === "remove"
+      ) {
+        await apiFetch<ApiEnvelope<unknown>>(
+          `/api/v1/environments/${encodeURIComponent(environmentId)}/harnesses/codex/mcp-servers/${encodeURIComponent(name)}/credential`,
+          { method: "DELETE" },
+        );
+      }
+      await load();
       setDraft(null);
       setEditingName("");
     } catch (saveError) {
-      setError(errorMessage(saveError, "Could not save the Codex MCP server."));
+      if (definitionSaved) {
+        setEditingName(name);
+      }
+      setError(
+        errorMessage(
+          saveError,
+          definitionSaved
+            ? "The server definition was saved, but its credential could not be updated. Retry to reconcile it."
+            : "Could not save the Codex MCP server.",
+        ),
+      );
     } finally {
       setBusyName("");
     }
@@ -357,6 +640,118 @@ export function CodexMcpSettings({
     }
   }
 
+  async function startOAuth(server: CodexMcpServer, preset?: CodexMcpPreset) {
+    if (busyName || !server.managed) return;
+    const popup = openOAuthPopup(server.name);
+    setOauthPopupBlocked(!popup);
+    setBusyName(server.name);
+    setError("");
+    dispatchConnection({ type: "checking", serverName: server.name });
+    try {
+      const login: CodexMcpOAuthLoginInput = {
+        presetId: server.presetId ?? preset?.id,
+        scopes:
+          server.scopes ??
+          (preset?.auth.scopes ? [...preset.auth.scopes] : undefined),
+      };
+      const response = await apiFetch<ApiEnvelope<CodexMcpOAuthFlow>>(
+        `/api/v1/environments/${encodeURIComponent(environmentId)}/harnesses/codex/mcp-servers/${encodeURIComponent(server.name)}/oauth/login`,
+        {
+          method: "POST",
+          body: JSON.stringify(login),
+        },
+      );
+      const authorizationUrl = safeCodexMcpOAuthAuthorizationUrl(
+        response.data.authorizationUrl,
+      );
+      if (!authorizationUrl) {
+        setOauthFlow(mergeCodexMcpOAuthFlow(null, response.data));
+        throw new Error(
+          "Codex returned an invalid non-HTTPS OAuth authorization URL.",
+        );
+      }
+      setOauthFlow(
+        mergeCodexMcpOAuthFlow(null, {
+          ...response.data,
+          authorizationUrl,
+        }),
+      );
+      if (popup) {
+        popup.location.replace(authorizationUrl);
+      }
+    } catch (loginError) {
+      popup?.close();
+      const message = errorMessage(
+        loginError,
+        "Could not start MCP OAuth authorization.",
+      );
+      dispatchConnection({
+        type: "failed",
+        serverName: server.name,
+        error: message,
+      });
+      setError(message);
+    } finally {
+      setBusyName("");
+    }
+  }
+
+  async function dismissOAuthFlow() {
+    if (!oauthFlow || oauthFlowBusy) return;
+    if (isTerminalCodexMcpOAuthFlow(oauthFlow)) {
+      setOauthFlow(null);
+      setOauthPopupBlocked(false);
+      return;
+    }
+    const flowId = oauthFlow.id;
+    setOauthFlowBusy(true);
+    setError("");
+    try {
+      await apiFetch<ApiEnvelope<unknown>>(
+        `/api/v1/environments/${encodeURIComponent(environmentId)}/harnesses/codex/mcp-oauth-flows/${encodeURIComponent(flowId)}`,
+        { method: "DELETE" },
+      );
+      setOauthFlow((current) => (current?.id === flowId ? null : current));
+      setOauthPopupBlocked(false);
+    } catch (cancelError) {
+      setError(
+        errorMessage(
+          cancelError,
+          "Could not stop the MCP OAuth authorization flow.",
+        ),
+      );
+    } finally {
+      setOauthFlowBusy(false);
+    }
+  }
+
+  async function logoutOAuth(server: CodexMcpServer) {
+    if (busyName || !server.managed) return;
+    setBusyName(server.name);
+    setError("");
+    dispatchConnection({ type: "checking", serverName: server.name });
+    try {
+      await apiFetch<ApiEnvelope<unknown>>(
+        `/api/v1/environments/${encodeURIComponent(environmentId)}/harnesses/codex/mcp-servers/${encodeURIComponent(server.name)}/oauth/logout`,
+        { method: "POST" },
+      );
+      await load();
+    } catch (logoutError) {
+      const message = errorMessage(
+        logoutError,
+        "Could not disconnect the MCP account.",
+      );
+      dispatchConnection({
+        type: "failed",
+        serverName: server.name,
+        error: message,
+      });
+      setError(message);
+    } finally {
+      setBusyName("");
+    }
+  }
+
   async function removeServer(server: CodexMcpServer) {
     if (busyName || !server.managed) return;
     setBusyName(server.name);
@@ -367,6 +762,10 @@ export function CodexMcpSettings({
         { method: "DELETE" },
       );
       setInventory(response.data);
+      dispatchConnection({
+        type: "inventory",
+        servers: response.data.servers,
+      });
       setRemoveConfirmName("");
       if (editingName === server.name) {
         setDraft(null);
@@ -401,6 +800,14 @@ export function CodexMcpSettings({
         </button>
       </ExtensionToolbar>
       {error ? <ExtensionError message={error} /> : null}
+      {oauthFlow ? (
+        <McpOAuthNotice
+          flow={oauthFlow}
+          popupBlocked={oauthPopupBlocked}
+          busy={oauthFlowBusy}
+          onDismiss={() => void dismissOAuthFlow()}
+        />
+      ) : null}
       {draft ? (
         <McpEditor
           draft={draft}
@@ -433,97 +840,215 @@ export function CodexMcpSettings({
         <ExtensionSkeleton rows={2} />
       ) : inventory && inventory.servers.length > 0 ? (
         <div className="codex-extension-list" aria-label="Codex MCP servers">
-          {inventory.servers.map((server) => (
-            <article className="codex-mcp-row" key={server.name}>
-              <span
-                className={`codex-extension-icon is-${server.runtimeStatus}`}
-                aria-hidden="true"
-              >
-                <Server size={16} />
-              </span>
-              <div className="codex-extension-main">
-                <div className="codex-extension-title">
-                  <strong>{server.serverTitle ?? server.name}</strong>
-                  <span>{server.transport}</span>
-                  {!server.managed ? <span>project/admin</span> : null}
-                </div>
-                <p className="codex-mcp-endpoint">
-                  {server.transport === "stdio"
-                    ? [server.command, ...server.args].filter(Boolean).join(" ")
-                    : server.url}
-                </p>
-                <div className="codex-extension-tags">
-                  <span className={`is-${server.runtimeStatus}`}>
-                    {mcpStatusLabel(server)}
-                  </span>
-                  {server.toolCount > 0 ? <span>{server.toolCount} tools</span> : null}
-                  {server.resourceCount > 0 ? (
-                    <span>{server.resourceCount} resources</span>
-                  ) : null}
-                  {server.required ? <span>required</span> : null}
-                  {server.defaultToolsApprovalMode ? (
-                    <span>{server.defaultToolsApprovalMode} approval</span>
-                  ) : null}
-                </div>
-              </div>
-              <div className="codex-extension-actions">
-                {server.managed ? (
-                  <>
-                    <button
-                      type="button"
-                      aria-label={`Edit ${server.name}`}
-                      title={`Edit ${server.name}`}
-                      disabled={Boolean(busyName) || Boolean(draft)}
-                      onClick={() => {
-                        setDraft(mcpDraft(server));
-                        setEditingName(server.name);
-                        setRemoveConfirmName("");
-                      }}
+          {inventory.servers.map((server) => {
+            const preset = mcpPresetForServer(server);
+            const snapshot = codexMcpConnectionState(server, preset?.auth);
+            const override = connectionStates[server.name];
+            const connection =
+              override?.readiness === "checking" ||
+              override?.readiness === "stale" ||
+              Boolean(override?.error)
+                ? override
+                : snapshot;
+            const configuredAuthMethod =
+              server.authMode ?? mcpAuthMethod(server, preset);
+            const supportsOAuth =
+              configuredAuthMethod === "oauth";
+            const supportsKey =
+              configuredAuthMethod === "bearer" ||
+              configuredAuthMethod === "header" ||
+              (configuredAuthMethod === "none" &&
+                preset?.auth.requirement === "optional" &&
+                (preset.auth.methods.includes("bearer") ||
+                  preset.auth.methods.includes("header")));
+            return (
+              <article className="codex-mcp-row" key={server.name}>
+                <span
+                  className={`codex-extension-icon is-${
+                    server.transport === "stdio"
+                      ? server.runtimeStatus
+                      : connection.readiness
+                  }`}
+                  aria-hidden="true"
+                >
+                  <Server size={16} />
+                </span>
+                <div className="codex-extension-main">
+                  <div className="codex-extension-title">
+                    <strong>{server.serverTitle ?? server.name}</strong>
+                    <span>{server.transport}</span>
+                    {!server.managed ? <span>project/admin</span> : null}
+                  </div>
+                  <p className="codex-mcp-endpoint">
+                    {server.transport === "stdio"
+                      ? [server.command, ...server.args].filter(Boolean).join(" ")
+                      : server.url}
+                  </p>
+                  <div className="codex-extension-tags">
+                    <span
+                      className={`is-${
+                        server.transport === "stdio"
+                          ? server.runtimeStatus
+                          : connection.readiness
+                      }`}
                     >
-                      <Pencil size={13} aria-hidden="true" />
-                    </button>
-                    {removeConfirmName === server.name ? (
-                      <div className="codex-mcp-remove-confirm">
-                        <button
-                          type="button"
-                          className="is-destructive"
-                          disabled={Boolean(busyName)}
-                          onClick={() => void removeServer(server)}
-                        >
-                          Remove
-                        </button>
-                        <button
-                          type="button"
-                          aria-label="Cancel removal"
-                          onClick={() => setRemoveConfirmName("")}
-                        >
-                          <X size={13} aria-hidden="true" />
-                        </button>
-                      </div>
-                    ) : (
+                      {server.transport === "stdio"
+                        ? mcpLocalStatusLabel(server)
+                        : mcpReadinessLabel(connection)}
+                    </span>
+                    {server.transport === "streamable-http" ? (
+                      <span
+                        className={`is-${connection.credentialState}`}
+                        title={
+                          connection.anonymousAvailable
+                            ? "The server initialized anonymously; connecting an account is optional for current access."
+                            : undefined
+                        }
+                      >
+                        {mcpCredentialLabel(connection)}
+                      </span>
+                    ) : null}
+                    {server.toolCount > 0 ? (
+                      <span>{server.toolCount} tools</span>
+                    ) : null}
+                    {server.resourceCount > 0 ? (
+                      <span>{server.resourceCount} resources</span>
+                    ) : null}
+                    {server.required ? <span>required</span> : null}
+                    {server.defaultToolsApprovalMode ? (
+                      <span>{server.defaultToolsApprovalMode} approval</span>
+                    ) : null}
+                  </div>
+                  {server.transport === "streamable-http" &&
+                  connection.error ? (
+                    <p className="codex-mcp-inline-error">{connection.error}</p>
+                  ) : null}
+                </div>
+                <div className="codex-extension-actions">
+                  {server.managed ? (
+                    <>
+                      {server.transport === "streamable-http" ? (
+                        <>
+                          <button
+                            type="button"
+                            className="codex-mcp-text-action"
+                            disabled={Boolean(busyName) || Boolean(draft)}
+                            onClick={() => void testServer(server.name)}
+                          >
+                            Test
+                          </button>
+                          {supportsOAuth ? (
+                            connection.credentialState ===
+                            "oauth-authorized" ? (
+                              <button
+                                type="button"
+                                aria-label={`Disconnect ${server.name} OAuth`}
+                                title={`Disconnect ${server.name} OAuth`}
+                                disabled={Boolean(busyName) || Boolean(draft)}
+                                onClick={() => void logoutOAuth(server)}
+                              >
+                                <LogOut size={13} aria-hidden="true" />
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                className="codex-mcp-text-action"
+                                disabled={Boolean(busyName) || Boolean(draft)}
+                                onClick={() => void startOAuth(server, preset)}
+                              >
+                                Connect
+                              </button>
+                            )
+                          ) : null}
+                          {supportsKey ? (
+                            <button
+                              type="button"
+                              aria-label={`${connection.credentialState === "key-configured" ? "Manage" : "Add"} ${server.name} credential`}
+                              title={`${connection.credentialState === "key-configured" ? "Manage" : "Add"} credential`}
+                              disabled={Boolean(busyName) || Boolean(draft)}
+                              onClick={() => {
+                                const next = mcpDraft(server, preset);
+                                setDraft({
+                                  ...next,
+                                  authMethod:
+                                    next.authMethod === "none"
+                                      ? (preset?.auth.methods.find(
+                                          (method) =>
+                                            method === "bearer" ||
+                                            method === "header",
+                                        ) ?? "header")
+                                      : next.authMethod,
+                                  credentialMutation:
+                                    connection.credentialState ===
+                                    "key-configured"
+                                      ? "keep"
+                                      : "replace",
+                                });
+                                setEditingName(server.name);
+                                setRemoveConfirmName("");
+                              }}
+                            >
+                              <KeyRound size={13} aria-hidden="true" />
+                            </button>
+                          ) : null}
+                        </>
+                      ) : null}
                       <button
                         type="button"
-                        aria-label={`Remove ${server.name}`}
-                        title={`Remove ${server.name}`}
+                        aria-label={`Edit ${server.name}`}
+                        title={`Edit ${server.name}`}
                         disabled={Boolean(busyName) || Boolean(draft)}
-                        onClick={() => setRemoveConfirmName(server.name)}
+                        onClick={() => {
+                          setDraft(mcpDraft(server, preset));
+                          setEditingName(server.name);
+                          setRemoveConfirmName("");
+                        }}
                       >
-                        <Trash2 size={13} aria-hidden="true" />
+                        <Pencil size={13} aria-hidden="true" />
                       </button>
-                    )}
-                    <NativeToggle
-                      label={`${server.enabled ? "Disable" : "Enable"} ${server.name}`}
-                      checked={server.enabled}
-                      disabled={Boolean(busyName) || Boolean(draft)}
-                      onChange={(enabled) => void setEnabled(server, enabled)}
-                    />
-                  </>
-                ) : (
-                  <span className="codex-readonly-badge">Read only</span>
-                )}
-              </div>
-            </article>
-          ))}
+                      {removeConfirmName === server.name ? (
+                        <div className="codex-mcp-remove-confirm">
+                          <button
+                            type="button"
+                            className="is-destructive"
+                            disabled={Boolean(busyName)}
+                            onClick={() => void removeServer(server)}
+                          >
+                            Remove
+                          </button>
+                          <button
+                            type="button"
+                            aria-label="Cancel removal"
+                            onClick={() => setRemoveConfirmName("")}
+                          >
+                            <X size={13} aria-hidden="true" />
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          aria-label={`Remove ${server.name}`}
+                          title={`Remove ${server.name}`}
+                          disabled={Boolean(busyName) || Boolean(draft)}
+                          onClick={() => setRemoveConfirmName(server.name)}
+                        >
+                          <Trash2 size={13} aria-hidden="true" />
+                        </button>
+                      )}
+                      <NativeToggle
+                        label={`${server.enabled ? "Disable" : "Enable"} ${server.name}`}
+                        checked={server.enabled}
+                        disabled={Boolean(busyName) || Boolean(draft)}
+                        onChange={(enabled) => void setEnabled(server, enabled)}
+                      />
+                    </>
+                  ) : (
+                    <span className="codex-readonly-badge">Read only</span>
+                  )}
+                </div>
+              </article>
+            );
+          })}
         </div>
       ) : (
         <ExtensionEmpty
@@ -533,10 +1058,9 @@ export function CodexMcpSettings({
         />
       )}
       <p className="settings-footnote">
-        Catalog entries only prefill Codex&apos;s native MCP configuration;
-        Sandpi does not persist a second integration state. OAuth callback
-        brokering for a remote app-server is intentionally not emulated by a
-        generic Sandpi credential flow.
+        Server definitions remain in Codex&apos;s native config. Remote API keys
+        are write-only and injected at the sandbox egress boundary; OAuth uses
+        Codex&apos;s native authorization and token refresh flow.
       </p>
     </div>
   );
@@ -715,16 +1239,23 @@ function McpEditor({
         </label>
       </div>
       {draft.transport === "streamable-http" ? (
-        <label className="full-field">
-          Server URL
-          <input
-            autoComplete="off"
-            spellCheck={false}
-            value={draft.url}
-            placeholder="https://example.com/mcp"
-            onChange={(event) => update("url", event.target.value)}
+        <>
+          <label className="full-field">
+            Server URL
+            <input
+              autoComplete="off"
+              spellCheck={false}
+              value={draft.url}
+              placeholder="https://example.com/mcp"
+              onChange={(event) => update("url", event.target.value)}
+            />
+          </label>
+          <McpRemoteAuthEditor
+            draft={draft}
+            preset={preset}
+            onChange={onChange}
           />
-        </label>
+        </>
       ) : (
         <>
           <label className="full-field">
@@ -851,9 +1382,293 @@ function McpEditor({
           Cancel
         </button>
         <button type="button" className="button-primary" disabled={busy} onClick={onSave}>
-          {busy ? "Saving…" : editing ? "Save server" : "Add server"}
+          {busy
+            ? "Saving…"
+            : editing
+              ? "Save server"
+              : draft.authMethod === "oauth"
+                ? "Add, then connect"
+                : "Add server"}
         </button>
       </footer>
+    </div>
+  );
+}
+
+function McpRemoteAuthEditor({
+  draft,
+  preset,
+  onChange,
+}: {
+  draft: McpDraft;
+  preset?: CodexMcpPreset;
+  onChange: (draft: McpDraft) => void;
+}) {
+  const allowedMethods: readonly CodexMcpRemoteAuthMethod[] = preset
+    ? [
+        ...(preset.auth.requirement === "optional" ||
+        preset.auth.requirement === "none"
+          ? (["none"] as const)
+          : []),
+        ...preset.auth.methods,
+      ]
+    : ["none", "oauth", "bearer", "header"];
+  const usesStaticCredential =
+    draft.authMethod === "bearer" || draft.authMethod === "header";
+  const showSecret =
+    usesStaticCredential && draft.credentialMutation === "replace";
+  const networkDestination =
+    preset?.network.endpointDomains.join(", ") ??
+    mcpUrlHostname(draft.url ?? "") ??
+    "the configured host";
+  const networkApproved =
+    Boolean(draft.url?.trim()) &&
+    draft.networkApprovedFor === draft.url?.trim();
+
+  function setAuthMethod(authMethod: CodexMcpRemoteAuthMethod) {
+    const usesNextStatic = authMethod === "bearer" || authMethod === "header";
+    onChange({
+      ...draft,
+      authMethod,
+      credentialMutation: usesNextStatic
+        ? draft.hasStoredCredential
+          ? "keep"
+          : "replace"
+        : draft.hasStoredCredential
+          ? "remove"
+          : "keep",
+      secret: "",
+      headerName:
+        authMethod === "header"
+          ? draft.headerName || preset?.auth.headerName || ""
+          : (preset?.auth.headerName ?? draft.headerName),
+      valueTemplate:
+        preset?.auth.valueTemplate ??
+        (authMethod === "bearer" ? "Bearer {{ .token }}" : "{{ .token }}"),
+    });
+  }
+
+  return (
+    <section className="codex-mcp-auth-editor" aria-label="Remote authentication">
+      <header>
+        <div>
+          <strong>Authentication</strong>
+          <p>
+            Secrets are write-only. Sandpi never reads an existing value back
+            into this form.
+          </p>
+        </div>
+        {preset ? (
+          <span>{authRequirementLabel(preset.auth.requirement)}</span>
+        ) : null}
+      </header>
+      <label className="full-field">
+        Method
+        <select
+          value={draft.authMethod}
+          onChange={(event) =>
+            setAuthMethod(event.target.value as CodexMcpRemoteAuthMethod)
+          }
+        >
+          {allowedMethods.map((method) => (
+            <option value={method} key={method}>
+              {mcpAuthMethodLabel(method)}
+            </option>
+          ))}
+        </select>
+      </label>
+      {draft.authMethod === "none" ? (
+        <p className="codex-mcp-auth-note">
+          Connect without credentials. Public or rate-limited server access may
+          still be available.
+        </p>
+      ) : null}
+      {draft.authMethod === "oauth" ? (
+        <>
+          <div className="codex-mcp-auth-note is-oauth">
+            <Link2 size={14} aria-hidden="true" />
+            <span>
+              Save this definition, then choose <strong>Connect</strong>. Codex
+              performs OAuth and Sandpi checks server readiness after the
+              callback completes.
+            </span>
+          </div>
+          <label className="full-field">
+            OAuth scopes <small>Optional, comma separated</small>
+            <input
+              autoComplete="off"
+              spellCheck={false}
+              value={draft.scopesText}
+              placeholder="read, write"
+              onChange={(event) =>
+                onChange({ ...draft, scopesText: event.target.value })
+              }
+            />
+          </label>
+        </>
+      ) : null}
+      {usesStaticCredential ? (
+        <>
+          {draft.hasStoredCredential ? (
+            <label className="full-field">
+              Stored credential
+              <select
+                value={draft.credentialMutation}
+                onChange={(event) =>
+                  onChange({
+                    ...draft,
+                    credentialMutation: event.target
+                      .value as CodexMcpCredentialMutation,
+                    secret: "",
+                  })
+                }
+              >
+                <option value="keep">Keep existing value</option>
+                <option value="replace">Replace with a new value</option>
+                <option value="remove">Remove stored value</option>
+              </select>
+            </label>
+          ) : null}
+          {showSecret ? (
+            <label className="full-field">
+              {draft.authMethod === "bearer" ? "Token" : "API key"}
+              <input
+                type="password"
+                autoComplete="new-password"
+                spellCheck={false}
+                value={draft.secret}
+                placeholder="Enter a new value"
+                onChange={(event) =>
+                  onChange({ ...draft, secret: event.target.value })
+                }
+              />
+              <small>
+                The value is sent once to the credential endpoint and is never
+                returned by the API.
+              </small>
+            </label>
+          ) : null}
+          {draft.authMethod === "header" ? (
+            <div className="field-grid two-columns">
+              <label>
+                Header name
+                <input
+                  autoComplete="off"
+                  spellCheck={false}
+                  disabled={Boolean(preset?.auth.headerName)}
+                  value={draft.headerName}
+                  placeholder="X-API-Key"
+                  onChange={(event) =>
+                    onChange({ ...draft, headerName: event.target.value })
+                  }
+                />
+              </label>
+              <label>
+                Value template
+                <input
+                  autoComplete="off"
+                  spellCheck={false}
+                  disabled={Boolean(preset?.auth.valueTemplate)}
+                  value={draft.valueTemplate}
+                  placeholder="{{ .token }}"
+                  onChange={(event) =>
+                    onChange({ ...draft, valueTemplate: event.target.value })
+                  }
+                />
+              </label>
+            </div>
+          ) : null}
+          {draft.credentialMutation === "remove" ? (
+            <p className="codex-mcp-auth-note is-warning">
+              Saving removes the egress credential binding. The server
+              definition remains configured.
+            </p>
+          ) : null}
+        </>
+      ) : null}
+      <label className="codex-mcp-network-consent">
+        <input
+          type="checkbox"
+          checked={networkApproved}
+          onChange={(event) =>
+            onChange({
+              ...draft,
+              networkApprovedFor: event.target.checked
+                ? (draft.url?.trim() ?? "")
+                : "",
+            })
+          }
+        />
+        <span>
+          <strong>Authorize credentials for this MCP destination</strong>
+          <small>
+            Bind credentials only to <code>{networkDestination}</code>.
+            Block-all Environments must still allow this domain in Network
+            policy. Changing the server URL requires another review.
+          </small>
+        </span>
+      </label>
+    </section>
+  );
+}
+
+function McpOAuthNotice({
+  flow,
+  popupBlocked,
+  busy,
+  onDismiss,
+}: {
+  flow: CodexMcpOAuthFlow;
+  popupBlocked: boolean;
+  busy: boolean;
+  onDismiss: () => void;
+}) {
+  const terminal = isTerminalCodexMcpOAuthFlow(flow);
+  const authorizationUrl = safeCodexMcpOAuthAuthorizationUrl(
+    flow.authorizationUrl,
+  );
+  return (
+    <div
+      className={`codex-mcp-oauth-notice is-${flow.status}`}
+      role={flow.status === "failed" ? "alert" : "status"}
+    >
+      <Link2 size={15} aria-hidden="true" />
+      <div>
+        <strong>
+          {flow.status === "completed"
+            ? "Authorization completed; checking server"
+            : flow.status === "failed"
+              ? "Authorization failed"
+              : flow.status === "expired"
+                ? "Authorization expired"
+                : flow.status === "cancelled"
+                  ? "Authorization stopped"
+                  : `Waiting for ${flow.serverName} authorization`}
+        </strong>
+        <p>
+          {flow.error ??
+            (popupBlocked
+              ? "The authorization popup was blocked. Open the link below to continue."
+              : terminal
+                ? "The account state will be confirmed from a fresh MCP connection."
+                : "Finish in the provider window. You can keep this settings page open.")}
+        </p>
+        {authorizationUrl && !terminal ? (
+          <a href={authorizationUrl} target="_blank" rel="noreferrer">
+            Open authorization link{" "}
+            <ExternalLink size={11} aria-hidden="true" />
+          </a>
+        ) : null}
+      </div>
+      <button
+        type="button"
+        aria-label={terminal ? "Dismiss OAuth status" : "Stop waiting for OAuth"}
+        title={terminal ? "Dismiss" : busy ? "Stopping…" : "Stop waiting"}
+        disabled={busy}
+        onClick={onDismiss}
+      >
+        <X size={13} aria-hidden="true" />
+      </button>
     </div>
   );
 }
@@ -941,11 +1756,121 @@ function ExtensionEmpty({
   );
 }
 
-function mcpStatusLabel(server: CodexMcpServer) {
+function mcpPresetForServer(server: CodexMcpServer) {
+  return CODEX_MCP_PRESETS.find(
+    (preset) =>
+      preset.id === server.presetId ||
+      (preset.name === server.name &&
+        preset.transport === server.transport &&
+        (preset.transport === "stdio"
+          ? preset.command === server.command
+          : preset.url === server.url)),
+  );
+}
+
+function mcpAuthMethod(
+  server: CodexMcpServer,
+  preset?: CodexMcpPreset,
+): CodexMcpRemoteAuthMethod {
+  if (server.transport === "stdio") return "none";
+  if (
+    server.credentialState === "key-configured" ||
+    server.credentialState === "key-missing" ||
+    server.authStatus === "bearerToken"
+  ) {
+    return (
+      preset?.auth.methods.find(
+        (method) => method === "bearer" || method === "header",
+      ) ?? "bearer"
+    );
+  }
+  if (
+    server.credentialState === "oauth-authorized" ||
+    server.credentialState === "oauth-required" ||
+    server.credentialState === "reauth-required" ||
+    server.authStatus === "oAuth" ||
+    server.authStatus === "notLoggedIn"
+  ) {
+    if (!preset || preset.auth.methods.includes("oauth")) return "oauth";
+    return preset.auth.methods[0] ?? "none";
+  }
+  return preset?.auth.requirement === "required"
+    ? (preset.auth.methods[0] ?? "none")
+    : "none";
+}
+
+function mcpReadinessLabel(state: CodexMcpConnectionState) {
+  if (state.readiness === "ready") return "Ready";
+  if (state.readiness === "checking") return "Checking…";
+  if (state.readiness === "failed") return "Connection failed";
+  if (state.readiness === "disabled") return "Disabled";
+  if (state.readiness === "stale") return "Status stale";
+  return "Not checked";
+}
+
+function mcpLocalStatusLabel(server: CodexMcpServer) {
   if (server.runtimeStatus === "connected") return "Connected";
-  if (server.runtimeStatus === "authentication-required") return "Sign-in required";
+  if (server.runtimeStatus === "authentication-required") {
+    return "Sign-in required";
+  }
   if (server.runtimeStatus === "disabled") return "Disabled";
   return "Unavailable";
+}
+
+function mcpCredentialLabel(state: CodexMcpConnectionState) {
+  if (state.anonymousAvailable) {
+    if (state.credentialState === "key-missing") return "API key optional";
+    return "Sign-in optional";
+  }
+  if (state.credentialState === "public") return "Public";
+  if (state.credentialState === "key-missing") return "API key required";
+  if (state.credentialState === "key-configured") return "API key configured";
+  if (state.credentialState === "oauth-required") return "Sign-in required";
+  if (state.credentialState === "oauth-authorized") return "OAuth connected";
+  if (state.credentialState === "reauth-required") return "Reconnect required";
+  return "Auth unknown";
+}
+
+function mcpAuthMethodLabel(method: CodexMcpRemoteAuthMethod) {
+  if (method === "oauth") return "OAuth";
+  if (method === "bearer") return "Bearer token";
+  if (method === "header") return "API key header";
+  return "No authentication";
+}
+
+function authRequirementLabel(
+  requirement: CodexMcpPreset["auth"]["requirement"],
+) {
+  if (requirement === "required") return "Required";
+  if (requirement === "optional") return "Optional";
+  return "No auth";
+}
+
+function mcpUrlHostname(value: string) {
+  try {
+    return new URL(value).hostname || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function openOAuthPopup(serverName: string) {
+  try {
+    const popup = window.open(
+      "about:blank",
+      `sandpi-mcp-oauth-${serverName}`,
+      "popup,width=620,height=760",
+    );
+    if (popup) {
+      popup.opener = null;
+      popup.document.title = "Waiting for MCP authorization";
+      popup.document.body.textContent =
+        "Sandpi is preparing the authorization request…";
+    }
+    return popup;
+  } catch {
+    return null;
+  }
 }
 
 function nonEmptyLines(value: string) {

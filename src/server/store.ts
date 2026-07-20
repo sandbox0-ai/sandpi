@@ -251,9 +251,14 @@ interface MembershipRow extends QueryResultRow {
 // Shared with transaction-scoped Turn admission and session-scoped lifecycle
 // workers. The second advisory-lock key is hashtext(Environment.id).
 const ENVIRONMENT_LIFECYCLE_LOCK_NAMESPACE = 1_907_424_101;
+const ENVIRONMENT_MCP_MUTATION_LOCK_NAMESPACE = 1_907_424_102;
+const ENVIRONMENT_MCP_OAUTH_CREDENTIAL_LOCK_NAMESPACE = 1_907_424_103;
 
 export class SandpiStore {
-  constructor(private readonly pool: Pool) {}
+  constructor(
+    private readonly pool: Pool,
+    private readonly advisoryLockPool: Pool = pool,
+  ) {}
 
   /**
    * Builds a lock-scoped Store whose direct queries and nested transactions
@@ -273,7 +278,10 @@ export class SandpiStore {
         return scopedClient;
       },
     };
-    return new SandpiStore(scopedPool as unknown as Pool);
+    return new SandpiStore(
+      scopedPool as unknown as Pool,
+      scopedPool as unknown as Pool,
+    );
   }
 
   async getBootstrap(
@@ -795,7 +803,7 @@ export class SandpiStore {
     environmentId: string,
     operation: (store: SandpiStore) => Promise<T>,
   ): Promise<{ acquired: false } | { acquired: true; value: T }> {
-    const client = await this.pool.connect();
+    const client = await this.advisoryLockPool.connect();
     let acquired = false;
     try {
       const result = await client.query<{ acquired: boolean }>(
@@ -822,6 +830,72 @@ export class SandpiStore {
   }
 
   /**
+   * Serializes Environment-scoped MCP and effective-network-policy mutations.
+   * Callers that also need the lifecycle lock must acquire this lock first.
+   */
+  async withEnvironmentMcpMutationLock<T>(
+    environmentId: string,
+    operation: (store: SandpiStore) => Promise<T>,
+  ): Promise<{ acquired: false } | { acquired: true; value: T }> {
+    const client = await this.advisoryLockPool.connect();
+    let acquired = false;
+    try {
+      const result = await client.query<{ acquired: boolean }>(
+        "SELECT pg_try_advisory_lock($1, hashtext($2)) AS acquired",
+        [ENVIRONMENT_MCP_MUTATION_LOCK_NAMESPACE, environmentId],
+      );
+      acquired = result.rows[0]?.acquired === true;
+      if (!acquired) return { acquired: false };
+      return {
+        acquired: true,
+        value: await operation(this.onClient(client)),
+      };
+    } finally {
+      if (acquired) {
+        await client
+          .query("SELECT pg_advisory_unlock($1, hashtext($2))", [
+            ENVIRONMENT_MCP_MUTATION_LOCK_NAMESPACE,
+            environmentId,
+          ])
+          .catch(() => undefined);
+      }
+      client.release();
+    }
+  }
+
+  /**
+   * Serializes every whole-file MCP OAuth credential synchronization for one
+   * Environment. When combined with other locks, the order is MCP mutation,
+   * Environment lifecycle, then OAuth credential. Nested locks must be taken
+   * through the lock-scoped Store passed to the outer callback.
+   */
+  async withEnvironmentMcpOAuthCredentialLock<T>(
+    environmentId: string,
+    operation: (store: SandpiStore) => Promise<T>,
+  ): Promise<T> {
+    const client = await this.advisoryLockPool.connect();
+    let acquired = false;
+    try {
+      await client.query(
+        "SELECT pg_advisory_lock($1, hashtext($2))",
+        [ENVIRONMENT_MCP_OAUTH_CREDENTIAL_LOCK_NAMESPACE, environmentId],
+      );
+      acquired = true;
+      return await operation(this.onClient(client));
+    } finally {
+      if (acquired) {
+        await client
+          .query("SELECT pg_advisory_unlock($1, hashtext($2))", [
+            ENVIRONMENT_MCP_OAUTH_CREDENTIAL_LOCK_NAMESPACE,
+            environmentId,
+          ])
+          .catch(() => undefined);
+      }
+      client.release();
+    }
+  }
+
+  /**
    * Serializes a user runtime operation with pause, recovery, and deletion
    * while still allowing independent Workspace requests to run concurrently.
    */
@@ -829,7 +903,7 @@ export class SandpiStore {
     environmentId: string,
     operation: (store: SandpiStore) => Promise<T>,
   ): Promise<{ acquired: false } | { acquired: true; value: T }> {
-    const client = await this.pool.connect();
+    const client = await this.advisoryLockPool.connect();
     let acquired = false;
     try {
       const result = await client.query<{ acquired: boolean }>(

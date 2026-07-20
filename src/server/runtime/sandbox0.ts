@@ -43,6 +43,8 @@ import { ENVIRONMENT_SANDBOX_HARD_TTL_SECONDS } from "@/server/environments/life
 import { toSandbox0NetworkPolicy } from "./network-policy";
 import {
   CODEX_ENVIRONMENT_CREDENTIAL_PATH,
+  CODEX_MCP_OAUTH_CALLBACK_BASE_PATH,
+  CODEX_MCP_OAUTH_CREDENTIAL_PATH,
   type CodexAuthRuntime,
   type EnvironmentAuditPageOptions,
   type EnvironmentRuntimeRecord,
@@ -50,9 +52,15 @@ import {
   type RecoveredCodexEnvironmentRuntime,
   type RuntimeAdapter,
   type RuntimeCodexEventStreamHandle,
+  type RuntimeCredentialSourceMetadata,
+  type RuntimeMcpOAuthCallbackService,
   type RuntimeProvisionEnvironmentInput,
+  type RuntimeStaticHeaderCredentialSourceInput,
   type RuntimeTerminalHandle,
   type RuntimeWorkspaceWatchHandle,
+  type Sandbox0AppService,
+  type Sandbox0AppServiceView,
+  type Sandbox0NetworkPolicy,
 } from "./types";
 import {
   gitRepositoryRootsFromMarkers,
@@ -80,9 +88,21 @@ const TERMINAL_EVENT_RETENTION_BYTES = 4 * 1024 * 1024;
 const ENVIRONMENT_CODEX_HOME = "/workspace/.sandpi/harnesses/codex";
 const WORKSPACE_CODEX_LAYOUT_MARKER = `${ENVIRONMENT_CODEX_HOME}/.sandpi-layout-environment-v1`;
 const ENVIRONMENT_CODEX_AUTH_FILE = CODEX_ENVIRONMENT_CREDENTIAL_PATH;
+const ENVIRONMENT_CODEX_MCP_OAUTH_FILE = CODEX_MCP_OAUTH_CREDENTIAL_PATH;
+const ENVIRONMENT_CODEX_MCP_OAUTH_LOCK_DIRECTORY =
+  `${ENVIRONMENT_CODEX_HOME}/mcp-oauth-locks`;
+const ENVIRONMENT_CODEX_MCP_OAUTH_LOCK_FILE =
+  `${ENVIRONMENT_CODEX_MCP_OAUTH_LOCK_DIRECTORY}/file-store.lock`;
+const ENVIRONMENT_CODEX_MCP_OAUTH_SCRATCH_PREFIX =
+  "/dev/shm/.sandpi-codex-mcp-oauth";
 const DEVICE_CODEX_HOME = "/dev/shm/sandpi-codex-device";
 const DEVICE_CODEX_AUTH_FILE = `${DEVICE_CODEX_HOME}/auth.json`;
 const CODEX_AUTH_MAX_BYTES = 4 * 1024 * 1024;
+const CODEX_MCP_SERVER_NAME = /^[A-Za-z0-9_-]{1,64}$/;
+const MCP_OAUTH_CALLBACK_SERVICE_ID = "sandpi-codex-mcp-oauth";
+const MCP_OAUTH_CALLBACK_ROUTE_ID = "oauth-callback";
+const MCP_OAUTH_CALLBACK_RATE_LIMIT_RPS = 5;
+const MCP_OAUTH_CALLBACK_RATE_LIMIT_BURST = 10;
 const AUTH_SANDBOX_HARD_TTL_SECONDS = 30 * 60;
 const MAX_GIT_DISCOVERY_DEPTH = 13;
 const MAX_FILE_PREVIEW_BYTES = 5 * 1024 * 1024;
@@ -213,13 +233,125 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     runtime: EnvironmentRuntimeRecord,
     policy: Environment["networkPolicy"],
   ) {
+    await this.applyEnvironmentSandboxNetworkPolicy(
+      runtime,
+      toSandbox0NetworkPolicy(policy),
+    );
+  }
+
+  async applyEnvironmentSandboxNetworkPolicy(
+    runtime: EnvironmentRuntimeRecord,
+    policy: Sandbox0NetworkPolicy,
+  ) {
     try {
       await this.client.sandboxes
         .sandbox(runtime.sandboxId)
-        .updateNetworkPolicy(toSandbox0NetworkPolicy(policy));
+        .updateNetworkPolicy(policy);
     } catch (error) {
       throw translateSandbox0Error(error);
     }
+  }
+
+  async createStaticHeaderCredentialSource(
+    input: RuntimeStaticHeaderCredentialSourceInput,
+  ): Promise<RuntimeCredentialSourceMetadata> {
+    try {
+      const metadata = await this.client.credentialSources.create(
+        staticHeaderCredentialSourceRequest(input),
+      );
+      return runtimeCredentialSourceMetadata(metadata);
+    } catch (error) {
+      throw translateCredentialSourceMutationError(error, "create");
+    }
+  }
+
+  async updateStaticHeaderCredentialSource(
+    input: RuntimeStaticHeaderCredentialSourceInput,
+  ): Promise<RuntimeCredentialSourceMetadata> {
+    try {
+      const metadata = await this.client.credentialSources.update(
+        input.name,
+        staticHeaderCredentialSourceRequest(input),
+      );
+      return runtimeCredentialSourceMetadata(metadata);
+    } catch (error) {
+      throw translateCredentialSourceMutationError(error, "update");
+    }
+  }
+
+  async deleteCredentialSource(name: string) {
+    try {
+      await this.client.credentialSources.delete(name);
+    } catch (error) {
+      if (isMissingResource(error)) return;
+      throw translateCredentialSourceMutationError(error, "delete");
+    }
+  }
+
+  async getEnvironmentServices(
+    runtime: EnvironmentRuntimeRecord,
+  ): Promise<Sandbox0AppServiceView[]> {
+    try {
+      const response = await this.client.sandboxes
+        .sandbox(runtime.sandboxId)
+        .getServices();
+      return response.services;
+    } catch (error) {
+      throw translateSandbox0Error(error);
+    }
+  }
+
+  async replaceEnvironmentServices(
+    runtime: EnvironmentRuntimeRecord,
+    services: Sandbox0AppService[],
+  ): Promise<Sandbox0AppServiceView[]> {
+    try {
+      const response = await this.client.sandboxes
+        .sandbox(runtime.sandboxId)
+        .updateServices(services);
+      return response.services;
+    } catch (error) {
+      throw translateSandbox0Error(error);
+    }
+  }
+
+  async ensureEnvironmentMcpOAuthCallbackService(
+    runtime: EnvironmentRuntimeRecord,
+    input: { port: number },
+  ): Promise<RuntimeMcpOAuthCallbackService> {
+    if (
+      !Number.isInteger(input.port) ||
+      input.port < 1 ||
+      input.port > 65_535
+    ) {
+      throw new HttpError(
+        400,
+        "invalid_mcp_oauth_callback_port",
+        "The MCP OAuth callback port must be an integer between 1 and 65535.",
+      );
+    }
+
+    const existing = await this.getEnvironmentServices(runtime);
+    const services = existing
+      .filter((service) => service.id !== MCP_OAUTH_CALLBACK_SERVICE_ID)
+      .map(sandboxAppServiceFromView);
+    services.push(mcpOAuthCallbackService(input.port));
+    const updated = await this.replaceEnvironmentServices(runtime, services);
+    const callback = updated.find(
+      (service) => service.id === MCP_OAUTH_CALLBACK_SERVICE_ID,
+    );
+    if (!callback?.publicUrl) {
+      throw new HttpError(
+        502,
+        "sandbox0_mcp_oauth_callback_unavailable",
+        "Sandbox0 did not publish the MCP OAuth callback service.",
+      );
+    }
+    return {
+      serviceId: MCP_OAUTH_CALLBACK_SERVICE_ID,
+      port: input.port,
+      publicUrl: callback.publicUrl,
+    };
   }
 
   async configureEnvironmentLifecycle(
@@ -268,7 +400,7 @@ export class Sandbox0Runtime implements RuntimeAdapter {
         command: [
           "/bin/sh",
           "-lc",
-          `install -d -m 700 ${ENVIRONMENT_CODEX_HOME} && rm -rf ${ENVIRONMENT_CODEX_HOME}/auth.json && ln -s ${ENVIRONMENT_CODEX_AUTH_FILE} ${ENVIRONMENT_CODEX_HOME}/auth.json && while [ ! -s ${ENVIRONMENT_CODEX_AUTH_FILE} ]; do sleep 0.2; done && exec codex app-server --stdio -c 'cli_auth_credentials_store="file"'`,
+          `install -d -m 700 ${ENVIRONMENT_CODEX_HOME} && rm -rf ${ENVIRONMENT_CODEX_HOME}/auth.json ${ENVIRONMENT_CODEX_HOME}/.credentials.json && ln -s ${ENVIRONMENT_CODEX_AUTH_FILE} ${ENVIRONMENT_CODEX_HOME}/auth.json && ln -s ${ENVIRONMENT_CODEX_MCP_OAUTH_FILE} ${ENVIRONMENT_CODEX_HOME}/.credentials.json && while [ ! -s ${ENVIRONMENT_CODEX_AUTH_FILE} ]; do sleep 0.2; done && exec codex app-server --stdio -c 'cli_auth_credentials_store="file"' -c 'mcp_oauth_credentials_store="file"'`,
         ],
         cwd: "/workspace",
         env: { HOME: "/workspace", CODEX_HOME: ENVIRONMENT_CODEX_HOME },
@@ -434,6 +566,79 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     return Buffer.from(bytes).toString("utf8");
   }
 
+  async installCodexMcpOauthCredentials(
+    runtime: EnvironmentRuntimeRecord,
+    credentialsJson: string,
+  ) {
+    await installCodexMcpOauthCredential(
+      this.client.sandboxes.sandbox(runtime.sandboxId),
+      credentialsJson,
+    );
+  }
+
+  async readCodexMcpOauthCredentials(runtime: EnvironmentRuntimeRecord) {
+    const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
+    const snapshotFile = codexMcpOauthScratchFile("snapshot");
+    try {
+      const exists = await snapshotCodexMcpOauthCredential(
+        sandbox,
+        snapshotFile,
+      );
+      if (!exists) return undefined;
+      const bytes = await sandbox.readFile(snapshotFile);
+      if (bytes.byteLength === 0) return undefined;
+      if (bytes.byteLength > CODEX_AUTH_MAX_BYTES) {
+        throw new HttpError(
+          502,
+          "codex_mcp_oauth_credential_invalid",
+          "Codex produced an invalid MCP OAuth credential file.",
+        );
+      }
+      const credentialsJson = Buffer.from(bytes).toString("utf8");
+      return credentialsJson.trim() ? credentialsJson : undefined;
+    } catch (error) {
+      if (isMissingResource(error)) return undefined;
+      throw translateSandbox0Error(error);
+    } finally {
+      await deleteSandboxFileIfPresent(sandbox, snapshotFile);
+    }
+  }
+
+  async logoutEnvironmentMcpServer(
+    runtime: EnvironmentRuntimeRecord,
+    name: string,
+  ) {
+    if (!CODEX_MCP_SERVER_NAME.test(name)) {
+      throw new HttpError(
+        400,
+        "invalid_codex_mcp_server_name",
+        "MCP server names may contain letters, numbers, hyphens and underscores.",
+      );
+    }
+    try {
+      const result = await this.client.sandboxes
+        .sandbox(runtime.sandboxId)
+        .cmd("codex-mcp-logout", {
+          command: ["codex", "mcp", "logout", name],
+          cwd: "/workspace",
+          envVars: {
+            HOME: "/workspace",
+            CODEX_HOME: ENVIRONMENT_CODEX_HOME,
+          },
+          ttlSec: 30,
+        });
+      if (result.exitCode !== undefined && result.exitCode !== 0) {
+        throw new HttpError(
+          502,
+          "codex_mcp_logout_failed",
+          "Codex could not remove the MCP OAuth credentials.",
+        );
+      }
+    } catch (error) {
+      throw translateSandbox0Error(error);
+    }
+  }
+
   /**
    * Repairs only the native Environment access surface. Workspace and
    * Terminal requests call this after their first direct access proves that a
@@ -455,6 +660,7 @@ export class Sandbox0Runtime implements RuntimeAdapter {
   async ensureCodexEnvironmentRuntime(
     runtime: EnvironmentRuntimeRecord,
     authJson: string,
+    mcpOauthJson?: string,
   ): Promise<RecoveredCodexEnvironmentRuntime> {
     let sandboxRestarted = false;
     try {
@@ -464,10 +670,11 @@ export class Sandbox0Runtime implements RuntimeAdapter {
       // Supervisor can leave its credential wait as soon as Sandbox0 restores
       // the process, before Workspace/FUSE health checks complete.
       let credentialRuntimeGeneration =
-        await this.materializeCodexEnvironmentCredential(
+        await this.materializeCodexEnvironmentCredentials(
           runtime.sandboxId,
           sandbox,
           authJson,
+          mcpOauthJson,
         );
       let lifecycle = await this.ensureSandboxWorkspaceAccess(
         runtime.sandboxId,
@@ -515,10 +722,11 @@ export class Sandbox0Runtime implements RuntimeAdapter {
         // the resumed runtime, so hydrate the final Sandbox0 generation before
         // app-server initialization can be admitted.
         credentialRuntimeGeneration =
-          await this.materializeCodexEnvironmentCredential(
+          await this.materializeCodexEnvironmentCredentials(
             runtime.sandboxId,
             sandbox,
             authJson,
+            mcpOauthJson,
           );
         if (credentialRuntimeGeneration !== lifecycle.runtimeGeneration) {
           throw codexRuntimeEpochChanged();
@@ -577,10 +785,11 @@ export class Sandbox0Runtime implements RuntimeAdapter {
         // Workspace check and final Supervisor observation. Re-hydrate that
         // authoritative generation instead of trusting Sandpi's prior view.
         credentialRuntimeGeneration =
-          await this.materializeCodexEnvironmentCredential(
+          await this.materializeCodexEnvironmentCredentials(
             runtime.sandboxId,
             sandbox,
             authJson,
+            mcpOauthJson,
           );
         if (credentialRuntimeGeneration !== running.runtimeGeneration) {
           throw codexRuntimeEpochChanged();
@@ -602,10 +811,11 @@ export class Sandbox0Runtime implements RuntimeAdapter {
    * Returns Sandbox0's authoritative generation after the ephemeral
    * credential write, allowing later repair to prove whether /dev/shm survived.
    */
-  private async materializeCodexEnvironmentCredential(
+  private async materializeCodexEnvironmentCredentials(
     sandboxId: string,
     sandbox: ReturnType<Client["sandboxes"]["sandbox"]>,
     authJson: string,
+    mcpOauthJson?: string,
   ) {
     // Wake first, then fence the actual credential write on both sides. A
     // write followed by a Sandbox restart and only then a generation read must
@@ -621,6 +831,14 @@ export class Sandbox0Runtime implements RuntimeAdapter {
         authJson,
       ),
     );
+    if (mcpOauthJson !== undefined) {
+      await this.withSandboxAutoResume(sandboxId, () =>
+        installCodexMcpOauthCredential(
+          sandbox,
+          mcpOauthJson,
+        ),
+      );
+    }
     const after = await this.client.sandboxes.get(sandboxId);
     if (before.runtimeGeneration !== after.runtimeGeneration) {
       throw codexRuntimeEpochChanged(
@@ -1557,6 +1775,120 @@ export class Sandbox0Runtime implements RuntimeAdapter {
   }
 }
 
+function staticHeaderCredentialSourceRequest(
+  input: RuntimeStaticHeaderCredentialSourceInput,
+) {
+  return {
+    name: input.name,
+    resolverKind: models.CredentialSourceResolverKind.StaticHeaders,
+    spec: {
+      staticHeaders: {
+        values: { ...input.headers },
+      },
+    },
+  };
+}
+
+function runtimeCredentialSourceMetadata(metadata: {
+  name: string;
+  resolverKind: string;
+  currentVersion?: number;
+  status?: string;
+  createdAt?: Date | null;
+  updatedAt?: Date | null;
+}): RuntimeCredentialSourceMetadata {
+  if (metadata.resolverKind !== models.CredentialSourceResolverKind.StaticHeaders) {
+    throw new HttpError(
+      502,
+      "sandbox0_credential_source_invalid",
+      "Sandbox0 returned an unexpected credential source type.",
+    );
+  }
+  return {
+    name: metadata.name,
+    resolverKind: "static_headers",
+    currentVersion: metadata.currentVersion,
+    status: metadata.status,
+    createdAt: metadata.createdAt,
+    updatedAt: metadata.updatedAt,
+  };
+}
+
+function sandboxAppServiceFromView(
+  service: Sandbox0AppServiceView,
+): Sandbox0AppService {
+  return {
+    id: service.id,
+    displayName: service.displayName,
+    port: service.port,
+    runtime: service.runtime
+      ? {
+          ...service.runtime,
+          command: service.runtime.command
+            ? [...service.runtime.command]
+            : undefined,
+          envVars: service.runtime.envVars
+            ? { ...service.runtime.envVars }
+            : undefined,
+        }
+      : undefined,
+    ingress: {
+      ...service.ingress,
+      routes: service.ingress.routes?.map((route) => ({
+        ...route,
+        methods: route.methods ? [...route.methods] : undefined,
+        auth: route.auth ? { ...route.auth } : undefined,
+        cors: route.cors
+          ? {
+              ...route.cors,
+              allowedOrigins: route.cors.allowedOrigins
+                ? [...route.cors.allowedOrigins]
+                : undefined,
+              allowedMethods: route.cors.allowedMethods
+                ? [...route.cors.allowedMethods]
+                : undefined,
+              allowedHeaders: route.cors.allowedHeaders
+                ? [...route.cors.allowedHeaders]
+                : undefined,
+              exposeHeaders: route.cors.exposeHeaders
+                ? [...route.cors.exposeHeaders]
+                : undefined,
+            }
+          : undefined,
+        rateLimit: route.rateLimit ? { ...route.rateLimit } : undefined,
+      })),
+    },
+    healthCheck: service.healthCheck ? { ...service.healthCheck } : undefined,
+  };
+}
+
+function mcpOAuthCallbackService(port: number): Sandbox0AppService {
+  return {
+    id: MCP_OAUTH_CALLBACK_SERVICE_ID,
+    displayName: "Codex MCP OAuth callback",
+    port,
+    runtime: { type: models.SandboxAppServiceRuntimeTypeEnum.Manual },
+    ingress: {
+      _public: true,
+      routes: [
+        {
+          id: MCP_OAUTH_CALLBACK_ROUTE_ID,
+          pathPrefix: `${CODEX_MCP_OAUTH_CALLBACK_BASE_PATH}/`,
+          methods: ["GET"],
+          auth: {
+            mode: models.SandboxAppServiceRouteAuthModeEnum.None,
+          },
+          rateLimit: {
+            rps: MCP_OAUTH_CALLBACK_RATE_LIMIT_RPS,
+            burst: MCP_OAUTH_CALLBACK_RATE_LIMIT_BURST,
+          },
+          resume: false,
+        },
+      ],
+    },
+  };
+}
+
 /**
  * procd input receipts bind an input id to one process attempt. Hashing both
  * coordinates keeps retries idempotent within that attempt while allowing the
@@ -1611,8 +1943,9 @@ else
   printf '%s\\n' environment_v1 > "$marker"
   chmod 600 "$marker"
 fi
-rm -rf "$home/auth.json"
+rm -rf "$home/auth.json" "$home/.credentials.json"
 ln -s ${ENVIRONMENT_CODEX_AUTH_FILE} "$home/auth.json"
+ln -s ${ENVIRONMENT_CODEX_MCP_OAUTH_FILE} "$home/.credentials.json"
 sync -f /workspace 2>/dev/null || sync`;
   const result = await sandbox.cmd("prepare-environment-codex-home", {
     command: ["/bin/sh", "-lc", command],
@@ -1646,6 +1979,104 @@ async function installCodexCredential(
   const result = await sandbox.cmd(`chmod 600 ${authFile}`, { wait: true });
   if (result.exitCode !== undefined && result.exitCode !== 0) {
     throw new Error("Unable to protect the ephemeral Codex credential file");
+  }
+}
+
+function codexMcpOauthScratchFile(kind: "install" | "snapshot") {
+  return `${ENVIRONMENT_CODEX_MCP_OAUTH_SCRATCH_PREFIX}.${kind}.${randomUUID()}.json`;
+}
+
+/**
+ * Installs the ephemeral native MCP store without racing Codex's file backend.
+ * The credential stays in File API bytes; shell argv only contains owned paths.
+ */
+async function installCodexMcpOauthCredential(
+  sandbox: ReturnType<Client["sandboxes"]["sandbox"]>,
+  credentialsJson: string,
+) {
+  const bytes = Buffer.from(credentialsJson, "utf8");
+  if (bytes.byteLength === 0 || bytes.byteLength > CODEX_AUTH_MAX_BYTES) {
+    throw new HttpError(
+      500,
+      "codex_credential_invalid",
+      "Stored Codex credentials are invalid.",
+    );
+  }
+
+  const temporaryFile = codexMcpOauthScratchFile("install");
+  try {
+    await sandbox.mkdir(path.posix.dirname(temporaryFile), true);
+    await sandbox.writeFile(temporaryFile, bytes);
+    const result = await sandbox.cmd("install-codex-mcp-oauth-credential", {
+      command: [
+        "/bin/sh",
+        "-ceu",
+        `install -d -m 700 -- "$1"
+touch -- "$2"
+chmod 600 -- "$2" "$3"
+flock -x "$2" mv -f -- "$3" "$4"`,
+        "sandpi-codex-mcp-oauth-install",
+        ENVIRONMENT_CODEX_MCP_OAUTH_LOCK_DIRECTORY,
+        ENVIRONMENT_CODEX_MCP_OAUTH_LOCK_FILE,
+        temporaryFile,
+        ENVIRONMENT_CODEX_MCP_OAUTH_FILE,
+      ],
+      cwd: "/workspace",
+      ttlSec: 30,
+    });
+    if (result.exitCode !== undefined && result.exitCode !== 0) {
+      throw new Error("Unable to install the Codex MCP OAuth credential file");
+    }
+  } finally {
+    await deleteSandboxFileIfPresent(sandbox, temporaryFile);
+  }
+}
+
+/**
+ * Copies a stable point-in-time native MCP store while holding Codex's lock.
+ * The caller reads and removes the unique snapshot after the lock is released.
+ */
+async function snapshotCodexMcpOauthCredential(
+  sandbox: ReturnType<Client["sandboxes"]["sandbox"]>,
+  snapshotFile: string,
+) {
+  const result = await sandbox.cmd("snapshot-codex-mcp-oauth-credential", {
+    command: [
+      "/bin/sh",
+      "-ceu",
+      `install -d -m 700 -- "$1"
+touch -- "$2"
+chmod 600 -- "$2"
+flock -x "$2" /bin/sh -ceu '
+  test -f "$1" || exit 44
+  umask 077
+  cp -- "$1" "$2"
+  chmod 600 -- "$2"
+' sandpi-codex-mcp-oauth-snapshot "$3" "$4"`,
+      "sandpi-codex-mcp-oauth-lock",
+      ENVIRONMENT_CODEX_MCP_OAUTH_LOCK_DIRECTORY,
+      ENVIRONMENT_CODEX_MCP_OAUTH_LOCK_FILE,
+      ENVIRONMENT_CODEX_MCP_OAUTH_FILE,
+      snapshotFile,
+    ],
+    cwd: "/workspace",
+    ttlSec: 30,
+  });
+  if (result.exitCode === 44) return false;
+  if (result.exitCode !== undefined && result.exitCode !== 0) {
+    throw new Error("Unable to snapshot the Codex MCP OAuth credential file");
+  }
+  return true;
+}
+
+async function deleteSandboxFileIfPresent(
+  sandbox: ReturnType<Client["sandboxes"]["sandbox"]>,
+  file: string,
+) {
+  try {
+    await sandbox.deleteFile(file);
+  } catch (error) {
+    if (!isMissingResource(error)) throw error;
   }
 }
 
@@ -2005,6 +2436,25 @@ function translateObservabilityError(error: unknown, surface: "audit" | "metrics
     );
   }
   return translateSandbox0Error(error);
+}
+
+function translateCredentialSourceMutationError(
+  error: unknown,
+  operation: "create" | "update" | "delete",
+) {
+  const translated = translateSandbox0Error(error);
+  if (!(translated instanceof HttpError)) {
+    return new HttpError(
+      502,
+      "sandbox0_credential_source_request_failed",
+      `Sandbox0 could not ${operation} the credential source.`,
+    );
+  }
+  return new HttpError(
+    translated.statusCode,
+    translated.code,
+    `Sandbox0 could not ${operation} the credential source.`,
+  );
 }
 
 function translateSandbox0Error(error: unknown) {

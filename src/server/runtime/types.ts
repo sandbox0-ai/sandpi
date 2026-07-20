@@ -13,9 +13,43 @@ import type {
   CodexDecoderState,
   SupervisorOutputEvent,
 } from "@/server/harnesses/codex/jsonl";
+import type { Sandbox } from "sandbox0";
 
 export const CODEX_ENVIRONMENT_CREDENTIAL_PATH =
   "/dev/shm/sandpi-codex-auth.json";
+export const CODEX_MCP_OAUTH_CREDENTIAL_PATH =
+  "/dev/shm/sandpi-codex-mcp-oauth.json";
+export const CODEX_MCP_OAUTH_CALLBACK_PORT = 43_419;
+/** Codex appends a per-login identifier below this callback base path. */
+export const CODEX_MCP_OAUTH_CALLBACK_BASE_PATH = "/callback";
+
+export type Sandbox0NetworkPolicy = Parameters<
+  Sandbox["updateNetworkPolicy"]
+>[0];
+export type Sandbox0AppService = Parameters<Sandbox["updateServices"]>[0][number];
+export type Sandbox0AppServiceView = Awaited<
+  ReturnType<Sandbox["getServices"]>
+>["services"][number];
+
+export interface RuntimeStaticHeaderCredentialSourceInput {
+  name: string;
+  headers: Readonly<Record<string, string>>;
+}
+
+export interface RuntimeCredentialSourceMetadata {
+  name: string;
+  resolverKind: "static_headers";
+  currentVersion?: number;
+  status?: string;
+  createdAt?: Date | null;
+  updatedAt?: Date | null;
+}
+
+export interface RuntimeMcpOAuthCallbackService {
+  serviceId: string;
+  port: number;
+  publicUrl: string;
+}
 
 export interface ProvisionedEnvironment {
   sandboxId: string;
@@ -82,6 +116,28 @@ export interface RuntimeAdapter {
     runtime: EnvironmentRuntimeRecord,
     policy: NetworkPolicy,
   ): Promise<void>;
+  applyEnvironmentSandboxNetworkPolicy(
+    runtime: EnvironmentRuntimeRecord,
+    policy: Sandbox0NetworkPolicy,
+  ): Promise<void>;
+  createStaticHeaderCredentialSource(
+    input: RuntimeStaticHeaderCredentialSourceInput,
+  ): Promise<RuntimeCredentialSourceMetadata>;
+  updateStaticHeaderCredentialSource(
+    input: RuntimeStaticHeaderCredentialSourceInput,
+  ): Promise<RuntimeCredentialSourceMetadata>;
+  deleteCredentialSource(name: string): Promise<void>;
+  getEnvironmentServices(
+    runtime: EnvironmentRuntimeRecord,
+  ): Promise<Sandbox0AppServiceView[]>;
+  replaceEnvironmentServices(
+    runtime: EnvironmentRuntimeRecord,
+    services: Sandbox0AppService[],
+  ): Promise<Sandbox0AppServiceView[]>;
+  ensureEnvironmentMcpOAuthCallbackService(
+    runtime: EnvironmentRuntimeRecord,
+    input: { port: number },
+  ): Promise<RuntimeMcpOAuthCallbackService>;
   configureEnvironmentLifecycle(
     runtime: EnvironmentRuntimeRecord,
     hardTtlSeconds: number,
@@ -101,6 +157,7 @@ export interface RuntimeAdapter {
   ensureCodexEnvironmentRuntime(
     runtime: EnvironmentRuntimeRecord,
     authJson: string,
+    mcpOauthJson?: string,
   ): Promise<RecoveredCodexEnvironmentRuntime>;
   provisionCodexAuth(
     environment: Environment,
@@ -124,6 +181,17 @@ export interface RuntimeAdapter {
   readCodexEnvironmentCredential(
     runtime: EnvironmentRuntimeRecord,
   ): Promise<string>;
+  installCodexMcpOauthCredentials(
+    runtime: EnvironmentRuntimeRecord,
+    credentialsJson: string,
+  ): Promise<void>;
+  readCodexMcpOauthCredentials(
+    runtime: EnvironmentRuntimeRecord,
+  ): Promise<string | undefined>;
+  logoutEnvironmentMcpServer(
+    runtime: EnvironmentRuntimeRecord,
+    name: string,
+  ): Promise<void>;
   writeCodexMessage(
     runtime: EnvironmentRuntimeRecord,
     message: unknown,

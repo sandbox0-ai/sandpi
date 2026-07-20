@@ -44,12 +44,20 @@ test("keeps MCP preset identities and native definitions valid", () => {
       const url = new URL(preset.url);
       assert.equal(url.protocol, "https:");
       assert.notEqual(url.hostname, "example.com");
+      assert.deepEqual(preset.network.endpointDomains, [url.hostname]);
     } else {
       assert.equal(preset.transport, "stdio");
       assert.ok(preset.command);
       assert.ok(preset.args?.length);
       assert.equal(preset.url, undefined);
     }
+
+    if (preset.auth.requirement === "none") {
+      assert.deepEqual(preset.auth.methods, []);
+    } else {
+      assert.ok(preset.auth.methods.length > 0);
+    }
+    assert.ok(preset.network.endpointDomains.length > 0);
   }
 });
 
@@ -60,6 +68,52 @@ test("uses the official OOMOL SaaS MCP endpoint for OpenConnector", () => {
   assert.ok(preset);
   assert.equal(preset.transport, "streamable-http");
   assert.equal(preset.url, "https://connector.oomol.com/v1/mcp");
+  assert.equal(preset.auth.requirement, "required");
+  assert.deepEqual(preset.auth.methods, ["bearer"]);
+  assert.equal(preset.auth.headerName, "Authorization");
+});
+
+test("uses the current Composio Connect endpoint and consumer key header", () => {
+  const preset = CODEX_MCP_PRESETS.find(
+    (candidate) => candidate.id === "composio-connect",
+  );
+  assert.ok(preset);
+  assert.equal(preset.url, "https://connect.composio.dev/mcp");
+  assert.equal(preset.auth.requirement, "required");
+  assert.deepEqual(preset.auth.methods, ["header", "oauth"]);
+  assert.equal(preset.auth.headerName, "x-consumer-api-key");
+  assert.equal(preset.auth.valueTemplate, "{{ .token }}");
+});
+
+test("keeps the GitHub Copilot endpoint PAT-only", () => {
+  const preset = CODEX_MCP_PRESETS.find(
+    (candidate) => candidate.id === "github",
+  );
+  assert.ok(preset);
+  assert.equal(preset.url, "https://api.githubcopilot.com/mcp/");
+  assert.equal(preset.connectionLabel, "PAT");
+  assert.equal(preset.auth.requirement, "required");
+  assert.deepEqual(preset.auth.methods, ["bearer"]);
+  assert.equal(preset.auth.methods.includes("oauth"), false);
+});
+
+test("marks public and optional-key remote endpoints explicitly", () => {
+  const preset = (id: string) => {
+    const result = CODEX_MCP_PRESETS.find((candidate) => candidate.id === id);
+    assert.ok(result);
+    return result;
+  };
+
+  assert.deepEqual(preset("microsoft-learn").auth, {
+    requirement: "none",
+    methods: [],
+  });
+  assert.deepEqual(preset("context7").auth, {
+    requirement: "optional",
+    methods: ["header"],
+    headerName: "CONTEXT7_API_KEY",
+    valueTemplate: "{{ .token }}",
+  });
 });
 
 test("builds isolated Codex server inputs from presets", () => {
@@ -78,14 +132,14 @@ test("builds isolated Codex server inputs from presets", () => {
   first.enabledTools.push("browser_navigate");
   assert.deepEqual(second.args, [
     "-y",
-    "@playwright/mcp@latest",
+    "@playwright/mcp@0.0.78",
     "--headless",
     "--no-sandbox",
   ]);
   assert.deepEqual(second.enabledTools, []);
   assert.deepEqual(preset.args, [
     "-y",
-    "@playwright/mcp@latest",
+    "@playwright/mcp@0.0.78",
     "--headless",
     "--no-sandbox",
   ]);
@@ -103,7 +157,7 @@ test("keeps the local MCP shortcut commands sandbox-ready", () => {
     command: "npx",
     args: [
       "-y",
-      "@playwright/mcp@latest",
+      "@playwright/mcp@0.0.78",
       "--headless",
       "--no-sandbox",
     ],
@@ -113,16 +167,17 @@ test("keeps the local MCP shortcut commands sandbox-ready", () => {
     startupTimeoutSec: 120,
     toolTimeoutSec: 120,
     defaultToolsApprovalMode: "prompt",
+    scopes: undefined,
     enabledTools: [],
     disabledTools: [],
   });
   assert.deepEqual(input("filesystem").args, [
     "-y",
-    "@modelcontextprotocol/server-filesystem",
+    "@modelcontextprotocol/server-filesystem@2026.7.10",
     "/workspace",
   ]);
   assert.deepEqual(input("sequential-thinking").args, [
     "-y",
-    "@modelcontextprotocol/server-sequential-thinking",
+    "@modelcontextprotocol/server-sequential-thinking@2026.7.4",
   ]);
 });

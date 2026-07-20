@@ -34,6 +34,13 @@ const credentials = {
   async syncCredentialFromRuntime() {
     return undefined;
   },
+  async mcpOAuthCredentialForEnvironmentRuntime() {
+    return undefined;
+  },
+  async markMcpOAuthCredentialMaterialized() {},
+  async syncMcpOAuthCredentialFromRuntime() {
+    return undefined;
+  },
 } satisfies CodexCredentialProvider;
 
 const environment: Environment = {
@@ -147,14 +154,18 @@ interface Fixture {
     message: Record<string, unknown>;
   }>;
   lifecycleLocks: string[];
+  recoveryLockEvents: string[];
   streamStarts: number[];
   rolloutReads: Array<{
     path: string;
     nativeSessionId: string;
   }>;
+  mcpLogoutNames: string[];
   exceptionalCandidateQueryCount(): number;
   lifecycleLockActive(): boolean;
   runtimeRecoveryCount(): number;
+  environmentRuntime(): StoredEnvironmentRuntime;
+  setMcpOauthCredentialsJson(value: string | undefined): void;
   reconciledEnvironmentEpochs(): Array<{
     supervisorSessionId?: string;
     attemptId?: string;
@@ -249,12 +260,15 @@ function fixture(input: {
   environmentRecoveryErrors?: Error[];
   runtimeAccessLockDelay?: Promise<void>;
   lifecycleLockResults?: boolean[];
+  assertScopedRecoveryLocks?: boolean;
   onRequest?: (
     message: Record<string, unknown>,
   ) => Record<string, unknown> | null | undefined;
   writeDelays?: Record<string, Promise<void>>;
   authoritativeEpochFence?: boolean;
   rollouts?: Record<string, string | Error | Promise<string>>;
+  credentials?: CodexCredentialProvider;
+  mcpOauthCredentialsJson?: string;
 } = {}): Fixture {
   const initial = input.sessions ?? [
     { id: "session-one", nativeSessionId: "thread-one" },
@@ -325,11 +339,14 @@ function fixture(input: {
   const streamStarts: number[] = [];
   const writes: Fixture["writes"] = [];
   const lifecycleLocks: string[] = [];
+  const recoveryLockEvents: string[] = [];
   const lifecycleLockResults = [...(input.lifecycleLockResults ?? [])];
   const exceptionalCandidateErrors = [
     ...(input.exceptionalCandidateErrors ?? []),
   ];
   const rolloutReads: Fixture["rolloutReads"] = [];
+  const mcpLogoutNames: string[] = [];
+  let mcpOauthCredentialsJson = input.mcpOauthCredentialsJson;
   let exceptionalCandidateQueries = 0;
   let lifecycleLockDepth = 0;
   let runtimeRecoveries = 0;
@@ -480,18 +497,39 @@ function fixture(input: {
     },
     async withEnvironmentLifecycleLock(
       environmentId: string,
-      operation: () => Promise<unknown>,
+      operation: (lockedStore: SandpiStore) => Promise<unknown>,
     ) {
       lifecycleLocks.push(environmentId);
+      if (input.assertScopedRecoveryLocks) {
+        recoveryLockEvents.push("lifecycle");
+      }
       if (lifecycleLockResults.shift() === false) {
         return { acquired: false };
       }
       lifecycleLockDepth += 1;
       try {
-        return { acquired: true, value: await operation() };
+        return {
+          acquired: true,
+          value: await operation(
+            input.assertScopedRecoveryLocks
+              ? recoveryLifecycleStore
+              : rootStore,
+          ),
+        };
       } finally {
         lifecycleLockDepth -= 1;
       }
+    },
+    async withEnvironmentMcpOAuthCredentialLock(
+      _environmentId: string,
+      operation: (lockedStore: SandpiStore) => Promise<unknown>,
+    ) {
+      if (input.assertScopedRecoveryLocks) {
+        assert.fail(
+          "credential lock must be acquired through the lifecycle-scoped Store",
+        );
+      }
+      return operation(rootStore);
     },
     async withEnvironmentRuntimeAccessLock(
       _environmentId: string,
@@ -844,6 +882,54 @@ function fixture(input: {
       });
     },
   } as unknown as SandpiStore;
+  const rootStore = store;
+  const recoveryCredentialStore = Object.assign(
+    Object.create(store) as SandpiStore,
+    {
+      async environmentRuntime() {
+        assert.fail(
+          "runtime reconciliation must retain the outer lifecycle-scoped Store",
+        );
+      },
+      async recordCodexEnvironmentRuntime() {
+        assert.fail(
+          "runtime reconciliation must retain the outer lifecycle-scoped Store",
+        );
+      },
+    },
+  );
+  const recoveryLifecycleStore = Object.assign(
+    Object.create(store) as SandpiStore,
+    {
+      async withEnvironmentMcpOAuthCredentialLock<T>(
+        requestedEnvironmentId: string,
+        operation: (lockedStore: SandpiStore) => Promise<T>,
+      ) {
+        assert.equal(requestedEnvironmentId, environment.id);
+        assert.equal(lifecycleLockDepth, 1);
+        recoveryLockEvents.push("credential");
+        return operation(recoveryCredentialStore);
+      },
+      async environmentRuntime(requestedEnvironmentId: string) {
+        assert.equal(requestedEnvironmentId, environment.id);
+        recoveryLockEvents.push("lifecycle-runtime-read");
+        return store.environmentRuntime(requestedEnvironmentId);
+      },
+      async recordCodexEnvironmentRuntime(
+        requestedEnvironmentId: string,
+        recovered: Awaited<
+          ReturnType<RuntimeAdapter["ensureCodexEnvironmentRuntime"]>
+        >,
+      ) {
+        assert.equal(requestedEnvironmentId, environment.id);
+        recoveryLockEvents.push("lifecycle-runtime-write");
+        return store.recordCodexEnvironmentRuntime(
+          requestedEnvironmentId,
+          recovered,
+        );
+      },
+    },
+  );
 
   const runtime = {
     mode: "sandbox0",
@@ -860,6 +946,17 @@ function fixture(input: {
       return "{}";
     },
     async installCodexEnvironmentCredential() {},
+    async readCodexMcpOauthCredentials() {
+      return mcpOauthCredentialsJson;
+    },
+    async installCodexMcpOauthCredentials() {},
+    async logoutEnvironmentMcpServer(
+      _runtime: StoredEnvironmentRuntime,
+      name: string,
+    ) {
+      mcpLogoutNames.push(name);
+      mcpOauthCredentialsJson = undefined;
+    },
     async writeCodexMessage(
       runtime: StoredEnvironmentRuntime,
       value: unknown,
@@ -960,7 +1057,7 @@ function fixture(input: {
     store,
     runtime,
     logger,
-    credentials,
+    input.credentials ?? credentials,
     {
       streamReconnectDelayMs: 5,
       streamBatchDelayMs: 1,
@@ -984,11 +1081,17 @@ function fixture(input: {
     sessionRuntimes,
     writes,
     lifecycleLocks,
+    recoveryLockEvents,
     streamStarts,
     rolloutReads,
+    mcpLogoutNames,
     exceptionalCandidateQueryCount: () => exceptionalCandidateQueries,
     lifecycleLockActive: () => lifecycleLockDepth > 0,
     runtimeRecoveryCount: () => runtimeRecoveries,
+    environmentRuntime: () => environmentRuntime,
+    setMcpOauthCredentialsJson: (value) => {
+      mcpOauthCredentialsJson = value;
+    },
     reconciledEnvironmentEpochs: () => [...reconciledEnvironmentEpochs],
     setRuntimeState: ({ desiredState, observedState }) => {
       environmentRuntime = {
@@ -1136,6 +1239,22 @@ test("retries an epoch change raised inside Environment lifecycle recovery", asy
     });
     assert.equal(context.runtimeRecoveryCount(), 2);
     assert.equal(context.lifecycleLocks.length, 2);
+  } finally {
+    await context.close();
+  }
+});
+
+test("recovery nests credential locking through the lifecycle-scoped Store", async () => {
+  const context = fixture({ assertScopedRecoveryLocks: true });
+  try {
+    await context.service.resumeWorkers();
+
+    assert.deepEqual(context.recoveryLockEvents, [
+      "lifecycle",
+      "credential",
+      "lifecycle-runtime-read",
+      "lifecycle-runtime-write",
+    ]);
   } finally {
     await context.close();
   }
@@ -2290,6 +2409,88 @@ test("filters stale records when one Supervisor batch returns to the current epo
       context.sessionRuntimes.get("session-two")?.activeNativeTurnId,
       "turn-current",
     );
+  } finally {
+    await context.close();
+  }
+});
+
+test("replays MCP lifecycle notifications when their handler fails before cursor commit", async () => {
+  const context = fixture();
+  const handlerError = new Error("durable MCP transition failed");
+  const handledAtCursors: number[] = [];
+  const handledEvents: Array<{
+    supervisorSequence: number;
+    recordIndex: number;
+    runtimeGeneration: number;
+    attemptId?: string;
+    occurredAt: string;
+  }> = [];
+  let attempts = 0;
+  const responseId = "mcp-response-before-lifecycle";
+  const takeRpcResponse = (
+    context.service as unknown as {
+      takeRpcResponse(
+        environmentId: string,
+        requestId: string,
+      ): Record<string, unknown> | undefined;
+    }
+  ).takeRpcResponse;
+  context.service.setMcpNotificationHandler({
+    async handleCodexMcpNotification(
+      _environmentId,
+      _runtime,
+      _message,
+      event,
+    ) {
+      attempts += 1;
+      handledEvents.push(event);
+      handledAtCursors.push(
+        context.environmentRuntime().decoder.supervisorCursor,
+      );
+      assert.deepEqual(
+        takeRpcResponse.call(context.service, environment.id, responseId),
+        { id: responseId, result: { accepted: true } },
+      );
+      if (attempts === 1) throw handlerError;
+    },
+  });
+  const batch = [
+    supervisorOutputEvent(1, [
+      {
+        method: "mcpServer/oauthLogin/completed",
+        params: { name: "github_remote", success: true },
+      },
+      { id: responseId, result: { accepted: true } },
+    ]),
+  ];
+  try {
+    await assert.rejects(
+      context.commitEvents(batch),
+      (error: unknown) => error === handlerError,
+    );
+    assert.equal(context.environmentRuntime().decoder.supervisorCursor, 0);
+
+    await context.commitEvents(batch);
+
+    assert.equal(attempts, 2);
+    assert.deepEqual(handledAtCursors, [0, 0]);
+    assert.deepEqual(handledEvents, [
+      {
+        supervisorSequence: 1,
+        recordIndex: 0,
+        runtimeGeneration: 1,
+        attemptId: "attempt-environment-test",
+        occurredAt: "2026-07-16T00:00:00.000Z",
+      },
+      {
+        supervisorSequence: 1,
+        recordIndex: 0,
+        runtimeGeneration: 1,
+        attemptId: "attempt-environment-test",
+        occurredAt: "2026-07-16T00:00:00.000Z",
+      },
+    ]);
+    assert.equal(context.environmentRuntime().decoder.supervisorCursor, 1);
   } finally {
     await context.close();
   }
@@ -3536,6 +3737,319 @@ test("lists and toggles Environment skills through Codex native RPCs", async () 
       ({ message }) => message.method === "skills/config/write",
     );
     assert.deepEqual(write?.message.params, { path: skillPath, enabled: false });
+  } finally {
+    await context.close();
+  }
+});
+
+test("correlates an MCP OAuth login with an isolated ephemeral Thread", async () => {
+  const context = fixture({
+    onRequest(message) {
+      if (message.method === "mcpServer/oauth/login") {
+        return {
+          id: message.id,
+          result: {
+            authorizationUrl:
+              "https://identity.example/authorize?state=test-only",
+          },
+        };
+      }
+      return undefined;
+    },
+  });
+  try {
+    const correlation =
+      await context.service.createEnvironmentMcpOAuthCorrelationThread({
+        userId: "user",
+        environmentId: environment.id,
+      });
+    const login = await context.service.beginEnvironmentMcpOAuthLogin({
+      environmentId: environment.id,
+      name: "github_remote",
+      nativeThreadId: correlation.nativeThreadId,
+      runtime: correlation.runtime,
+      scopes: ["repo"],
+      timeoutSecs: 600,
+    });
+
+    assert.equal(
+      login.authorizationUrl,
+      "https://identity.example/authorize?state=test-only",
+    );
+    const threadStart = context.writes.find(
+      ({ message }) =>
+        message.method === "thread/start" &&
+        (message.params as { ephemeral?: boolean }).ephemeral === true,
+    );
+    assert.ok(threadStart);
+    const oauthLogin = context.writes.find(
+      ({ message }) => message.method === "mcpServer/oauth/login",
+    );
+    assert.equal(
+      (oauthLogin?.message.params as { threadId?: string }).threadId,
+      correlation.nativeThreadId,
+    );
+    await context.service.releaseEnvironmentMcpOAuthCorrelationThread(
+      correlation.runtime,
+      correlation.nativeThreadId,
+    );
+    assert.equal(
+      (
+        context.writes.find(
+          ({ message }) => message.method === "thread/unsubscribe",
+        )?.message.params as { threadId?: string }
+      ).threadId,
+      correlation.nativeThreadId,
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("MCP logout persists an absent native token store instead of reviving it", async () => {
+  const synchronized: Array<{
+    environmentId: string;
+    credentialsJson: string | undefined;
+  }> = [];
+  const credentialProvider = {
+    ...credentials,
+    async syncMcpOAuthCredentialFromRuntime(
+      environmentId: string,
+      credentialsJson: string | undefined,
+    ) {
+      synchronized.push({ environmentId, credentialsJson });
+      return undefined;
+    },
+  } satisfies CodexCredentialProvider;
+  const context = fixture({
+    credentials: credentialProvider,
+    onRequest(message) {
+      if (message.method === "mcpServerStatus/list") {
+        return {
+          id: message.id,
+          result: { data: [], nextCursor: null },
+        };
+      }
+      if (message.method === "config/read") {
+        return {
+          id: message.id,
+          result: {
+            config: { mcp_servers: {} },
+            origins: {},
+            layers: [],
+          },
+        };
+      }
+      return undefined;
+    },
+  });
+  try {
+    await context.service.logoutEnvironmentMcpServer({
+      userId: "user",
+      environmentId: environment.id,
+      name: "github_remote",
+    });
+
+    assert.deepEqual(context.mcpLogoutNames, ["github_remote"]);
+    assert.deepEqual(synchronized, [
+      {
+        environmentId: environment.id,
+        credentialsJson: undefined,
+      },
+    ]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("MCP logout waits for an older persist and then reads native credentials again", async () => {
+  const oldCredentials = JSON.stringify({
+    github_remote: { access_token: "old-token" },
+  });
+  const synchronized: Array<string | undefined> = [];
+  let markFirstSyncStarted!: () => void;
+  const firstSyncStarted = new Promise<void>((resolve) => {
+    markFirstSyncStarted = resolve;
+  });
+  let releaseFirstSync: (() => void) | undefined;
+  const firstSyncBlocked = new Promise<void>((resolve) => {
+    releaseFirstSync = resolve;
+  });
+  const credentialProvider = {
+    ...credentials,
+    async syncMcpOAuthCredentialFromRuntime(
+      _environmentId: string,
+      credentialsJson: string | undefined,
+    ) {
+      synchronized.push(credentialsJson);
+      if (synchronized.length === 1) {
+        markFirstSyncStarted();
+        await firstSyncBlocked;
+      }
+      return undefined;
+    },
+  } satisfies CodexCredentialProvider;
+  const context = fixture({
+    credentials: credentialProvider,
+    mcpOauthCredentialsJson: oldCredentials,
+    onRequest(message) {
+      if (message.method === "mcpServerStatus/list") {
+        return {
+          id: message.id,
+          result: { data: [], nextCursor: null },
+        };
+      }
+      if (message.method === "config/read") {
+        return {
+          id: message.id,
+          result: {
+            config: { mcp_servers: {} },
+            origins: {},
+            layers: [],
+          },
+        };
+      }
+      return undefined;
+    },
+  });
+  try {
+    const backgroundPersist =
+      context.service.persistEnvironmentMcpOAuthCredential(
+      context.environmentRuntime(),
+    );
+    await firstSyncStarted;
+
+    let logoutSettled = false;
+    const logout = context.service
+      .logoutEnvironmentMcpServer({
+        userId: "user",
+        environmentId: environment.id,
+        name: "github_remote",
+      })
+      .finally(() => {
+        logoutSettled = true;
+      });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(logoutSettled, false);
+    assert.deepEqual(context.mcpLogoutNames, []);
+
+    releaseFirstSync?.();
+    await Promise.all([backgroundPersist, logout]);
+    assert.deepEqual(context.mcpLogoutNames, ["github_remote"]);
+    assert.deepEqual(synchronized, [oldCredentials, undefined]);
+  } finally {
+    releaseFirstSync?.();
+    await context.close();
+  }
+});
+
+test("MCP logout fails when the durable OAuth revocation fails", async () => {
+  const revokeError = new Error("durable MCP OAuth revoke failed");
+  const credentialProvider = {
+    ...credentials,
+    async syncMcpOAuthCredentialFromRuntime(
+      _environmentId: string,
+      credentialsJson: string | undefined,
+    ) {
+      assert.equal(credentialsJson, undefined);
+      throw revokeError;
+    },
+  } satisfies CodexCredentialProvider;
+  const context = fixture({ credentials: credentialProvider });
+  try {
+    await assert.rejects(
+      context.service.logoutEnvironmentMcpServer({
+        userId: "user",
+        environmentId: environment.id,
+        name: "github_remote",
+      }),
+      (error: unknown) => error === revokeError,
+    );
+    assert.deepEqual(context.mcpLogoutNames, ["github_remote"]);
+    assert.equal(
+      context.writes.some(
+        ({ message }) => message.method === "config/mcpServer/reload",
+      ),
+      false,
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("credential flush queues a fresh MCP OAuth read behind an older persist", async () => {
+  const synchronized: Array<string | undefined> = [];
+  let markFirstSyncStarted!: () => void;
+  const firstSyncStarted = new Promise<void>((resolve) => {
+    markFirstSyncStarted = resolve;
+  });
+  let releaseFirstSync: (() => void) | undefined;
+  const firstSyncBlocked = new Promise<void>((resolve) => {
+    releaseFirstSync = resolve;
+  });
+  const credentialProvider = {
+    ...credentials,
+    async syncMcpOAuthCredentialFromRuntime(
+      _environmentId: string,
+      credentialsJson: string | undefined,
+    ) {
+      synchronized.push(credentialsJson);
+      if (synchronized.length === 1) {
+        markFirstSyncStarted();
+        await firstSyncBlocked;
+      }
+      return undefined;
+    },
+  } satisfies CodexCredentialProvider;
+  const context = fixture({
+    credentials: credentialProvider,
+    mcpOauthCredentialsJson: '{"github_remote":{"access_token":"old-token"}}',
+  });
+  try {
+    const backgroundPersist =
+      context.service.persistEnvironmentMcpOAuthCredential(
+      context.environmentRuntime(),
+    );
+    await firstSyncStarted;
+    context.setMcpOauthCredentialsJson(undefined);
+
+    const flush = context.service.flushEnvironmentCredentials(environment.id);
+    releaseFirstSync?.();
+    await Promise.all([backgroundPersist, flush]);
+    assert.deepEqual(synchronized, [
+      '{"github_remote":{"access_token":"old-token"}}',
+      undefined,
+    ]);
+  } finally {
+    releaseFirstSync?.();
+    await context.close();
+  }
+});
+
+test("MCP RPC failures do not expose provider-controlled error details", async () => {
+  const secret = "provider-error-secret";
+  const context = fixture({
+    onRequest(message) {
+      if (message.method === "config/read") {
+        return {
+          id: message.id,
+          error: { message: `Authorization failed for ${secret}` },
+        };
+      }
+      return undefined;
+    },
+  });
+  try {
+    await assert.rejects(
+      context.service.listEnvironmentMcpServers("user", environment.id),
+      (error: unknown) => {
+        assert.ok(error instanceof HttpError);
+        assert.equal(error.code, "codex_config_read_failed");
+        assert.equal(error.message, "Codex could not read the Environment configuration.");
+        assert.equal(error.message.includes(secret), false);
+        return true;
+      },
+    );
   } finally {
     await context.close();
   }

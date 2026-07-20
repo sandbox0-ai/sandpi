@@ -21,7 +21,10 @@ export class EnvironmentLifecycleService {
   private closed = false;
   private started = false;
   private readonly controller = new AbortController();
-  private beforePause?: (environmentId: string) => void;
+  private beforePause?: (
+    environmentId: string,
+    store: SandpiStore,
+  ) => Promise<void> | void;
 
   constructor(
     private readonly store: SandpiStore,
@@ -30,7 +33,12 @@ export class EnvironmentLifecycleService {
     private readonly options: { pollIntervalMs?: number; batchSize?: number } = {},
   ) {}
 
-  setBeforePause(handler: (environmentId: string) => void) {
+  setBeforePause(
+    handler: (
+      environmentId: string,
+      store: SandpiStore,
+    ) => Promise<void> | void,
+  ) {
     this.beforePause = handler;
   }
 
@@ -143,7 +151,7 @@ export class EnvironmentLifecycleService {
           // Stop this replica's retained Supervisor stream before Sandbox0
           // closes it, so a concurrent wake cannot make the old worker treat
           // the intentional pause as a runtime failure that needs recovery.
-          this.beforePause?.(environmentId);
+          await this.beforePause?.(environmentId, scopedStore);
           await this.runtime.pauseEnvironment(runtime, this.controller.signal);
           await scopedStore.recordEnvironmentPaused(
             environmentId,

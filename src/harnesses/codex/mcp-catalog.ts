@@ -5,6 +5,21 @@ import type {
 } from "@/harnesses/codex/environment-tools";
 
 export type CodexMcpPresetCategory = "aggregators" | "remote" | "local";
+export type CodexMcpAuthRequirement = "none" | "optional" | "required";
+export type CodexMcpPresetAuthMethod = "oauth" | "bearer" | "header";
+
+export interface CodexMcpPresetAuth {
+  requirement: CodexMcpAuthRequirement;
+  methods: readonly CodexMcpPresetAuthMethod[];
+  headerName?: string;
+  valueTemplate?: string;
+  scopes?: readonly string[];
+}
+
+export interface CodexMcpPresetNetwork {
+  endpointDomains: readonly string[];
+  oauthDomains?: readonly string[];
+}
 
 export interface CodexMcpPresetCategoryDefinition {
   id: CodexMcpPresetCategory;
@@ -20,6 +35,8 @@ interface CodexMcpPresetBase {
   connectionLabel: string;
   setupHint: string;
   docsUrl: string;
+  auth: CodexMcpPresetAuth;
+  network: CodexMcpPresetNetwork;
   startupTimeoutSec?: number;
   toolTimeoutSec?: number;
   defaultToolsApprovalMode?: CodexMcpApprovalMode;
@@ -56,7 +73,8 @@ export const CODEX_MCP_PRESET_CATEGORIES: readonly CodexMcpPresetCategoryDefinit
     {
       id: "local",
       label: "Local MCP servers",
-      description: "Processes launched by Codex inside this Environment sandbox.",
+      description:
+        "Trusted packages launched beside Codex with access to this Environment and workspace.",
     },
   ];
 
@@ -71,21 +89,35 @@ export const CODEX_MCP_PRESETS: readonly CodexMcpPreset[] = [
     url: "https://connector.oomol.com/v1/mcp",
     connectionLabel: "API key",
     setupHint:
-      "This shortcut uses OOMOL's SaaS endpoint, the hosted counterpart to OpenConnector. It requires an OOMOL API key in the Authorization header; use Custom server instead for your own OpenConnector /mcp URL.",
+      "This shortcut uses OOMOL's SaaS endpoint, the hosted counterpart to OpenConnector. Its API key is injected only for connector.oomol.com; use Custom server for a self-hosted OpenConnector /mcp URL.",
     docsUrl: "https://console.oomol.com/install?target=mcp",
+    auth: {
+      requirement: "required",
+      methods: ["bearer"],
+      headerName: "Authorization",
+      valueTemplate: "Bearer {{ .token }}",
+    },
+    network: { endpointDomains: ["connector.oomol.com"] },
   },
   {
-    id: "composio-rube",
+    id: "composio-connect",
     category: "aggregators",
     name: "composio",
-    title: "Composio Rube",
-    description: "Connect many SaaS apps through Composio's hosted universal MCP server.",
+    title: "Composio Connect",
+    description: "Connect many SaaS apps through Composio's hosted MCP gateway.",
     transport: "streamable-http",
-    url: "https://rube.app/mcp",
-    connectionLabel: "OAuth / token",
+    url: "https://connect.composio.dev/mcp",
+    connectionLabel: "OAuth / API key",
     setupHint:
-      "Rube uses OAuth 2.1 or an authorization token. Sandpi can save the endpoint, but it does not currently broker MCP OAuth callbacks or custom authorization headers.",
-    docsUrl: "https://composio.dev/content/rube-mcp-solving-context-overload",
+      "Composio supports native OAuth or a consumer API key. Sandpi injects API keys as x-consumer-api-key only for connect.composio.dev.",
+    docsUrl: "https://docs.composio.dev/docs/composio-connect",
+    auth: {
+      requirement: "required",
+      methods: ["header", "oauth"],
+      headerName: "x-consumer-api-key",
+      valueTemplate: "{{ .token }}",
+    },
+    network: { endpointDomains: ["connect.composio.dev"] },
   },
   {
     id: "github",
@@ -95,11 +127,18 @@ export const CODEX_MCP_PRESETS: readonly CodexMcpPreset[] = [
     description: "Work with repositories, issues, pull requests and Actions.",
     transport: "streamable-http",
     url: "https://api.githubcopilot.com/mcp/",
-    connectionLabel: "OAuth / PAT",
+    connectionLabel: "PAT",
     setupHint:
-      "GitHub requires OAuth or a personal access token. Use https://api.githubcopilot.com/mcp/readonly when only read access is needed.",
+      "This shortcut uses a personal access token because GitHub's remote server does not support dynamic client registration and Sandpi does not ship a deployment GitHub OAuth app. Use the /readonly endpoint when only read access is needed.",
     docsUrl:
       "https://github.com/github/github-mcp-server/blob/main/docs/remote-server.md",
+    auth: {
+      requirement: "required",
+      methods: ["bearer"],
+      headerName: "Authorization",
+      valueTemplate: "Bearer {{ .token }}",
+    },
+    network: { endpointDomains: ["api.githubcopilot.com"] },
     defaultToolsApprovalMode: "writes",
   },
   {
@@ -112,8 +151,10 @@ export const CODEX_MCP_PRESETS: readonly CodexMcpPreset[] = [
     url: "https://mcp.notion.com/mcp",
     connectionLabel: "OAuth",
     setupHint:
-      "Notion's hosted MCP server supports OAuth only. Sandpi can save the endpoint, but account connection needs native MCP OAuth support.",
+      "Notion's hosted MCP server uses OAuth. Sandpi starts Codex's native authorization flow and never receives the account token in the browser.",
     docsUrl: "https://developers.notion.com/guides/mcp/get-started-with-mcp",
+    auth: { requirement: "required", methods: ["oauth"] },
+    network: { endpointDomains: ["mcp.notion.com"] },
   },
   {
     id: "linear",
@@ -125,8 +166,15 @@ export const CODEX_MCP_PRESETS: readonly CodexMcpPreset[] = [
     url: "https://mcp.linear.app/mcp",
     connectionLabel: "OAuth / token",
     setupHint:
-      "Linear supports OAuth or a Bearer token. Sandpi does not currently broker MCP OAuth callbacks or custom authorization headers.",
+      "Linear supports OAuth or a Bearer token. OAuth uses Codex's native flow; tokens are injected at the sandbox egress boundary.",
     docsUrl: "https://linear.app/docs/mcp",
+    auth: {
+      requirement: "required",
+      methods: ["oauth", "bearer"],
+      headerName: "Authorization",
+      valueTemplate: "Bearer {{ .token }}",
+    },
+    network: { endpointDomains: ["mcp.linear.app"] },
   },
   {
     id: "sentry",
@@ -138,8 +186,10 @@ export const CODEX_MCP_PRESETS: readonly CodexMcpPreset[] = [
     url: "https://mcp.sentry.dev/mcp",
     connectionLabel: "OAuth",
     setupHint:
-      "Sentry account authorization is required after the endpoint is added. Sandpi does not currently broker the MCP OAuth callback.",
+      "Sentry account authorization is completed through Codex's native OAuth flow after the server is saved.",
     docsUrl: "https://github.com/getsentry/sentry-mcp",
+    auth: { requirement: "required", methods: ["oauth"] },
+    network: { endpointDomains: ["mcp.sentry.dev"] },
   },
   {
     id: "context7",
@@ -151,8 +201,15 @@ export const CODEX_MCP_PRESETS: readonly CodexMcpPreset[] = [
     url: "https://mcp.context7.com/mcp",
     connectionLabel: "Optional API key",
     setupHint:
-      "Basic public access works without authentication. Higher limits and private repositories require an API-key header that Sandpi does not currently configure.",
+      "Basic public access works without authentication. Add an API key for higher limits and private repositories.",
     docsUrl: "https://github.com/upstash/context7",
+    auth: {
+      requirement: "optional",
+      methods: ["header"],
+      headerName: "CONTEXT7_API_KEY",
+      valueTemplate: "{{ .token }}",
+    },
+    network: { endpointDomains: ["mcp.context7.com"] },
   },
   {
     id: "microsoft-learn",
@@ -167,6 +224,8 @@ export const CODEX_MCP_PRESETS: readonly CodexMcpPreset[] = [
       "Microsoft Learn exposes a public Streamable HTTP endpoint and does not require authentication.",
     docsUrl:
       "https://learn.microsoft.com/en-us/training/support/mcp-developer-reference",
+    auth: { requirement: "none", methods: [] },
+    network: { endpointDomains: ["learn.microsoft.com"] },
   },
   {
     id: "playwright",
@@ -176,11 +235,13 @@ export const CODEX_MCP_PRESETS: readonly CodexMcpPreset[] = [
     description: "Automate and inspect web pages through a headless browser.",
     transport: "stdio",
     command: "npx",
-    args: ["-y", "@playwright/mcp@latest", "--headless", "--no-sandbox"],
+    args: ["-y", "@playwright/mcp@0.0.78", "--headless", "--no-sandbox"],
     connectionLabel: "STDIO",
     setupHint:
-      "Runs inside the Environment sandbox. The first launch needs npm registry access, and the runtime must provide a compatible Chromium or Chrome binary.",
+      "Trusted code: runs beside Codex and can access this Environment and workspace. The first launch needs npm registry access, and the runtime must provide a compatible Chromium or Chrome binary.",
     docsUrl: "https://github.com/microsoft/playwright-mcp",
+    auth: { requirement: "none", methods: [] },
+    network: { endpointDomains: ["registry.npmjs.org"] },
     startupTimeoutSec: 120,
     toolTimeoutSec: 120,
   },
@@ -192,12 +253,18 @@ export const CODEX_MCP_PRESETS: readonly CodexMcpPreset[] = [
     description: "Expose read and write operations scoped to /workspace.",
     transport: "stdio",
     command: "npx",
-    args: ["-y", "@modelcontextprotocol/server-filesystem", "/workspace"],
+    args: [
+      "-y",
+      "@modelcontextprotocol/server-filesystem@2026.7.10",
+      "/workspace",
+    ],
     connectionLabel: "STDIO",
     setupHint:
-      "Runs inside the Environment sandbox and overlaps with Codex's native file tools. The first launch needs npm registry access; tool approval remains set to prompt.",
+      "Trusted code: can read and write /workspace beside Codex and overlaps with native file tools. The first launch needs npm registry access; tool approval remains set to prompt.",
     docsUrl:
       "https://github.com/modelcontextprotocol/servers/blob/main/src/filesystem/README.md",
+    auth: { requirement: "none", methods: [] },
+    network: { endpointDomains: ["registry.npmjs.org"] },
   },
   {
     id: "sequential-thinking",
@@ -207,12 +274,17 @@ export const CODEX_MCP_PRESETS: readonly CodexMcpPreset[] = [
     description: "Add a structured, revisable problem-solving tool.",
     transport: "stdio",
     command: "npx",
-    args: ["-y", "@modelcontextprotocol/server-sequential-thinking"],
+    args: [
+      "-y",
+      "@modelcontextprotocol/server-sequential-thinking@2026.7.4",
+    ],
     connectionLabel: "STDIO",
     setupHint:
-      "Runs inside the Environment sandbox. The first launch downloads the package with npx and therefore needs npm registry access.",
+      "Trusted code: runs beside Codex with this Environment's process privileges. The first launch downloads the pinned package from npm.",
     docsUrl:
       "https://github.com/modelcontextprotocol/servers/blob/main/src/sequentialthinking/README.md",
+    auth: { requirement: "none", methods: [] },
+    network: { endpointDomains: ["registry.npmjs.org"] },
   },
 ];
 
@@ -229,6 +301,7 @@ export function codexMcpInputFromPreset(
     startupTimeoutSec: preset.startupTimeoutSec,
     toolTimeoutSec: preset.toolTimeoutSec,
     defaultToolsApprovalMode: preset.defaultToolsApprovalMode ?? "prompt",
+    scopes: preset.auth.scopes ? [...preset.auth.scopes] : undefined,
     enabledTools: [],
     disabledTools: [],
   };

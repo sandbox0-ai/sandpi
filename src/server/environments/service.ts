@@ -2,13 +2,23 @@ import { setTimeout as delay } from "node:timers/promises";
 
 import type { Environment, NetworkPolicy } from "@/lib/types";
 import { conflict, HttpError } from "@/server/http-error";
-import type { RuntimeAdapter } from "@/server/runtime/types";
+import type {
+  EnvironmentRuntimeRecord,
+  RuntimeAdapter,
+} from "@/server/runtime/types";
 import { SandpiStore } from "@/server/store";
 
 interface ServiceLogger {
   info(fields: object, message: string): void;
   error(fields: object, message: string): void;
 }
+
+export type EnvironmentNetworkPolicyApplier = (input: {
+  userId: string;
+  environmentId: string;
+  runtime: EnvironmentRuntimeRecord;
+  userPolicy: NetworkPolicy;
+}) => Promise<void>;
 
 export class EnvironmentService {
   private reconciliation?: Promise<void>;
@@ -22,6 +32,7 @@ export class EnvironmentService {
     private readonly store: SandpiStore,
     private readonly runtime: RuntimeAdapter,
     private readonly logger: ServiceLogger,
+    private readonly networkPolicyApplier?: EnvironmentNetworkPolicyApplier,
   ) {}
 
   setBeforeDelete(
@@ -91,21 +102,57 @@ export class EnvironmentService {
   ): Promise<Environment> {
     const current = await this.store.getEnvironment(userId, environmentId);
     if (
-      current.status === "ready" &&
-      JSON.stringify(current.networkPolicy) !== JSON.stringify(input.networkPolicy)
+      JSON.stringify(current.networkPolicy) === JSON.stringify(input.networkPolicy)
     ) {
-      const runtime = await this.store.getEnvironmentRuntime(
-        userId,
-        environmentId,
-      );
-      // The Sandbox is owned by the Environment, so policy edits apply to the
-      // running runtime instead of being deferred to a future Session claim.
-      await this.runtime.updateEnvironmentNetworkPolicy(
-        runtime,
-        input.networkPolicy,
-      );
+      return this.store.updateEnvironment(userId, environmentId, input);
     }
-    return this.store.updateEnvironment(userId, environmentId, input);
+
+    // Network policy is a whole-resource Sandbox0 replacement. Serialize its
+    // read, external apply and PostgreSQL update with credential-binding
+    // mutations and Environment deletion across every Sandpi replica.
+    return this.waitForMcpMutationLock(environmentId, (mcpStore) =>
+      this.waitForLifecycleLock(
+        environmentId,
+        async (scopedStore) => {
+          const locked = await scopedStore.getEnvironment(userId, environmentId);
+          const runtime = await scopedStore.getEnvironmentRuntime(
+            userId,
+            environmentId,
+          );
+          if (runtime.desiredState === "terminated") {
+            throw new HttpError(
+              409,
+              "environment_terminated",
+              "The Environment is being deleted.",
+            );
+          }
+          if (
+            locked.status === "ready" &&
+            JSON.stringify(locked.networkPolicy) !==
+              JSON.stringify(input.networkPolicy)
+          ) {
+            // The Sandbox is owned by the Environment, so policy edits apply to
+            // the running runtime instead of being deferred to a future Session
+            // claim.
+            if (this.networkPolicyApplier) {
+              await this.networkPolicyApplier({
+                userId,
+                environmentId,
+                runtime,
+                userPolicy: input.networkPolicy,
+              });
+            } else {
+              await this.runtime.updateEnvironmentNetworkPolicy(
+                runtime,
+                input.networkPolicy,
+              );
+            }
+          }
+          return scopedStore.updateEnvironment(userId, environmentId, input);
+        },
+        mcpStore,
+      ),
+    );
   }
 
   /**
@@ -126,33 +173,55 @@ export class EnvironmentService {
       );
     }
 
-    // Device-login cleanup may query PostgreSQL. Run it before acquiring the
-    // session advisory lock so the lock callback can stay on one connection.
-    await this.beforeDelete?.(userId, environmentId);
+    // Publish the terminal intent before cleanup releases the lifecycle lock.
+    // MCP credential/OAuth mutations use this durable gate to reject new
+    // external resources while deletion is in progress.
+    await this.waitForLifecycleLock(environmentId, async (lockedStore) => {
+      await lockedStore.prepareEnvironmentDeletion(userId, environmentId);
+    });
+    try {
+      // Environment-owned cleanup may query PostgreSQL and call external APIs,
+      // so it runs after the short gate transaction without pinning a lock
+      // connection.
+      await this.beforeDelete?.(userId, environmentId);
+    } catch (error) {
+      await this.store
+        .recordEnvironmentDeletionFailure(environmentId, errorMessage(error))
+        .catch(() => undefined);
+      throw error;
+    }
+
+    await this.waitForLifecycleLock(environmentId, async (scopedStore) => {
+      const resources = await scopedStore.prepareEnvironmentDeletion(
+        userId,
+        environmentId,
+      );
+      try {
+        await this.runtime.deleteEnvironmentResources(resources);
+        await scopedStore.deleteEnvironmentMetadata(userId, environmentId);
+        this.logger.info({ environmentId }, "Environment deleted");
+      } catch (error) {
+        await scopedStore.recordEnvironmentDeletionFailure(
+          environmentId,
+          errorMessage(error),
+        );
+        throw error;
+      }
+    });
+  }
+
+  private async waitForLifecycleLock<T>(
+    environmentId: string,
+    operation: (store: SandpiStore) => Promise<T>,
+    lockStore: SandpiStore = this.store,
+  ): Promise<T> {
     const deadline = Date.now() + 130_000;
     while (Date.now() < deadline) {
-      const result = await this.store.withEnvironmentLifecycleLock(
+      const result = await lockStore.withEnvironmentLifecycleLock(
         environmentId,
-        async (lockedStore) => {
-          const scopedStore = lockedStore ?? this.store;
-          const resources = await scopedStore.prepareEnvironmentDeletion(
-            userId,
-            environmentId,
-          );
-          try {
-            await this.runtime.deleteEnvironmentResources(resources);
-            await scopedStore.deleteEnvironmentMetadata(userId, environmentId);
-            this.logger.info({ environmentId }, "Environment deleted");
-          } catch (error) {
-            await scopedStore.recordEnvironmentDeletionFailure(
-              environmentId,
-              errorMessage(error),
-            );
-            throw error;
-          }
-        },
+        (lockedStore) => operation(lockedStore ?? this.store),
       );
-      if (result.acquired) return;
+      if (result.acquired) return result.value;
       // A pause, runtime recovery, or Turn admission already owns this
       // Environment. Poll without pinning a PostgreSQL connection behind the
       // external operation.
@@ -161,7 +230,27 @@ export class EnvironmentService {
     throw new HttpError(
       503,
       "environment_lifecycle_busy",
-      "Timed out waiting to delete the Environment.",
+      "Timed out waiting for the Environment lifecycle lock.",
+    );
+  }
+
+  private async waitForMcpMutationLock<T>(
+    environmentId: string,
+    operation: (store: SandpiStore) => Promise<T>,
+  ): Promise<T> {
+    const deadline = Date.now() + 130_000;
+    while (Date.now() < deadline) {
+      const result = await this.store.withEnvironmentMcpMutationLock(
+        environmentId,
+        (lockedStore) => operation(lockedStore ?? this.store),
+      );
+      if (result.acquired) return result.value;
+      await delay(250);
+    }
+    throw new HttpError(
+      503,
+      "environment_mcp_mutation_busy",
+      "Timed out waiting to update the Environment network policy.",
     );
   }
 

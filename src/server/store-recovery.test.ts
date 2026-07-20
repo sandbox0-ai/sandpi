@@ -300,6 +300,55 @@ test("a live connection heartbeat extends only an already-running Environment", 
   assert.deepEqual(update.values, ["environment-one", 1_800_000]);
 });
 
+test("MCP mutations use a distinct Environment advisory-lock namespace", async () => {
+  const fixture = transactionalStore((sql) => {
+    if (sql.includes("pg_try_advisory_lock")) {
+      return { rows: [{ acquired: true }], rowCount: 1 };
+    }
+    return { rows: [], rowCount: 1 };
+  });
+
+  assert.deepEqual(
+    await fixture.store.withEnvironmentMcpMutationLock(
+      "environment-one",
+      async () => "ready",
+    ),
+    { acquired: true, value: "ready" },
+  );
+
+  const lock = fixture.calls.find((call) =>
+    call.sql.includes("pg_try_advisory_lock"),
+  );
+  const unlock = fixture.calls.find((call) =>
+    call.sql.includes("pg_advisory_unlock"),
+  );
+  assert.deepEqual(lock?.values, [1_907_424_102, "environment-one"]);
+  assert.deepEqual(unlock?.values, [1_907_424_102, "environment-one"]);
+});
+
+test("MCP OAuth credential sync uses one Environment advisory lock", async () => {
+  const fixture = transactionalStore(() => ({ rows: [], rowCount: 1 }));
+
+  assert.equal(
+    await fixture.store.withEnvironmentMcpOAuthCredentialLock(
+      "environment-one",
+      async () => "ready",
+    ),
+    "ready",
+  );
+
+  const lock = fixture.calls.find(
+    (call) =>
+      call.sql.includes("pg_advisory_lock") &&
+      !call.sql.includes("pg_try_advisory_lock"),
+  );
+  const unlock = fixture.calls.find((call) =>
+    call.sql.includes("pg_advisory_unlock"),
+  );
+  assert.deepEqual(lock?.values, [1_907_424_103, "environment-one"]);
+  assert.deepEqual(unlock?.values, [1_907_424_103, "environment-one"]);
+});
+
 test("runtime access uses the Environment lifecycle advisory key in shared mode", async () => {
   const fixture = transactionalStore((sql) => {
     if (sql.includes("pg_try_advisory_lock_shared")) {

@@ -16,13 +16,27 @@ export interface CodexDecoderState {
   supervisorCursor: number;
 }
 
-export interface DecodedCodexRecord {
+export interface CodexNativeEventIdentity {
   supervisorSequence: number;
   recordIndex: number;
   runtimeGeneration: number;
   attemptId?: string;
+}
+
+export interface DecodedCodexRecord extends CodexNativeEventIdentity {
   receivedAt: string;
   message: Record<string, unknown>;
+}
+
+export function codexNativeEventIdentity(
+  record: DecodedCodexRecord,
+): CodexNativeEventIdentity {
+  return {
+    supervisorSequence: record.supervisorSequence,
+    recordIndex: record.recordIndex,
+    runtimeGeneration: record.runtimeGeneration,
+    ...(record.attemptId ? { attemptId: record.attemptId } : {}),
+  };
 }
 
 export interface DecodeResult {

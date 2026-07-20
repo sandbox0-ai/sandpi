@@ -15,6 +15,13 @@ export class UnconfiguredRuntime implements RuntimeAdapter {
   provisionEnvironment = unavailable;
   deleteEnvironmentResources = async () => undefined;
   updateEnvironmentNetworkPolicy = unavailable;
+  applyEnvironmentSandboxNetworkPolicy = unavailable;
+  createStaticHeaderCredentialSource = unavailable;
+  updateStaticHeaderCredentialSource = unavailable;
+  deleteCredentialSource = unavailable;
+  getEnvironmentServices = unavailable;
+  replaceEnvironmentServices = unavailable;
+  ensureEnvironmentMcpOAuthCallbackService = unavailable;
   configureEnvironmentLifecycle = unavailable;
   pauseEnvironment = unavailable;
   ensureEnvironmentRuntimeAccess = unavailable;
@@ -26,6 +33,9 @@ export class UnconfiguredRuntime implements RuntimeAdapter {
   readCodexAuthJson = unavailable;
   installCodexEnvironmentCredential = unavailable;
   readCodexEnvironmentCredential = unavailable;
+  installCodexMcpOauthCredentials = unavailable;
+  readCodexMcpOauthCredentials = unavailable;
+  logoutEnvironmentMcpServer = unavailable;
   writeCodexMessage = unavailable;
   watchCodexEvents = unavailable;
   readCodexRollout = unavailable;

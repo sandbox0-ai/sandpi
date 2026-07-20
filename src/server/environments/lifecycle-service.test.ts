@@ -96,7 +96,9 @@ test("one elected worker applies policy and pauses a due idle Environment", asyn
     },
   } as unknown as RuntimeAdapter;
   const service = new EnvironmentLifecycleService(store, runtime, logger);
-  service.setBeforePause(() => calls.push("suspend-worker"));
+  service.setBeforePause(() => {
+    calls.push("suspend-worker");
+  });
 
   await service.reconcileOnce();
   await service.close();
@@ -111,6 +113,82 @@ test("one elected worker applies policy and pauses a due idle Environment", asyn
     "suspend-worker",
     "pause",
     "record-paused",
+  ]);
+});
+
+test("idle pause passes the lifecycle-scoped Store through credential flush", async () => {
+  const calls: string[] = [];
+  const runtimeState = storedRuntime();
+  const scopedStore = {
+    async prepareEnvironmentIdlePause(environmentId: string) {
+      assert.equal(environmentId, runtimeState.id);
+      calls.push("prepare");
+      return runtimeState;
+    },
+    async recordEnvironmentPaused(
+      environmentId: string,
+      sandboxId: string,
+    ) {
+      assert.equal(environmentId, runtimeState.id);
+      assert.equal(sandboxId, runtimeState.sandboxId);
+      calls.push("record");
+    },
+    async recordEnvironmentPauseFailure() {
+      assert.fail("successful pause must not record a failure");
+    },
+  } as unknown as SandpiStore;
+  const rootStore = {
+    async environmentLifecyclePolicyCandidateIds() {
+      return [];
+    },
+    async environmentIdlePauseCandidateIds() {
+      return [runtimeState.id];
+    },
+    async withEnvironmentLifecycleLock(
+      environmentId: string,
+      operation: (lockedStore: SandpiStore) => Promise<unknown>,
+    ) {
+      assert.equal(environmentId, runtimeState.id);
+      calls.push("lifecycle");
+      return { acquired: true as const, value: await operation(scopedStore) };
+    },
+    async prepareEnvironmentIdlePause() {
+      assert.fail("pause preparation must use the lifecycle-scoped Store");
+    },
+    async recordEnvironmentPaused() {
+      assert.fail("pause completion must use the lifecycle-scoped Store");
+    },
+    async recordEnvironmentPauseFailure() {
+      assert.fail("pause failure must use the lifecycle-scoped Store");
+    },
+  } as unknown as SandpiStore;
+  const runtime = {
+    mode: "sandbox0",
+    async pauseEnvironment(received: StoredEnvironmentRuntime) {
+      assert.strictEqual(received, runtimeState);
+      calls.push("pause");
+    },
+  } as unknown as RuntimeAdapter;
+  const service = new EnvironmentLifecycleService(rootStore, runtime, logger);
+  const flushEnvironmentCredentials = async (
+    environmentId: string,
+    store: SandpiStore,
+  ) => {
+    assert.equal(environmentId, runtimeState.id);
+    assert.strictEqual(store, scopedStore);
+    calls.push("flush");
+  };
+  service.setBeforePause(flushEnvironmentCredentials);
+
+  await service.reconcileOnce();
+  await service.close();
+
+  assert.deepEqual(calls, [
+    "lifecycle",
+    "prepare",
+    "flush",
+    "pause",
+    "record",
   ]);
 });
 

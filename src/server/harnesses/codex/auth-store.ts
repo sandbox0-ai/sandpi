@@ -7,6 +7,7 @@ import { toUnixTimestamp, type UnixTimestamp } from "@/lib/time";
 import type { EncryptedValue } from "@/server/secrets";
 import {
   CODEX_ENVIRONMENT_CREDENTIAL_PATH,
+  CODEX_MCP_OAUTH_CREDENTIAL_PATH,
   type CodexAuthRuntime,
 } from "@/server/runtime/types";
 import { notFound } from "@/server/http-error";
@@ -72,6 +73,7 @@ interface CredentialRow extends QueryResultRow {
   id: string;
   environment_id: string;
   harness: string;
+  credential_slot: string;
   revision: number;
   ciphertext: Buffer;
   initialization_vector: Buffer;
@@ -86,6 +88,8 @@ interface RuntimeCredentialRow extends CredentialRow {
   binding_revision: number | null;
   binding_status: "active" | "stale" | "revoked" | null;
 }
+
+type CodexCredentialSlot = "account" | "mcp-oauth";
 
 const ACTIVE_STATUSES: CodexDeviceAuthStatus[] = [
   "provisioning",
@@ -369,6 +373,7 @@ export class CodexAuthStore {
         AND m.status = 'active'
        WHERE e.created_by_user_id = $1
          AND c.environment_id = $2 AND c.harness = 'codex'
+         AND c.credential_slot = 'account'
          AND c.revoked_at IS NULL
        LIMIT 1`,
       [userId, environmentId],
@@ -430,8 +435,10 @@ export class CodexAuthStore {
        LEFT JOIN environment_credential_bindings b
          ON b.environment_id = c.environment_id
         AND b.harness = 'codex'
+        AND b.credential_slot = 'account'
        WHERE c.environment_id = $1
         AND c.harness = 'codex'
+        AND c.credential_slot = 'account'
         AND c.revoked_at IS NULL
        LIMIT 1`,
       [environmentId],
@@ -469,7 +476,8 @@ export class CodexAuthStore {
       }
       const current = await client.query<CredentialRow>(
         `SELECT * FROM harness_credentials
-         WHERE environment_id = $1 AND harness = 'codex' AND revoked_at IS NULL
+         WHERE environment_id = $1 AND harness = 'codex'
+           AND credential_slot = 'account' AND revoked_at IS NULL
          LIMIT 1
          FOR UPDATE`,
         [environmentId],
@@ -480,7 +488,8 @@ export class CodexAuthStore {
       }
       const binding = await client.query<{ credential_source_id: string }>(
         `SELECT credential_source_id FROM environment_credential_bindings
-         WHERE environment_id = $1 AND harness = 'codex'`,
+         WHERE environment_id = $1 AND harness = 'codex'
+           AND credential_slot = 'account'`,
         [environmentId],
       );
       const boundSourceId =
@@ -490,6 +499,7 @@ export class CodexAuthStore {
           `UPDATE environment_credential_bindings
            SET status = 'stale', updated_at = NOW()
            WHERE environment_id = $1 AND harness = 'codex'
+             AND credential_slot = 'account'
              AND status <> 'revoked'`,
           [environmentId],
         );
@@ -506,6 +516,7 @@ export class CodexAuthStore {
          SET status = 'active', credential_source_id = $2,
              source_revision = $3, last_synced_at = NOW(), updated_at = NOW()
          WHERE environment_id = $1 AND harness = 'codex'
+           AND credential_slot = 'account'
            AND status <> 'revoked'`,
         [environmentId, next.sourceId, next.revision],
       );
@@ -535,9 +546,10 @@ export class CodexAuthStore {
     const result = await this.pool.query(
       `INSERT INTO environment_credential_bindings (
          id, environment_id, sandbox_id, credential_source_id, harness,
-         source_revision, native_target_path, status
+         credential_slot, source_revision, native_target_path, status
        )
-       SELECT $1, e.id, r.sandbox_id, c.id, 'codex', c.revision, $5, 'active'
+       SELECT $1, e.id, r.sandbox_id, c.id, 'codex', 'account',
+              c.revision, $5, 'active'
        FROM environments e
        JOIN environment_runtime r
          ON r.environment_id = e.id AND r.sandbox_id IS NOT NULL
@@ -545,9 +557,10 @@ export class CodexAuthStore {
          ON c.id = $2
         AND c.environment_id = e.id
         AND c.harness = 'codex'
+        AND c.credential_slot = 'account'
         AND c.revoked_at IS NULL
        WHERE e.id = $3 AND c.revision = $4
-       ON CONFLICT (environment_id) DO UPDATE
+       ON CONFLICT (environment_id, harness, credential_slot) DO UPDATE
        SET sandbox_id = EXCLUDED.sandbox_id,
            credential_source_id = EXCLUDED.credential_source_id,
            source_revision = EXCLUDED.source_revision,
@@ -564,6 +577,215 @@ export class CodexAuthStore {
     );
     if (!result.rowCount) {
       throw new Error("Codex Credential Source cannot be bound to this Environment");
+    }
+  }
+
+  async getMcpOAuthCredentialForEnvironmentRuntime(environmentId: string) {
+    const result = await this.pool.query<RuntimeCredentialRow>(
+      `SELECT c.*, b.credential_source_id AS binding_source_id,
+              b.source_revision AS binding_revision,
+              b.status AS binding_status
+       FROM harness_credentials c
+       LEFT JOIN environment_credential_bindings b
+         ON b.environment_id = c.environment_id
+        AND b.harness = 'codex'
+        AND b.credential_slot = 'mcp-oauth'
+       WHERE c.environment_id = $1
+         AND c.harness = 'codex'
+         AND c.credential_slot = 'mcp-oauth'
+         AND c.revoked_at IS NULL
+       LIMIT 1`,
+      [environmentId],
+    );
+    const row = result.rows[0];
+    if (!row) return undefined;
+    return {
+      environmentId: row.environment_id,
+      sourceId: row.id,
+      revision: row.revision,
+      encrypted: encryptedCredential(row),
+      metadata: row.non_secret_metadata,
+      bindingSourceId: row.binding_source_id ?? undefined,
+      bindingRevision: row.binding_revision ?? undefined,
+      bindingStatus: row.binding_status ?? undefined,
+    };
+  }
+
+  async replaceMcpOAuthCredentialFromEnvironment(
+    environmentId: string,
+    expectedSourceId: string | undefined,
+    encrypted: EncryptedValue,
+    metadata: Record<string, unknown>,
+  ) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const environment = await client.query(
+        `SELECT id FROM environments
+         WHERE id = $1 AND harness = 'codex' AND status <> 'archived'
+         FOR UPDATE`,
+        [environmentId],
+      );
+      if (!environment.rowCount) {
+        throw notFound("environment_not_found", "Environment not found.");
+      }
+      const current = await client.query<CredentialRow>(
+        `SELECT * FROM harness_credentials
+         WHERE environment_id = $1 AND harness = 'codex'
+           AND credential_slot = 'mcp-oauth' AND revoked_at IS NULL
+         LIMIT 1
+         FOR UPDATE`,
+        [environmentId],
+      );
+      const currentSource = current.rows[0];
+      if (currentSource && currentSource.id !== expectedSourceId) {
+        await client.query("COMMIT");
+        return {
+          replaced: false as const,
+          credential: credentialFromRow(currentSource),
+        };
+      }
+      const next = await replaceNativeCredentialSlot(client, {
+        environmentId,
+        slot: "mcp-oauth",
+        credentialType: "codex-mcp-oauth-json",
+        encrypted,
+        metadata,
+      });
+      await client.query(
+        `UPDATE environment_credential_bindings
+         SET status = 'active', credential_source_id = $2,
+             source_revision = $3, materialized_at = NOW(),
+             last_synced_at = NOW(), updated_at = NOW()
+         WHERE environment_id = $1 AND harness = 'codex'
+           AND credential_slot = 'mcp-oauth'
+           AND status <> 'revoked'`,
+        [environmentId, next.sourceId, next.revision],
+      );
+      await client.query("COMMIT");
+      return { replaced: true as const, credential: next };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async revokeMcpOAuthCredentialFromEnvironment(
+    environmentId: string,
+    expectedSourceId: string | undefined,
+  ) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const environment = await client.query(
+        `SELECT id FROM environments
+         WHERE id = $1 AND harness = 'codex' AND status <> 'archived'
+         FOR UPDATE`,
+        [environmentId],
+      );
+      if (!environment.rowCount) {
+        throw notFound("environment_not_found", "Environment not found.");
+      }
+      const current = await client.query<CredentialRow>(
+        `SELECT * FROM harness_credentials
+         WHERE environment_id = $1 AND harness = 'codex'
+           AND credential_slot = 'mcp-oauth' AND revoked_at IS NULL
+         LIMIT 1
+         FOR UPDATE`,
+        [environmentId],
+      );
+      const currentSource = current.rows[0];
+      if (currentSource && currentSource.id !== expectedSourceId) {
+        await client.query("COMMIT");
+        return {
+          revoked: false as const,
+          credential: credentialFromRow(currentSource),
+        };
+      }
+      if (currentSource) {
+        await client.query(
+          `UPDATE harness_credentials
+           SET revoked_at = NOW(), updated_at = NOW()
+           WHERE id = $1 AND revoked_at IS NULL`,
+          [currentSource.id],
+        );
+      }
+      await client.query(
+        `UPDATE environment_credential_bindings
+         SET status = 'revoked', last_synced_at = NOW(), updated_at = NOW()
+         WHERE environment_id = $1 AND harness = 'codex'
+           AND credential_slot = 'mcp-oauth'`,
+        [environmentId],
+      );
+      await client.query("COMMIT");
+      return { revoked: true as const };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async markMcpOAuthCredentialMaterialized(
+    environmentId: string,
+    sourceId: string,
+    sourceRevision: number,
+  ) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        `SELECT id FROM environments
+         WHERE id = $1 AND harness = 'codex' AND status <> 'archived'
+         FOR UPDATE`,
+        [environmentId],
+      );
+      const result = await client.query(
+        `INSERT INTO environment_credential_bindings (
+           id, environment_id, sandbox_id, credential_source_id, harness,
+           credential_slot, source_revision, native_target_path, status
+         )
+         SELECT $1, e.id, r.sandbox_id, c.id, 'codex', 'mcp-oauth',
+                c.revision, $5, 'active'
+         FROM environments e
+         JOIN environment_runtime r
+           ON r.environment_id = e.id AND r.sandbox_id IS NOT NULL
+         JOIN harness_credentials c
+           ON c.id = $2
+          AND c.environment_id = e.id
+          AND c.harness = 'codex'
+          AND c.credential_slot = 'mcp-oauth'
+          AND c.revoked_at IS NULL
+         WHERE e.id = $3 AND c.revision = $4
+         ON CONFLICT (environment_id, harness, credential_slot) DO UPDATE
+         SET sandbox_id = EXCLUDED.sandbox_id,
+             credential_source_id = EXCLUDED.credential_source_id,
+             source_revision = EXCLUDED.source_revision,
+             native_target_path = EXCLUDED.native_target_path,
+             status = 'active', materialized_at = NOW(), updated_at = NOW()
+         RETURNING id`,
+        [
+          `binding_${randomUUID()}`,
+          sourceId,
+          environmentId,
+          sourceRevision,
+          CODEX_MCP_OAUTH_CREDENTIAL_PATH,
+        ],
+      );
+      if (!result.rowCount) {
+        throw new Error(
+          "Codex MCP OAuth credential cannot be bound to this Environment",
+        );
+      }
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
     }
   }
 }
@@ -634,16 +856,18 @@ async function replaceEnvironmentCredentialSource(
   await client.query(
     `UPDATE harness_credentials
      SET revoked_at = NOW(), updated_at = NOW()
-     WHERE environment_id = $1 AND harness = 'codex' AND revoked_at IS NULL`,
+     WHERE environment_id = $1 AND harness = 'codex'
+       AND credential_slot = 'account' AND revoked_at IS NULL`,
     [input.environmentId],
   );
   await client.query(
     `INSERT INTO harness_credentials (
-       id, environment_id, harness, revision, credential_type, ciphertext,
+       id, environment_id, harness, credential_slot, revision,
+       credential_type, ciphertext,
        initialization_vector, authentication_tag, encryption_algorithm,
        encryption_key_id, non_secret_metadata, last_verified_at
      ) VALUES (
-       $1, $2, 'codex', $3, 'codex-native-auth-json', $4, $5, $6,
+       $1, $2, 'codex', 'account', $3, 'codex-native-auth-json', $4, $5, $6,
        $7, $8, $9::JSONB, NOW()
      )`,
     [
@@ -662,6 +886,7 @@ async function replaceEnvironmentCredentialSource(
     `UPDATE environment_credential_bindings
      SET status = 'stale', updated_at = NOW()
      WHERE environment_id = $1 AND harness = 'codex'
+       AND credential_slot = 'account'
        AND status <> 'revoked'`,
     [input.environmentId],
   );
@@ -687,6 +912,70 @@ async function replaceEnvironmentCredentialSource(
     ],
   );
   return { sourceId, revision, encrypted: input.encrypted, metadata: input.metadata };
+}
+
+async function replaceNativeCredentialSlot(
+  client: PoolClient,
+  input: {
+    environmentId: string;
+    slot: CodexCredentialSlot;
+    credentialType: string;
+    encrypted: EncryptedValue;
+    metadata: Record<string, unknown>;
+  },
+) {
+  const revisionResult = await client.query<{ revision: number }>(
+    `SELECT COALESCE(MAX(revision), 0) + 1 AS revision
+     FROM harness_credentials
+     WHERE environment_id = $1 AND harness = 'codex'
+       AND credential_slot = $2`,
+    [input.environmentId, input.slot],
+  );
+  const revision = Number(revisionResult.rows[0]?.revision ?? 1);
+  const sourceId = `credential_${randomUUID()}`;
+  await client.query(
+    `UPDATE harness_credentials
+     SET revoked_at = NOW(), updated_at = NOW()
+     WHERE environment_id = $1 AND harness = 'codex'
+       AND credential_slot = $2 AND revoked_at IS NULL`,
+    [input.environmentId, input.slot],
+  );
+  await client.query(
+    `INSERT INTO harness_credentials (
+       id, environment_id, harness, credential_slot, revision,
+       credential_type, ciphertext, initialization_vector,
+       authentication_tag, encryption_algorithm, encryption_key_id,
+       non_secret_metadata, last_verified_at
+     ) VALUES (
+       $1, $2, 'codex', $3, $4, $5, $6, $7, $8, $9, $10, $11::JSONB, NOW()
+     )`,
+    [
+      sourceId,
+      input.environmentId,
+      input.slot,
+      revision,
+      input.credentialType,
+      input.encrypted.ciphertext,
+      input.encrypted.initializationVector,
+      input.encrypted.authenticationTag,
+      input.encrypted.algorithm,
+      input.encrypted.keyId,
+      JSON.stringify(input.metadata),
+    ],
+  );
+  await client.query(
+    `UPDATE environment_credential_bindings
+     SET status = 'stale', updated_at = NOW()
+     WHERE environment_id = $1 AND harness = 'codex'
+       AND credential_slot = $2 AND status <> 'revoked'`,
+    [input.environmentId, input.slot],
+  );
+  return {
+    sourceId,
+    revision,
+    encrypted: input.encrypted,
+    metadata: input.metadata,
+  };
 }
 
 function flowFromRow(row: FlowRow): CodexDeviceAuthFlow {

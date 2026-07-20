@@ -52,6 +52,11 @@ test("migration history contains every durable Sandpi boundary", async () => {
       "0025_environment_runtime_authority",
       "0026_environment_runtime_authority_comments",
       "0027_environment_network_policy",
+      "0028_environment_mcp_integrations",
+      "0029_codex_native_credential_slots",
+      "0030_environment_mcp_credential_projection",
+      "0031_environment_mcp_mutation_sagas",
+      "0032_environment_mcp_oauth_event_journal",
     ],
   );
 
@@ -228,4 +233,218 @@ test("migration history contains every durable Sandpi boundary", async () => {
   );
   assert.match(environmentNetworkPolicySql, /ELSE 'block-all'/);
   assert.doesNotMatch(environmentNetworkPolicySql, /restricted'\s+THEN/);
+
+  const environmentMcpIntegrationsSql = migrations[27]?.sql ?? "";
+  assert.match(
+    environmentMcpIntegrationsSql,
+    /CREATE TABLE environment_mcp_integrations\b/,
+  );
+  assert.match(
+    environmentMcpIntegrationsSql,
+    /credential_source_ref TEXT/,
+  );
+  assert.match(
+    environmentMcpIntegrationsSql,
+    /credential_binding_ref TEXT/,
+  );
+  assert.match(
+    environmentMcpIntegrationsSql,
+    /endpoint_fingerprint TEXT NOT NULL/,
+  );
+  assert.match(
+    environmentMcpIntegrationsSql,
+    /destination_domain TEXT NOT NULL/,
+  );
+  assert.match(
+    environmentMcpIntegrationsSql,
+    /destination_path TEXT NOT NULL/,
+  );
+  assert.match(
+    environmentMcpIntegrationsSql,
+    /lifecycle_status TEXT NOT NULL/,
+  );
+  assert.match(
+    environmentMcpIntegrationsSql,
+    /credential_status TEXT NOT NULL/,
+  );
+  assert.match(environmentMcpIntegrationsSql, /last_error TEXT/);
+  assert.match(
+    environmentMcpIntegrationsSql,
+    /CREATE TABLE environment_mcp_oauth_flows\b/,
+  );
+  assert.match(
+    environmentMcpIntegrationsSql,
+    /environment_mcp_oauth_flows_one_active_idx[\s\S]+WHERE status IN \('starting', 'awaiting_user'\)/,
+  );
+  assert.doesNotMatch(
+    environmentMcpIntegrationsSql,
+    /\b(?:plaintext|ciphertext|api_key|access_token|refresh_token|authorization_code)\s+(?:TEXT|BYTEA|JSONB)\b/i,
+  );
+
+  const codexNativeCredentialSlotsSql = migrations[28]?.sql ?? "";
+  assert.match(
+    codexNativeCredentialSlotsSql,
+    /UNIQUE \(environment_id, harness, credential_slot, revision\)/,
+  );
+  assert.match(
+    codexNativeCredentialSlotsSql,
+    /ON harness_credentials \(environment_id, harness, credential_slot\)[\s\S]+WHERE revoked_at IS NULL/,
+  );
+  assert.match(
+    codexNativeCredentialSlotsSql,
+    /credential_slot = 'account'[\s\S]+credential_type = 'codex-native-auth-json'/,
+  );
+  assert.match(
+    codexNativeCredentialSlotsSql,
+    /credential_slot = 'mcp-oauth'[\s\S]+credential_type = 'codex-mcp-oauth-json'/,
+  );
+  assert.match(
+    codexNativeCredentialSlotsSql,
+    /credential_slot = 'account'[\s\S]+native_target_path = '\/dev\/shm\/sandpi-codex-auth\.json'/,
+  );
+  assert.match(
+    codexNativeCredentialSlotsSql,
+    /credential_slot = 'mcp-oauth'[\s\S]+native_target_path = '\/dev\/shm\/sandpi-codex-mcp-oauth\.json'/,
+  );
+  assert.doesNotMatch(
+    codexNativeCredentialSlotsSql,
+    /\b(?:plaintext|api_key|access_token|refresh_token|authorization_code)\s+(?:TEXT|BYTEA|JSONB)\b/i,
+  );
+
+  const environmentMcpProjectionSql = migrations[29]?.sql ?? "";
+  assert.match(
+    environmentMcpProjectionSql,
+    /ADD COLUMN credential_header_name TEXT/,
+  );
+  assert.match(
+    environmentMcpProjectionSql,
+    /ADD COLUMN credential_value_template TEXT/,
+  );
+  assert.match(
+    environmentMcpProjectionSql,
+    /credential_value_template[\s\S]+\\\.token/,
+  );
+  assert.doesNotMatch(
+    environmentMcpProjectionSql,
+    /\b(?:plaintext|ciphertext|api_key|access_token|refresh_token|authorization_code)\s+(?:TEXT|BYTEA|JSONB)\b/i,
+  );
+
+  const environmentMcpMutationSagasSql = migrations[30]?.sql ?? "";
+  assert.match(environmentMcpMutationSagasSql, /ADD COLUMN version BIGINT/);
+  assert.match(
+    environmentMcpMutationSagasSql,
+    /ADD COLUMN binding_enabled BOOLEAN NOT NULL DEFAULT FALSE/,
+  );
+  assert.match(
+    environmentMcpMutationSagasSql,
+    /ADD COLUMN pending_credential_source_ref TEXT/,
+  );
+  assert.match(
+    environmentMcpMutationSagasSql,
+    /ADD COLUMN retiring_credential_source_ref TEXT/,
+  );
+  assert.match(
+    environmentMcpMutationSagasSql,
+    /ADD COLUMN oauth_config_fingerprint TEXT/,
+  );
+  assert.match(
+    environmentMcpMutationSagasSql,
+    /ADD COLUMN endpoint_fingerprint TEXT/,
+  );
+  assert.match(
+    environmentMcpMutationSagasSql,
+    /environment_mcp_oauth_flows_one_blocking_idx[\s\S]+WHERE status IN \('starting', 'awaiting_user', 'cancelled'\)/,
+  );
+  assert.match(
+    environmentMcpMutationSagasSql,
+    /environment_mcp_integrations_saga_lifecycle_check[\s\S]+lifecycle_status IN \('updating', 'deleting', 'error'\)/,
+  );
+  assert.match(
+    environmentMcpMutationSagasSql,
+    /ADD COLUMN cleanup_completed_at TIMESTAMPTZ/,
+  );
+  assert.match(
+    environmentMcpMutationSagasSql,
+    /environment_mcp_oauth_flows_cleanup_pending_idx[\s\S]+cleanup_completed_at IS NULL/,
+  );
+  assert.match(
+    environmentMcpMutationSagasSql,
+    /SET status = 'cancelled'[\s\S]+WHERE status IN \('starting', 'awaiting_user'\)[\s\S]+expires_at <= NOW\(\)/,
+  );
+  assert.match(
+    environmentMcpMutationSagasSql,
+    /ranked_blocking_flows[\s\S]+WHERE status IN \('starting', 'awaiting_user', 'cancelled'\)[\s\S]+ranked\.rank > 1/,
+  );
+  assert.doesNotMatch(
+    environmentMcpMutationSagasSql.match(
+      /WITH ranked_blocking_flows[\s\S]+?ranked\.rank > 1;/,
+    )?.[0] ?? "",
+    /expires_at > NOW\(\)/,
+  );
+  assert.match(
+    environmentMcpMutationSagasSql,
+    /oauth_config_fingerprint = \([\s\S]+flow\.status IN \([\s\S]+'starting', 'awaiting_user', 'completed', 'cancelled'/,
+  );
+  assert.doesNotMatch(
+    environmentMcpMutationSagasSql,
+    /\b(?:plaintext|ciphertext|api_key|access_token|refresh_token|authorization_code)\s+(?:TEXT|BYTEA|JSONB)\b/i,
+  );
+
+  const environmentMcpOAuthEventJournalSql = migrations[31]?.sql ?? "";
+  assert.match(
+    environmentMcpOAuthEventJournalSql,
+    /ALTER TABLE environment_mcp_oauth_flows[\s\S]+ADD COLUMN native_thread_id TEXT/,
+  );
+  assert.match(
+    environmentMcpOAuthEventJournalSql,
+    /ADD COLUMN native_runtime_generation BIGINT[\s\S]+ADD COLUMN native_attempt_id TEXT[\s\S]+ADD COLUMN native_thread_cleanup_completed_at TIMESTAMPTZ/,
+  );
+  assert.match(
+    environmentMcpOAuthEventJournalSql,
+    /environment_mcp_oauth_flows_native_correlation_group_check[\s\S]+num_nonnulls\([\s\S]+native_thread_id,[\s\S]+native_runtime_generation,[\s\S]+native_attempt_id[\s\S]+\) IN \(0, 3\)/,
+  );
+  assert.match(
+    environmentMcpOAuthEventJournalSql,
+    /environment_mcp_oauth_flows_native_correlation_check[\s\S]+length\(btrim\(native_thread_id\)\) > 0[\s\S]+native_runtime_generation >= 0/,
+  );
+  assert.match(
+    environmentMcpOAuthEventJournalSql,
+    /environment_mcp_oauth_flows_thread_cleanup_status_check[\s\S]+native_thread_cleanup_completed_at IS NULL[\s\S]+status IN \('completed', 'failed', 'cancelled', 'expired'\)/,
+  );
+  assert.match(
+    environmentMcpOAuthEventJournalSql,
+    /SET status = 'cancelled'[\s\S]+WHERE status IN \('starting', 'awaiting_user'\)[\s\S]+native_thread_id IS NULL/,
+  );
+  assert.match(
+    environmentMcpOAuthEventJournalSql,
+    /CREATE UNIQUE INDEX environment_mcp_oauth_flows_native_thread_idx[\s\S]+environment_id,[\s\S]+native_thread_id[\s\S]+WHERE native_thread_id IS NOT NULL/,
+  );
+  assert.match(
+    environmentMcpOAuthEventJournalSql,
+    /environment_mcp_oauth_flows_thread_cleanup_pending_idx[\s\S]+native_thread_id IS NOT NULL[\s\S]+native_thread_cleanup_completed_at IS NULL[\s\S]+status IN \('completed', 'failed', 'cancelled', 'expired'\)/,
+  );
+  assert.match(
+    environmentMcpOAuthEventJournalSql,
+    /CREATE TABLE environment_mcp_oauth_events\b/,
+  );
+  assert.match(
+    environmentMcpOAuthEventJournalSql,
+    /environment_id TEXT NOT NULL[\s\S]+REFERENCES environments\(id\) ON DELETE CASCADE/,
+  );
+  assert.match(
+    environmentMcpOAuthEventJournalSql,
+    /attempt_id TEXT NOT NULL/,
+  );
+  assert.match(
+    environmentMcpOAuthEventJournalSql,
+    /PRIMARY KEY \(\s*environment_id,\s*runtime_generation,\s*supervisor_sequence,\s*record_index,\s*attempt_id\s*\)/,
+  );
+  assert.match(
+    environmentMcpOAuthEventJournalSql,
+    /server_name TEXT NOT NULL[\s\S]+success BOOLEAN NOT NULL[\s\S]+disposition TEXT NOT NULL[\s\S]+occurred_at TIMESTAMPTZ NOT NULL[\s\S]+processed_at TIMESTAMPTZ NOT NULL/,
+  );
+  assert.doesNotMatch(
+    environmentMcpOAuthEventJournalSql,
+    /\b(?:plaintext|ciphertext|api_key|access_token|refresh_token|authorization_code)\s+(?:TEXT|BYTEA|JSONB)\b/i,
+  );
 });

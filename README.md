@@ -285,6 +285,47 @@ The command reads the native file locally, validates it, encrypts it with
 `SANDPI_SECRET_KEY`, and writes a new Environment Credential Source revision.
 It does not place the credential in the Environment Workspace Volume.
 
+### Configure MCP servers
+
+Open **Environment Settings → MCP servers** to add a server for every Codex
+Session in that Environment. Quick add is organized into aggregator services,
+hosted third-party servers and local STDIO servers. The catalog is maintained
+in the application rather than duplicated here. Remote shortcuts use the
+provider's hosted HTTPS endpoint by default; use **Custom server** for a
+self-hosted endpoint.
+
+Remote authentication follows the method declared by the selected server:
+
+- Public endpoints need no credential. An endpoint with optional
+  authentication can be tested anonymously before adding a key.
+- API keys and personal access tokens are write-only. Sandpi sends a new value
+  directly to a new immutable Sandbox0 Credential Source and stores only
+  non-secret binding metadata. Rotation switches the complete egress policy
+  before retiring the old source. Sandbox0 injects the managed header only for
+  that server's exact HTTPS destination; the value is not written to Codex
+  `config.toml`, the Workspace Volume or a Sandpi API response.
+- OAuth uses Codex's native MCP login, callback validation and token refresh.
+  Sandpi exposes the Environment callback through a constrained Sandbox0 app
+  service, correlates each attempt with a dedicated native Thread, and encrypts
+  the native token file between runtime generations. Cancellation quarantines
+  the old attempt until its listener can no longer alter the shared credential
+  slot.
+
+Credential authorization does not grant general network access. In a
+`block-all` Environment, explicitly add the remote MCP domain to **Environment
+Settings → Network**. The credential rule remains fail-closed and cannot
+override a user traffic deny.
+
+Local STDIO entries are different: Codex launches their command inside the
+Environment Sandbox. They receive no remote credential injection, run with the
+Environment's filesystem and process boundary, and may need an explicit network
+exception to download a package or contact an external service. Treat every
+local MCP package as trusted code: it runs beside Codex and can access the
+Environment workspace. Curated commands pin package versions.
+
+The detailed ownership, callback and persistence boundaries are documented in
+[MCP integration authority](docs/architecture/native-session-authority.md#mcp-integration-authority).
+
 If PostgreSQL already runs locally, set `DATABASE_URL` to that instance and
 skip the Compose command. The database user must be allowed to create and alter
 tables in the selected database.

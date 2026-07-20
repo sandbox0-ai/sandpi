@@ -5467,7 +5467,20 @@ code.codex-compact-activity-subject {
   color: var(--green);
 }
 
+.codex-extension-icon.is-ready {
+  border-color: var(--green);
+  background: var(--green-soft);
+  color: var(--green);
+}
+
 .codex-extension-icon.is-authentication-required {
+  border-color: var(--amber);
+  background: var(--amber-soft);
+  color: var(--amber);
+}
+
+.codex-extension-icon.is-checking,
+.codex-extension-icon.is-stale {
   border-color: var(--amber);
   background: var(--amber-soft);
   color: var(--amber);
@@ -5541,10 +5554,40 @@ code.codex-compact-activity-subject {
   color: var(--green);
 }
 
+.codex-extension-tags > span.is-ready,
+.codex-extension-tags > span.is-key-configured,
+.codex-extension-tags > span.is-oauth-authorized,
+.codex-extension-tags > span.is-public {
+  border-color: var(--green);
+  background: var(--green-soft);
+  color: var(--green);
+}
+
 .codex-extension-tags > span.is-authentication-required {
   border-color: var(--amber);
   background: var(--amber-soft);
   color: var(--amber);
+}
+
+.codex-extension-tags > span.is-checking,
+.codex-extension-tags > span.is-stale,
+.codex-extension-tags > span.is-key-missing,
+.codex-extension-tags > span.is-oauth-required,
+.codex-extension-tags > span.is-reauth-required {
+  border-color: var(--amber);
+  background: var(--amber-soft);
+  color: var(--amber);
+}
+
+.codex-extension-tags > span.is-failed {
+  border-color: var(--red);
+  background: var(--red-soft);
+  color: var(--red);
+}
+
+.codex-mcp-inline-error {
+  color: var(--red) !important;
+  white-space: normal;
 }
 
 .codex-extension-actions {
@@ -5580,6 +5623,15 @@ code.codex-compact-activity-subject {
 .codex-extension-actions > button:disabled {
   cursor: not-allowed;
   opacity: 0.4;
+}
+
+.codex-extension-actions > button.codex-mcp-text-action {
+  width: auto;
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  font-size: 8px;
+  font-weight: 640;
 }
 
 .codex-mcp-remove-confirm {
@@ -5798,6 +5850,183 @@ code.codex-compact-activity-subject {
 
 .codex-mcp-preset-note a:hover {
   color: var(--ink);
+}
+
+.codex-mcp-auth-editor {
+  display: grid;
+  gap: 11px;
+  padding: 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.codex-mcp-auth-editor > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.codex-mcp-auth-editor > header strong {
+  color: var(--ink);
+  font-size: 9.5px;
+}
+
+.codex-mcp-auth-editor > header p {
+  margin: 3px 0 0;
+  color: var(--ink-faint);
+  font-size: 8px;
+  line-height: 1.45;
+}
+
+.codex-mcp-auth-editor > header > span {
+  flex: 0 0 auto;
+  padding: 3px 5px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--ink-faint);
+  font-size: 7.5px;
+  font-weight: 640;
+}
+
+.codex-mcp-auth-note {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 8.5px;
+  line-height: 1.5;
+}
+
+.codex-mcp-auth-note.is-oauth {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 8px;
+  border: 1px solid var(--green);
+  border-radius: 7px;
+  background: var(--green-soft);
+}
+
+.codex-mcp-auth-note.is-oauth > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: var(--green);
+}
+
+.codex-mcp-auth-note.is-warning {
+  padding: 7px 8px;
+  border: 1px solid var(--amber);
+  border-radius: 7px;
+  background: var(--amber-soft);
+}
+
+.codex-mcp-network-consent {
+  display: flex !important;
+  align-items: flex-start !important;
+  gap: 8px !important;
+  padding-top: 10px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.codex-mcp-network-consent > input {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  margin: 1px 0 0;
+  accent-color: var(--green);
+}
+
+.codex-mcp-network-consent > span {
+  display: grid;
+  gap: 3px;
+}
+
+.codex-mcp-network-consent strong {
+  color: var(--ink-soft);
+  font-size: 8.5px;
+}
+
+.codex-mcp-network-consent small {
+  color: var(--ink-faint);
+  font-size: 8px;
+  line-height: 1.45;
+}
+
+.codex-mcp-network-consent code {
+  color: var(--ink-soft);
+  font-size: 7.5px;
+}
+
+.codex-mcp-oauth-notice {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 10px;
+  border: 1px solid var(--amber);
+  border-radius: 8px;
+  background: var(--amber-soft);
+  color: var(--amber);
+}
+
+.codex-mcp-oauth-notice.is-completed {
+  border-color: var(--green);
+  background: var(--green-soft);
+  color: var(--green);
+}
+
+.codex-mcp-oauth-notice.is-failed,
+.codex-mcp-oauth-notice.is-expired {
+  border-color: var(--red);
+  background: var(--red-soft);
+  color: var(--red);
+}
+
+.codex-mcp-oauth-notice > svg {
+  margin-top: 1px;
+}
+
+.codex-mcp-oauth-notice > div {
+  min-width: 0;
+}
+
+.codex-mcp-oauth-notice strong {
+  font-size: 9.5px;
+}
+
+.codex-mcp-oauth-notice p {
+  margin: 3px 0 0;
+  color: var(--ink-soft);
+  font-size: 8.5px;
+  line-height: 1.45;
+}
+
+.codex-mcp-oauth-notice a {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+  color: currentColor;
+  font-size: 8px;
+  font-weight: 650;
+}
+
+.codex-mcp-oauth-notice > button {
+  display: inline-flex;
+  width: 25px;
+  height: 25px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: currentColor;
+  cursor: pointer;
+}
+
+.codex-mcp-oauth-notice > button:hover {
+  background: var(--hover);
 }
 
 .codex-mcp-switches {
