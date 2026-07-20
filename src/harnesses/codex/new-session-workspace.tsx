@@ -3,14 +3,11 @@
 import Image from "next/image";
 import {
   ArrowUp,
-  AtSign,
-  ChevronDown,
   GitFork,
   LockKeyhole,
   LoaderCircle,
   Menu,
   PanelLeftOpen,
-  Paperclip,
   Settings2,
   Sparkles,
   SquareTerminal,
@@ -19,12 +16,21 @@ import {
 import { useEffect, useRef, useState } from "react";
 
 import {
+  CodexComposerReferences,
+  CodexComposerToolbar,
+  encodeCodexComposerReferences,
+} from "@/harnesses/codex/composer";
+import {
   shouldSubmitComposer,
   type OperationLanguage,
   type SendShortcut,
 } from "@/lib/operation-ui";
 import { getCodexUiCopy } from "@/harnesses/codex/ui";
-import type { CodexComposerImage, CodexSession } from "@/harnesses/codex/types";
+import type {
+  CodexComposerImage,
+  CodexComposerReference,
+  CodexSession,
+} from "@/harnesses/codex/types";
 import {
   clipboardCodexImageFiles,
   encodeCodexComposerImage,
@@ -37,7 +43,6 @@ import {
   codexDefaultModel,
   codexModelOptionsFromNativeResult,
   codexReasoningEffortForModel,
-  codexReasoningEffortLabel,
   type CodexModelOption,
 } from "@/harnesses/codex/models";
 import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
@@ -83,8 +88,8 @@ export function CodexNewSessionWorkspace({
   const [retryingEnvironment, setRetryingEnvironment] = useState(false);
   const [error, setError] = useState("");
   const [images, setImages] = useState<CodexComposerImage[]>([]);
+  const [references, setReferences] = useState<CodexComposerReference[]>([]);
   const promptRef = useRef<HTMLTextAreaElement>(null);
-  const imageInputRef = useRef<HTMLInputElement>(null);
   const selectedModel = modelOptions.find(
     (model) => model.id === selectedModelId,
   );
@@ -92,10 +97,6 @@ export function CodexNewSessionWorkspace({
     selectedModel,
     selectedModel ? reasoningEfforts[selectedModel.id] : undefined,
   );
-  const selectedReasoningDescription =
-    selectedModel?.supportedReasoningEfforts.find(
-      (option) => option.id === selectedReasoningEffort,
-    )?.description;
 
   useEffect(() => {
     if (!window.matchMedia("(min-width: 641px)").matches) {
@@ -176,7 +177,7 @@ export function CodexNewSessionWorkspace({
       return;
     }
     const instruction = prompt.trim();
-    if (!instruction && images.length === 0) {
+    if (!instruction && images.length === 0 && references.length === 0) {
       setError(ui.emptyInstruction(environment.codingAgent.label));
       promptRef.current?.focus();
       return;
@@ -188,16 +189,17 @@ export function CodexNewSessionWorkspace({
       const response = await apiFetch<ApiEnvelope<CodexSession>>(
         "/api/v1/sessions",
         {
-        method: "POST",
-        body: JSON.stringify({
-          environmentId: environment.id,
-          prompt: instruction,
-          images: images.map(encodeCodexComposerImage),
-          modelId: selectedModel.id,
-          ...(selectedReasoningEffort
-            ? { reasoningEffort: selectedReasoningEffort }
-            : {}),
-        }),
+          method: "POST",
+          body: JSON.stringify({
+            environmentId: environment.id,
+            prompt: instruction,
+            images: images.map(encodeCodexComposerImage),
+            references: encodeCodexComposerReferences(references),
+            modelId: selectedModel.id,
+            ...(selectedReasoningEffort
+              ? { reasoningEffort: selectedReasoningEffort }
+              : {}),
+          }),
         },
       );
       onCreated(response.data);
@@ -327,7 +329,7 @@ export function CodexNewSessionWorkspace({
           </div>
         </div>
 
-        <div className={styles.composer}>
+        <div className={`composer-shell ${styles.composer}`}>
           {images.length > 0 ? (
             <div className={styles.imagePreviews} aria-label="Attached images">
               {images.map((image) => (
@@ -355,6 +357,16 @@ export function CodexNewSessionWorkspace({
               ))}
             </div>
           ) : null}
+          <CodexComposerReferences
+            language={language}
+            references={references}
+            onRemove={(id) => {
+              setReferences((current) =>
+                current.filter((reference) => reference.id !== id),
+              );
+              setError("");
+            }}
+          />
           {/*
             Codex slash-command completion belongs in this Codex composer. Future harnesses
             provide their own composer instead of registering commands in a shared catalog.
@@ -375,7 +387,8 @@ export function CodexNewSessionWorkspace({
             onPaste={(event) => {
               const pasted = clipboardCodexImageFiles(event.clipboardData);
               if (pasted.length === 0) return;
-              event.preventDefault();
+              // Preserve accompanying clipboard text while the image is added
+              // as its own native Codex input.
               void addImages(pasted);
             }}
             onKeyDown={(event) => {
@@ -396,134 +409,93 @@ export function CodexNewSessionWorkspace({
               }
             }}
           />
-          <div className={styles.composerToolbar}>
-            <div>
+          <CodexComposerToolbar
+            language={language}
+            environmentId={environment.id}
+            agentLabel={environment.codingAgent.label}
+            references={references}
+            onReferencesChange={setReferences}
+            onAttachmentError={setError}
+            attachmentDisabled={
+              creating ||
+              environment.status !== "ready" ||
+              environment.codingAgent.status !== "connected"
+            }
+            modelOptions={modelOptions}
+            selectedModel={selectedModel}
+            modelPlaceholder={
+              modelCatalogState === "loading"
+                ? ui.startingAgent(environment.codingAgent.label)
+                : ui.modelsUnavailable
+            }
+            modelTitle={modelCatalogError || undefined}
+            modelDisabled={
+              creating ||
+              modelCatalogState !== "ready" ||
+              modelOptions.length === 0
+            }
+            reasoningDisabled={creating}
+            selectedReasoningEffort={selectedReasoningEffort}
+            onModelChange={(modelId) => {
+              const model = modelOptions.find(
+                (candidate) => candidate.id === modelId,
+              );
+              if (!model) return;
+              setSelectedModelId(model.id);
+              setReasoningEfforts((current) => ({
+                ...current,
+                [model.id]: codexReasoningEffortForModel(
+                  model,
+                  current[model.id],
+                ),
+              }));
+            }}
+            onReasoningEffortChange={(effort) => {
+              if (!selectedModel) return;
+              setReasoningEfforts((current) => ({
+                ...current,
+                [selectedModel.id]: effort,
+              }));
+            }}
+            status={{
+              state:
+                modelCatalogState === "error"
+                  ? "unavailable"
+                  : modelCatalogState === "ready"
+                    ? "ready"
+                    : "loading",
+              label:
+                modelCatalogState === "error"
+                  ? ui.modelsUnavailable
+                  : modelCatalogState === "ready"
+                    ? ui.environmentReady(environment.revision)
+                    : ui.startingAgent(environment.codingAgent.label),
+            }}
+            action={
               <button
                 type="button"
-                aria-label={ui.attachFile}
-                onClick={() => imageInputRef.current?.click()}
+                className="send-button"
+                aria-label={creating ? ui.starting : ui.sendAndStart}
+                disabled={
+                  creating ||
+                  environment.status !== "ready" ||
+                  environment.codingAgent.status !== "connected" ||
+                  modelCatalogState !== "ready" ||
+                  !selectedModel ||
+                  (!prompt.trim() &&
+                    images.length === 0 &&
+                    references.length === 0)
+                }
+                onClick={() => void createSession()}
               >
-                <Paperclip size={17} aria-hidden="true" />
+                {creating ? (
+                  <span className="activity-spinner" aria-hidden="true" />
+                ) : (
+                  <ArrowUp size={17} strokeWidth={2.5} aria-hidden="true" />
+                )}
               </button>
-              <input
-                ref={imageInputRef}
-                className={styles.srOnly}
-                type="file"
-                accept="image/png,image/jpeg,image/gif,image/webp"
-                multiple
-                tabIndex={-1}
-                onChange={(event) => {
-                  const files = Array.from(event.currentTarget.files ?? []);
-                  event.currentTarget.value = "";
-                  if (files.length > 0) void addImages(files);
-                }}
-              />
-              <button type="button" aria-label={ui.mentionFile}>
-                <AtSign size={17} aria-hidden="true" />
-              </button>
-              <span className={styles.boundAgent}>
-                <span className={styles.boundAgentMark} aria-hidden="true" />
-                <span className={styles.harnessLabel}>
-                  {environment.codingAgent.label}
-                </span>
-                <label className={styles.modelPicker}>
-                  <span className={styles.srOnly}>
-                    {ui.selectModel(environment.codingAgent.label)}
-                  </span>
-                  <select
-                    name="new-session-model"
-                    aria-label={ui.selectModel(
-                      environment.codingAgent.label,
-                    )}
-                    value={selectedModelId}
-                    disabled={
-                      modelCatalogState !== "ready" ||
-                      modelOptions.length === 0
-                    }
-                    onChange={(event) => {
-                      const model = modelOptions.find(
-                        (candidate) => candidate.id === event.target.value,
-                      );
-                      if (!model) return;
-                      setSelectedModelId(model.id);
-                      setReasoningEfforts((current) => ({
-                        ...current,
-                        [model.id]: codexReasoningEffortForModel(
-                          model,
-                          current[model.id],
-                        ),
-                      }));
-                    }}
-                  >
-                    {modelOptions.length > 0 ? (
-                      modelOptions.map((model) => (
-                        <option value={model.id} key={model.id}>
-                          {model.displayName}
-                        </option>
-                      ))
-                    ) : (
-                      <option value="">
-                        {modelCatalogState === "loading"
-                          ? ui.startingAgent(environment.codingAgent.label)
-                          : ui.modelsUnavailable}
-                      </option>
-                    )}
-                  </select>
-                  <ChevronDown size={12} aria-hidden="true" />
-                </label>
-                {selectedModel?.supportedReasoningEfforts.length ? (
-                  <label
-                    className={styles.reasoningPicker}
-                    title={selectedReasoningDescription}
-                  >
-                    <span className={styles.srOnly}>
-                      {ui.selectReasoningEffort(selectedModel.displayName)}
-                    </span>
-                    <select
-                      name="new-session-reasoning-effort"
-                      aria-label={ui.selectReasoningEffort(
-                        selectedModel.displayName,
-                      )}
-                      value={selectedReasoningEffort}
-                      disabled={creating}
-                      onChange={(event) =>
-                        setReasoningEfforts((current) => ({
-                          ...current,
-                          [selectedModel.id]: event.target.value,
-                        }))
-                      }
-                    >
-                      {selectedModel.supportedReasoningEfforts.map((effort) => (
-                        <option value={effort.id} key={effort.id}>
-                          {codexReasoningEffortLabel(effort.id)}
-                        </option>
-                      ))}
-                    </select>
-                    <ChevronDown size={12} aria-hidden="true" />
-                  </label>
-                ) : null}
-              </span>
-            </div>
-            <button
-              type="button"
-              className={styles.sendButton}
-              aria-label={creating ? ui.starting : ui.sendAndStart}
-              disabled={
-                creating ||
-                environment.status !== "ready" ||
-                environment.codingAgent.status !== "connected" ||
-                modelCatalogState !== "ready" ||
-                !selectedModel
-              }
-              onClick={() => void createSession()}
-            >
-              {creating ? (
-                <span className={styles.spinner} />
-              ) : (
-                <ArrowUp size={18} aria-hidden="true" />
-              )}
-            </button>
-          </div>
+            }
+          />
         </div>
 
         {modelCatalogState === "loading" &&

@@ -13,7 +13,7 @@ test("projects validated image bytes into the native Codex image input", () => {
       { name: "pixel.png", mimeType: "image/png", dataBase64: onePixelPng },
     ]),
     [
-      { type: "text", text: "Inspect this" },
+      { type: "text", text: "Inspect this", text_elements: [] },
       { type: "image", url: `data:image/png;base64,${onePixelPng}` },
     ],
   );
@@ -30,5 +30,38 @@ test("rejects image content that does not match its declared type", () => {
         },
       ]),
     (error) => error instanceof HttpError && error.code === "invalid_codex_image",
+  );
+});
+
+test("preserves native Codex file mentions and local image inputs", () => {
+  assert.deepEqual(
+    nativeCodexTurnInput(
+      "Compare these",
+      [],
+      [
+        {
+          kind: "mention",
+          name: "README.md",
+          path: "/workspace/README.md",
+        },
+        {
+          kind: "localImage",
+          name: "diagram.png",
+          path: "/workspace/.sandpi/uploads/upload-1/diagram.png",
+        },
+      ],
+    ),
+    [
+      { type: "text", text: "Compare these", text_elements: [] },
+      {
+        type: "mention",
+        name: "README.md",
+        path: "/workspace/README.md",
+      },
+      {
+        type: "localImage",
+        path: "/workspace/.sandpi/uploads/upload-1/diagram.png",
+      },
+    ],
   );
 });

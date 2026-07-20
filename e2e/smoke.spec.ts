@@ -17,11 +17,90 @@ import type {
 import type {
   CodexEventEnvelope,
   CodexNativeSnapshot,
+  CodexThreadItem,
+  CodexTurn,
 } from "../src/harnesses/codex/types";
 import {
   mockEnvironmentAudit,
   mockEnvironmentMetrics,
 } from "../src/lib/mock-data";
+
+interface ControlledEventWindow extends Window {
+  __sandpiEmitEvent?: (
+    urlIncludes: string,
+    type: string,
+    payload: unknown,
+  ) => boolean;
+}
+
+async function installControlledEventSource(page: Page) {
+  await page.addInitScript(() => {
+    class ControlledEventSource extends EventTarget {
+      static readonly CONNECTING = 0;
+      static readonly OPEN = 1;
+      static readonly CLOSED = 2;
+
+      readonly CONNECTING = 0;
+      readonly OPEN = 1;
+      readonly CLOSED = 2;
+      readonly url: string;
+      readonly withCredentials: boolean;
+      readyState = 1;
+
+      constructor(url: string | URL, init?: EventSourceInit) {
+        super();
+        this.url = String(url);
+        this.withCredentials = init?.withCredentials ?? false;
+        sources.push(this);
+      }
+
+      close() {
+        this.readyState = ControlledEventSource.CLOSED;
+      }
+    }
+
+    const sources: ControlledEventSource[] = [];
+    const host = window as ControlledEventWindow;
+    host.__sandpiEmitEvent = (urlIncludes, type, payload) => {
+      const source = sources.findLast(
+        (candidate) =>
+          candidate.readyState === ControlledEventSource.OPEN &&
+          candidate.url.includes(urlIncludes),
+      );
+      if (!source) return false;
+      source.dispatchEvent(
+        new MessageEvent(type, { data: JSON.stringify(payload) }),
+      );
+      return true;
+    };
+    Object.defineProperty(window, "EventSource", {
+      configurable: true,
+      writable: true,
+      value: ControlledEventSource,
+    });
+  });
+}
+
+async function emitControlledEvent(
+  page: Page,
+  urlIncludes: string,
+  type: string,
+  payload: unknown,
+) {
+  await expect
+    .poll(() =>
+      page.evaluate(
+        ({ urlIncludes, type, payload }) =>
+          (window as ControlledEventWindow).__sandpiEmitEvent?.(
+            urlIncludes,
+            type,
+            payload,
+          ) ?? false,
+        { urlIncludes, type, payload },
+      ),
+    )
+    .toBe(true);
+}
 
 async function pageBlocksUnload(page: Page) {
   return page.evaluate(() => {
@@ -34,7 +113,9 @@ async function activeWorkspace(request: APIRequestContext) {
   const response = await request.get("/api/v1/bootstrap");
   expect(response.ok()).toBeTruthy();
   const bootstrap = (await response.json()) as ApiEnvelope<SandpiBootstrap>;
-  const session = bootstrap.data.sessions.find((candidate) => !candidate.archived);
+  const session = bootstrap.data.sessions.find(
+    (candidate) => !candidate.archived,
+  );
   const environment = bootstrap.data.environments.find(
     (candidate) => candidate.id === session?.environmentId,
   );
@@ -68,29 +149,23 @@ test("loads the live workspace and Environment credential surface", async ({
       .getByRole("button", { name: "New session in Development" })
       .click();
   }
+  await expect(newSessionHeading).toBeVisible();
   await expect(
-    newSessionHeading,
+    page.getByText("Development", { exact: true }).first(),
   ).toBeVisible();
-  await expect(page.getByText("Development", { exact: true }).first()).toBeVisible();
 
-  await page.locator('input[type="file"]').setInputFiles({
-    name: "pixel.png",
-    mimeType: "image/png",
-    buffer: Buffer.from(
-      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
-      "base64",
-    ),
-  });
-  await expect(page.getByRole("img", { name: "pixel.png" })).toBeVisible();
-
-  await page.getByRole("button", { name: "Development settings" }).last().click();
+  await page
+    .getByRole("button", { name: "Development settings" })
+    .last()
+    .click();
   await page.getByRole("button", { name: /Coding agent/ }).click();
   const settingsLayout = await page
     .locator(".settings-content")
     .evaluate((content) => {
       const section = content.querySelector<HTMLElement>(".settings-section");
       const body = content.querySelector<HTMLElement>(".settings-section-body");
-      if (!section || !body) throw new Error("Environment settings layout missing");
+      if (!section || !body)
+        throw new Error("Environment settings layout missing");
       const sectionStyle = window.getComputedStyle(section);
       return {
         contentWidth: content.getBoundingClientRect().width,
@@ -102,9 +177,9 @@ test("loads the live workspace and Environment credential surface", async ({
       };
     });
   expect(settingsLayout.paddingInline).toBeLessThanOrEqual(64);
-  expect(settingsLayout.bodyWidth / settingsLayout.contentWidth).toBeGreaterThan(
-    0.88,
-  );
+  expect(
+    settingsLayout.bodyWidth / settingsLayout.contentWidth,
+  ).toBeGreaterThan(0.88);
   expect(settingsLayout.bodyOverflow).toBe(0);
   await expect(
     page.locator(".credential-row").getByText(/Connected|Not connected/),
@@ -134,6 +209,7 @@ test("waits for native New Session models and scopes reasoning effort by model",
 
   let releaseCatalog!: () => void;
   let createSessionBody: Record<string, unknown> | undefined;
+  let uploadBody: Record<string, unknown> | undefined;
   const catalogGate = new Promise<void>((resolve) => {
     releaseCatalog = resolve;
   });
@@ -199,6 +275,46 @@ test("waits for native New Session models and scopes reasoning effort by model",
       });
     },
   );
+  await page.route(
+    `**/api/v1/environments/${encodeURIComponent(environment.id)}/harnesses/codex/uploads`,
+    async (route) => {
+      uploadBody = route.request().postDataJSON() as Record<string, unknown>;
+      await route.fulfill({
+        status: 201,
+        json: {
+          data: {
+            id: "upload:e2e-requirements",
+            name: "requirements.pdf",
+            path: "/workspace/.sandpi/uploads/e2e-requirements/requirements.pdf",
+            mimeType: "application/pdf",
+            sizeBytes: 13,
+            kind: "mention",
+            source: "upload",
+          },
+        },
+      });
+    },
+  );
+  await page.route(
+    `**/api/v1/environments/${encodeURIComponent(environment.id)}/files/search?*`,
+    async (route) => {
+      expect(new URL(route.request().url()).searchParams.get("query")).toBe(
+        "README",
+      );
+      await route.fulfill({
+        json: {
+          data: [
+            {
+              name: "README.md",
+              path: "/workspace/README.md",
+              kind: "file",
+            },
+          ],
+          meta: { source: "sandbox0", root: "/workspace" },
+        },
+      });
+    },
+  );
 
   await page.goto(
     `/?team=${encodeURIComponent(environment.teamId)}&environment=${encodeURIComponent(environment.id)}&new=1`,
@@ -228,6 +344,28 @@ test("waits for native New Session models and scopes reasoning effort by model",
   await expect(fastEffortPicker).toHaveValue("high");
   await expect(fastEffortPicker.locator("option")).toHaveText(["Low", "High"]);
 
+  await page.getByTestId("codex-composer-upload-input").setInputFiles({
+    name: "requirements.pdf",
+    mimeType: "application/pdf",
+    buffer: Buffer.from("%PDF-e2e-test"),
+  });
+  await expect(
+    page.getByText("requirements.pdf", { exact: true }),
+  ).toBeVisible();
+  await expect
+    .poll(() => uploadBody)
+    .toMatchObject({
+      name: "requirements.pdf",
+      mimeType: "application/pdf",
+      dataBase64: Buffer.from("%PDF-e2e-test").toString("base64"),
+    });
+  await page.getByRole("button", { name: "Mention a Workspace file" }).click();
+  await page.getByPlaceholder("Search /workspace").fill("README");
+  await page.getByRole("option").filter({ hasText: "README.md" }).click();
+  await expect(
+    page.locator(".composer-file-reference").filter({ hasText: "README.md" }),
+  ).toBeVisible();
+
   await modelPicker.selectOption("e2e-codex-deep");
   const deepEffortPicker = page.getByRole("combobox", {
     name: "Select reasoning effort for E2E Codex Deep",
@@ -243,18 +381,34 @@ test("waits for native New Session models and scopes reasoning effort by model",
   await modelPicker.selectOption("e2e-codex-deep");
   await expect(deepEffortPicker).toHaveValue("medium");
   await page
-    .getByPlaceholder(`Ask ${environment.codingAgent.label} to work on something…`)
+    .getByPlaceholder(
+      `Ask ${environment.codingAgent.label} to work on something…`,
+    )
     .fill("Verify native model settings.");
   await page
     .getByRole("button", {
       name: "Send instruction and start Session",
     })
     .click();
-  await expect.poll(() => createSessionBody).toMatchObject({
-    environmentId: environment.id,
-    modelId: "e2e-codex-deep",
-    reasoningEffort: "medium",
-  });
+  await expect
+    .poll(() => createSessionBody)
+    .toMatchObject({
+      environmentId: environment.id,
+      modelId: "e2e-codex-deep",
+      reasoningEffort: "medium",
+      references: [
+        {
+          name: "requirements.pdf",
+          path: "/workspace/.sandpi/uploads/e2e-requirements/requirements.pdf",
+          kind: "mention",
+        },
+        {
+          name: "README.md",
+          path: "/workspace/README.md",
+          kind: "mention",
+        },
+      ],
+    });
   expect(browserErrors).toEqual([]);
 });
 
@@ -318,22 +472,32 @@ test("refreshes the Codex account and live limits after device login", async ({
       const basePath =
         `/api/v1/environments/${encodeURIComponent(environment.id)}` +
         "/harnesses/codex/device-login";
-      if (requestUrl.pathname === basePath && route.request().method() === "GET") {
+      if (
+        requestUrl.pathname === basePath &&
+        route.request().method() === "GET"
+      ) {
         await route.fulfill({
           status: 200,
           contentType: "application/json",
-          body: JSON.stringify({ data: loginStarted ? {
-            id: "codex-auth-test",
-            environmentId: environment.id,
-            status: "awaiting_user",
-            verificationUrl: "https://auth.openai.com/device",
-            userCode: "TEST-CODE",
-            expiresAt: 1_900_000_000,
-          } : null }),
+          body: JSON.stringify({
+            data: loginStarted
+              ? {
+                  id: "codex-auth-test",
+                  environmentId: environment.id,
+                  status: "awaiting_user",
+                  verificationUrl: "https://auth.openai.com/device",
+                  userCode: "TEST-CODE",
+                  expiresAt: 1_900_000_000,
+                }
+              : null,
+          }),
         });
         return;
       }
-      if (requestUrl.pathname === basePath && route.request().method() === "POST") {
+      if (
+        requestUrl.pathname === basePath &&
+        route.request().method() === "POST"
+      ) {
         loginStarted = true;
         await route.fulfill({
           status: 201,
@@ -432,10 +596,9 @@ test("refreshes the Codex account and live limits after device login", async ({
   await settingsDialog.getByRole("button", { name: "Connect Codex" }).click();
 
   await expect(
-    settingsDialog.locator(".codex-account-identity").getByText(
-      "codex-user@example.com",
-      { exact: true },
-    ),
+    settingsDialog
+      .locator(".codex-account-identity")
+      .getByText("codex-user@example.com", { exact: true }),
   ).toBeVisible();
   await expect(
     settingsDialog.locator(".codex-account-identity").getByText("Pro", {
@@ -536,9 +699,7 @@ test("prefills native MCP definitions from the three shortcut groups", async ({
   );
   await expect(
     settingsDialog.getByLabel("Server URL", { exact: true }),
-  ).toHaveValue(
-    "https://connector.oomol.com/v1/mcp",
-  );
+  ).toHaveValue("https://connector.oomol.com/v1/mcp");
   await settingsDialog.getByRole("button", { name: "Cancel" }).click();
 
   await settingsDialog
@@ -567,9 +728,7 @@ test("prefills native MCP definitions from the three shortcut groups", async ({
   );
   await expect(
     settingsDialog.getByLabel("Server URL", { exact: true }),
-  ).toHaveValue(
-    "https://mcp.context7.com/mcp",
-  );
+  ).toHaveValue("https://mcp.context7.com/mcp");
 });
 
 test("configures Sandbox0 network modes through safe domain exceptions", async ({
@@ -665,11 +824,11 @@ test("configures Sandbox0 network modes through safe domain exceptions", async (
 
   await domainInput.fill("GitHub.COM.");
   await settingsDialog.getByRole("button", { name: "Allow domain" }).click();
-  await expect(settingsDialog.getByText("github.com", { exact: true })).toBeVisible();
+  await expect(
+    settingsDialog.getByText("github.com", { exact: true }),
+  ).toBeVisible();
 
-  await settingsDialog
-    .getByText("Allow by default", { exact: true })
-    .click();
+  await settingsDialog.getByText("Allow by default", { exact: true }).click();
   await expect(
     settingsDialog.getByRole("alert").getByText("Clear 1 allowed domain?"),
   ).toBeVisible();
@@ -677,11 +836,11 @@ test("configures Sandbox0 network modes through safe domain exceptions", async (
     .getByRole("button", { name: "Keep current mode" })
     .click();
   await expect(blockByDefault).toBeChecked();
-  await expect(settingsDialog.getByText("github.com", { exact: true })).toBeVisible();
+  await expect(
+    settingsDialog.getByText("github.com", { exact: true }),
+  ).toBeVisible();
 
-  await settingsDialog
-    .getByText("Allow by default", { exact: true })
-    .click();
+  await settingsDialog.getByText("Allow by default", { exact: true }).click();
   await settingsDialog
     .getByRole("button", { name: "Switch & clear domains" })
     .click();
@@ -750,9 +909,7 @@ test("requires an exact Environment name before permanent deletion", async ({
     .click();
   await page.getByRole("button", { name: "Delete Environment" }).click();
 
-  const confirmation = page.getByLabel(
-    `Type ${environment.name} to confirm`,
-  );
+  const confirmation = page.getByLabel(`Type ${environment.name} to confirm`);
   const deletePermanently = page.getByRole("button", {
     name: "Delete permanently",
   });
@@ -766,9 +923,7 @@ test("requires an exact Environment name before permanent deletion", async ({
   await expect(
     page.getByRole("dialog", { name: `${environment.name} settings` }),
   ).toBeHidden();
-  await expect
-    .poll(() => deleteCalls)
-    .toBe(1);
+  await expect.poll(() => deleteCalls).toBe(1);
   await expect(
     page.getByRole("button", { name: `${environment.name} settings` }),
   ).toHaveCount(0);
@@ -782,15 +937,23 @@ test("requires an exact Environment name before permanent deletion", async ({
 test("serves shared Preferences and Team layouts", async ({ page }) => {
   await page.goto("/preferences");
   await expect(page).toHaveURL(/\/preferences\/?$/);
-  await expect(page.getByRole("heading", { name: "Preferences" })).toBeVisible();
-  await expect(page.getByText("Environment and coding agent settings live with each Environment.")).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Preferences" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText(
+      "Environment and coding agent settings live with each Environment.",
+    ),
+  ).toBeVisible();
 
   await page.goto("/team");
   await expect(page).toHaveURL(/\/team\/?$/);
   await expect(
     page.getByRole("heading", { level: 1, name: "Sandpi", exact: true }),
   ).toBeVisible();
-  await expect(page.getByText("Sandpi control plane", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("Sandpi control plane", { exact: true }),
+  ).toBeVisible();
 });
 
 test("keeps the Codex live event response open between tool updates", async ({
@@ -871,7 +1034,9 @@ test("shows a Sandbox0 credential failure instead of loading forever", async ({
   const activityView = page.getByLabel("Codex Session Activity", {
     exact: true,
   });
-  await expect(activityView.getByRole("alert").getByText(message)).toBeVisible();
+  await expect(
+    activityView.getByRole("alert").getByText(message),
+  ).toBeVisible();
   await expect(activityView.getByText("Loading Codex activity…")).toBeHidden();
 });
 
@@ -902,11 +1067,321 @@ test("shows a fallback when the Codex EventSource handshake fails", async ({
   );
 
   await expect(
-    page.getByRole("alert").getByText(
-      "The Codex event stream could not be opened. Check the Sandpi server connection and deployment configuration.",
-    ),
+    page
+      .getByRole("alert")
+      .getByText(
+        "The Codex event stream could not be opened. Check the Sandpi server connection and deployment configuration.",
+      ),
   ).toBeVisible();
   await expect(page.getByText("Loading conversation…")).toBeHidden();
+});
+
+test("keeps an optimistic prompt ahead of native Activity without duplicating it", async ({
+  page,
+  request,
+}) => {
+  const workspace = await activeWorkspace(request);
+  test.skip(!workspace, "An active Session is required for this check.");
+  if (!workspace) return;
+  const { environment, session } = workspace;
+  const eventPath = `/api/v1/sessions/${session.id}/events`;
+  const nativeThreadId = "thread-e2e-optimistic-order";
+  const nativeTurnId = "turn-e2e-optimistic-order";
+  const prompt = "Keep this prompt ahead of its Activity.";
+  const now = Date.now() / 1_000;
+  const snapshot: CodexNativeSnapshot = {
+    protocol: "codex-app-server",
+    nativeSessionId: nativeThreadId,
+    historyRevision: 1,
+    modelId: "e2e-order-model",
+    reasoningEffort: "high",
+    sessionStatus: "waiting",
+    forkableTurnIds: [],
+    activity: {
+      source: "codex-rollout",
+      availability: "available",
+      error: null,
+      records: [],
+    },
+    thread: {
+      id: nativeThreadId,
+      createdAt: now,
+      updatedAt: now,
+      status: { type: "idle" },
+      turns: [],
+    },
+  };
+  let turnRequestBody:
+    | {
+        clientMessageId?: string;
+        references?: Array<{
+          name: string;
+          path: string;
+          kind: string;
+        }>;
+      }
+    | undefined;
+  let releaseTurnResponse!: () => void;
+  const turnResponseGate = new Promise<void>((resolve) => {
+    releaseTurnResponse = resolve;
+  });
+
+  await installControlledEventSource(page);
+  await page.route("**/api/v1/sessions/**/models", async (route) => {
+    await route.fulfill({
+      json: {
+        data: {
+          data: [
+            {
+              id: snapshot.modelId,
+              displayName: "E2E order model",
+              isDefault: true,
+              defaultReasoningEffort: "high",
+              supportedReasoningEfforts: [
+                {
+                  reasoningEffort: "high",
+                  description: "Deep reasoning",
+                },
+              ],
+            },
+          ],
+        },
+        meta: { availability: "available", source: "codex" },
+      },
+    });
+  });
+  await page.route(
+    `**/api/v1/sessions/${encodeURIComponent(session.id)}/turns`,
+    async (route) => {
+      turnRequestBody = route.request().postDataJSON() as {
+        clientMessageId?: string;
+        references?: Array<{
+          name: string;
+          path: string;
+          kind: string;
+        }>;
+      };
+      await turnResponseGate;
+      await route.fulfill({
+        status: 202,
+        json: {
+          data: {
+            requestId: "turn-start:e2e-order",
+            clientMessageId: turnRequestBody.clientMessageId,
+            nativeTurnId,
+          },
+        },
+      });
+    },
+  );
+  await page.route(
+    `**/api/v1/environments/${encodeURIComponent(environment.id)}/files/search?*`,
+    async (route) => {
+      await route.fulfill({
+        json: {
+          data: [
+            {
+              name: "page.tsx",
+              path: "/workspace/app/page.tsx",
+              kind: "file",
+            },
+          ],
+          meta: { source: "sandbox0", root: "/workspace" },
+        },
+      });
+    },
+  );
+
+  await page.goto(
+    `/?team=${encodeURIComponent(environment.teamId)}&environment=${encodeURIComponent(environment.id)}&session=${encodeURIComponent(session.id)}`,
+  );
+  await emitControlledEvent(page, eventPath, "snapshot", snapshot);
+  await expect(page.getByText("Loading conversation…")).toBeHidden();
+
+  const composer = page.getByRole("textbox", {
+    name: `Message ${environment.codingAgent.label}`,
+  });
+  await expect(page.getByTestId("codex-composer-upload-input")).toHaveCount(1);
+  await page.getByRole("button", { name: "Mention a Workspace file" }).click();
+  await page.getByPlaceholder("Search /workspace").fill("page");
+  await page.getByRole("option").filter({ hasText: "app/page.tsx" }).click();
+  await composer.fill(prompt);
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect
+    .poll(() => turnRequestBody?.clientMessageId)
+    .toMatch(/^user-message-/);
+  const clientMessageId = turnRequestBody?.clientMessageId;
+  expect(clientMessageId).toBeTruthy();
+  expect(turnRequestBody?.references).toEqual([
+    {
+      name: "page.tsx",
+      path: "/workspace/app/page.tsx",
+      kind: "mention",
+    },
+  ]);
+  await expect(composer).toHaveValue("");
+  await expect(page.getByText(prompt, { exact: true })).toHaveCount(1);
+  await expect(
+    page.getByRole("button", { name: "Starting Codex turn" }),
+  ).toHaveAttribute("aria-busy", "true");
+
+  const userRow = page.locator(".message-column > .message-user");
+  const activityRow = page.locator(
+    ".message-column > .message-codex-turn-activity",
+  );
+  await expect(userRow).toHaveCount(1);
+  await expect(activityRow).toHaveCount(1);
+  const initialOrder = await Promise.all([
+    userRow.boundingBox(),
+    activityRow.boundingBox(),
+  ]);
+  expect(initialOrder[0]).not.toBeNull();
+  expect(initialOrder[1]).not.toBeNull();
+  expect(initialOrder[0]!.y).toBeLessThan(initialOrder[1]!.y);
+
+  const runningTurn: CodexTurn = {
+    id: nativeTurnId,
+    items: [],
+    itemsView: "full",
+    status: "inProgress",
+    error: null,
+    startedAt: now,
+    completedAt: null,
+    durationMs: null,
+  };
+  const nativeUserMessage: CodexThreadItem = {
+    type: "userMessage",
+    id: "native-user-e2e-order",
+    clientId: clientMessageId!,
+    content: [
+      { type: "text", text: prompt, text_elements: [] },
+      {
+        type: "mention",
+        name: "page.tsx",
+        path: "/workspace/app/page.tsx",
+      },
+    ],
+  };
+  const runningCommand: CodexThreadItem = {
+    type: "commandExecution",
+    id: "native-command-e2e-order",
+    command: "rg --files",
+    cwd: "/workspace",
+    processId: null,
+    source: "agent",
+    status: "inProgress",
+    commandActions: [
+      { type: "listFiles", command: "rg --files", path: "/workspace" },
+    ],
+    aggregatedOutput: "app/page.tsx\n",
+    exitCode: null,
+    durationMs: null,
+  };
+  let sequence = 1;
+  const envelope = (
+    notification: CodexEventEnvelope["notification"],
+  ): CodexEventEnvelope => ({
+    harness: "codex",
+    harnessVersion: "e2e",
+    protocolVersion: "v2",
+    sequence: sequence++,
+    receivedAt: now + sequence,
+    notification,
+  });
+
+  await emitControlledEvent(
+    page,
+    eventPath,
+    "notification",
+    envelope({
+      method: "turn/started",
+      params: { threadId: nativeThreadId, turn: runningTurn },
+    }),
+  );
+  await emitControlledEvent(
+    page,
+    eventPath,
+    "notification",
+    envelope({
+      method: "item/started",
+      params: {
+        threadId: nativeThreadId,
+        turnId: nativeTurnId,
+        item: nativeUserMessage,
+        startedAtMs: now * 1_000,
+      },
+    }),
+  );
+  await expect(page.getByText(prompt, { exact: true })).toHaveCount(1);
+  releaseTurnResponse();
+  await emitControlledEvent(
+    page,
+    eventPath,
+    "notification",
+    envelope({
+      method: "item/started",
+      params: {
+        threadId: nativeThreadId,
+        turnId: nativeTurnId,
+        item: runningCommand,
+        startedAtMs: now * 1_000 + 100,
+      },
+    }),
+  );
+  const activityDetails = activityRow.locator(":scope > details");
+  await expect(activityDetails).toHaveAttribute("open", "");
+  const runningActivityHeight = await activityDetails.evaluate(
+    (details) => details.getBoundingClientRect().height,
+  );
+  expect(runningActivityHeight).toBeGreaterThan(40);
+
+  const completedCommand: CodexThreadItem = {
+    ...runningCommand,
+    status: "completed",
+    exitCode: 0,
+    durationMs: 250,
+  };
+  const finalMessage: CodexThreadItem = {
+    type: "agentMessage",
+    id: "native-final-e2e-order",
+    text: "The ordering is stable.",
+    phase: "final_answer",
+    memoryCitation: null,
+  };
+  const completedTurn: CodexTurn = {
+    ...runningTurn,
+    items: [nativeUserMessage, completedCommand, finalMessage],
+    status: "completed",
+    completedAt: now + 1,
+    durationMs: 1_000,
+  };
+  await emitControlledEvent(
+    page,
+    eventPath,
+    "notification",
+    envelope({
+      method: "turn/completed",
+      params: { threadId: nativeThreadId, turn: completedTurn },
+    }),
+  );
+
+  await expect(page.getByText(prompt, { exact: true })).toHaveCount(1);
+  await expect(
+    page.getByText("The ordering is stable.", { exact: true }),
+  ).toBeVisible();
+  await expect(activityDetails).toHaveAttribute("open", "");
+  const completedActivityHeight = await activityDetails.evaluate(
+    (details) => details.getBoundingClientRect().height,
+  );
+  expect(completedActivityHeight).toBeGreaterThan(40);
+  const completedRows = await page
+    .locator(".message-column > .message")
+    .evaluateAll((rows) => rows.map((row) => row.className));
+  expect(completedRows).toEqual([
+    "message message-user",
+    "message message-codex-turn-activity",
+    "message message-assistant",
+  ]);
 });
 
 test("keeps Codex Session Activity native and Environment Audit separate", async ({
@@ -959,21 +1434,23 @@ test("keeps Codex Session Activity native and Environment Audit separate", async
             input:
               'const r = await tools.exec_command({"cmd":"git status --short"});',
           },
-          outputs: [{
-            outputType: "custom_tool_call_output",
-            createdAt: startedAt + 1.2,
-            nativeStatus: null,
-            payload: {
-              type: "custom_tool_call_output",
-              call_id: "call-e2e-rollout-exec",
-              output: [
-                {
-                  type: "input_text",
-                  text: "Script running with cell ID 6\nOutput:\nclean\n",
-                },
-              ],
+          outputs: [
+            {
+              outputType: "custom_tool_call_output",
+              createdAt: startedAt + 1.2,
+              nativeStatus: null,
+              payload: {
+                type: "custom_tool_call_output",
+                call_id: "call-e2e-rollout-exec",
+                output: [
+                  {
+                    type: "input_text",
+                    text: "Script running with cell ID 6\nOutput:\nclean\n",
+                  },
+                ],
+              },
             },
-          }],
+          ],
           codeModeTools: ["exec_command"],
           payloadTruncated: false,
         },
@@ -996,16 +1473,18 @@ test("keeps Codex Session Activity native and Environment Audit separate", async
             name: "wait",
             arguments: '{"cell_id":"6"}',
           },
-          outputs: [{
-            outputType: "function_call_output",
-            createdAt: startedAt + 2.1,
-            nativeStatus: null,
-            payload: {
-              type: "function_call_output",
-              call_id: "call-e2e-rollout-wait",
-              output: "Script completed",
+          outputs: [
+            {
+              outputType: "function_call_output",
+              createdAt: startedAt + 2.1,
+              nativeStatus: null,
+              payload: {
+                type: "function_call_output",
+                call_id: "call-e2e-rollout-wait",
+                output: "Script completed",
+              },
             },
-          }],
+          ],
           codeModeTools: [],
           payloadTruncated: false,
         },
@@ -1219,9 +1698,7 @@ test("keeps Codex Session Activity native and Environment Audit separate", async
   const activityFilter = activityView.getByRole("combobox", {
     name: "Filter Codex Session Activity",
   });
-  await expect(
-    activityHeading,
-  ).toBeVisible();
+  await expect(activityHeading).toBeVisible();
   await expect(activityFilter).toBeVisible();
   const [activityHeadingBox, activityFilterBox] = await Promise.all([
     activityHeading.boundingBox(),
@@ -1231,10 +1708,9 @@ test("keeps Codex Session Activity native and Environment Audit separate", async
   expect(activityFilterBox).not.toBeNull();
   expect(activityFilterBox!.y).toBeLessThan(activityHeadingBox!.y);
   await expect(
-    activityView.getByText(
-      "Attributed by native Thread and Turn IDs.",
-      { exact: false },
-    ),
+    activityView.getByText("Attributed by native Thread and Turn IDs.", {
+      exact: false,
+    }),
   ).toHaveCount(0);
   await expect(
     activityView.getByRole("heading", {
@@ -1260,17 +1736,13 @@ test("keeps Codex Session Activity native and Environment Audit separate", async
     .locator(".codex-compact-activity")
     .filter({ hasText: "git status --short" });
   await expect(commandActivity).toBeVisible();
-  await expect(commandActivity.locator(":scope > summary")).toHaveAccessibleName(
-    /Ran.*git status --short.*1 update/,
-  );
-  await expect(commandActivity).not.toContainText(
-    "call-e2e-rollout-exec",
-  );
+  await expect(
+    commandActivity.locator(":scope > summary"),
+  ).toHaveAccessibleName(/Ran.*git status --short.*1 update/);
+  await expect(commandActivity).not.toContainText("call-e2e-rollout-exec");
   await commandActivity.locator(":scope > summary").click();
   await expect(commandActivity).toContainText("1 update");
-  await commandActivity
-    .locator(".codex-native-tool-details > summary")
-    .click();
+  await commandActivity.locator(".codex-native-tool-details > summary").click();
   await expect(
     commandActivity.locator(".codex-native-tool-details pre").first(),
   ).toHaveAttribute("tabindex", "0");
@@ -1335,9 +1807,9 @@ test("keeps Codex Session Activity native and Environment Audit separate", async
   await expect(
     auditRegion.getByText("All 8 loaded records are verified"),
   ).toBeVisible();
-  await expect(
-    auditRegion.locator(".audit-technical-content pre"),
-  ).toHaveCount(0);
+  await expect(auditRegion.locator(".audit-technical-content pre")).toHaveCount(
+    0,
+  );
 
   const firstAuditActivity = auditRegion.locator(".audit-activity").first();
   await expect(firstAuditActivity).toContainText(
@@ -1372,9 +1844,7 @@ test("keeps Codex Session Activity native and Environment Audit separate", async
   await auditRegion
     .getByRole("button", { name: "Load newer signed records" })
     .click();
-  await expect
-    .poll(() => auditCursors)
-    .toEqual(["mock-history-cursor"]);
+  await expect.poll(() => auditCursors).toEqual(["mock-history-cursor"]);
   await expect(
     auditRegion.getByRole("button", { name: "Load newer signed records" }),
   ).toHaveCount(0);
@@ -1392,9 +1862,7 @@ test("keeps Codex Session Activity native and Environment Audit separate", async
 
   await settingsDialog.getByRole("button", { name: "Done" }).click();
   await expect(settingsDialog).toBeHidden();
-  await expect
-    .poll(() => environmentUpdates)
-    .toBe(0);
+  await expect.poll(() => environmentUpdates).toBe(0);
   expect(browserErrors).toEqual([]);
 });
 
@@ -1801,7 +2269,9 @@ test("opens the Environment terminal from New Session and replays only the last 
       `/api/v1/environments/${encodeURIComponent(environment.id)}/terminal`,
     (socket) => {
       connectionUrls.push(socket.url());
-      const after = Number(new URL(socket.url()).searchParams.get("after") ?? 0);
+      const after = Number(
+        new URL(socket.url()).searchParams.get("after") ?? 0,
+      );
       socket.send(
         JSON.stringify({
           type: "ready",
@@ -1812,9 +2282,11 @@ test("opens the Environment terminal from New Session and replays only the last 
           replayReset: false,
         }),
       );
-      history.filter((event) => event.seq > after).forEach((event) => {
-        sendOutput(socket, event);
-      });
+      history
+        .filter((event) => event.seq > after)
+        .forEach((event) => {
+          sendOutput(socket, event);
+        });
 
       let input = "";
       socket.onMessage((raw) => {
@@ -1914,7 +2386,9 @@ test("stops retrying a structured terminal failure until the user asks", async (
   const terminal = page.getByRole("region", {
     name: `Terminal for ${environment.name}`,
   });
-  await expect(terminal.getByText("Unauthorized", { exact: true })).toBeVisible();
+  await expect(
+    terminal.getByText("Unauthorized", { exact: true }),
+  ).toBeVisible();
   await expect(terminal.getByRole("button", { name: "Retry" })).toBeVisible();
   await page.waitForTimeout(2_000);
   expect(connections).toBe(1);
@@ -2098,7 +2572,8 @@ test("shows a matching skeleton while each Inspector tab loads", async ({
     ["files", "Files"],
     ["metrics", "Metrics"],
   ] as const) {
-    if (tab !== "files") await tabs.getByRole("button", { name: label }).click();
+    if (tab !== "files")
+      await tabs.getByRole("button", { name: label }).click();
     const skeleton = page.locator(`.inspector-skeleton-${tab}`);
     await expect(skeleton).toBeVisible();
     await expect(skeleton).toContainText(`Loading ${label.toLowerCase()}…`);
@@ -2125,8 +2600,13 @@ test("shows a matching skeleton while each Inspector tab loads", async ({
     name: `Select ${environment.codingAgent.label} model`,
   });
   await expect(modelPicker).toBeEnabled();
-  await expect.poll(() => modelPicker.locator("option").count()).toBeGreaterThan(0);
-  const firstNativeModel = await modelPicker.locator("option").first().getAttribute("value");
+  await expect
+    .poll(() => modelPicker.locator("option").count())
+    .toBeGreaterThan(0);
+  const firstNativeModel = await modelPicker
+    .locator("option")
+    .first()
+    .getAttribute("value");
   expect(firstNativeModel).toBeTruthy();
   await modelPicker.selectOption(firstNativeModel ?? "");
   await expect(modelPicker).toHaveValue(firstNativeModel ?? "");
@@ -2134,9 +2614,7 @@ test("shows a matching skeleton while each Inspector tab loads", async ({
     name: "Select reasoning effort for E2E native Codex model",
   });
   await expect(
-    page.locator(
-      ".conversation-header-actions button[aria-haspopup='menu']",
-    ),
+    page.locator(".conversation-header-actions button[aria-haspopup='menu']"),
   ).toHaveCount(0);
   await expect(reasoningEffortPicker).toBeEnabled();
   await expect(reasoningEffortPicker).toHaveValue("high");
@@ -2239,7 +2717,9 @@ test("renders the dedicated live Web IDE with Git state and changed lines", asyn
   let directoryLoads = 0;
   let remoteFile = file;
   await page.route("**/api/v1/environments/**/files?*", async (route) => {
-    const directoryPath = new URL(route.request().url()).searchParams.get("path");
+    const directoryPath = new URL(route.request().url()).searchParams.get(
+      "path",
+    );
     expect(directoryPath).toBe("/workspace/src");
     directoryLoads += 1;
     const listing: WorkspaceDirectoryListing = {
@@ -2332,8 +2812,12 @@ test("renders the dedicated live Web IDE with Git state and changed lines", asyn
   await expect(page.getByText('const transport = "websocket";')).toBeVisible();
   await expect(page.locator(".sandpi-line-modified")).toHaveCount(1);
   await expect(page.locator(".sandpi-line-added")).toHaveCount(1);
-  await expect(page.getByText("feature/live-ide", { exact: true })).toBeVisible();
-  await expect(page.getByText("src · feature/live-ide", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("feature/live-ide", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("src · feature/live-ide", { exact: true }),
+  ).toBeVisible();
   await expect(page.getByText(/1 uncommitted file.*↑1/)).toBeVisible();
   const editor = page.locator(".monaco-editor").first();
   await editor.click();
@@ -2351,16 +2835,22 @@ test("renders the dedicated live Web IDE with Git state and changed lines", asyn
   remoteFile = {
     ...remoteFile,
     revision: `sha256:${"c".repeat(43)}`,
-    content: Buffer.from("export const externalChange = true;\n").toString("base64"),
+    content: Buffer.from("export const externalChange = true;\n").toString(
+      "base64",
+    ),
   };
   await expect(save).toBeEnabled();
   // Use the editor's real keyboard save path here. The conflict response
   // disables the button synchronously, which can make Playwright retry a
   // locator click even though the first click already reached the server.
   await page.keyboard.press("Control+S");
-  await expect(page.getByText("This file changed outside the editor.")).toBeVisible();
+  await expect(
+    page.getByText("This file changed outside the editor."),
+  ).toBeVisible();
   await page.getByRole("button", { name: "Use latest" }).click();
-  await expect(page.getByText("export const externalChange = true;")).toBeVisible();
+  await expect(
+    page.getByText("export const externalChange = true;"),
+  ).toBeVisible();
   await expect(save).toBeDisabled();
 
   snapshot.git = { repositories: [] };
@@ -2417,7 +2907,10 @@ test("restores a new-Session deep link and keeps overlays usable in dark mode", 
   ).toBeVisible();
   await page.keyboard.press("Escape");
 
-  await page.getByRole("button", { name: "Development settings" }).last().click();
+  await page
+    .getByRole("button", { name: "Development settings" })
+    .last()
+    .click();
   await expect(
     page.getByRole("dialog", { name: "Development settings" }),
   ).toBeVisible();

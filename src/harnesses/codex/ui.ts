@@ -172,9 +172,6 @@ const copy = {
       copyMessage: "Copy message",
       messageAgent: (agent: string) => `Message ${agent}`,
       askPlaceholder: (agent: string) => `Ask ${agent} to work in this session…`,
-      selectModel: (agent: string) => `Select ${agent} model`,
-      selectReasoningEffort: (model: string) =>
-        `Select reasoning effort for ${model}`,
       modelListUnavailable: "The Codex model list is unavailable while this runtime is offline.",
       nativeRolloutUnavailableTitle: "Codex history unavailable",
       nativeRolloutUnavailableBody:
@@ -187,15 +184,11 @@ const copy = {
       wakingConversation: "Restoring the Codex runtime…",
       wakingConversationBody:
         "This Environment may be resuming from an idle checkpoint. Files and Terminal remain available independently.",
-      attachFile: "Attach file",
-      mentionFile: "Mention file",
       attachedImages: "Attached images",
       removeImage: (name: string) => `Remove ${name}`,
       imageLimit: (count: number) => `Up to ${count} images per message.`,
       imageTooLarge: "Each image must be 10 MB or smaller.",
       imagePasteFailed: "Could not read that clipboard image.",
-      boundToEnvironment: "Bound to this Environment",
-      environment: "Environment",
       durableSession: "Durable session",
       checkingRuntime: "Checking Codex runtime",
       runtimeUnavailable: "Codex runtime unavailable",
@@ -204,6 +197,7 @@ const copy = {
       interruptingTurn: "Interrupting Codex turn",
       interruptTurnFailed: "Could not interrupt the running Codex turn.",
       turnStarting: "Starting Codex turn",
+      jumpToLatest: "Jump to latest",
       workingInWorkspace: "Working in /workspace",
       networkInherited: (name: string) => `Network policy inherited from ${name}`,
       commandStatus: (
@@ -277,6 +271,7 @@ const copy = {
         kind === "add" ? "Added" : kind === "delete" ? "Deleted" : "Edited",
       turnActivity: (
         state:
+          | "submitting"
           | "working"
           | "thinking"
           | "responding"
@@ -284,7 +279,9 @@ const copy = {
           | "waitingForCommand"
           | "editingFiles",
       ) =>
-        state === "thinking"
+        state === "submitting"
+          ? "Sending"
+          : state === "thinking"
           ? "Thinking"
           : state === "responding"
             ? "Responding"
@@ -325,17 +322,11 @@ const copy = {
       emptyInstruction: (agent: string) => `Tell ${agent} what to work on.`,
       startFailed: "Could not start the Session. Try again.",
       placeholder: (agent: string) => `Ask ${agent} to work on something…`,
-      selectModel: (agent: string) => `Select ${agent} model`,
-      selectReasoningEffort: (model: string) =>
-        `Select reasoning effort for ${model}`,
       startingAgent: (agent: string) => `Starting ${agent}…`,
       modelListEmpty: "Codex returned no available models.",
       modelListFailed: "Could not load Codex models.",
       modelsUnavailable: "Models unavailable",
       waitForModels: "Wait for Codex to finish loading its model list.",
-      attachFile: "Attach file",
-      mentionFile: "Mention file",
-      environment: "Environment",
       starting: "Starting Session",
       sendAndStart: "Send instruction and start Session",
       starterLabel: "Starter instructions",
@@ -512,8 +503,6 @@ const copy = {
       copyMessage: "复制消息",
       messageAgent: (agent: string) => `向 ${agent} 发送消息`,
       askPlaceholder: (agent: string) => `让 ${agent} 在此会话中执行任务…`,
-      selectModel: (agent: string) => `选择 ${agent} 模型`,
-      selectReasoningEffort: (model: string) => `选择 ${model} 的推理深度`,
       modelListUnavailable: "当前运行时离线，无法获取 Codex 模型列表。",
       nativeRolloutUnavailableTitle: "Codex 历史不可用",
       nativeRolloutUnavailableBody:
@@ -526,15 +515,11 @@ const copy = {
       wakingConversation: "正在恢复 Codex 运行时…",
       wakingConversationBody:
         "环境可能正在从空闲检查点恢复；文件和终端可独立打开，不必等待对话就绪。",
-      attachFile: "附加文件",
-      mentionFile: "引用文件",
       attachedImages: "已附加图片",
       removeImage: (name: string) => `移除 ${name}`,
       imageLimit: (count: number) => `每条消息最多添加 ${count} 张图片。`,
       imageTooLarge: "每张图片不能超过 10 MB。",
       imagePasteFailed: "无法读取剪贴板中的图片。",
-      boundToEnvironment: "绑定到此环境",
-      environment: "环境",
       durableSession: "持久会话",
       checkingRuntime: "正在检查 Codex 运行时",
       runtimeUnavailable: "Codex 运行时不可用",
@@ -543,6 +528,7 @@ const copy = {
       interruptingTurn: "正在中断 Codex Turn",
       interruptTurnFailed: "无法中断正在运行的 Codex Turn。",
       turnStarting: "正在启动 Codex Turn",
+      jumpToLatest: "跳到最新消息",
       workingInWorkspace: "工作目录 /workspace",
       networkInherited: (name: string) => `网络策略继承自 ${name}`,
       commandStatus: (
@@ -616,6 +602,7 @@ const copy = {
         kind === "add" ? "新增" : kind === "delete" ? "删除" : "编辑",
       turnActivity: (
         state:
+          | "submitting"
           | "working"
           | "thinking"
           | "responding"
@@ -623,7 +610,9 @@ const copy = {
           | "waitingForCommand"
           | "editingFiles",
       ) =>
-        state === "thinking"
+        state === "submitting"
+          ? "正在发送"
+          : state === "thinking"
           ? "正在思考"
           : state === "responding"
             ? "正在回复"
@@ -664,16 +653,11 @@ const copy = {
       emptyInstruction: (agent: string) => `请告诉 ${agent} 要完成什么任务。`,
       startFailed: "无法启动会话，请重试。",
       placeholder: (agent: string) => `让 ${agent} 执行任务…`,
-      selectModel: (agent: string) => `选择 ${agent} 模型`,
-      selectReasoningEffort: (model: string) => `选择 ${model} 的推理深度`,
       startingAgent: (agent: string) => `正在启动 ${agent}…`,
       modelListEmpty: "Codex 未返回可用模型。",
       modelListFailed: "无法加载 Codex 模型。",
       modelsUnavailable: "模型不可用",
       waitForModels: "请等待 Codex 完成启动并加载模型列表。",
-      attachFile: "附加文件",
-      mentionFile: "引用文件",
-      environment: "环境",
       starting: "正在启动会话",
       sendAndStart: "发送指令并启动会话",
       starterLabel: "入门指令",

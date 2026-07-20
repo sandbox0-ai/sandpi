@@ -8,11 +8,7 @@ import type { UnixTimestamp } from "./time";
 export type HarnessId = "codex" | "claude-code" | "opencode" | "pi";
 
 export type SessionStatus =
-  | "running"
-  | "waiting"
-  | "paused"
-  | "completed"
-  | "failed";
+  "running" | "waiting" | "paused" | "completed" | "failed";
 
 export type TeamRole = "owner" | "admin" | "member";
 
@@ -161,12 +157,7 @@ export interface NetworkPolicy {
 }
 
 export type EnvironmentSandboxState =
-  | "pending"
-  | "provisioning"
-  | "running"
-  | "paused"
-  | "terminated"
-  | "failed";
+  "pending" | "provisioning" | "running" | "paused" | "terminated" | "failed";
 
 export interface Environment {
   id: string;
@@ -228,6 +219,13 @@ export interface WorkspaceFile {
   content?: string;
   /** Present only after this folder's direct children have been loaded. */
   children?: WorkspaceFile[];
+}
+
+/** One harness-neutral match from the Environment Workspace. */
+export interface WorkspaceFileSearchResult {
+  name: string;
+  path: string;
+  kind: "file" | "folder";
 }
 
 /**
@@ -359,7 +357,10 @@ export type EnvironmentAuditEvent = Omit<
 };
 
 /** Pagination metadata is part of the SDK response and must survive API transport. */
-export type EnvironmentAuditFeed = Omit<SandboxObservabilityEvents, "events"> & {
+export type EnvironmentAuditFeed = Omit<
+  SandboxObservabilityEvents,
+  "events"
+> & {
   events: EnvironmentAuditEvent[];
 };
 

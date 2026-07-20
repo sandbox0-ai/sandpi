@@ -2,10 +2,9 @@
 
 import Image from "next/image";
 import {
+  ArrowDown,
   ArrowUp,
-  AtSign,
   Check,
-  ChevronDown,
   Copy,
   Files,
   GitFork,
@@ -13,7 +12,6 @@ import {
   Menu,
   PanelLeftOpen,
   PanelRight,
-  Paperclip,
   Settings2,
   Square,
   SquareTerminal,
@@ -32,6 +30,11 @@ import {
 import { Inspector, type InspectorTab } from "@/components/inspector";
 import { MarkdownContent } from "@/components/markdown-content";
 import type { WorkspaceFileNavigationRequest } from "@/components/workspace-ide";
+import {
+  CodexComposerReferences,
+  CodexComposerToolbar,
+  encodeCodexComposerReferences,
+} from "@/harnesses/codex/composer";
 import {
   codexDefaultModel,
   codexModelOptionsFromNativeResult,
@@ -58,9 +61,13 @@ import {
 } from "@/harnesses/codex/activity";
 import { CodexSessionActivityView } from "@/harnesses/codex/session-activity-view";
 import { normalizeCodexRolloutActivityFeed } from "@/harnesses/codex/rollout-activity";
-import { groupCodexTimelineByTurn } from "@/harnesses/codex/timeline";
+import {
+  groupCodexTimelineByTurn,
+  type CodexTurnTimelineGroup,
+} from "@/harnesses/codex/timeline";
 import type {
   CodexComposerImage,
+  CodexComposerReference,
   CodexEventEnvelope,
   CodexNativeActivityUpdate,
   CodexNativeInvalidation,
@@ -68,9 +75,11 @@ import type {
   CodexNativeStreamFailure,
   CodexSession,
 } from "@/harnesses/codex/types";
+import { MAX_CODEX_COMPOSER_REFERENCES } from "@/harnesses/codex/types";
 import {
   projectCodexTimeline,
   shouldRefreshCodexNativeSnapshot,
+  type CodexActiveTurnView,
   type CodexMessageView,
   type CodexTimelineEntry,
 } from "@/harnesses/codex/events";
@@ -80,6 +89,7 @@ import {
   type ApiEnvelope,
 } from "@/lib/api-client";
 import { copyTextToClipboard } from "@/lib/clipboard";
+import { createId } from "@/lib/id";
 import { useConversationAutoScroll } from "@/lib/use-conversation-auto-scroll";
 import {
   shouldSubmitComposer,
@@ -125,6 +135,16 @@ const CODEX_SESSION_STATUSES = new Set<CodexNativeSnapshot["sessionStatus"]>([
   "completed",
   "failed",
 ]);
+
+interface PendingCodexTurn {
+  clientMessageId: string;
+  nativeTurnId?: string;
+  content: string;
+  images: CodexComposerImage[];
+  references: CodexComposerReference[];
+  startedAt: number;
+  phase: "submitting" | "accepted";
+}
 
 export function CodexConversation({
   language,
@@ -183,13 +203,10 @@ export function CodexConversation({
     selectedModel,
     reasoningEfforts[selectedModel.id] ?? fallbackReasoningEffort,
   );
-  const selectedReasoningDescription =
-    selectedModel.supportedReasoningEfforts.find(
-      (option) => option.id === selectedReasoningEffort,
-    )?.description;
   const [draft, setDraft] = useState("");
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [pastedImages, setPastedImages] = useState<CodexComposerImage[]>([]);
+  const [references, setReferences] = useState<CodexComposerReference[]>([]);
   const [attachmentError, setAttachmentError] = useState("");
   const [sending, setSending] = useState(false);
   const [interrupting, setInterrupting] = useState(false);
@@ -205,10 +222,11 @@ export function CodexConversation({
   const [nativeHistoryError, setNativeHistoryError] = useState("");
   const [nativeHistoryWaitLong, setNativeHistoryWaitLong] = useState(false);
   const [activityClock, setActivityClock] = useState(() => Date.now());
+  const [pendingTurn, setPendingTurn] = useState<PendingCodexTurn | null>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
-  const imageInputRef = useRef<HTMLInputElement>(null);
   const scrollbarHideTimerRef = useRef<number | null>(null);
   const pendingTurnStartedAtRef = useRef<number | null>(null);
+  const nativeAcceptedMessageIdsRef = useRef(new Set<string>());
   const hasNativeSnapshotRef = useRef(false);
   const hasNativeStreamFailureRef = useRef(false);
   const liveNotificationSequencesRef = useRef(new Set<number>());
@@ -226,8 +244,37 @@ export function CodexConversation({
     () => codexTurnCapabilitySets(nativeSnapshot),
     [nativeSnapshot],
   );
+  const observedPendingTurnId =
+    pendingTurn?.nativeTurnId ??
+    (pendingTurn ? visibleTimeline.activeTurn?.turnId : undefined);
+  const pendingNativeMessage = pendingTurn
+    ? visibleTimeline.entries.find(
+        (entry): entry is CodexMessageView =>
+          entry.kind === "message" &&
+          entry.role === "user" &&
+          (entry.clientId === pendingTurn.clientMessageId ||
+            (Boolean(observedPendingTurnId) &&
+              entry.turnId === observedPendingTurnId)),
+      )
+    : undefined;
+  const pendingTurnVisible = Boolean(pendingTurn && !pendingNativeMessage);
+  const pendingNativeTurnId =
+    pendingNativeMessage?.turnId ?? observedPendingTurnId;
+  const pendingNativeTimelineTurn =
+    pendingTurnVisible && pendingNativeTurnId
+      ? timelineTurns.find((turn) => turn.turnId === pendingNativeTurnId)
+      : undefined;
+  const optimisticActiveTurn: CodexActiveTurnView | undefined =
+    pendingTurn && !pendingNativeMessage
+      ? {
+          turnId: pendingNativeTurnId ?? `pending:${pendingTurn.clientMessageId}`,
+          startedAt: pendingTurn.startedAt,
+          state: pendingTurn.phase === "submitting" ? "submitting" : "working",
+        }
+      : undefined;
   const runningTurn =
     visibleTimeline.activeTurn ??
+    optimisticActiveTurn ??
     (session.status === "running"
       ? {
           turnId: `pending:${session.id}`,
@@ -237,7 +284,7 @@ export function CodexConversation({
       : undefined);
   const runningTurnId = runningTurn?.turnId;
   const interruptibleTurnId = visibleTimeline.activeTurn?.turnId;
-  const turnRunning = Boolean(runningTurnId);
+  const turnRunning = Boolean(runningTurnId || pendingTurn);
   const nativeReady =
     Boolean(nativeSnapshot) && nativeStreamReady && !nativeHistoryError;
   // Sandpi deliberately stores no secondary chat transcript. Until the native
@@ -249,6 +296,8 @@ export function CodexConversation({
     scrollRef: conversationScrollRef,
     contentRef: conversationContentRef,
     onScroll: handleAutoScroll,
+    scrollToBottom,
+    following: followingLatest,
   } = useConversationAutoScroll({ resetKey: session.id });
 
   useEffect(() => {
@@ -266,8 +315,11 @@ export function CodexConversation({
 
   useEffect(() => {
     pendingTurnStartedAtRef.current = null;
+    nativeAcceptedMessageIdsRef.current.clear();
+    setPendingTurn(null);
     setDraft("");
     setPastedImages([]);
+    setReferences([]);
     setAttachmentError("");
     setSending(false);
     setInterrupting(false);
@@ -283,6 +335,15 @@ export function CodexConversation({
     liveNotificationCountRef.current = 0;
     nativeSnapshotRefreshRequestedRef.current = false;
   }, [session.id]);
+
+  useEffect(() => {
+    if (!pendingTurn || !pendingNativeMessage) return;
+    const clientMessageId = pendingTurn.clientMessageId;
+    nativeAcceptedMessageIdsRef.current.add(clientMessageId);
+    setPendingTurn((current) =>
+      current?.clientMessageId === clientMessageId ? null : current,
+    );
+  }, [pendingNativeMessage, pendingTurn]);
 
   useEffect(() => {
     if (!runningTurnId) return;
@@ -398,7 +459,9 @@ export function CodexConversation({
         setLiveNotifications([]);
         setNativeStreamReady(true);
         setNativeHistoryError("");
-        setSelectedModelId(snapshot.modelId);
+        // Empty snapshot metadata means the native model is not known yet; it
+        // must not overwrite a model just returned by the native model catalog.
+        if (snapshot.modelId) setSelectedModelId(snapshot.modelId);
         if (snapshot.modelId && snapshot.reasoningEffort) {
           setReasoningEfforts((current) => ({
             ...current,
@@ -413,8 +476,9 @@ export function CodexConversation({
           harnessState: {
             ...current.harnessState,
             threadId: snapshot.thread.id,
-            modelId: snapshot.modelId,
-            reasoningEffort: snapshot.reasoningEffort,
+            modelId: snapshot.modelId || current.harnessState.modelId,
+            reasoningEffort:
+              snapshot.reasoningEffort ?? current.harnessState.reasoningEffort,
             historyRevision: snapshot.historyRevision,
           },
         };
@@ -460,6 +524,16 @@ export function CodexConversation({
         const current = sessionRef.current;
         const started = envelope.notification.method === "turn/started";
         const completed = envelope.notification.method === "turn/completed";
+        if (envelope.notification.method === "turn/started") {
+          const nativeTurnId = envelope.notification.params.turn.id;
+          setPendingTurn((current) => {
+            if (!current) return current;
+            nativeAcceptedMessageIdsRef.current.add(current.clientMessageId);
+            return current.nativeTurnId
+              ? current
+              : { ...current, nativeTurnId };
+          });
+        }
         const next: CodexSession = {
           ...current,
           updatedAt: envelope.receivedAt,
@@ -613,23 +687,52 @@ export function CodexConversation({
   );
 
   async function submitMessage() {
+    const submittedDraft = draft;
+    const submittedImages = pastedImages;
+    const submittedReferences = references;
     const content = draft.trim();
-    if (!content && pastedImages.length === 0) {
+    if (
+      !content &&
+      submittedImages.length === 0 &&
+      submittedReferences.length === 0
+    ) {
       return;
     }
     if (sending || turnRunning || session.status !== "waiting" || !nativeReady) {
       return;
     }
+    const clientMessageId = createId("user-message", 24);
+    const startedAt = Date.now() / 1_000;
+    pendingTurnStartedAtRef.current = startedAt;
+    setPendingTurn({
+      clientMessageId,
+      content,
+      images: submittedImages,
+      references: submittedReferences,
+      startedAt,
+      phase: "submitting",
+    });
     setSending(true);
+    setDraft("");
+    setPastedImages([]);
+    setReferences([]);
     setAttachmentError("");
     try {
-      await apiFetch<ApiEnvelope<{ requestId: string }>>(
+      const response = await apiFetch<
+        ApiEnvelope<{
+          requestId: string;
+          clientMessageId: string;
+          nativeTurnId?: string;
+        }>
+      >(
         `/api/v1/sessions/${encodeURIComponent(session.id)}/turns`,
         {
           method: "POST",
           body: JSON.stringify({
             text: content,
-            images: pastedImages.map(encodeCodexComposerImage),
+            images: submittedImages.map(encodeCodexComposerImage),
+            references: encodeCodexComposerReferences(submittedReferences),
+            clientMessageId,
             ...(selectedModel.id !== "default"
               ? { modelId: selectedModel.id }
               : {}),
@@ -638,6 +741,16 @@ export function CodexConversation({
               : {}),
           }),
         },
+      );
+      setPendingTurn((current) =>
+        current?.clientMessageId === clientMessageId
+          ? {
+              ...current,
+              nativeTurnId:
+                response.data.nativeTurnId ?? current.nativeTurnId,
+              phase: "accepted",
+            }
+          : current,
       );
       const next = {
         ...sessionRef.current,
@@ -649,18 +762,43 @@ export function CodexConversation({
           reasoningEffort: selectedReasoningEffort,
         },
       };
-      pendingTurnStartedAtRef.current = Date.now() / 1_000;
       sessionRef.current = next;
       onSessionChange(next);
     } catch (error) {
+      if (nativeAcceptedMessageIdsRef.current.has(clientMessageId)) {
+        setSending(false);
+        return;
+      }
+      pendingTurnStartedAtRef.current = null;
+      setPendingTurn((current) =>
+        current?.clientMessageId === clientMessageId ? null : current,
+      );
+      setDraft((current) =>
+        current && submittedDraft
+          ? `${submittedDraft}${submittedDraft.endsWith("\n") ? "" : "\n"}${current}`
+          : submittedDraft || current,
+      );
+      setPastedImages((current) =>
+        [...submittedImages, ...current].slice(0, MAX_CODEX_COMPOSER_IMAGES),
+      );
+      setReferences((current) => {
+        const restored = new Map(
+          [...submittedReferences, ...current].map((reference) => [
+            reference.path,
+            reference,
+          ]),
+        );
+        return [...restored.values()].slice(
+          0,
+          MAX_CODEX_COMPOSER_REFERENCES,
+        );
+      });
       setAttachmentError(
         error instanceof Error ? error.message : "Could not start the Codex Turn.",
       );
       setSending(false);
       return;
     }
-    setDraft("");
-    setPastedImages([]);
     setAttachmentError("");
     setSending(false);
   }
@@ -846,6 +984,12 @@ export function CodexConversation({
               ))}
             </div>
           ) : null}
+          {message.references?.length ? (
+            <CodexComposerReferences
+              language={language}
+              references={message.references}
+            />
+          ) : null}
           {message.content ? (
             <MarkdownContent
               content={message.content}
@@ -920,6 +1064,66 @@ export function CodexConversation({
       </article>
     );
   }
+
+  function renderTimelineTurn(timelineTurn: CodexTurnTimelineGroup) {
+    const lastActivityBlockIndex = timelineTurn.blocks.findLastIndex(
+      (block) => block.kind === "activity",
+    );
+    return (
+      <Fragment key={timelineTurn.turnId}>
+        {timelineTurn.blocks.map((block, blockIndex) => {
+          if (block.kind === "message") {
+            return renderTimelineEntry(block.entry);
+          }
+          if (block.kind === "result") {
+            return renderTimelineEntry(block.entry);
+          }
+          const activeTurn =
+            block.id === timelineTurn.activeActivityBlockId &&
+            runningTurn?.turnId === timelineTurn.turnId
+              ? runningTurn
+              : undefined;
+          if (block.entries.length === 0 && !activeTurn) return null;
+          return (
+            <CodexTurnActivity
+              key={block.id}
+              activeTurn={activeTurn}
+              turn={
+                blockIndex === lastActivityBlockIndex
+                  ? timelineTurn.turn
+                  : undefined
+              }
+              language={language}
+              now={activityClock}
+            >
+              {block.entries.map(renderTimelineEntry)}
+            </CodexTurnActivity>
+          );
+        })}
+      </Fragment>
+    );
+  }
+
+  const pendingMessage: CodexMessageView | undefined =
+    pendingTurn && !pendingNativeMessage
+      ? {
+          kind: "message",
+          id: pendingTurn.clientMessageId,
+          clientId: pendingTurn.clientMessageId,
+          turnId:
+            pendingNativeTimelineTurn?.turnId ??
+            `pending:${pendingTurn.clientMessageId}`,
+          role: "user",
+          content: pendingTurn.content,
+          createdAt: pendingTurn.startedAt,
+          attachments: pendingTurn.images.length
+            ? pendingTurn.images
+            : undefined,
+          references: pendingTurn.references.length
+            ? pendingTurn.references
+            : undefined,
+        }
+      : undefined;
 
   return (
     <>
@@ -1039,35 +1243,27 @@ export function CodexConversation({
                 </span>
               </div>
             ) : null}
-            {timelineTurns.map((timelineTurn) => {
-              const activeTurn =
-                runningTurn?.turnId === timelineTurn.turnId
-                  ? runningTurn
-                  : undefined;
-              const hasActivity =
-                timelineTurn.activityEntries.length > 0 ||
-                Boolean(activeTurn);
-              return (
-                <Fragment key={timelineTurn.turnId}>
-                  {timelineTurn.userMessages.map(renderTimelineEntry)}
-                  {hasActivity ? (
-                    <CodexTurnActivity
-                      activeTurn={activeTurn}
-                      turn={timelineTurn.turn}
-                      language={language}
-                      now={activityClock}
-                    >
-                      {timelineTurn.activityEntries.map(renderTimelineEntry)}
-                    </CodexTurnActivity>
-                  ) : null}
-                  {timelineTurn.finalMessage
-                    ? renderTimelineEntry(timelineTurn.finalMessage)
-                    : null}
-                  {timelineTurn.results.map(renderTimelineEntry)}
-                </Fragment>
-              );
-            })}
+            {timelineTurns.map((timelineTurn) =>
+              timelineTurn.turnId === pendingNativeTimelineTurn?.turnId
+                ? null
+                : renderTimelineTurn(timelineTurn),
+            )}
+            {pendingMessage ? (
+              <Fragment key={pendingMessage.id}>
+                {renderTimelineEntry(pendingMessage)}
+                {pendingNativeTimelineTurn ? (
+                  renderTimelineTurn(pendingNativeTimelineTurn)
+                ) : (
+                  <CodexTurnActivity
+                    activeTurn={runningTurn}
+                    language={language}
+                    now={activityClock}
+                  />
+                )}
+              </Fragment>
+            ) : null}
             {runningTurn &&
+              !pendingMessage &&
               !nativeHistoryLoading &&
               !timelineTurns.some(
                 (turn) => turn.turnId === runningTurn.turnId,
@@ -1082,6 +1278,17 @@ export function CodexConversation({
         </div>
 
         <div className="composer-region">
+          {!followingLatest ? (
+            <button
+              type="button"
+              className="conversation-jump-to-latest"
+              aria-label={ui.jumpToLatest}
+              onClick={scrollToBottom}
+            >
+              <ArrowDown size={14} aria-hidden="true" />
+              <span>{ui.jumpToLatest}</span>
+            </button>
+          ) : null}
           <div className="composer-shell">
             {pastedImages.length ? (
               <div
@@ -1119,6 +1326,16 @@ export function CodexConversation({
                 {attachmentError}
               </div>
             ) : null}
+            <CodexComposerReferences
+              language={language}
+              references={references}
+              onRemove={(id) => {
+                setReferences((current) =>
+                  current.filter((reference) => reference.id !== id),
+                );
+                setAttachmentError("");
+              }}
+            />
             {/*
               Slash commands, approvals, steering and other composer behavior are Codex-native.
               Do not lift them into the shared dispatcher when additional harnesses are added.
@@ -1137,7 +1354,9 @@ export function CodexConversation({
                 if (imageFiles.length === 0) {
                   return;
                 }
-                event.preventDefault();
+                // A textarea ignores image clipboard items on its own. Let the
+                // browser keep any accompanying plain text while images are
+                // attached separately.
                 void addPastedImages(imageFiles);
               }}
               onKeyDown={(event) => {
@@ -1161,145 +1380,61 @@ export function CodexConversation({
               placeholder={ui.askPlaceholder(environment.codingAgent.label)}
               rows={1}
             />
-            <div className="composer-toolbar">
-              <div className="composer-tools">
-                <button
-                  type="button"
-                  className="composer-icon-button"
-                  aria-label={ui.attachFile}
-                  onClick={() => imageInputRef.current?.click()}
-                >
-                  <Paperclip size={17} />
-                </button>
-                <input
-                  ref={imageInputRef}
-                  className="sr-only"
-                  type="file"
-                  accept="image/png,image/jpeg,image/gif,image/webp"
-                  multiple
-                  tabIndex={-1}
-                  onChange={(event) => {
-                    const files = Array.from(event.currentTarget.files ?? []);
-                    event.currentTarget.value = "";
-                    if (files.length > 0) void addPastedImages(files);
-                  }}
-                />
-                <button
-                  type="button"
-                  className="composer-icon-button"
-                  aria-label={ui.mentionFile}
-                >
-                  <AtSign size={17} />
-                </button>
-                <span
-                  className="composer-agent-bound"
-                  title={ui.boundToEnvironment}
-                >
-                  <span className="codex-glyph" />
-                  <span className="composer-harness-label">
-                    {environment.codingAgent.label}
-                  </span>
-                  <label
-                    className="composer-model-picker"
-                    title={modelCatalogUnavailable || undefined}
-                    data-availability={
-                      modelCatalogUnavailable ? "runtime-unavailable" : "available"
-                    }
-                  >
-                    <span className="sr-only">
-                      {ui.selectModel(environment.codingAgent.label)}
-                    </span>
-                    <select
-                      name="coding-agent-model"
-                      aria-label={ui.selectModel(
-                        environment.codingAgent.label,
-                      )}
-                      value={selectedModel.id}
-                      disabled={modelOptions.length === 0 || sending}
-                      onChange={(event) => {
-                        const model = modelOptions.find(
-                          (candidate) => candidate.id === event.target.value,
-                        );
-                        if (!model) return;
-                        setSelectedModelId(model.id);
-                        setReasoningEfforts((current) => ({
-                          ...current,
-                          [model.id]: codexReasoningEffortForModel(
-                            model,
-                            current[model.id],
-                          ),
-                        }));
-                      }}
-                    >
-                      {(modelOptions.length > 0
-                        ? modelOptions
-                        : [selectedModel]
-                      ).map((model) => (
-                        <option value={model.id} key={model.id}>
-                          {model.displayName}
-                        </option>
-                      ))}
-                    </select>
-                    <ChevronDown size={12} aria-hidden="true" />
-                  </label>
-                  {selectedModel.supportedReasoningEfforts.length ? (
-                    <label
-                      className="composer-reasoning-picker"
-                      title={selectedReasoningDescription}
-                    >
-                      <span className="sr-only">
-                        {ui.selectReasoningEffort(selectedModel.displayName)}
-                      </span>
-                      <select
-                        name="coding-agent-reasoning-effort"
-                        aria-label={ui.selectReasoningEffort(
-                          selectedModel.displayName,
-                        )}
-                        value={selectedReasoningEffort}
-                        disabled={sending}
-                        onChange={(event) =>
-                          setReasoningEfforts((current) => ({
-                            ...current,
-                            [selectedModel.id]: event.target.value,
-                          }))
-                        }
-                      >
-                        {selectedModel.supportedReasoningEfforts.map(
-                          (effort) => (
-                            <option value={effort.id} key={effort.id}>
-                              {codexReasoningEffortLabel(effort.id)}
-                            </option>
-                          ),
-                        )}
-                      </select>
-                      <ChevronDown size={12} aria-hidden="true" />
-                    </label>
-                  ) : null}
-                </span>
-              </div>
-              <div className="composer-send-area">
-                <span
-                  className={`connection-copy ${
-                    nativeHistoryError
-                      ? "is-unavailable"
-                      : !nativeReady
-                        ? "is-loading"
-                        : ""
-                  }`}
-                >
-                  <span />
-                  {nativeHistoryError
-                    ? ui.runtimeUnavailable
-                    : nativeReady
-                      ? ui.durableSession
-                      : ui.checkingRuntime}
-                </span>
-                {turnRunning ? (
+            <CodexComposerToolbar
+              language={language}
+              environmentId={environment.id}
+              agentLabel={environment.codingAgent.label}
+              references={references}
+              onReferencesChange={setReferences}
+              onAttachmentError={setAttachmentError}
+              modelOptions={
+                modelOptions.length > 0 ? modelOptions : [selectedModel]
+              }
+              selectedModel={selectedModel}
+              modelPlaceholder={selectedModel.displayName}
+              modelTitle={modelCatalogUnavailable || undefined}
+              modelDisabled={modelOptions.length === 0 || sending}
+              reasoningDisabled={sending}
+              selectedReasoningEffort={selectedReasoningEffort}
+              onModelChange={(modelId) => {
+                const model = modelOptions.find(
+                  (candidate) => candidate.id === modelId,
+                );
+                if (!model) return;
+                setSelectedModelId(model.id);
+                setReasoningEfforts((current) => ({
+                  ...current,
+                  [model.id]: codexReasoningEffortForModel(
+                    model,
+                    current[model.id],
+                  ),
+                }));
+              }}
+              onReasoningEffortChange={(effort) =>
+                setReasoningEfforts((current) => ({
+                  ...current,
+                  [selectedModel.id]: effort,
+                }))
+              }
+              status={{
+                state: nativeHistoryError
+                  ? "unavailable"
+                  : nativeReady
+                    ? "ready"
+                    : "loading",
+                label: nativeHistoryError
+                  ? ui.runtimeUnavailable
+                  : nativeReady
+                    ? ui.durableSession
+                    : ui.checkingRuntime,
+              }}
+              action={
+                turnRunning ? (
                   <button
                     type="button"
                     className={`send-button is-running ${
-                      interrupting ? "is-interrupting" : ""
-                    }`}
+                      !interruptibleTurnId ? "is-starting" : ""
+                    } ${interrupting ? "is-interrupting" : ""}`}
                     disabled={interrupting || !interruptibleTurnId}
                     aria-label={
                       interrupting
@@ -1308,11 +1443,13 @@ export function CodexConversation({
                           ? ui.interruptTurn
                           : ui.turnStarting
                     }
-                    aria-busy={interrupting}
-                    title={ui.interruptTurn}
+                    aria-busy={interrupting || !interruptibleTurnId}
+                    title={
+                      interruptibleTurnId ? ui.interruptTurn : ui.turnStarting
+                    }
                     onClick={() => void interruptActiveTurn()}
                   >
-                    {interrupting ? (
+                    {interrupting || !interruptibleTurnId ? (
                       <span className="activity-spinner" aria-hidden="true" />
                     ) : (
                       <Square size={10} fill="currentColor" aria-hidden="true" />
@@ -1326,16 +1463,18 @@ export function CodexConversation({
                       sending ||
                       session.status !== "waiting" ||
                       !nativeReady ||
-                      (!draft.trim() && pastedImages.length === 0)
+                      (!draft.trim() &&
+                        pastedImages.length === 0 &&
+                        references.length === 0)
                     }
                     aria-label={ui.sendMessage}
                     onClick={() => void submitMessage()}
                   >
                     <ArrowUp size={17} strokeWidth={2.5} />
                   </button>
-                )}
-              </div>
-            </div>
+                )
+              }
+            />
           </div>
           <p className="composer-footnote">
             <Files size={12} /> {ui.workingInWorkspace}

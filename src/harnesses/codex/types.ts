@@ -14,7 +14,28 @@ import type { CodexRolloutActivityFeed } from "./rollout-activity";
  */
 export type CodexUserInput =
   | { type: "text"; text: string; text_elements: [] }
-  | { type: "image"; url: string; detail?: "auto" | "low" | "high" };
+  | { type: "image"; url: string; detail?: "auto" | "low" | "high" }
+  | { type: "localImage"; path: string; detail?: "auto" | "low" | "high" }
+  | { type: "mention"; name: string; path: string };
+
+export type CodexComposerReferenceKind = "mention" | "localImage";
+export const MAX_CODEX_COMPOSER_REFERENCES = 20;
+export const MAX_CODEX_COMPOSER_UPLOAD_BYTES = 20 * 1024 * 1024;
+
+/**
+ * A native Codex composer input backed by the Environment Workspace.
+ * `workspace` references come from the harness-neutral Environment search;
+ * `upload` references point only into Sandpi's protected Workspace upload root.
+ */
+export interface CodexComposerReference {
+  id: string;
+  name: string;
+  path: string;
+  kind: CodexComposerReferenceKind;
+  source: "workspace" | "upload";
+  mimeType?: string;
+  sizeBytes?: number;
+}
 
 export interface CodexFileUpdateChange {
   path: string;
@@ -28,13 +49,15 @@ export interface CodexFileUpdateChange {
 export type CodexCommandAction =
   | { type: "read"; command: string; name: string; path: string }
   | { type: "listFiles"; command: string; path: string | null }
-  | { type: "search"; command: string; query: string | null; path: string | null }
+  | {
+      type: "search";
+      command: string;
+      query: string | null;
+      path: string | null;
+    }
   | { type: "unknown"; command: string };
 
-export type CodexNativeToolStatus =
-  | "inProgress"
-  | "completed"
-  | "failed";
+export type CodexNativeToolStatus = "inProgress" | "completed" | "failed";
 
 export interface CodexMcpToolCallAppContext {
   connectorId: string;
@@ -82,7 +105,8 @@ export type CodexThreadItem =
       command: string;
       cwd: string;
       processId: string | null;
-      source: "agent" | "userShell" | "unifiedExecStartup" | "unifiedExecInteraction";
+      source:
+        "agent" | "userShell" | "unifiedExecStartup" | "unifiedExecInteraction";
       status: "inProgress" | "completed" | "failed" | "declined";
       commandActions: CodexCommandAction[];
       aggregatedOutput: string | null;
@@ -123,12 +147,7 @@ export type CodexThreadItem =
   | {
       type: "collabAgentToolCall";
       id: string;
-      tool:
-        | "spawnAgent"
-        | "sendInput"
-        | "resumeAgent"
-        | "wait"
-        | "closeAgent";
+      tool: "spawnAgent" | "sendInput" | "resumeAgent" | "wait" | "closeAgent";
       status: CodexNativeToolStatus;
       senderThreadId: string;
       receiverThreadIds: string[];
@@ -209,11 +228,21 @@ export type CodexServerNotification =
     }
   | {
       method: "item/agentMessage/delta";
-      params: { threadId: string; turnId: string; itemId: string; delta: string };
+      params: {
+        threadId: string;
+        turnId: string;
+        itemId: string;
+        delta: string;
+      };
     }
   | {
       method: "item/plan/delta";
-      params: { threadId: string; turnId: string; itemId: string; delta: string };
+      params: {
+        threadId: string;
+        turnId: string;
+        itemId: string;
+        delta: string;
+      };
     }
   | {
       method: "item/reasoning/summaryTextDelta";
@@ -246,7 +275,12 @@ export type CodexServerNotification =
     }
   | {
       method: "item/commandExecution/outputDelta";
-      params: { threadId: string; turnId: string; itemId: string; delta: string };
+      params: {
+        threadId: string;
+        turnId: string;
+        itemId: string;
+        delta: string;
+      };
     }
   | {
       method: "item/commandExecution/terminalInteraction";
@@ -260,7 +294,12 @@ export type CodexServerNotification =
     }
   | {
       method: "item/fileChange/outputDelta";
-      params: { threadId: string; turnId: string; itemId: string; delta: string };
+      params: {
+        threadId: string;
+        turnId: string;
+        itemId: string;
+        delta: string;
+      };
     }
   | {
       method: "item/fileChange/patchUpdated";
@@ -302,7 +341,10 @@ export const CODEX_TRANSCRIPT_NOTIFICATION_METHODS = [
   "turn/completed",
 ] as const;
 
-export type CodexEventEnvelope = HarnessEventEnvelope<"codex", CodexServerNotification>;
+export type CodexEventEnvelope = HarnessEventEnvelope<
+  "codex",
+  CodexServerNotification
+>;
 
 export interface CodexHarnessState {
   protocol: "codex-app-server";
@@ -382,6 +424,8 @@ export interface CodexComposerImage {
   previewUrl: string;
 }
 
-export function isCodexSession(session: CodingSession): session is CodexSession {
+export function isCodexSession(
+  session: CodingSession,
+): session is CodexSession {
   return session.harness === "codex";
 }

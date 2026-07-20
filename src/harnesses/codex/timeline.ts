@@ -9,16 +9,32 @@ import type {
 export interface CodexTurnTimelineGroup {
   turnId: string;
   turn?: CodexTurnView;
-  userMessages: CodexMessageView[];
-  activityEntries: CodexTimelineEntry[];
-  finalMessage?: CodexMessageView;
-  results: CodexTurnResultView[];
+  blocks: CodexTurnTimelineBlock[];
+  activeActivityBlockId?: string;
 }
 
+export type CodexTurnTimelineBlock =
+  | {
+      kind: "message";
+      id: string;
+      entry: CodexMessageView;
+    }
+  | {
+      kind: "activity";
+      id: string;
+      entries: CodexTimelineEntry[];
+    }
+  | {
+      kind: "result";
+      id: string;
+      entry: CodexTurnResultView;
+    };
+
 /**
- * Preserve Codex-native Turn boundaries while separating the durable prompt
- * and final answer from noisy intermediate work. Completed Turns can then
- * collapse their activity without hiding either side of the conversation.
+ * Preserve Codex-native item order within each Turn while separating visible
+ * messages from intermediate work. In particular, do not hoist every user
+ * message to the beginning: Codex may add later steering messages between tool
+ * calls, and future harness adapters must preserve their own native ordering.
  */
 export function groupCodexTimelineByTurn(
   projection: CodexConversationProjection,
@@ -44,25 +60,81 @@ export function groupCodexTimelineByTurn(
     const finalMessage =
       explicitFinal ??
       (turn?.status !== "inProgress" ? assistantMessages.at(-1) : undefined);
-    const results = entries.filter(
-      (entry): entry is CodexTurnResultView => entry.kind === "turnResult",
+    const blocks: CodexTurnTimelineBlock[] = [];
+    let activityEntries: CodexTimelineEntry[] = [];
+    let activitySequence = 0;
+
+    const flushActivity = () => {
+      if (activityEntries.length === 0) return;
+      blocks.push({
+        kind: "activity",
+        id: `${turnId}:activity:${activitySequence++}`,
+        entries: activityEntries,
+      });
+      activityEntries = [];
+    };
+
+    for (const entry of entries) {
+      if (
+        entry.kind === "message" &&
+        (entry.role === "user" || entry.id === finalMessage?.id)
+      ) {
+        flushActivity();
+        blocks.push({ kind: "message", id: entry.id, entry });
+        continue;
+      }
+      if (entry.kind === "turnResult") {
+        flushActivity();
+        blocks.push({ kind: "result", id: entry.id, entry });
+        continue;
+      }
+      activityEntries.push(entry);
+    }
+    flushActivity();
+
+    // A live suffix can expose work just before its opening userMessage. Move
+    // only that first prompt ahead of leading activity; later user messages
+    // stay exactly where the native harness placed them.
+    const firstUserMessageIndex = blocks.findIndex(
+      (block) => block.kind === "message" && block.entry.role === "user",
     );
+    if (
+      firstUserMessageIndex > 0 &&
+      blocks
+        .slice(0, firstUserMessageIndex)
+        .every((block) => block.kind === "activity")
+    ) {
+      const [firstUserMessage] = blocks.splice(firstUserMessageIndex, 1);
+      if (firstUserMessage) blocks.unshift(firstUserMessage);
+    }
+
+    let activeActivityBlockId: string | undefined;
+    if (projection.activeTurn?.turnId === turnId) {
+      const lastUserMessageIndex = blocks.findLastIndex(
+        (block) => block.kind === "message" && block.entry.role === "user",
+      );
+      const existingActivityIndex = blocks.findIndex(
+        (block, index) =>
+          index > lastUserMessageIndex && block.kind === "activity",
+      );
+      if (existingActivityIndex >= 0) {
+        activeActivityBlockId = blocks[existingActivityIndex]?.id;
+      } else {
+        const activeActivity = {
+          kind: "activity" as const,
+          id: `${turnId}:activity:active`,
+          entries: [],
+        };
+        blocks.splice(Math.max(0, lastUserMessageIndex + 1), 0, activeActivity);
+        activeActivityBlockId = activeActivity.id;
+      }
+    }
 
     return {
       turnId,
       turn,
-      userMessages: entries.filter(
-        (entry): entry is CodexMessageView =>
-          entry.kind === "message" && entry.role === "user",
-      ),
-      activityEntries: entries.filter(
-        (entry) =>
-          entry.kind !== "turnResult" &&
-          !(entry.kind === "message" && entry.role === "user") &&
-          entry.id !== finalMessage?.id,
-      ),
-      finalMessage,
-      results,
+      blocks,
+      activeActivityBlockId,
     };
   });
 }

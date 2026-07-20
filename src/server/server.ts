@@ -14,15 +14,13 @@ import Fastify, {
 import type { Pool } from "pg";
 import { ZodError, z } from "zod";
 
-import type {
-  SandpiDeploymentSummary,
-  SandpiPreferences,
-} from "@/lib/types";
+import type { SandpiDeploymentSummary, SandpiPreferences } from "@/lib/types";
 import {
   DEFAULT_ENVIRONMENT_METRIC_RANGE_SECONDS,
   isEnvironmentMetricRangeSeconds,
 } from "@/lib/environment-metrics";
 import { toUnixTimestamp } from "@/lib/time";
+import { WORKSPACE_ROOT } from "@/lib/workspace-path-policy";
 import { OidcIdentityService } from "@/server/auth/oidc";
 import type { Principal } from "@/server/auth/principal";
 import { loadConfig, type SandpiConfig } from "@/server/config";
@@ -45,6 +43,13 @@ import {
   MAX_CODEX_INPUT_BASE64_LENGTH,
   MAX_CODEX_INPUT_IMAGES,
 } from "@/server/harnesses/codex/input-images";
+import {
+  MAX_CODEX_COMPOSER_UPLOAD_BASE64_LENGTH,
+  MAX_CODEX_INPUT_REFERENCES,
+  codexComposerUploadPath,
+  codexComposerUploadReference,
+  decodeCodexComposerUpload,
+} from "@/server/harnesses/codex/input-references";
 import type { CodexRolloutActivityFeed } from "@/harnesses/codex/rollout-activity";
 import { HttpError } from "@/server/http-error";
 import { createRuntime } from "@/server/runtime";
@@ -61,9 +66,42 @@ import { networkPolicySchema } from "@/server/network-policy-schema";
 
 const SESSION_COOKIE = "sandpi_session";
 const CODEX_IMAGE_BODY_LIMIT_BYTES = 36 * 1024 * 1024;
+const CODEX_UPLOAD_BODY_LIMIT_BYTES =
+  MAX_CODEX_COMPOSER_UPLOAD_BASE64_LENGTH + 64 * 1024;
 const WORKSPACE_FILE_BODY_LIMIT_BYTES = 7 * 1024 * 1024;
 const MAX_ENVIRONMENT_AUDIT_CURSOR_LENGTH = 4_096;
+const workspaceFileSearchQuerySchema = z
+  .string()
+  .trim()
+  .max(512)
+  .refine((value) => !value.includes("\0"));
 const codexReasoningEffortSchema = z.string().trim().min(1).max(100);
+const codexReferenceNameSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(512)
+  .refine((value) => !/[\u0000\r\n]/.test(value));
+const codexInputReferenceSchema = z.object({
+  name: codexReferenceNameSchema,
+  path: z.string().trim().min(1).max(4_096),
+  kind: z.enum(["mention", "localImage"]),
+});
+const codexInputReferencesSchema = z
+  .array(codexInputReferenceSchema)
+  .max(MAX_CODEX_INPUT_REFERENCES)
+  .default([]);
+const codexComposerUploadSchema = z.object({
+  name: codexReferenceNameSchema,
+  mimeType: z
+    .string()
+    .trim()
+    .min(1)
+    .max(255)
+    .refine((value) => !/[\u0000\r\n]/.test(value))
+    .default("application/octet-stream"),
+  dataBase64: z.string().min(1).max(MAX_CODEX_COMPOSER_UPLOAD_BASE64_LENGTH),
+});
 const codexMcpServerInputSchema = z
   .object({
     transport: z.enum(["stdio", "streamable-http"]),
@@ -78,8 +116,14 @@ const codexMcpServerInputSchema = z
       .enum(["auto", "prompt", "writes", "approve"])
       .optional(),
     scopes: z.array(z.string().trim().min(1).max(200)).max(128).default([]),
-    enabledTools: z.array(z.string().trim().min(1).max(200)).max(256).default([]),
-    disabledTools: z.array(z.string().trim().min(1).max(200)).max(256).default([]),
+    enabledTools: z
+      .array(z.string().trim().min(1).max(200))
+      .max(256)
+      .default([]),
+    disabledTools: z
+      .array(z.string().trim().min(1).max(200))
+      .max(256)
+      .default([]),
   })
   .superRefine((value, context) => {
     if (value.transport === "stdio" && !value.command) {
@@ -144,7 +188,8 @@ export async function createSandpiServer(
   const config = options.config ?? loadConfig();
   const ownsPool = !options.pool;
   const pool =
-    options.pool ?? createDatabasePool({ connectionString: config.databaseUrl });
+    options.pool ??
+    createDatabasePool({ connectionString: config.databaseUrl });
   const ownsAdvisoryLockPool = !options.pool && !options.advisoryLockPool;
   const advisoryLockPool =
     options.advisoryLockPool ??
@@ -163,11 +208,14 @@ export async function createSandpiServer(
     logger: { level: config.logLevel },
     trustProxy: true,
     requestIdHeader: "x-request-id",
-    genReqId: (request) => request.headers["x-request-id"]?.toString() || randomUUID(),
+    genReqId: (request) =>
+      request.headers["x-request-id"]?.toString() || randomUUID(),
   });
   const store = new SandpiStore(pool, advisoryLockPool);
   const runtime = options.runtime ?? createRuntime(config);
-  const secretBox = config.secretKey ? new SecretBox(config.secretKey) : undefined;
+  const secretBox = config.secretKey
+    ? new SecretBox(config.secretKey)
+    : undefined;
   const codexAuth = new CodexEnvironmentAuthService(
     store,
     new CodexAuthStore(pool),
@@ -341,14 +389,19 @@ function registerAuthRoutes(
 ) {
   app.get("/api/v1/auth/login", async (request, reply) => {
     const returnTo = queryString(request, "return_to") ?? "/";
-    if (!oidcIdentity) return reply.redirect(safeLocalRedirect(returnTo, config));
+    if (!oidcIdentity)
+      return reply.redirect(safeLocalRedirect(returnTo, config));
     const login = await oidcIdentity.startLogin(returnTo);
     return reply.redirect(login.authorizationUrl.toString());
   });
 
   app.get("/api/v1/auth/callback", async (request, reply) => {
     if (!oidcIdentity) {
-      throw new HttpError(404, "oidc_not_configured", "OIDC is not configured.");
+      throw new HttpError(
+        404,
+        "oidc_not_configured",
+        "OIDC is not configured.",
+      );
     }
     const result = await oidcIdentity.completeLogin(
       new URL(request.url, config.publicUrl),
@@ -358,7 +411,11 @@ function registerAuthRoutes(
     // bootstrap so every client observes the same ready/error state without a
     // server restart. EnvironmentService coalesces concurrent reconciliations.
     await environments.reconcilePending();
-    reply.setCookie(SESSION_COOKIE, result.token, sessionCookie(config, result.expiresAt));
+    reply.setCookie(
+      SESSION_COOKIE,
+      result.token,
+      sessionCookie(config, result.expiresAt),
+    );
     return reply.redirect(result.returnTo);
   });
 
@@ -409,7 +466,10 @@ function registerApiRoutes(
   }));
   app.post("/api/v1/environments", async (request, reply) => {
     const body = z
-      .object({ teamId: z.string().min(1), name: z.string().trim().min(1).max(80) })
+      .object({
+        teamId: z.string().min(1),
+        name: z.string().trim().min(1).max(80),
+      })
       .parse(request.body);
     const environment = await services.environments.create({
       userId: request.principal.userId,
@@ -450,7 +510,9 @@ function registerApiRoutes(
   app.put<{ Params: { environmentId: string } }>(
     "/api/v1/environments/:environmentId/provisioning",
     async (request, reply) => {
-      const body = z.object({ desiredState: z.literal("ready") }).parse(request.body);
+      const body = z
+        .object({ desiredState: z.literal("ready") })
+        .parse(request.body);
       void body;
       const environment = await services.environments.retry(
         request.principal.userId,
@@ -527,6 +589,32 @@ function registerApiRoutes(
       meta: { availability: "available", source: "codex" },
     }),
   );
+  app.post<{ Params: { environmentId: string }; Body: unknown }>(
+    "/api/v1/environments/:environmentId/harnesses/codex/uploads",
+    { bodyLimit: CODEX_UPLOAD_BODY_LIMIT_BYTES },
+    async (request, reply) => {
+      const body = codexComposerUploadSchema.parse(request.body);
+      const content = decodeCodexComposerUpload(body.dataBase64);
+      const uploadId = randomUUID();
+      const filePath = codexComposerUploadPath(uploadId, body.name);
+      const reference = codexComposerUploadReference({
+        id: `upload:${uploadId}`,
+        name: body.name,
+        path: filePath,
+        mimeType: body.mimeType,
+        content,
+      });
+      await services.runtimeAccess.withRuntimeAccess(
+        request.principal.userId,
+        request.params.environmentId,
+        (runtime) =>
+          services.runtime.writeCodexComposerUpload(runtime, filePath, content),
+      );
+      return reply.status(201).send({
+        data: reference,
+      });
+    },
+  );
   app.get<{ Params: { environmentId: string } }>(
     "/api/v1/environments/:environmentId/harnesses/codex/skills",
     async (request) => ({
@@ -570,7 +658,10 @@ function registerApiRoutes(
       const body = z
         .intersection(
           z.object({
-            name: z.string().trim().regex(/^[A-Za-z0-9_-]{1,64}$/),
+            name: z
+              .string()
+              .trim()
+              .regex(/^[A-Za-z0-9_-]{1,64}$/),
           }),
           codexMcpDefinitionSchema,
         )
@@ -707,42 +798,54 @@ function registerApiRoutes(
     "/api/v1/sessions",
     { bodyLimit: CODEX_IMAGE_BODY_LIMIT_BYTES },
     async (request, reply) => {
-    const body = z
-      .object({
-        environmentId: z.string().min(1),
-        prompt: z.string().trim().max(100_000).default(""),
-        title: z.string().trim().max(200).optional(),
-        modelId: z.string().max(200).optional(),
-        reasoningEffort: codexReasoningEffortSchema.optional(),
-        images: codexInputImagesSchema,
-      })
-      .refine((value) => value.prompt.length > 0 || value.images.length > 0, {
-        message: "A Session requires text or at least one image.",
-      })
-      .parse(request.body);
-    const environment = await services.store.getEnvironment(
-      request.principal.userId,
-      body.environmentId,
-    );
-    if (environment.status !== "ready" || !environment.workspaceVolumeId) {
-      throw new HttpError(
-        409,
-        "environment_not_ready",
-        environment.provisioningError ?? "Environment is not ready.",
+      const body = z
+        .object({
+          environmentId: z.string().min(1),
+          prompt: z.string().trim().max(100_000).default(""),
+          title: z.string().trim().max(200).optional(),
+          modelId: z.string().max(200).optional(),
+          reasoningEffort: codexReasoningEffortSchema.optional(),
+          images: codexInputImagesSchema,
+          references: codexInputReferencesSchema,
+        })
+        .refine(
+          (value) =>
+            value.prompt.length > 0 ||
+            value.images.length > 0 ||
+            value.references.length > 0,
+          {
+            message:
+              "A Session requires text, an image, or a referenced Workspace file.",
+          },
+        )
+        .parse(request.body);
+      const environment = await services.store.getEnvironment(
+        request.principal.userId,
+        body.environmentId,
       );
-    }
-    const sessionId = await services.codex.createSession({
-      userId: request.principal.userId,
-      environment,
-      title: body.title || body.prompt.slice(0, 56) || "Image task",
-      prompt: body.prompt,
-      images: body.images,
-      modelId: body.modelId,
-      reasoningEffort: body.reasoningEffort,
-    });
-    return reply.status(201).send({
-      data: await services.store.getSession(request.principal.userId, sessionId),
-    });
+      if (environment.status !== "ready" || !environment.workspaceVolumeId) {
+        throw new HttpError(
+          409,
+          "environment_not_ready",
+          environment.provisioningError ?? "Environment is not ready.",
+        );
+      }
+      const sessionId = await services.codex.createSession({
+        userId: request.principal.userId,
+        environment,
+        title: body.title || body.prompt.slice(0, 56) || "File task",
+        prompt: body.prompt,
+        images: body.images,
+        references: body.references,
+        modelId: body.modelId,
+        reasoningEffort: body.reasoningEffort,
+      });
+      return reply.status(201).send({
+        data: await services.store.getSession(
+          request.principal.userId,
+          sessionId,
+        ),
+      });
     },
   );
 
@@ -790,10 +893,19 @@ function registerApiRoutes(
           images: codexInputImagesSchema,
           modelId: z.string().trim().min(1).max(200).optional(),
           reasoningEffort: codexReasoningEffortSchema.optional(),
+          clientMessageId: z.string().trim().min(1).max(200).optional(),
+          references: codexInputReferencesSchema,
         })
-        .refine((value) => value.text.length > 0 || value.images.length > 0, {
-          message: "A Turn requires text or at least one image.",
-        })
+        .refine(
+          (value) =>
+            value.text.length > 0 ||
+            value.images.length > 0 ||
+            value.references.length > 0,
+          {
+            message:
+              "A Turn requires text, an image, or a referenced Workspace file.",
+          },
+        )
         .parse(request.body);
       const result = await services.codex.startTurn({
         userId: request.principal.userId,
@@ -802,6 +914,8 @@ function registerApiRoutes(
         images: body.images,
         modelId: body.modelId,
         reasoningEffort: body.reasoningEffort,
+        clientMessageId: body.clientMessageId,
+        references: body.references,
       });
       return reply.status(202).send({ data: result });
     },
@@ -896,11 +1010,30 @@ function registerApiRoutes(
   app.get<{ Params: { sessionId: string } }>(
     "/api/v1/sessions/:sessionId/events",
     async (request, reply) => {
-      await services.store.getSession(request.principal.userId, request.params.sessionId);
+      await services.store.getSession(
+        request.principal.userId,
+        request.params.sessionId,
+      );
       // The selected Session's initial thread/read wakes the Environment and
       // starts its Supervisor stream. Starting a worker before that lazy read
       // could race an intentional idle pause and duplicate recovery.
       return streamHarnessEvents(request, reply, services.codex);
+    },
+  );
+  app.get<{ Params: { environmentId: string } }>(
+    "/api/v1/environments/:environmentId/files/search",
+    async (request) => {
+      const query = workspaceFileSearchQuerySchema.parse(
+        queryString(request, "query") ?? "",
+      );
+      return {
+        data: await services.runtimeAccess.withRuntimeAccess(
+          request.principal.userId,
+          request.params.environmentId,
+          (runtime) => services.runtime.searchFiles(runtime, query),
+        ),
+        meta: { source: services.runtime.mode, root: WORKSPACE_ROOT },
+      };
     },
   );
   app.get<{ Params: { environmentId: string } }>(
@@ -920,7 +1053,8 @@ function registerApiRoutes(
     "/api/v1/environments/:environmentId/file",
     async (request) => {
       const filePath = queryString(request, "path");
-      if (!filePath) throw new HttpError(400, "path_required", "File path is required.");
+      if (!filePath)
+        throw new HttpError(400, "path_required", "File path is required.");
       const content = await services.runtimeAccess.withRuntimeAccess(
         request.principal.userId,
         request.params.environmentId,
@@ -1011,8 +1145,7 @@ function registerApiRoutes(
     { websocket: true },
     async (socket, request) => {
       let watcher:
-        | Awaited<ReturnType<RuntimeAdapter["watchWorkspaceFiles"]>>
-        | undefined;
+        Awaited<ReturnType<RuntimeAdapter["watchWorkspaceFiles"]>> | undefined;
       try {
         watcher = await services.runtimeAccess.withRuntimeAccess(
           request.principal.userId,
@@ -1092,8 +1225,10 @@ function registerApiRoutes(
     "/api/v1/environments/:environmentId/terminal",
     { websocket: true },
     async (socket, request) => {
-      let terminal: Awaited<ReturnType<RuntimeAdapter["openTerminal"]>> | undefined;
-      let inputQueue: TerminalInputQueue<z.infer<typeof terminalInputSchema>> | undefined;
+      let terminal:
+        Awaited<ReturnType<RuntimeAdapter["openTerminal"]>> | undefined;
+      let inputQueue:
+        TerminalInputQueue<z.infer<typeof terminalInputSchema>> | undefined;
       let heartbeat: TerminalHeartbeat | undefined;
       let cleanedUp = false;
       const cleanup = () => {
@@ -1207,7 +1342,10 @@ function registerApiRoutes(
           } catch (error) {
             if (socket.readyState === socket.OPEN) {
               socket.send(
-                JSON.stringify({ type: "error", error: normalizeError(error).message }),
+                JSON.stringify({
+                  type: "error",
+                  error: normalizeError(error).message,
+                }),
               );
             }
           }
@@ -1262,20 +1400,19 @@ function registerApiRoutes(
   }));
   app.put<{
     Params: { teamId: string; membershipId: string };
-  }>(
-    "/api/v1/teams/:teamId/members/:membershipId/plan",
-    async (request) => {
-      const body = z.object({ planId: z.enum(["free", "pro", "max"]) }).parse(request.body);
-      return {
-        data: await services.store.updateMembershipPlan(
-          request.principal.userId,
-          request.params.teamId,
-          request.params.membershipId,
-          body.planId,
-        ),
-      };
-    },
-  );
+  }>("/api/v1/teams/:teamId/members/:membershipId/plan", async (request) => {
+    const body = z
+      .object({ planId: z.enum(["free", "pro", "max"]) })
+      .parse(request.body);
+    return {
+      data: await services.store.updateMembershipPlan(
+        request.principal.userId,
+        request.params.teamId,
+        request.params.membershipId,
+        body.planId,
+      ),
+    };
+  });
 }
 
 async function streamHarnessEvents(
@@ -1290,10 +1427,11 @@ async function streamHarnessEvents(
   // Codex captures the live cursor at the exact thread/read response record.
   // Notifications before that boundary belong to the native snapshot; only
   // the suffix after it is streamed to the client.
-  let initial: Awaited<ReturnType<CodexService["readNativeSnapshotWithCursor"]>>
+  let initial:
+    | Awaited<ReturnType<CodexService["readNativeSnapshotWithCursor"]>>
     | undefined;
-  let initialInvalidation: { reason: string; message: string; unrecoverable: true }
-    | undefined;
+  let initialInvalidation:
+    { reason: string; message: string; unrecoverable: true } | undefined;
   let initialStreamFailure: ReturnType<typeof codexNativeStreamFailure>;
   try {
     initial = await codex.readNativeSnapshotWithCursor(
@@ -1520,7 +1658,8 @@ async function authenticateRequest(
   }
   const token = request.cookies[SESSION_COOKIE];
   const principal = token ? await oidcIdentity.authenticate(token) : undefined;
-  if (!principal) throw new HttpError(401, "authentication_required", "Sign in required.");
+  if (!principal)
+    throw new HttpError(401, "authentication_required", "Sign in required.");
   return principal;
 }
 
@@ -1609,13 +1748,14 @@ export function parseEnvironmentAuditCursor(value: string | undefined) {
 function normalizeError(error: unknown): HttpError {
   if (error instanceof HttpError) return error;
   if (error instanceof ZodError) {
-    return new HttpError(400, "invalid_request", "Request validation failed.", error.issues);
+    return new HttpError(
+      400,
+      "invalid_request",
+      "Request validation failed.",
+      error.issues,
+    );
   }
-  return new HttpError(
-    500,
-    "internal_error",
-    "Internal server error.",
-  );
+  return new HttpError(500, "internal_error", "Internal server error.");
 }
 
 function isOptionalCodexRuntimeError(error: unknown): error is HttpError {

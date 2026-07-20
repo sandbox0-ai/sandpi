@@ -1,6 +1,9 @@
 export const WORKSPACE_ROOT = "/workspace";
 export const WORKSPACE_INTERNAL_ROOT = `${WORKSPACE_ROOT}/.sandpi`;
-const WORKSPACE_IGNORED_DIRECTORY_NAMES = new Set(["node_modules"]);
+export const WORKSPACE_IGNORED_DIRECTORY_NAMES = ["node_modules"] as const;
+const WORKSPACE_IGNORED_DIRECTORY_NAME_SET = new Set<string>(
+  WORKSPACE_IGNORED_DIRECTORY_NAMES,
+);
 
 /**
  * Browser-safe POSIX normalization for paths crossing Sandpi's Workspace UI
@@ -22,7 +25,8 @@ export function normalizeWorkspacePath(candidate: string) {
     components.push(component);
   }
   const normalized = `/${components.join("/")}`;
-  return normalized === WORKSPACE_ROOT || normalized.startsWith(`${WORKSPACE_ROOT}/`)
+  return normalized === WORKSPACE_ROOT ||
+    normalized.startsWith(`${WORKSPACE_ROOT}/`)
     ? normalized
     : undefined;
 }
@@ -73,6 +77,6 @@ export function isWorkspaceIdePathHidden(
   return directoryParts.some(
     (component) =>
       component.startsWith(".") ||
-      WORKSPACE_IGNORED_DIRECTORY_NAMES.has(component),
+      WORKSPACE_IGNORED_DIRECTORY_NAME_SET.has(component),
   );
 }

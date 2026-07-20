@@ -11,10 +11,7 @@ import type {
   StoredEnvironmentRuntime,
   StoredSessionRuntime,
 } from "@/server/store";
-import {
-  CodexService,
-  type CodexCredentialProvider,
-} from "./service";
+import { CodexService, type CodexCredentialProvider } from "./service";
 import type { SupervisorOutputEvent } from "./jsonl";
 
 const logger = {
@@ -236,40 +233,42 @@ async function waitForPromiseOrAbort(
   });
 }
 
-function fixture(input: {
-  sessions?: Array<{
-    id: string;
-    nativeSessionId: string;
-    archived?: boolean;
-    status?: CodingSession["status"];
-    activeNativeTurnId?: string;
-    pendingTurnPhase?: StoredSessionRuntime["pendingTurnPhase"];
-    pendingTurnStartedAt?: Date;
-    reasoningEffort?: string;
-  }>;
-  streamErrors?: Error[];
-  rpcTimeoutMs?: number;
-  rpcSubmissionTimeoutMs?: number;
-  exceptionalSessionRecoveryDelayMs?: number;
-  exceptionalPendingTurnGraceMs?: number;
-  exceptionalSessionRetryBaseMs?: number;
-  exceptionalSessionActiveRecheckMs?: number;
-  exceptionalSessionRequestTimeoutMs?: number;
-  exceptionalCandidateErrors?: Error[];
-  environmentRecoveryDelay?: Promise<void>;
-  environmentRecoveryErrors?: Error[];
-  runtimeAccessLockDelay?: Promise<void>;
-  lifecycleLockResults?: boolean[];
-  assertScopedRecoveryLocks?: boolean;
-  onRequest?: (
-    message: Record<string, unknown>,
-  ) => Record<string, unknown> | null | undefined;
-  writeDelays?: Record<string, Promise<void>>;
-  authoritativeEpochFence?: boolean;
-  rollouts?: Record<string, string | Error | Promise<string>>;
-  credentials?: CodexCredentialProvider;
-  mcpOauthCredentialsJson?: string;
-} = {}): Fixture {
+function fixture(
+  input: {
+    sessions?: Array<{
+      id: string;
+      nativeSessionId: string;
+      archived?: boolean;
+      status?: CodingSession["status"];
+      activeNativeTurnId?: string;
+      pendingTurnPhase?: StoredSessionRuntime["pendingTurnPhase"];
+      pendingTurnStartedAt?: Date;
+      reasoningEffort?: string;
+    }>;
+    streamErrors?: Error[];
+    rpcTimeoutMs?: number;
+    rpcSubmissionTimeoutMs?: number;
+    exceptionalSessionRecoveryDelayMs?: number;
+    exceptionalPendingTurnGraceMs?: number;
+    exceptionalSessionRetryBaseMs?: number;
+    exceptionalSessionActiveRecheckMs?: number;
+    exceptionalSessionRequestTimeoutMs?: number;
+    exceptionalCandidateErrors?: Error[];
+    environmentRecoveryDelay?: Promise<void>;
+    environmentRecoveryErrors?: Error[];
+    runtimeAccessLockDelay?: Promise<void>;
+    lifecycleLockResults?: boolean[];
+    assertScopedRecoveryLocks?: boolean;
+    onRequest?: (
+      message: Record<string, unknown>,
+    ) => Record<string, unknown> | null | undefined;
+    writeDelays?: Record<string, Promise<void>>;
+    authoritativeEpochFence?: boolean;
+    rollouts?: Record<string, string | Error | Promise<string>>;
+    credentials?: CodexCredentialProvider;
+    mcpOauthCredentialsJson?: string;
+  } = {},
+): Fixture {
   const initial = input.sessions ?? [
     { id: "session-one", nativeSessionId: "thread-one" },
     { id: "session-two", nativeSessionId: "thread-two" },
@@ -281,37 +280,39 @@ function fixture(input: {
     ]),
   );
   const sessionRuntimes = new Map<string, StoredSessionRuntime>(
-    initial.map(({
-      id,
-      nativeSessionId,
-      activeNativeTurnId,
-      pendingTurnPhase,
-      pendingTurnStartedAt,
-      reasoningEffort,
-      status,
-    }) => {
-      const runtime = sessionRuntime(id, nativeSessionId);
-      return [
+    initial.map(
+      ({
         id,
-        {
-          ...runtime,
-          activeNativeTurnId,
-          pendingTurnRequestId: pendingTurnPhase
-            ? `request-${id}`
-            : undefined,
-          pendingTurnClientMessageId: pendingTurnPhase
-            ? `message-${id}`
-            : undefined,
-          pendingTurnStableInputId: pendingTurnPhase
-            ? `input-${id}`
-            : undefined,
-          pendingTurnPhase,
-          pendingTurnStartedAt,
-          reasoningEffort,
-          sessionStatus: status ?? runtime.sessionStatus,
-        },
-      ] as [string, StoredSessionRuntime];
-    }),
+        nativeSessionId,
+        activeNativeTurnId,
+        pendingTurnPhase,
+        pendingTurnStartedAt,
+        reasoningEffort,
+        status,
+      }) => {
+        const runtime = sessionRuntime(id, nativeSessionId);
+        return [
+          id,
+          {
+            ...runtime,
+            activeNativeTurnId,
+            pendingTurnRequestId: pendingTurnPhase
+              ? `request-${id}`
+              : undefined,
+            pendingTurnClientMessageId: pendingTurnPhase
+              ? `message-${id}`
+              : undefined,
+            pendingTurnStableInputId: pendingTurnPhase
+              ? `input-${id}`
+              : undefined,
+            pendingTurnPhase,
+            pendingTurnStartedAt,
+            reasoningEffort,
+            sessionStatus: status ?? runtime.sessionStatus,
+          },
+        ] as [string, StoredSessionRuntime];
+      },
+    ),
   );
   let environmentRuntime: StoredEnvironmentRuntime = {
     id: environment.id,
@@ -622,14 +623,20 @@ function fixture(input: {
             activeNativeTurnId: transition.nativeTurnId,
             sessionStatus: "running",
           });
-          sessions.set(owner.sessionId, { ...currentSession, status: "running" });
+          sessions.set(owner.sessionId, {
+            ...currentSession,
+            status: "running",
+          });
         } else {
           sessionRuntimes.set(owner.sessionId, {
             ...current,
             activeNativeTurnId: undefined,
             sessionStatus: "waiting",
           });
-          sessions.set(owner.sessionId, { ...currentSession, status: "waiting" });
+          sessions.set(owner.sessionId, {
+            ...currentSession,
+            status: "waiting",
+          });
         }
       }
       return true;
@@ -680,10 +687,7 @@ function fixture(input: {
       reasoningEffort?: string;
     }) {
       const id = `session-child-${++childSequence}`;
-      sessions.set(
-        id,
-        session(id, "", "paused"),
-      );
+      sessions.set(id, session(id, "", "paused"));
       sessions.set(id, {
         ...sessions.get(id)!,
         title: options.title ?? `${options.source.title} fork`,
@@ -710,7 +714,10 @@ function fixture(input: {
       return true;
     },
     async markSessionFailed(sessionId: string) {
-      sessions.set(sessionId, { ...sessions.get(sessionId)!, status: "failed" });
+      sessions.set(sessionId, {
+        ...sessions.get(sessionId)!,
+        status: "failed",
+      });
     },
     async reconcileNativeSessionState(options: {
       sessionId: string;
@@ -774,9 +781,7 @@ function fixture(input: {
         pendingTurnStableInputId: clearPending
           ? undefined
           : current.pendingTurnStableInputId,
-        pendingTurnPhase: clearPending
-          ? undefined
-          : current.pendingTurnPhase,
+        pendingTurnPhase: clearPending ? undefined : current.pendingTurnPhase,
         pendingTurnNativeTurnId: clearPending
           ? undefined
           : current.pendingTurnNativeTurnId,
@@ -1077,10 +1082,8 @@ function fixture(input: {
       rpcSubmissionTimeoutMs: input.rpcSubmissionTimeoutMs,
       exceptionalSessionRecoveryDelayMs:
         input.exceptionalSessionRecoveryDelayMs,
-      exceptionalPendingTurnGraceMs:
-        input.exceptionalPendingTurnGraceMs,
-      exceptionalSessionRetryBaseMs:
-        input.exceptionalSessionRetryBaseMs,
+      exceptionalPendingTurnGraceMs: input.exceptionalPendingTurnGraceMs,
+      exceptionalSessionRetryBaseMs: input.exceptionalSessionRetryBaseMs,
       exceptionalSessionActiveRecheckMs:
         input.exceptionalSessionActiveRecheckMs,
       exceptionalSessionRequestTimeoutMs:
@@ -1211,9 +1214,7 @@ test("uses one Environment app-server for multiple native Sessions", async () =>
     });
 
     assert.ok(
-      context.writes.every(
-        (write) => write.environmentId === environment.id,
-      ),
+      context.writes.every((write) => write.environmentId === environment.id),
     );
     assert.equal(
       context.writes.filter((write) => write.message.method === "initialize")
@@ -1449,7 +1450,7 @@ test("reads and parses persisted rollout Activity with the native snapshot", asy
       payload: {
         type: "function_call",
         name: "wait",
-        arguments: "{\"timeout_ms\":1000}",
+        arguments: '{"timeout_ms":1000}',
         call_id: "call-wait",
       },
     },
@@ -1488,8 +1489,7 @@ test("reads and parses persisted rollout Activity with the native snapshot", asy
         status: snapshot.activity.records[0]?.status,
         output: (
           snapshot.activity.records[0]?.outputs[0]?.payload as
-            | { output?: unknown }
-            | undefined
+            { output?: unknown } | undefined
         )?.output,
       },
       {
@@ -1566,10 +1566,7 @@ test("keeps the conversation snapshot when persisted rollout Activity cannot be 
     );
     assert.equal(snapshot.activity.availability, "unavailable");
     assert.deepEqual(snapshot.activity.records, []);
-    assert.equal(
-      snapshot.activity.error?.code,
-      "codex_rollout_read_failed",
-    );
+    assert.equal(snapshot.activity.error?.code, "codex_rollout_read_failed");
     assert.equal(snapshot.activity.error?.message, "volume read failed");
     assert.equal(context.rolloutReads.length, 1);
   } finally {
@@ -1606,10 +1603,7 @@ test("rejects an unmanaged native rollout path without reading it", async () => 
     assert.equal(snapshot.thread.turns.length, 1);
     assert.equal(snapshot.activity.availability, "unavailable");
     assert.deepEqual(snapshot.activity.records, []);
-    assert.equal(
-      snapshot.activity.error?.code,
-      "codex_rollout_path_invalid",
-    );
+    assert.equal(snapshot.activity.error?.code, "codex_rollout_path_invalid");
     assert.equal(context.rolloutReads.length, 0);
   } finally {
     await context.close();
@@ -1643,10 +1637,7 @@ test("scopes a non-string native rollout path to Activity", async () => {
 
     assert.equal(snapshot.thread.id, "thread-one");
     assert.equal(snapshot.activity.availability, "unavailable");
-    assert.equal(
-      snapshot.activity.error?.code,
-      "codex_rollout_path_invalid",
-    );
+    assert.equal(snapshot.activity.error?.code, "codex_rollout_path_invalid");
     assert.equal(context.rolloutReads.length, 0);
   } finally {
     await context.close();
@@ -1673,8 +1664,7 @@ test("rejects a native snapshot returned for a different Thread", async () => {
     await assert.rejects(
       context.service.readNativeSnapshot("user", "session-one"),
       (error: unknown) =>
-        error instanceof HttpError &&
-        error.code === "codex_thread_read_failed",
+        error instanceof HttpError && error.code === "codex_thread_read_failed",
     );
     assert.equal(
       context.sessionRuntimes.get("session-one")?.activeNativeTurnId,
@@ -1708,24 +1698,31 @@ test("recovers only the Environment protocol and leaves native Sessions detached
 
     let methods = context.writes.map((write) => write.message.method);
     assert.equal(methods.filter((method) => method === "initialize").length, 1);
-    assert.equal(methods.filter((method) => method === "thread/resume").length, 0);
+    assert.equal(
+      methods.filter((method) => method === "thread/resume").length,
+      0,
+    );
 
     assert.equal(
-      (
-        await context.service.readNativeSnapshot("user", "session-one")
-      ).thread.id,
+      (await context.service.readNativeSnapshot("user", "session-one")).thread
+        .id,
       "thread-one",
     );
     assert.equal(
-      (
-        await context.service.readNativeSnapshot("user", "session-archived")
-      ).thread.id,
+      (await context.service.readNativeSnapshot("user", "session-archived"))
+        .thread.id,
       "thread-archived",
     );
 
     methods = context.writes.map((write) => write.message.method);
-    assert.equal(methods.filter((method) => method === "thread/read").length, 2);
-    assert.equal(methods.filter((method) => method === "thread/resume").length, 0);
+    assert.equal(
+      methods.filter((method) => method === "thread/read").length,
+      2,
+    );
+    assert.equal(
+      methods.filter((method) => method === "thread/resume").length,
+      0,
+    );
   } finally {
     await context.close();
   }
@@ -1791,8 +1788,7 @@ test("does not start a Turn in an archived Session", async () => {
     assert.equal(
       context.writes.some(
         ({ message }) =>
-          message.method === "thread/resume" ||
-          message.method === "turn/start",
+          message.method === "thread/resume" || message.method === "turn/start",
       ),
       false,
     );
@@ -1834,17 +1830,15 @@ test("repairs only exceptional non-archived Session state without blocking Envir
     await context.service.resumeWorkers();
     await eventually(
       () =>
-        context.writes.filter(
-          ({ message }) => message.method === "thread/read",
-        ).length === 1,
+        context.writes.filter(({ message }) => message.method === "thread/read")
+          .length === 1,
       "exceptional reconciliation did not start after Environment recovery",
     );
 
     assert.equal(context.exceptionalCandidateQueryCount(), 1);
     assert.equal(
-      context.writes.filter(
-        ({ message }) => message.method === "thread/resume",
-      ).length,
+      context.writes.filter(({ message }) => message.method === "thread/resume")
+        .length,
       0,
     );
     const read = context.writes.find(
@@ -1899,9 +1893,8 @@ test("repairs only exceptional non-archived Session state without blocking Envir
     );
     assert.equal(context.sessions.get("session-waiting")?.status, "waiting");
     assert.equal(
-      context.writes.filter(
-        ({ message }) => message.method === "thread/read",
-      ).length,
+      context.writes.filter(({ message }) => message.method === "thread/read")
+        .length,
       1,
     );
   } finally {
@@ -1932,9 +1925,8 @@ test("defers fresh pending Turn repair across replicas until its grace expires",
     await new Promise((resolve) => setTimeout(resolve, 30));
 
     assert.equal(
-      context.writes.filter(
-        ({ message }) => message.method === "thread/read",
-      ).length,
+      context.writes.filter(({ message }) => message.method === "thread/read")
+        .length,
       0,
     );
     assert.equal(
@@ -1944,9 +1936,8 @@ test("defers fresh pending Turn repair across replicas until its grace expires",
 
     await eventually(
       () =>
-        context.writes.filter(
-          ({ message }) => message.method === "thread/read",
-        ).length === 1,
+        context.writes.filter(({ message }) => message.method === "thread/read")
+          .length === 1,
       "pending Turn was not repaired after its distributed grace",
     );
     await eventually(
@@ -1988,9 +1979,8 @@ test("an explicit control repair wakes an existing distributed grace timer", asy
       "explicit repair did not wake the existing grace timer",
     );
     assert.equal(
-      context.writes.filter(
-        ({ message }) => message.method === "thread/read",
-      ).length,
+      context.writes.filter(({ message }) => message.method === "thread/read")
+        .length,
       0,
     );
   } finally {
@@ -2108,9 +2098,7 @@ test("metadata-only repair preserves an active native Thread without loading rep
     await context.service.resumeWorkers();
     await eventually(
       () =>
-        context.writes.some(
-          ({ message }) => message.method === "thread/read",
-        ),
+        context.writes.some(({ message }) => message.method === "thread/read"),
       "active native Thread was not checked",
     );
     await new Promise((resolve) => setTimeout(resolve, 25));
@@ -2159,9 +2147,8 @@ test("defers exceptional Session reads when the Environment lifecycle lock is bu
 
     assert.equal(context.exceptionalCandidateQueryCount(), 1);
     assert.equal(
-      context.writes.filter(
-        ({ message }) => message.method === "thread/read",
-      ).length,
+      context.writes.filter(({ message }) => message.method === "thread/read")
+        .length,
       0,
     );
     assert.equal(context.lifecycleLockActive(), false);
@@ -2197,9 +2184,8 @@ test("does not submit exceptional Session reads after the Environment is paused"
 
     assert.equal(context.lifecycleLocks.length, 2);
     assert.equal(
-      context.writes.filter(
-        ({ message }) => message.method === "thread/read",
-      ).length,
+      context.writes.filter(({ message }) => message.method === "thread/read")
+        .length,
       0,
     );
     assert.equal(
@@ -2232,9 +2218,7 @@ test("a submitted exceptional Session read cannot wake a subsequently paused Env
     await context.service.resumeWorkers();
     await eventually(
       () =>
-        context.writes.some(
-          ({ message }) => message.method === "thread/read",
-        ),
+        context.writes.some(({ message }) => message.method === "thread/read"),
       "exceptional reconciliation did not submit thread/read",
     );
     const read = context.writes.find(
@@ -2302,9 +2286,7 @@ test("cancelling an exceptional Session read while submission is pending is hand
     await context.service.resumeWorkers();
     await eventually(
       () =>
-        context.writes.some(
-          ({ message }) => message.method === "thread/read",
-        ),
+        context.writes.some(({ message }) => message.method === "thread/read"),
       "exceptional reconciliation did not begin its native submission",
     );
     assert.equal(context.lifecycleLockActive(), true);
@@ -2376,9 +2358,7 @@ test("interactive requests still reconcile an Environment paused after submissio
     const listing = context.service.listModels("user", "session-one");
     await eventually(
       () =>
-        context.writes.some(
-          ({ message }) => message.method === "model/list",
-        ),
+        context.writes.some(({ message }) => message.method === "model/list"),
       "interactive model/list was not submitted",
     );
     const request = context.writes.find(
@@ -2417,10 +2397,9 @@ test("recovers a Sandbox0 epoch changed outside Sandpi before submitting once", 
       runtimeGeneration: 2,
     });
 
-    assert.deepEqual(
-      await context.service.listModels("user", "session-one"),
-      { data: [{ id: "gpt-test" }] },
-    );
+    assert.deepEqual(await context.service.listModels("user", "session-one"), {
+      data: [{ id: "gpt-test" }],
+    });
     assert.equal(context.runtimeRecoveryCount(), 2);
     assert.equal(
       context.writes.filter(({ message }) => message.method === "model/list")
@@ -2447,10 +2426,9 @@ test("a recovery-owned worker reconnects without waiting on its own recovery", a
     await context.service.resumeWorkers();
     assert.equal(context.runtimeRecoveryCount(), 1);
 
-    assert.deepEqual(
-      await context.service.listModels("user", "session-one"),
-      { data: [{ id: "gpt-test" }] },
-    );
+    assert.deepEqual(await context.service.listModels("user", "session-one"), {
+      data: [{ id: "gpt-test" }],
+    });
     assert.equal(context.runtimeRecoveryCount(), 1);
     assert.ok(context.streamStarts.length >= 2);
   } finally {
@@ -2476,9 +2454,7 @@ test("does not replay a Turn after its submitted runtime epoch is lost", async (
     });
     await eventually(
       () =>
-        context.writes.some(
-          ({ message }) => message.method === "turn/start",
-        ),
+        context.writes.some(({ message }) => message.method === "turn/start"),
       "turn/start was not submitted",
     );
 
@@ -2503,16 +2479,13 @@ test("does not replay a Turn after its submitted runtime epoch is lost", async (
     assert.equal(typeof result.requestId, "string");
     assert.equal(result.nativeTurnId, undefined);
     assert.equal(
-      context.writes.filter(
-        ({ message }) => message.method === "turn/start",
-      ).length,
+      context.writes.filter(({ message }) => message.method === "turn/start")
+        .length,
       1,
     );
     await eventually(
       () =>
-        context.writes.some(
-          ({ message }) => message.method === "thread/read",
-        ),
+        context.writes.some(({ message }) => message.method === "thread/read"),
       "ambiguous Turn delivery did not schedule native reconciliation",
     );
   } finally {
@@ -2705,16 +2678,13 @@ test("bounds input delivery without replaying an ambiguously submitted Turn", as
     assert.equal(typeof result.requestId, "string");
     assert.equal(result.nativeTurnId, undefined);
     assert.equal(
-      context.writes.filter(
-        ({ message }) => message.method === "turn/start",
-      ).length,
+      context.writes.filter(({ message }) => message.method === "turn/start")
+        .length,
       1,
     );
     await eventually(
       () =>
-        context.writes.some(
-          ({ message }) => message.method === "thread/read",
-        ),
+        context.writes.some(({ message }) => message.method === "thread/read"),
       "timed-out input delivery did not enter native reconciliation",
     );
   } finally {
@@ -2742,9 +2712,7 @@ test("closes promptly while exceptional native reconciliation is waiting", async
   await context.service.resumeWorkers();
   await eventually(
     () =>
-      context.writes.some(
-        ({ message }) => message.method === "thread/read",
-    ),
+      context.writes.some(({ message }) => message.method === "thread/read"),
     "exceptional reconciliation did not begin",
   );
   let closeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -2771,10 +2739,7 @@ test("closes promptly while startup initialization is waiting", async () => {
 
   const recovery = context.service.resumeWorkers();
   await eventually(
-    () =>
-      context.writes.some(
-        ({ message }) => message.method === "initialize",
-      ),
+    () => context.writes.some(({ message }) => message.method === "initialize"),
     "Environment startup did not reach protocol initialization",
   );
   let closeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -2819,9 +2784,8 @@ test("closing during slow Environment recovery prevents a new initialize waiter"
     assert.equal(closed, true);
     await startup;
     assert.equal(
-      context.writes.filter(
-        ({ message }) => message.method === "initialize",
-      ).length,
+      context.writes.filter(({ message }) => message.method === "initialize")
+        .length,
       0,
     );
   } finally {
@@ -2849,9 +2813,8 @@ test("suspending an Environment cancels delayed Session reconciliation", async (
 
     assert.equal(context.exceptionalCandidateQueryCount(), 0);
     assert.equal(
-      context.writes.filter(
-        ({ message }) => message.method === "thread/read",
-      ).length,
+      context.writes.filter(({ message }) => message.method === "thread/read")
+        .length,
       0,
     );
     assert.equal(
@@ -2897,9 +2860,8 @@ test("defers exceptional reconciliation until interactive Turn admission finishe
     await new Promise((resolve) => setTimeout(resolve, 25));
     assert.equal(context.exceptionalCandidateQueryCount(), 0);
     assert.equal(
-      context.writes.filter(
-        ({ message }) => message.method === "thread/read",
-      ).length,
+      context.writes.filter(({ message }) => message.method === "thread/read")
+        .length,
       0,
     );
 
@@ -2925,9 +2887,8 @@ test("defers exceptional reconciliation until interactive Turn admission finishe
     );
     await eventually(
       () =>
-        context.writes.filter(
-          ({ message }) => message.method === "thread/read",
-        ).length === 1,
+        context.writes.filter(({ message }) => message.method === "thread/read")
+          .length === 1,
       "active Session was not authoritatively checked after recovery",
     );
     assert.equal(
@@ -2969,8 +2930,7 @@ test("interactive Turn admission preempts and then reschedules a background Sess
         context.writes.some(
           ({ message }) =>
             message.method === "thread/read" &&
-            (message.params as { threadId?: string }).threadId ===
-              "thread-two",
+            (message.params as { threadId?: string }).threadId === "thread-two",
         ),
       "background reconciliation did not reach the stale Session",
     );
@@ -2982,9 +2942,8 @@ test("interactive Turn admission preempts and then reschedules a background Sess
       images: [],
     });
     assert.equal(
-      context.writes.filter(
-        ({ message }) => message.method === "turn/start",
-      ).length,
+      context.writes.filter(({ message }) => message.method === "turn/start")
+        .length,
       1,
     );
     await eventually(
@@ -2996,8 +2955,7 @@ test("interactive Turn admission preempts and then reschedules a background Sess
         context.writes.filter(
           ({ message }) =>
             message.method === "thread/read" &&
-            (message.params as { threadId?: string }).threadId ===
-              "thread-two",
+            (message.params as { threadId?: string }).threadId === "thread-two",
         ).length >= 2,
       "rescheduled reconciliation did not revisit the stale Session",
     );
@@ -3040,9 +2998,8 @@ test("repairs only the selected Session projection from its native snapshot", as
     );
     assert.equal(context.sessions.get("session-two")?.status, "running");
     assert.equal(
-      context.writes.filter(
-        ({ message }) => message.method === "thread/resume",
-      ).length,
+      context.writes.filter(({ message }) => message.method === "thread/resume")
+        .length,
       0,
     );
   } finally {
@@ -3071,9 +3028,11 @@ test("lazily attaches only the native Session that starts a Turn", async () => {
       images: [],
       modelId: "gpt-next",
       reasoningEffort: "high",
+      clientMessageId: "user-message:browser-e2e",
     });
 
     assert.match(started.nativeTurnId ?? "", /^turn-new-/);
+    assert.equal(started.clientMessageId, "user-message:browser-e2e");
     const nativeMethods = context.writes.filter(({ message }) =>
       ["thread/resume", "turn/start"].includes(String(message.method)),
     );
@@ -3082,8 +3041,7 @@ test("lazily attaches only the native Session that starts a Turn", async () => {
       ["thread/resume", "turn/start"],
     );
     const resumeParams = nativeMethods[0]?.message.params as
-      | Record<string, unknown>
-      | undefined;
+      Record<string, unknown> | undefined;
     assert.equal(resumeParams?.threadId, "thread-one");
     assert.equal(resumeParams?.model, "gpt-next");
     assert.deepEqual(resumeParams?.config, {
@@ -3091,11 +3049,14 @@ test("lazily attaches only the native Session that starts a Turn", async () => {
     });
     assert.equal("excludeTurns" in (resumeParams ?? {}), false);
     const turnParams = nativeMethods[1]?.message.params as
-      | Record<string, unknown>
-      | undefined;
+      Record<string, unknown> | undefined;
     assert.equal(turnParams?.model, "gpt-next");
     assert.equal(turnParams?.effort, "high");
-    assert.equal(context.sessionRuntimes.get("session-one")?.modelId, "gpt-next");
+    assert.equal(turnParams?.clientUserMessageId, "user-message:browser-e2e");
+    assert.equal(
+      context.sessionRuntimes.get("session-one")?.modelId,
+      "gpt-next",
+    );
     assert.equal(
       context.sessionRuntimes.get("session-one")?.reasoningEffort,
       "high",
@@ -3116,9 +3077,8 @@ test("lazily attaches only the native Session that starts a Turn", async () => {
       turnId: started.nativeTurnId!,
     });
     assert.equal(
-      context.writes.filter(
-        ({ message }) => message.method === "thread/resume",
-      ).length,
+      context.writes.filter(({ message }) => message.method === "thread/resume")
+        .length,
       1,
     );
   } finally {
@@ -3185,9 +3145,8 @@ test("deduplicates concurrent lazy attachment within one app-server attempt", as
 
     await Promise.all([first, second]);
     assert.equal(
-      context.writes.filter(
-        ({ message }) => message.method === "thread/resume",
-      ).length,
+      context.writes.filter(({ message }) => message.method === "thread/resume")
+        .length,
       1,
     );
     assert.equal(
@@ -3211,9 +3170,8 @@ test("invalidates a lazy attachment when app-server epoch coordinates change", a
       images: [],
     });
     assert.equal(
-      context.writes.filter(
-        ({ message }) => message.method === "thread/resume",
-      ).length,
+      context.writes.filter(({ message }) => message.method === "thread/resume")
+        .length,
       1,
     );
 
@@ -3227,9 +3185,8 @@ test("invalidates a lazy attachment when app-server epoch coordinates change", a
       turnId: started.nativeTurnId!,
     });
     assert.equal(
-      context.writes.filter(
-        ({ message }) => message.method === "thread/resume",
-      ).length,
+      context.writes.filter(({ message }) => message.method === "thread/resume")
+        .length,
       2,
     );
 
@@ -3243,9 +3200,8 @@ test("invalidates a lazy attachment when app-server epoch coordinates change", a
       turnId: started.nativeTurnId!,
     });
     assert.equal(
-      context.writes.filter(
-        ({ message }) => message.method === "thread/resume",
-      ).length,
+      context.writes.filter(({ message }) => message.method === "thread/resume")
+        .length,
       3,
     );
 
@@ -3260,12 +3216,10 @@ test("invalidates a lazy attachment when app-server epoch coordinates change", a
       turnId: started.nativeTurnId!,
     });
     assert.equal(
-      context.writes.filter(
-        ({ message }) => message.method === "thread/resume",
-      ).length,
+      context.writes.filter(({ message }) => message.method === "thread/resume")
+        .length,
       4,
     );
-
   } finally {
     await context.close();
   }
@@ -3299,9 +3253,8 @@ test("retries a failed lazy attachment without delivering the Turn early", async
         error.code === "codex_native_session_attach_failed",
     );
     assert.equal(
-      context.writes.filter(
-        ({ message }) => message.method === "turn/start",
-      ).length,
+      context.writes.filter(({ message }) => message.method === "turn/start")
+        .length,
       0,
     );
     assert.equal(
@@ -3318,9 +3271,8 @@ test("retries a failed lazy attachment without delivering the Turn early", async
     });
     assert.equal(resumes, 2);
     assert.equal(
-      context.writes.filter(
-        ({ message }) => message.method === "turn/start",
-      ).length,
+      context.writes.filter(({ message }) => message.method === "turn/start")
+        .length,
       1,
     );
   } finally {
@@ -3357,9 +3309,8 @@ test("rejects a lazy attachment returned for a different Thread", async () => {
         error.code === "codex_thread_resume_failed",
     );
     assert.equal(
-      context.writes.filter(
-        ({ message }) => message.method === "turn/start",
-      ).length,
+      context.writes.filter(({ message }) => message.method === "turn/start")
+        .length,
       0,
     );
     assert.equal(context.sessions.get("session-one")?.status, "waiting");
@@ -3388,9 +3339,8 @@ test("abandons pending Turn admission when lazy attachment times out", async () 
         error instanceof HttpError && error.code === "codex_rpc_timeout",
     );
     assert.equal(
-      context.writes.filter(
-        ({ message }) => message.method === "turn/start",
-      ).length,
+      context.writes.filter(({ message }) => message.method === "turn/start")
+        .length,
       0,
     );
     assert.equal(
@@ -3423,9 +3373,8 @@ test("reconciles ambiguous Turn delivery lazily after its RPC timeout", async ()
     assert.equal(result.nativeTurnId, undefined);
     await eventually(
       () =>
-        context.writes.filter(
-          ({ message }) => message.method === "thread/read",
-        ).length === 1,
+        context.writes.filter(({ message }) => message.method === "thread/read")
+          .length === 1,
       "ambiguous Turn delivery did not schedule a native state read",
     );
     await eventually(
@@ -3446,9 +3395,8 @@ test("reconciles ambiguous Turn delivery lazily after its RPC timeout", async ()
       true,
     );
     assert.equal(
-      context.writes.filter(
-        ({ message }) => message.method === "thread/resume",
-      ).length,
+      context.writes.filter(({ message }) => message.method === "thread/resume")
+        .length,
       1,
     );
   } finally {
@@ -3544,9 +3492,7 @@ test("hands an exact timeout repair to a newer app-server epoch", async () => {
 
     await eventually(
       () =>
-        context.writes.some(
-          ({ message }) => message.method === "thread/read",
-        ),
+        context.writes.some(({ message }) => message.method === "thread/read"),
       "new app-server epoch did not inherit the exact repair",
     );
     await eventually(
@@ -3608,7 +3554,10 @@ test("routes a shared Supervisor journal by native thread id", async () => {
       context.sessionRuntimes.get("session-one")?.activeNativeTurnId,
       "turn-one-live",
     );
-    assert.equal(context.sessionRuntimes.get("session-two")?.activeNativeTurnId, undefined);
+    assert.equal(
+      context.sessionRuntimes.get("session-two")?.activeNativeTurnId,
+      undefined,
+    );
   } finally {
     await context.close();
   }
@@ -3704,7 +3653,9 @@ test("publishes a running tool before Codex completes it", async () => {
       ["item/started"],
     );
     assert.equal(
-      notifications.some((notification) => notification.method === "item/completed"),
+      notifications.some(
+        (notification) => notification.method === "item/completed",
+      ),
       false,
     );
   } finally {
@@ -3760,7 +3711,9 @@ test("reconnects the Supervisor stream from the committed cursor", async () => {
       context.service
         .listLiveNotifications("session-one")
         .map((update) =>
-          update.kind === "notification" ? update.event.notification.method : "",
+          update.kind === "notification"
+            ? update.event.notification.method
+            : "",
         ),
       ["turn/started", "item/agentMessage/delta"],
     );
@@ -3824,9 +3777,8 @@ test("forks a product Session only through Codex thread/fork", async () => {
       images: [],
     });
     assert.equal(
-      context.writes.filter(
-        (write) => write.message.method === "thread/resume",
-      ).length,
+      context.writes.filter((write) => write.message.method === "thread/resume")
+        .length,
       0,
     );
     assert.ok(
@@ -3898,7 +3850,10 @@ test("lists and toggles Environment skills through Codex native RPCs", async () 
     const write = context.writes.find(
       ({ message }) => message.method === "skills/config/write",
     );
-    assert.deepEqual(write?.message.params, { path: skillPath, enabled: false });
+    assert.deepEqual(write?.message.params, {
+      path: skillPath,
+      enabled: false,
+    });
   } finally {
     await context.close();
   }
@@ -4077,8 +4032,8 @@ test("MCP logout waits for an older persist and then reads native credentials ag
   try {
     const backgroundPersist =
       context.service.persistEnvironmentMcpOAuthCredential(
-      context.environmentRuntime(),
-    );
+        context.environmentRuntime(),
+      );
     await firstSyncStarted;
 
     let logoutSettled = false;
@@ -4170,8 +4125,8 @@ test("credential flush queues a fresh MCP OAuth read behind an older persist", a
   try {
     const backgroundPersist =
       context.service.persistEnvironmentMcpOAuthCredential(
-      context.environmentRuntime(),
-    );
+        context.environmentRuntime(),
+      );
     await firstSyncStarted;
     context.setMcpOauthCredentialsJson(undefined);
 
@@ -4207,7 +4162,10 @@ test("MCP RPC failures do not expose provider-controlled error details", async (
       (error: unknown) => {
         assert.ok(error instanceof HttpError);
         assert.equal(error.code, "codex_config_read_failed");
-        assert.equal(error.message, "Codex could not read the Environment configuration.");
+        assert.equal(
+          error.message,
+          "Codex could not read the Environment configuration.",
+        );
         assert.equal(error.message.includes(secret), false);
         return true;
       },
@@ -4227,12 +4185,7 @@ test("creates remote and local Environment MCP servers and reloads every native 
   };
   const localDefinition = {
     command: "npx",
-    args: [
-      "-y",
-      "@playwright/mcp@latest",
-      "--headless",
-      "--no-sandbox",
-    ],
+    args: ["-y", "@playwright/mcp@latest", "--headless", "--no-sandbox"],
     enabled: true,
     required: false,
     startup_timeout_sec: 120,
@@ -4285,38 +4238,39 @@ test("creates remote and local Environment MCP servers and reloads every native 
         return {
           id: message.id,
           result: {
-            data: configured > 0
-              ? [
-                  {
-                    name: "docs",
-                    serverInfo: {
-                      name: "docs-server",
-                      title: "Docs",
-                      version: "1.0.0",
+            data:
+              configured > 0
+                ? [
+                    {
+                      name: "docs",
+                      serverInfo: {
+                        name: "docs-server",
+                        title: "Docs",
+                        version: "1.0.0",
+                      },
+                      tools: { search: { name: "search" } },
+                      resources: [],
+                      resourceTemplates: [],
+                      authStatus: "unsupported",
                     },
-                    tools: { search: { name: "search" } },
-                    resources: [],
-                    resourceTemplates: [],
-                    authStatus: "unsupported",
-                  },
-                  ...(configured > 1
-                    ? [
-                        {
-                          name: "playwright",
-                          serverInfo: {
+                    ...(configured > 1
+                      ? [
+                          {
                             name: "playwright",
-                            title: "Playwright",
-                            version: "1.0.0",
+                            serverInfo: {
+                              name: "playwright",
+                              title: "Playwright",
+                              version: "1.0.0",
+                            },
+                            tools: {},
+                            resources: [],
+                            resourceTemplates: [],
+                            authStatus: "unsupported",
                           },
-                          tools: {},
-                          resources: [],
-                          resourceTemplates: [],
-                          authStatus: "unsupported",
-                        },
-                      ]
-                    : []),
-                ]
-              : [],
+                        ]
+                      : []),
+                  ]
+                : [],
             nextCursor: null,
           },
         };
@@ -4347,8 +4301,9 @@ test("creates remote and local Environment MCP servers and reloads every native 
     const batch = context.writes.find(
       ({ message }) => message.method === "config/batchWrite",
     );
-    const edits = (batch?.message.params as { edits: Array<Record<string, unknown>> })
-      .edits;
+    const edits = (
+      batch?.message.params as { edits: Array<Record<string, unknown>> }
+    ).edits;
     assert.ok(
       edits.some(
         (edit) =>
@@ -4358,7 +4313,8 @@ test("creates remote and local Environment MCP servers and reloads every native 
     );
     assert.ok(
       edits.some(
-        (edit) => edit.keyPath === "mcp_servers.docs.command" && edit.value === null,
+        (edit) =>
+          edit.keyPath === "mcp_servers.docs.command" && edit.value === null,
       ),
     );
     assert.equal(

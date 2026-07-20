@@ -22,6 +22,7 @@ import type {
   EnvironmentMetrics,
   WorkspaceDirectoryListing,
   WorkspaceFile,
+  WorkspaceFileSearchResult,
   WorkspaceGitState,
   WorkspaceIdeFile,
   WorkspaceLineChange,
@@ -36,10 +37,16 @@ import {
   isWorkspaceIdePathHidden,
   isWorkspaceInternalPath,
   userVisibleWorkspacePath,
+  WORKSPACE_IGNORED_DIRECTORY_NAMES,
   WORKSPACE_INTERNAL_ROOT,
+  WORKSPACE_ROOT,
 } from "@/lib/workspace-path-policy";
 import { HttpError } from "@/server/http-error";
 import { ENVIRONMENT_SANDBOX_HARD_TTL_SECONDS } from "@/server/environments/lifecycle-policy";
+import {
+  isCodexComposerUploadPath,
+  MAX_CODEX_COMPOSER_UPLOAD_BYTES,
+} from "@/server/harnesses/codex/input-references";
 import { toSandbox0NetworkPolicy } from "./network-policy";
 import {
   CODEX_ENVIRONMENT_CREDENTIAL_PATH,
@@ -89,10 +96,8 @@ const ENVIRONMENT_CODEX_HOME = "/workspace/.sandpi/harnesses/codex";
 const WORKSPACE_CODEX_LAYOUT_MARKER = `${ENVIRONMENT_CODEX_HOME}/.sandpi-layout-environment-v1`;
 const ENVIRONMENT_CODEX_AUTH_FILE = CODEX_ENVIRONMENT_CREDENTIAL_PATH;
 const ENVIRONMENT_CODEX_MCP_OAUTH_FILE = CODEX_MCP_OAUTH_CREDENTIAL_PATH;
-const ENVIRONMENT_CODEX_MCP_OAUTH_LOCK_DIRECTORY =
-  `${ENVIRONMENT_CODEX_HOME}/mcp-oauth-locks`;
-const ENVIRONMENT_CODEX_MCP_OAUTH_LOCK_FILE =
-  `${ENVIRONMENT_CODEX_MCP_OAUTH_LOCK_DIRECTORY}/file-store.lock`;
+const ENVIRONMENT_CODEX_MCP_OAUTH_LOCK_DIRECTORY = `${ENVIRONMENT_CODEX_HOME}/mcp-oauth-locks`;
+const ENVIRONMENT_CODEX_MCP_OAUTH_LOCK_FILE = `${ENVIRONMENT_CODEX_MCP_OAUTH_LOCK_DIRECTORY}/file-store.lock`;
 const ENVIRONMENT_CODEX_MCP_OAUTH_SCRATCH_PREFIX =
   "/dev/shm/.sandpi-codex-mcp-oauth";
 const DEVICE_CODEX_HOME = "/dev/shm/sandpi-codex-device";
@@ -106,6 +111,8 @@ const MCP_OAUTH_CALLBACK_RATE_LIMIT_BURST = 10;
 const AUTH_SANDBOX_HARD_TTL_SECONDS = 30 * 60;
 const MAX_GIT_DISCOVERY_DEPTH = 13;
 const MAX_FILE_PREVIEW_BYTES = 5 * 1024 * 1024;
+const MAX_WORKSPACE_FILE_SEARCH_CANDIDATES = 500;
+const MAX_WORKSPACE_FILE_SEARCH_RESULTS = 100;
 const MAX_CODEX_ROLLOUT_BYTES = 16 * 1024 * 1024;
 const CODEX_ROLLOUT_REPRESENTATION_RETRIES = 3;
 const CODEX_ROLLOUT_REPRESENTATION_RETRY_MS = 50;
@@ -113,6 +120,21 @@ const GIT_STATUS_CONCURRENCY = 4;
 const SANDBOX_AUTO_RESUME_TIMEOUT_MS = 120_000;
 const SANDBOX_AUTO_RESUME_RETRY_DELAY_MS = 250;
 const SANDBOX0_TRANSPORT_RETRY_DELAYS_MS = [100, 250] as const;
+// Sandbox0's File API lists one directory at a time. Keep cross-harness search
+// as one bounded Sandbox command so large trees do not become recursive HTTP
+// fan-out, and keep the capability below every coding-agent adapter.
+const WORKSPACE_FILE_SEARCH_PRUNE_EXPRESSION = [
+  "-name '.*'",
+  ...WORKSPACE_IGNORED_DIRECTORY_NAMES.map(
+    (name) => `-name ${shellSingleQuoted(name)}`,
+  ),
+].join(" -o ");
+const WORKSPACE_FILE_SEARCH_COMMAND = `cd "$1"
+find . -mindepth 1 \\
+  \\( -type d \\( ${WORKSPACE_FILE_SEARCH_PRUNE_EXPRESSION} \\) \\) -prune -o \\
+  \\( \\( -type f -o -type d \\) -a -ipath "$2" \\) \\
+  -printf '%y\\0%p\\0' |
+head -z -n ${MAX_WORKSPACE_FILE_SEARCH_CANDIDATES * 2}`;
 
 type SdkRuntimeMetricSeries = SandboxMetrics["series"][number];
 const decompressZstd = promisify(zstdDecompress);
@@ -432,12 +454,15 @@ export class Sandbox0Runtime implements RuntimeAdapter {
       // Every Environment uses Sandbox0's coding-agent template. This Auth
       // Runner claims that same template but mounts neither the Environment
       // Workspace Volume nor a rootfs snapshot. It is not a user Session.
-      const sandbox = await this.client.sandboxes.claim(environment.templateId, {
-        config: {
-          hardTtl: AUTH_SANDBOX_HARD_TTL_SECONDS,
-          network: toSandbox0NetworkPolicy(environment.networkPolicy),
+      const sandbox = await this.client.sandboxes.claim(
+        environment.templateId,
+        {
+          config: {
+            hardTtl: AUTH_SANDBOX_HARD_TTL_SECONDS,
+            network: toSandbox0NetworkPolicy(environment.networkPolicy),
+          },
         },
-      });
+      );
       sandboxId = sandbox.id;
       await this.client.sandboxes.waitForLifecycle(
         sandbox.id,
@@ -474,7 +499,9 @@ export class Sandbox0Runtime implements RuntimeAdapter {
         ? supervisor
         : await waitForAttempt(sandbox, supervisor.id);
       if (!running.attempt) {
-        throw new Error("Codex authentication Supervisor Session did not start");
+        throw new Error(
+          "Codex authentication Supervisor Session did not start",
+        );
       }
       return {
         sandboxId: sandbox.id,
@@ -484,7 +511,9 @@ export class Sandbox0Runtime implements RuntimeAdapter {
       };
     } catch (error) {
       if (sandboxId) {
-        await this.deleteCodexAuthResources({ sandboxId }).catch(() => undefined);
+        await this.deleteCodexAuthResources({ sandboxId }).catch(
+          () => undefined,
+        );
       }
       throw translateSandbox0Error(error);
     }
@@ -518,7 +547,10 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     try {
       const page = await this.client.sandboxes
         .sandbox(runtime.sandboxId)
-        .listSessionEvents(runtime.supervisorSessionId, { after, limit: 1_000 });
+        .listSessionEvents(runtime.supervisorSessionId, {
+          after,
+          limit: 1_000,
+        });
       return {
         events: page.events.map((event) => ({
           ...event,
@@ -747,7 +779,8 @@ export class Sandbox0Runtime implements RuntimeAdapter {
           // runtimeRecovery can win this race immediately after Sandbox
           // resume. Accept a conflict only when Sandbox0 now proves that the
           // same Supervisor has a live attempt; other 409s remain actionable.
-          if (!(error instanceof APIError) || error.statusCode !== 409) throw error;
+          if (!(error instanceof APIError) || error.statusCode !== 409)
+            throw error;
           let raced;
           try {
             raced = await sandbox.getSession(supervisor.id);
@@ -825,18 +858,11 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     );
     const before = await this.client.sandboxes.get(sandboxId);
     await this.withSandboxAutoResume(sandboxId, () =>
-      installCodexCredential(
-        sandbox,
-        ENVIRONMENT_CODEX_AUTH_FILE,
-        authJson,
-      ),
+      installCodexCredential(sandbox, ENVIRONMENT_CODEX_AUTH_FILE, authJson),
     );
     if (mcpOauthJson !== undefined) {
       await this.withSandboxAutoResume(sandboxId, () =>
-        installCodexMcpOauthCredential(
-          sandbox,
-          mcpOauthJson,
-        ),
+        installCodexMcpOauthCredential(sandbox, mcpOauthJson),
       );
     }
     const after = await this.client.sandboxes.get(sandboxId);
@@ -1109,6 +1135,89 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     return { path: root, entries, refreshedAt: toUnixTimestamp(new Date()) };
   }
 
+  async searchFiles(
+    runtime: EnvironmentRuntimeRecord,
+    query: string,
+  ): Promise<WorkspaceFileSearchResult[]> {
+    const normalizedQuery = query.trim();
+    if (!normalizedQuery) return [];
+    if (normalizedQuery.includes("\0")) {
+      throw new HttpError(
+        400,
+        "workspace_file_search_query_invalid",
+        "Workspace file search cannot contain a null byte.",
+      );
+    }
+
+    try {
+      const result = await this.client.sandboxes
+        .sandbox(runtime.sandboxId)
+        .cmd("search-workspace-files", {
+          command: [
+            "/bin/sh",
+            "-ceu",
+            WORKSPACE_FILE_SEARCH_COMMAND,
+            "sandpi-workspace-file-search",
+            WORKSPACE_ROOT,
+            workspaceFileSearchPattern(normalizedQuery),
+          ],
+          cwd: WORKSPACE_ROOT,
+          envVars: { LC_ALL: "C" },
+          ttlSec: 10,
+        });
+      if (result.exitCode !== undefined && result.exitCode !== 0) {
+        throw new HttpError(
+          502,
+          "workspace_file_search_failed",
+          (result.stderr ?? "").trim() ||
+            "Sandbox0 could not search the Workspace.",
+        );
+      }
+      return workspaceFileSearchResults(result.stdout, normalizedQuery);
+    } catch (error) {
+      throw translateSandbox0Error(error);
+    }
+  }
+
+  async writeCodexComposerUpload(
+    runtime: EnvironmentRuntimeRecord,
+    requestedPath: string,
+    content: Uint8Array,
+  ) {
+    const filePath = path.posix.normalize(requestedPath);
+    if (!isCodexComposerUploadPath(filePath)) {
+      throw new HttpError(
+        400,
+        "invalid_codex_file_upload_path",
+        "Composer uploads must stay under Sandpi's protected upload directory.",
+      );
+    }
+    if (
+      content.byteLength === 0 ||
+      content.byteLength > MAX_CODEX_COMPOSER_UPLOAD_BYTES
+    ) {
+      throw new HttpError(
+        413,
+        "codex_file_upload_too_large",
+        "Uploaded files must be between 1 byte and 20 MiB.",
+      );
+    }
+
+    try {
+      const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
+      const directory = path.posix.dirname(filePath);
+      await sandbox.mkdir(directory, true);
+      // The directory is Sandpi-owned but remains inside an agent-writable
+      // Workspace. Re-check every component before the File API write so an
+      // agent-created symlink cannot redirect browser uploads.
+      await assertWorkspacePathHasNoSymlink(sandbox, directory);
+      await assertWorkspacePathHasNoSymlink(sandbox, filePath, true);
+      await sandbox.writeFile(filePath, content);
+    } catch (error) {
+      throw translateWorkspaceFileError(error);
+    }
+  }
+
   async readFile(runtime: EnvironmentRuntimeRecord, requestedPath: string) {
     try {
       const filePath = safeWorkspacePath(requestedPath);
@@ -1158,11 +1267,7 @@ export class Sandbox0Runtime implements RuntimeAdapter {
       attempt += 1
     ) {
       try {
-        return await readCodexRolloutRepresentation(
-          sandbox,
-          filePath,
-          signal,
-        );
+        return await readCodexRolloutRepresentation(sandbox, filePath, signal);
       } catch (error) {
         if (
           !(error instanceof HttpError) ||
@@ -1177,10 +1282,7 @@ export class Sandbox0Runtime implements RuntimeAdapter {
             "The native Codex rollout is no longer available.",
           );
         }
-        await abortableDelay(
-          CODEX_ROLLOUT_REPRESENTATION_RETRY_MS,
-          signal,
-        );
+        await abortableDelay(CODEX_ROLLOUT_REPRESENTATION_RETRY_MS, signal);
       }
     }
     throw new Error("Codex rollout representation retry loop exhausted");
@@ -1238,7 +1340,11 @@ export class Sandbox0Runtime implements RuntimeAdapter {
         !isWorkspaceIdePathHidden(root, true),
     );
     const repositories: WorkspaceGitState["repositories"] = [];
-    for (let offset = 0; offset < roots.length; offset += GIT_STATUS_CONCURRENCY) {
+    for (
+      let offset = 0;
+      offset < roots.length;
+      offset += GIT_STATUS_CONCURRENCY
+    ) {
       const batch = await Promise.all(
         roots
           .slice(offset, offset + GIT_STATUS_CONCURRENCY)
@@ -1309,7 +1415,9 @@ export class Sandbox0Runtime implements RuntimeAdapter {
         throw error;
       }
       const relativePath = path.posix.relative(repository.root, filePath);
-      const revision = change.staged ? `HEAD:${relativePath}` : `:${relativePath}`;
+      const revision = change.staged
+        ? `HEAD:${relativePath}`
+        : `:${relativePath}`;
       content = Buffer.from(
         await this.runGit(runtime, repository.root, ["show", revision]),
       );
@@ -1329,10 +1437,7 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     const lineCount =
       text === undefined
         ? 0
-        : Math.max(
-            1,
-            text.split("\n").length - (text.endsWith("\n") ? 1 : 0),
-          );
+        : Math.max(1, text.split("\n").length - (text.endsWith("\n") ? 1 : 0));
     let lineChanges: WorkspaceLineChange[] = [];
 
     if (text !== undefined && change && repository) {
@@ -1483,11 +1588,7 @@ export class Sandbox0Runtime implements RuntimeAdapter {
       messages: {
         async *[Symbol.asyncIterator]() {
           for await (const message of watcher.events()) {
-            if (
-              message.type !== "event" ||
-              !message.event ||
-              !message.path
-            ) {
+            if (message.type !== "event" || !message.event || !message.path) {
               continue;
             }
             const eventPath = userVisibleWorkspacePath(message.path);
@@ -1520,15 +1621,14 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     root: string,
     args: string[],
   ) {
-    const result = await this.client.sandboxes.sandbox(runtime.sandboxId).cmd(
-      "git",
-      {
+    const result = await this.client.sandboxes
+      .sandbox(runtime.sandboxId)
+      .cmd("git", {
         command: ["git", "-C", root, ...args],
         cwd: root,
         envVars: { GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C" },
         ttlSec: 15,
-      },
-    );
+      });
     if (result.exitCode !== undefined && result.exitCode !== 0) {
       throw new HttpError(
         502,
@@ -1701,7 +1801,8 @@ export class Sandbox0Runtime implements RuntimeAdapter {
         );
       }
     }
-    if (!terminal.attempt) terminal = await waitForAttempt(sandbox, terminal.id);
+    if (!terminal.attempt)
+      terminal = await waitForAttempt(sandbox, terminal.id);
     if (!terminal.attempt) {
       throw new HttpError(502, "terminal_not_ready", "Terminal did not start.");
     }
@@ -1797,7 +1898,9 @@ function runtimeCredentialSourceMetadata(metadata: {
   createdAt?: Date | null;
   updatedAt?: Date | null;
 }): RuntimeCredentialSourceMetadata {
-  if (metadata.resolverKind !== models.CredentialSourceResolverKind.StaticHeaders) {
+  if (
+    metadata.resolverKind !== models.CredentialSourceResolverKind.StaticHeaders
+  ) {
     throw new HttpError(
       502,
       "sandbox0_credential_source_invalid",
@@ -2118,6 +2221,122 @@ async function waitForNewAttempt(
   return session;
 }
 
+function shellSingleQuoted(value: string) {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function workspaceFileSearchPattern(query: string) {
+  const fuzzyCharacters = Array.from(query, (character) =>
+    "\\*?[]".includes(character) ? `\\${character}` : character,
+  );
+  return `*${fuzzyCharacters.join("*")}*`;
+}
+
+function workspaceFileSearchResults(
+  stdout: string,
+  query: string,
+): WorkspaceFileSearchResult[] {
+  const fields = stdout.split("\0");
+  const seen = new Set<string>();
+  const matches: Array<{
+    result: WorkspaceFileSearchResult;
+    score: number;
+  }> = [];
+
+  for (
+    let index = 0;
+    index + 1 < fields.length &&
+    matches.length < MAX_WORKSPACE_FILE_SEARCH_CANDIDATES;
+    index += 2
+  ) {
+    const entryType = fields[index];
+    const candidate = fields[index + 1];
+    if ((entryType !== "f" && entryType !== "d") || !candidate) {
+      continue;
+    }
+    const absolutePath = path.posix.isAbsolute(candidate)
+      ? path.posix.normalize(candidate)
+      : path.posix.resolve(WORKSPACE_ROOT, candidate);
+    const visiblePath = userVisibleWorkspacePath(absolutePath);
+    const folder = entryType === "d";
+    if (
+      !visiblePath ||
+      visiblePath === WORKSPACE_ROOT ||
+      isWorkspaceIdePathHidden(visiblePath, folder) ||
+      seen.has(visiblePath)
+    ) {
+      continue;
+    }
+    const name = path.posix.basename(visiblePath);
+    const score = workspaceFileSearchScore(name, visiblePath, query);
+    if (!Number.isFinite(score)) continue;
+    seen.add(visiblePath);
+    matches.push({
+      result: {
+        name,
+        path: visiblePath,
+        kind: folder ? "folder" : "file",
+      },
+      score,
+    });
+  }
+
+  return matches
+    .sort(
+      (left, right) =>
+        right.score - left.score ||
+        left.result.path.localeCompare(right.result.path),
+    )
+    .slice(0, MAX_WORKSPACE_FILE_SEARCH_RESULTS)
+    .map(({ result }) => result);
+}
+
+function workspaceFileSearchScore(
+  name: string,
+  absolutePath: string,
+  query: string,
+) {
+  const normalizedQuery = query.toLowerCase();
+  const normalizedName = name.toLowerCase();
+  const relativePath = absolutePath
+    .slice(`${WORKSPACE_ROOT}/`.length)
+    .toLowerCase();
+  const nameFuzzyScore = fuzzySubsequenceScore(normalizedName, normalizedQuery);
+  const pathFuzzyScore = fuzzySubsequenceScore(relativePath, normalizedQuery);
+  if (!Number.isFinite(nameFuzzyScore) && !Number.isFinite(pathFuzzyScore)) {
+    return Number.NEGATIVE_INFINITY;
+  }
+
+  let score = Math.max(pathFuzzyScore, nameFuzzyScore + 500);
+  if (normalizedName === normalizedQuery) {
+    score += 10_000;
+  } else if (normalizedName.startsWith(normalizedQuery)) {
+    score += 5_000;
+  } else {
+    const substringIndex = normalizedName.indexOf(normalizedQuery);
+    if (substringIndex >= 0) score += 2_500 - substringIndex;
+  }
+  return score - relativePath.split("/").length;
+}
+
+function fuzzySubsequenceScore(candidate: string, query: string) {
+  let cursor = 0;
+  let previousIndex = -2;
+  let score = 0;
+  for (const character of query) {
+    const index = candidate.indexOf(character, cursor);
+    if (index < 0) return Number.NEGATIVE_INFINITY;
+    const consecutive = index === previousIndex + 1;
+    const boundary =
+      index === 0 || "/._- ".includes(candidate[index - 1] ?? "");
+    score += (consecutive ? 24 : 4) + (boundary ? 20 : 0);
+    score -= Math.max(0, index - cursor);
+    cursor = index + 1;
+    previousIndex = index;
+  }
+  return score - Math.max(0, candidate.length - query.length);
+}
+
 function safeWorkspacePath(requestedPath: string) {
   const visible = userVisibleWorkspacePath(requestedPath || "/workspace");
   if (visible) return visible;
@@ -2135,10 +2354,7 @@ function safeWorkspacePath(requestedPath: string) {
   );
 }
 
-function safeCodexRolloutPath(
-  requestedPath: string,
-  nativeSessionId: string,
-) {
+function safeCodexRolloutPath(requestedPath: string, nativeSessionId: string) {
   const normalized = path.posix.normalize(requestedPath);
   const roots = [
     `${ENVIRONMENT_CODEX_HOME}/sessions`,
@@ -2318,12 +2534,7 @@ async function readBoundedCodexRolloutFile(
 
 function safeEditableWorkspacePath(requestedPath: string) {
   const filePath = safeWorkspacePath(requestedPath);
-  if (
-    path.posix
-      .relative("/workspace", filePath)
-      .split("/")
-      .includes(".git")
-  ) {
+  if (path.posix.relative("/workspace", filePath).split("/").includes(".git")) {
     throw new HttpError(
       403,
       "workspace_git_metadata_protected",
@@ -2347,7 +2558,11 @@ async function assertWorkspacePathHasNoSymlink(
     try {
       file = await sandbox.statFile(current);
     } catch (error) {
-      if (allowMissingLeaf && index === components.length - 1 && isMissingResource(error)) {
+      if (
+        allowMissingLeaf &&
+        index === components.length - 1 &&
+        isMissingResource(error)
+      ) {
         return;
       }
       throw error;
@@ -2380,7 +2595,8 @@ function requireMetric(
   const value = series.find(
     (candidate) =>
       candidate.metric === metric &&
-      (direction === undefined || candidate.dimensions?.direction === direction),
+      (direction === undefined ||
+        candidate.dimensions?.direction === direction),
   );
   return value ?? emptyMetric(metric, direction);
 }
@@ -2391,7 +2607,10 @@ function emptyMetric(
 ): SdkRuntimeMetricSeries {
   return {
     metric,
-    kind: metric === SandboxRuntimeMetricName.SandboxNetworkIo ? "counter" : "gauge",
+    kind:
+      metric === SandboxRuntimeMetricName.SandboxNetworkIo
+        ? "counter"
+        : "gauge",
     unit:
       metric === SandboxRuntimeMetricName.SandboxCpuUtilization
         ? "ratio"
@@ -2423,8 +2642,14 @@ function metricProjection(series: SdkRuntimeMetricSeries): RuntimeMetricSeries {
   };
 }
 
-function translateObservabilityError(error: unknown, surface: "audit" | "metrics") {
-  if (error instanceof APIError && (error.statusCode === 403 || error.statusCode === 503)) {
+function translateObservabilityError(
+  error: unknown,
+  surface: "audit" | "metrics",
+) {
+  if (
+    error instanceof APIError &&
+    (error.statusCode === 403 || error.statusCode === 503)
+  ) {
     return new HttpError(
       error.statusCode,
       error.statusCode === 403
@@ -2536,7 +2761,10 @@ export function createSandbox0FetchWithRetry(
 
 const fetchSandbox0WithRetry = createSandbox0FetchWithRetry();
 
-function isSandbox0TransportError(error: unknown, seen = new Set<unknown>()): boolean {
+function isSandbox0TransportError(
+  error: unknown,
+  seen = new Set<unknown>(),
+): boolean {
   if (!error || (typeof error !== "object" && typeof error !== "function")) {
     return false;
   }
@@ -2552,11 +2780,16 @@ function isSandbox0TransportError(error: unknown, seen = new Set<unknown>()): bo
   };
   const name = typeof candidate.name === "string" ? candidate.name : "";
   const message =
-    typeof candidate.message === "string" ? candidate.message.toLowerCase() : "";
+    typeof candidate.message === "string"
+      ? candidate.message.toLowerCase()
+      : "";
   const code = typeof candidate.code === "string" ? candidate.code : "";
 
   if (name === "AbortError") return false;
-  if (name === "FetchError" || (name === "TypeError" && message === "fetch failed")) {
+  if (
+    name === "FetchError" ||
+    (name === "TypeError" && message === "fetch failed")
+  ) {
     return true;
   }
   if (

@@ -18,7 +18,7 @@ test("resumes following when the reader returns to the bottom threshold", () => 
   assert.equal(
     isNearConversationBottom({
       scrollHeight: 2_000,
-      scrollTop: 1_292,
+      scrollTop: 1_252,
       clientHeight: 700,
     }),
     true,
@@ -26,7 +26,7 @@ test("resumes following when the reader returns to the bottom threshold", () => 
   assert.equal(
     isNearConversationBottom({
       scrollHeight: 2_000,
-      scrollTop: 1_291,
+      scrollTop: 1_251,
       clientHeight: 700,
     }),
     false,

@@ -4,6 +4,7 @@ import type {
   EnvironmentAuditFeed,
   EnvironmentMetrics,
   WorkspaceDirectoryListing,
+  WorkspaceFileSearchResult,
   WorkspaceGitState,
   WorkspaceIdeFile,
 } from "@/lib/types";
@@ -26,7 +27,9 @@ export const CODEX_MCP_OAUTH_CALLBACK_BASE_PATH = "/callback";
 export type Sandbox0NetworkPolicy = Parameters<
   Sandbox["updateNetworkPolicy"]
 >[0];
-export type Sandbox0AppService = Parameters<Sandbox["updateServices"]>[0][number];
+export type Sandbox0AppService = Parameters<
+  Sandbox["updateServices"]
+>[0][number];
 export type Sandbox0AppServiceView = Awaited<
   ReturnType<Sandbox["getServices"]>
 >["services"][number];
@@ -172,7 +175,10 @@ export interface RuntimeAdapter {
   listCodexAuthEvents(
     runtime: CodexAuthRuntime,
     after?: number,
-  ): Promise<{ events: unknown[]; cursor: { earliest: number; latest: number } }>;
+  ): Promise<{
+    events: unknown[];
+    cursor: { earliest: number; latest: number };
+  }>;
   readCodexAuthJson(runtime: CodexAuthRuntime): Promise<string>;
   installCodexEnvironmentCredential(
     runtime: EnvironmentRuntimeRecord,
@@ -218,7 +224,20 @@ export interface RuntimeAdapter {
     runtime: EnvironmentRuntimeRecord,
     path: string,
   ): Promise<WorkspaceDirectoryListing>;
-  readFile(runtime: EnvironmentRuntimeRecord, path: string): Promise<Uint8Array>;
+  /** Searches the shared Workspace independently of any coding-agent harness. */
+  searchFiles(
+    runtime: EnvironmentRuntimeRecord,
+    query: string,
+  ): Promise<WorkspaceFileSearchResult[]>;
+  writeCodexComposerUpload(
+    runtime: EnvironmentRuntimeRecord,
+    path: string,
+    content: Uint8Array,
+  ): Promise<void>;
+  readFile(
+    runtime: EnvironmentRuntimeRecord,
+    path: string,
+  ): Promise<Uint8Array>;
   getWorkspaceGitState(
     runtime: EnvironmentRuntimeRecord,
   ): Promise<WorkspaceGitState>;

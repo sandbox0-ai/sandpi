@@ -53,6 +53,7 @@ import {
   nativeCodexTurnInput,
   type EncodedCodexInputImage,
 } from "./input-images";
+import type { EncodedCodexInputReference } from "./input-references";
 import { parseCodexRolloutActivity } from "./rollout-activity";
 
 const STREAM_RECONNECT_DELAY_MS = 250;
@@ -332,6 +333,7 @@ export class CodexService {
     title: string;
     prompt: string;
     images: EncodedCodexInputImage[];
+    references?: EncodedCodexInputReference[];
     modelId?: string;
     reasoningEffort?: string;
   }) {
@@ -367,16 +369,18 @@ export class CodexService {
         );
       }
       await this.store.markSessionNativeReady(sessionId, nativeSessionId);
-      this.rememberNativeOwner(input.environment.id, nativeSessionId, sessionId);
-      this.rememberNativeSessionAttached(
-        environmentRuntime,
+      this.rememberNativeOwner(
+        input.environment.id,
         nativeSessionId,
+        sessionId,
       );
+      this.rememberNativeSessionAttached(environmentRuntime, nativeSessionId);
       await this.startTurn({
         userId: input.userId,
         sessionId,
         text: input.prompt,
         images: input.images,
+        references: input.references,
         modelId: input.modelId,
         reasoningEffort: input.reasoningEffort,
       });
@@ -508,10 +512,7 @@ export class CodexService {
       }
       await this.store.markSessionNativeReady(childSessionId, nativeSessionId);
       this.rememberNativeOwner(environment.id, nativeSessionId, childSessionId);
-      this.rememberNativeSessionAttached(
-        environmentRuntime,
-        nativeSessionId,
-      );
+      this.rememberNativeSessionAttached(environmentRuntime, nativeSessionId);
       this.ensureEnvironmentWorker(environment.id);
       return childSessionId;
     } catch (error) {
@@ -615,10 +616,7 @@ export class CodexService {
     return this.readEnvironmentMcpInventory(environmentId, runtime);
   }
 
-  async environmentRuntimeForMcp(
-    userId: string,
-    environmentId: string,
-  ) {
+  async environmentRuntimeForMcp(userId: string, environmentId: string) {
     return this.environmentRuntimeForEnvironment(userId, environmentId);
   }
 
@@ -973,7 +971,10 @@ export class CodexService {
     environmentId: string,
     runtime: StoredEnvironmentRuntime,
   ): Promise<CodexMcpInventory> {
-    const config = await this.readEnvironmentCodexConfig(environmentId, runtime);
+    const config = await this.readEnvironmentCodexConfig(
+      environmentId,
+      runtime,
+    );
     const statuses = new Map<string, Record<string, unknown>>();
     let cursor: string | undefined;
     do {
@@ -1003,13 +1004,18 @@ export class CodexService {
         if (status && name) statuses.set(name, status);
       }
       const nextCursor = result.nextCursor;
-      if (nextCursor !== undefined && nextCursor !== null && typeof nextCursor !== "string") {
+      if (
+        nextCursor !== undefined &&
+        nextCursor !== null &&
+        typeof nextCursor !== "string"
+      ) {
         throw invalidCodexResponse(
           "codex_mcp_status_failed",
           "Codex returned an invalid MCP status cursor.",
         );
       }
-      cursor = typeof nextCursor === "string" && nextCursor ? nextCursor : undefined;
+      cursor =
+        typeof nextCursor === "string" && nextCursor ? nextCursor : undefined;
     } while (cursor);
 
     return {
@@ -1132,19 +1138,22 @@ export class CodexService {
     sessionId: string;
     text: string;
     images: EncodedCodexInputImage[];
+    references?: EncodedCodexInputReference[];
     modelId?: string;
     reasoningEffort?: string;
+    clientMessageId?: string;
   }) {
     const sessionRuntime = await this.requireNativeSessionRuntime(
       input.userId,
       input.sessionId,
     );
     const releaseInteractiveOperation =
-      this.retainInteractiveEnvironmentOperation(
-        sessionRuntime.environmentId,
-      );
+      this.retainInteractiveEnvironmentOperation(sessionRuntime.environmentId);
     try {
-      const submission = turnSubmissionCoordinates(input.sessionId);
+      const submission = turnSubmissionCoordinates(
+        input.sessionId,
+        input.clientMessageId,
+      );
       // Persist pending delivery while holding the same Environment advisory
       // lock used by idle pause. If pause won first, the following native
       // runtime access auto-resumes it; if Turn admission won first, pause
@@ -1169,10 +1178,7 @@ export class CodexService {
           input.userId,
           input.sessionId,
         );
-        await this.ensureNativeSessionAttached(
-          environmentRuntime,
-          turnRuntime,
-        );
+        await this.ensureNativeSessionAttached(environmentRuntime, turnRuntime);
         await this.store.markTurnSubmitted(
           input.sessionId,
           submission.requestId,
@@ -1187,7 +1193,11 @@ export class CodexService {
             params: {
               threadId: sessionRuntime.nativeSessionId,
               clientUserMessageId: submission.clientMessageId,
-              input: nativeCodexTurnInput(input.text, input.images),
+              input: nativeCodexTurnInput(
+                input.text,
+                input.images,
+                input.references ?? [],
+              ),
               ...(input.modelId ? { model: input.modelId } : {}),
               ...(input.reasoningEffort
                 ? { effort: input.reasoningEffort }
@@ -1213,7 +1223,11 @@ export class CodexService {
           );
         }
         this.ensureEnvironmentWorker(sessionRuntime.environmentId);
-        return { requestId: submission.requestId, nativeTurnId };
+        return {
+          requestId: submission.requestId,
+          clientMessageId: submission.clientMessageId,
+          nativeTurnId,
+        };
       } catch (error) {
         if (turnDeliveryAttempted && isAmbiguousTurnDelivery(error)) {
           // Delivery is ambiguous after a response timeout or after the
@@ -1242,7 +1256,10 @@ export class CodexService {
               );
             }
           }
-          return { requestId: submission.requestId };
+          return {
+            requestId: submission.requestId,
+            clientMessageId: submission.clientMessageId,
+          };
         }
         await this.store.abandonTurn(input.sessionId, submission.requestId);
         throw error;
@@ -1253,7 +1270,10 @@ export class CodexService {
   }
 
   async listModels(userId: string, sessionId: string) {
-    const sessionRuntime = await this.store.getSessionRuntime(userId, sessionId);
+    const sessionRuntime = await this.store.getSessionRuntime(
+      userId,
+      sessionId,
+    );
     const environmentRuntime = await this.environmentRuntimeForSession(
       userId,
       sessionId,
@@ -1391,8 +1411,7 @@ export class CodexService {
       historyRevision: sessionRuntime.historyRevision,
       runtimeVersion: sessionRuntime.version,
       environmentId: responseRuntime.id,
-      environmentSupervisorSessionId:
-        responseRuntime.supervisorSessionId,
+      environmentSupervisorSessionId: responseRuntime.supervisorSessionId,
       environmentAttemptId: responseRuntime.attemptId,
       environmentRuntimeGeneration: responseRuntime.runtimeGeneration,
       activeNativeTurnId,
@@ -1412,7 +1431,8 @@ export class CodexService {
     return {
       snapshot: {
         protocol: "codex-app-server",
-        nativeSessionId: latest.nativeSessionId ?? sessionRuntime.nativeSessionId,
+        nativeSessionId:
+          latest.nativeSessionId ?? sessionRuntime.nativeSessionId,
         historyRevision: latest.historyRevision,
         modelId: latest.modelId ?? "",
         reasoningEffort: latest.reasoningEffort ?? "",
@@ -1510,9 +1530,7 @@ export class CodexService {
         "Codex persisted Session Activity unavailable",
       );
       return unavailableCodexRolloutActivity(
-        code.startsWith("codex_rollout_")
-          ? code
-          : "codex_rollout_read_failed",
+        code.startsWith("codex_rollout_") ? code : "codex_rollout_read_failed",
         message,
       );
     } finally {
@@ -1541,9 +1559,7 @@ export class CodexService {
       );
     }
     const releaseInteractiveOperation =
-      this.retainInteractiveEnvironmentOperation(
-        sessionRuntime.environmentId,
-      );
+      this.retainInteractiveEnvironmentOperation(sessionRuntime.environmentId);
     try {
       const environmentRuntime = await this.environmentRuntimeForSession(
         input.userId,
@@ -1614,7 +1630,9 @@ export class CodexService {
   async scheduleSessionControlStateRepair(sessionId: string) {
     try {
       const session = await this.store.sessionRuntime(sessionId);
-      const runtime = await this.store.environmentRuntime(session.environmentId);
+      const runtime = await this.store.environmentRuntime(
+        session.environmentId,
+      );
       if (
         runtime.desiredState === "running" &&
         runtime.observedState === "running"
@@ -1651,14 +1669,16 @@ export class CodexService {
     active?.abort();
     const controller = new AbortController();
     this.workers.set(environmentId, controller);
-    const task = this.runWorker(environmentId, controller.signal).finally(() => {
-      if (this.workers.get(environmentId) === controller) {
-        this.workers.delete(environmentId);
-      }
-      if (this.workerTasks.get(environmentId) === task) {
-        this.workerTasks.delete(environmentId);
-      }
-    });
+    const task = this.runWorker(environmentId, controller.signal).finally(
+      () => {
+        if (this.workers.get(environmentId) === controller) {
+          this.workers.delete(environmentId);
+        }
+        if (this.workerTasks.get(environmentId) === task) {
+          this.workerTasks.delete(environmentId);
+        }
+      },
+    );
     this.workerTasks.set(environmentId, task);
   }
 
@@ -1782,7 +1802,8 @@ export class CodexService {
           cursor: oldestCursor - 1,
           kind: "invalidation",
           reason: "live-window-expired",
-          message: "The live Codex update window expired; reload the native snapshot.",
+          message:
+            "The live Codex update window expired; reload the native snapshot.",
         },
       ];
     }
@@ -1848,7 +1869,10 @@ export class CodexService {
     userId: string,
     environment: Environment,
   ) {
-    const current = await this.store.getEnvironmentRuntime(userId, environment.id);
+    const current = await this.store.getEnvironmentRuntime(
+      userId,
+      environment.id,
+    );
     if (
       current.desiredState === "running" &&
       current.observedState === "running" &&
@@ -1879,7 +1903,10 @@ export class CodexService {
     return this.ensureEnvironmentRuntimeForUser(userId, environment);
   }
 
-  private async environmentRuntimeForSession(userId: string, sessionId: string) {
+  private async environmentRuntimeForSession(
+    userId: string,
+    sessionId: string,
+  ) {
     const session = await this.store.getSession(userId, sessionId);
     const environment = await this.store.getEnvironment(
       userId,
@@ -1891,11 +1918,13 @@ export class CodexService {
   private recoverEnvironmentRuntime(environmentId: string) {
     const active = this.recovering.get(environmentId);
     if (active) return active;
-    const recovery = this.performEnvironmentRecovery(environmentId).finally(() => {
-      if (this.recovering.get(environmentId) === recovery) {
-        this.recovering.delete(environmentId);
-      }
-    });
+    const recovery = this.performEnvironmentRecovery(environmentId).finally(
+      () => {
+        if (this.recovering.get(environmentId) === recovery) {
+          this.recovering.delete(environmentId);
+        }
+      },
+    );
     this.recovering.set(environmentId, recovery);
     return recovery;
   }
@@ -1906,38 +1935,39 @@ export class CodexService {
       await this.credentials.credentialForEnvironmentRuntime(environmentId);
     while (!this.closed) {
       try {
-        const locked = await this.advisoryLockStore().withEnvironmentLifecycleLock(
-          environmentId,
-          async (lockedStore) => {
-            const scopedStore = lockedStore ?? this.store;
-            return scopedStore.withEnvironmentMcpOAuthCredentialLock(
-              environmentId,
-              async () => {
-                const mcpOAuthCredential =
-                  await this.credentials.mcpOAuthCredentialForEnvironmentRuntime(
+        const locked =
+          await this.advisoryLockStore().withEnvironmentLifecycleLock(
+            environmentId,
+            async (lockedStore) => {
+              const scopedStore = lockedStore ?? this.store;
+              return scopedStore.withEnvironmentMcpOAuthCredentialLock(
+                environmentId,
+                async () => {
+                  const mcpOAuthCredential =
+                    await this.credentials.mcpOAuthCredentialForEnvironmentRuntime(
+                      environmentId,
+                    );
+                  const ready = await this.reconcileEnvironmentRuntime(
                     environmentId,
-                  );
-                const ready = await this.reconcileEnvironmentRuntime(
-                  environmentId,
-                  credential,
-                  mcpOAuthCredential,
-                  scopedStore,
-                );
-                await this.credentials.markCredentialMaterialized(
-                  environmentId,
-                  credential,
-                );
-                if (mcpOAuthCredential) {
-                  await this.credentials.markMcpOAuthCredentialMaterialized(
-                    environmentId,
+                    credential,
                     mcpOAuthCredential,
+                    scopedStore,
                   );
-                }
-                return ready;
-              },
-            );
-          },
-        );
+                  await this.credentials.markCredentialMaterialized(
+                    environmentId,
+                    credential,
+                  );
+                  if (mcpOAuthCredential) {
+                    await this.credentials.markMcpOAuthCredentialMaterialized(
+                      environmentId,
+                      mcpOAuthCredential,
+                    );
+                  }
+                  return ready;
+                },
+              );
+            },
+          );
         if (locked.acquired) {
           await this.ensureProtocolInitialized(locked.value);
           this.scheduleExceptionalSessionReconciliation(locked.value);
@@ -2014,7 +2044,8 @@ export class CodexService {
     if (active) return active;
     const sync = (async () => {
       try {
-        const authJson = await this.runtime.readCodexEnvironmentCredential(runtime);
+        const authJson =
+          await this.runtime.readCodexEnvironmentCredential(runtime);
         const authoritative = await this.credentials.syncCredentialFromRuntime(
           runtime.id,
           authJson,
@@ -2055,13 +2086,12 @@ export class CodexService {
     const previous =
       this.mcpOAuthCredentialSyncs.get(runtime.id) ?? Promise.resolve();
     const sync = previous.then(() =>
-      (lockStore ?? this.advisoryLockStore()).withEnvironmentMcpOAuthCredentialLock(
-        runtime.id,
-        async () => {
-          await beforeRead?.();
-          await this.synchronizeEnvironmentMcpOAuthCredential(runtime);
-        },
-      ),
+      (
+        lockStore ?? this.advisoryLockStore()
+      ).withEnvironmentMcpOAuthCredentialLock(runtime.id, async () => {
+        await beforeRead?.();
+        await this.synchronizeEnvironmentMcpOAuthCredential(runtime);
+      }),
     );
     this.trackEnvironmentMcpOAuthCredentialSync(runtime.id, sync);
     return sync;
@@ -2130,9 +2160,9 @@ export class CodexService {
     const current = this.exceptionalSessionReconciliations.get(runtime.id);
     if (current?.epoch === epoch) {
       let addedTarget = false;
-      for (const [sessionId, requestId] of
-        options.pendingTurnRequests ?? []) {
-        addedTarget ||= current.pendingTurnRequests.get(sessionId) !== requestId;
+      for (const [sessionId, requestId] of options.pendingTurnRequests ?? []) {
+        addedTarget ||=
+          current.pendingTurnRequests.get(sessionId) !== requestId;
         current.pendingTurnRequests.set(sessionId, requestId);
       }
       current.rerunRequested = true;
@@ -2203,9 +2233,7 @@ export class CodexService {
     requestedDelayMs?: number,
   ) {
     await delay(
-      requestedDelayMs ??
-        this.options.exceptionalSessionRecoveryDelayMs ??
-        500,
+      requestedDelayMs ?? this.options.exceptionalSessionRecoveryDelayMs ?? 500,
       reconciliation.controller.signal,
     );
     if (!this.isCurrentExceptionalReconciliation(runtime.id, reconciliation)) {
@@ -2220,8 +2248,7 @@ export class CodexService {
         runtime.id,
       );
     reconciliation.nextRetryAttempt = 0;
-    for (const [sessionId, requestId] of
-      reconciliation.pendingTurnRequests) {
+    for (const [sessionId, requestId] of reconciliation.pendingTurnRequests) {
       const candidate = sessions.find(
         (session) => session.sessionId === sessionId,
       );
@@ -2251,16 +2278,15 @@ export class CodexService {
             EXCEPTIONAL_PENDING_TURN_GRACE_MS,
         );
         if (pendingDelayMs > 0) {
-          this.requestExceptionalSessionRerun(
-            reconciliation,
-            pendingDelayMs,
-          );
+          this.requestExceptionalSessionRerun(reconciliation, pendingDelayMs);
           continue;
         }
       }
       const nativeSessionId = session.nativeSessionId;
       await this.waitForEnvironmentRpcIdle(runtime.id, reconciliation);
-      if (!this.isCurrentExceptionalReconciliation(runtime.id, reconciliation)) {
+      if (
+        !this.isCurrentExceptionalReconciliation(runtime.id, reconciliation)
+      ) {
         return;
       }
       try {
@@ -2377,8 +2403,7 @@ export class CodexService {
         session.sessionId,
         "native-session-state-reconciled",
         {
-          message:
-            "Codex execution state was repaired from the native Thread.",
+          message: "Codex execution state was repaired from the native Thread.",
         },
       );
     } else if (!reconciled) {
@@ -2418,8 +2443,7 @@ export class CodexService {
         includeTurns: false,
       },
     };
-    const locked =
-      await this.advisoryLockStore().withEnvironmentLifecycleLock(
+    const locked = await this.advisoryLockStore().withEnvironmentLifecycleLock(
       environmentId,
       async (lockedStore) => {
         if (
@@ -2442,10 +2466,7 @@ export class CodexService {
           return undefined;
         }
         if (environmentRuntimeEpoch(runtime) !== reconciliation.epoch) {
-          this.handoffExceptionalSessionReconciliation(
-            runtime,
-            reconciliation,
-          );
+          this.handoffExceptionalSessionReconciliation(runtime, reconciliation);
           return undefined;
         }
         if (
@@ -2472,10 +2493,7 @@ export class CodexService {
     );
     if (!locked.acquired) {
       if (
-        this.isCurrentExceptionalReconciliation(
-          environmentId,
-          reconciliation,
-        )
+        this.isCurrentExceptionalReconciliation(environmentId, reconciliation)
       ) {
         this.requestExceptionalSessionRetry(reconciliation);
       }
@@ -2514,10 +2532,11 @@ export class CodexService {
     const cancelled =
       this.cancelExceptionalSessionReconciliation(environmentId);
     if (cancelled) {
-      const deferred =
-        this.deferredExceptionalSessionReconciliations.get(environmentId) ?? {
-          pendingTurnRequests: new Map<string, string>(),
-        };
+      const deferred = this.deferredExceptionalSessionReconciliations.get(
+        environmentId,
+      ) ?? {
+        pendingTurnRequests: new Map<string, string>(),
+      };
       for (const [sessionId, requestId] of cancelled.pendingTurnRequests) {
         deferred.pendingTurnRequests.set(sessionId, requestId);
       }
@@ -2777,18 +2796,14 @@ export class CodexService {
     runtime: StoredEnvironmentRuntime,
     session: StoredSessionRuntime & { nativeSessionId: string },
   ) {
-    const response = await this.requestCodex(
-      runtime.id,
-      runtime,
-      {
-        method: "thread/resume",
-        id: rpcId("thread-resume", session.sessionId),
-        params: {
-          threadId: session.nativeSessionId,
-          ...threadConfiguration(session.modelId, session.reasoningEffort),
-        },
+    const response = await this.requestCodex(runtime.id, runtime, {
+      method: "thread/resume",
+      id: rpcId("thread-resume", session.sessionId),
+      params: {
+        threadId: session.nativeSessionId,
+        ...threadConfiguration(session.modelId, session.reasoningEffort),
       },
-    );
+    });
     if (response.error) throw nativeSessionAttachFailed(response.error);
     const thread = threadFromRpcResponse(response);
     if (!thread || thread.id !== session.nativeSessionId) {
@@ -2840,7 +2855,10 @@ export class CodexService {
       {
         method: "thread/read",
         id: rpcId("thread-read", ownerSessionId),
-        params: { threadId: sessionRuntime.nativeSessionId, includeTurns: true },
+        params: {
+          threadId: sessionRuntime.nativeSessionId,
+          includeTurns: true,
+        },
       },
       ownerSessionId,
     );
@@ -2932,32 +2950,33 @@ export class CodexService {
     while (!this.closed) {
       const locked =
         await this.advisoryLockStore().withEnvironmentRuntimeAccessLock(
-        environmentId,
-        async (lockedStore) => {
-          const scopedStore = lockedStore ?? this.store;
-          const current = await scopedStore.environmentRuntime(environmentId);
-          if (
-            current.desiredState !== "running" ||
-            current.observedState !== "running" ||
-            environmentRuntimeEpoch(current) !== environmentRuntimeEpoch(runtime)
-          ) {
-            throw codexRuntimeEpochChanged();
-          }
-          const submitted = await this.submitPreparedCodexRequest(
-            runtime,
-            message,
-            stableInputId,
-            request,
-            AbortSignal.timeout(
-              this.options.rpcSubmissionTimeoutMs ??
-                RPC_SUBMISSION_TIMEOUT_MS,
-            ),
-          );
-          if (submitted) {
-            await scopedStore.recordEnvironmentRuntimeAccess(environmentId);
-          }
-        },
-      );
+          environmentId,
+          async (lockedStore) => {
+            const scopedStore = lockedStore ?? this.store;
+            const current = await scopedStore.environmentRuntime(environmentId);
+            if (
+              current.desiredState !== "running" ||
+              current.observedState !== "running" ||
+              environmentRuntimeEpoch(current) !==
+                environmentRuntimeEpoch(runtime)
+            ) {
+              throw codexRuntimeEpochChanged();
+            }
+            const submitted = await this.submitPreparedCodexRequest(
+              runtime,
+              message,
+              stableInputId,
+              request,
+              AbortSignal.timeout(
+                this.options.rpcSubmissionTimeoutMs ??
+                  RPC_SUBMISSION_TIMEOUT_MS,
+              ),
+            );
+            if (submitted) {
+              await scopedStore.recordEnvironmentRuntimeAccess(environmentId);
+            }
+          },
+        );
       if (locked.acquired) return;
       if (Date.now() >= deadline) {
         throw new HttpError(
@@ -3036,7 +3055,10 @@ export class CodexService {
     }
   }
 
-  private registerRpcWaiter(environmentId: string, requestId: string): RpcWaiter {
+  private registerRpcWaiter(
+    environmentId: string,
+    requestId: string,
+  ): RpcWaiter {
     const cached = this.takeRpcResponse(environmentId, requestId);
     if (cached) {
       return {
@@ -3108,10 +3130,7 @@ export class CodexService {
     return waiter;
   }
 
-  private cacheRpcRecord(
-    environmentId: string,
-    record: DecodedCodexRecord,
-  ) {
+  private cacheRpcRecord(environmentId: string, record: DecodedCodexRecord) {
     const message = record.message;
     const id = message.id;
     if (
@@ -3186,8 +3205,7 @@ export class CodexService {
       cursor: state.cursor,
       kind: "notification",
       event,
-      refreshPersistedActivity:
-        event.notification.method === "turn/completed",
+      refreshPersistedActivity: event.notification.method === "turn/completed",
     });
     if (state.updates.length > MAX_LIVE_NOTIFICATIONS_PER_SESSION) {
       state.updates.splice(
@@ -3259,8 +3277,7 @@ export class CodexService {
     let consecutiveFailures = 0;
     while (!signal.aborted) {
       let stream:
-        | Awaited<ReturnType<RuntimeAdapter["watchCodexEvents"]>>
-        | undefined;
+        Awaited<ReturnType<RuntimeAdapter["watchCodexEvents"]>> | undefined;
       try {
         let stored = await this.store.environmentRuntime(environmentId);
         if (stored.desiredState !== "running") break;
@@ -3382,7 +3399,11 @@ function controlTransitions(
       continue;
     }
     const status = objectString(turn, "status");
-    if (status === "completed" || status === "failed" || status === "interrupted") {
+    if (
+      status === "completed" ||
+      status === "failed" ||
+      status === "interrupted"
+    ) {
       const completedAt = objectNumber(turn, "completedAt");
       transitions.push({
         type: "turnCompleted",
@@ -3417,8 +3438,10 @@ function isMcpLifecycleNotification(message: Record<string, unknown>) {
 
 function notificationThreadId(message: Record<string, unknown>) {
   const params = objectRecord(message.params);
-  return objectString(params, "threadId") ??
-    objectString(objectRecord(params?.thread), "id");
+  return (
+    objectString(params, "threadId") ??
+    objectString(objectRecord(params?.thread), "id")
+  );
 }
 
 function threadConfiguration(modelId?: string, reasoningEffort?: string) {
@@ -3442,17 +3465,18 @@ function threadIdFromRpcResponse(response: Record<string, unknown>) {
 
 function threadFromRpcResponse(response: Record<string, unknown>) {
   const thread = objectRecord(objectRecord(response.result)?.thread);
-  if (!thread || typeof thread.id !== "string" || !Array.isArray(thread.turns)) {
+  if (
+    !thread ||
+    typeof thread.id !== "string" ||
+    !Array.isArray(thread.turns)
+  ) {
     return undefined;
   }
   return thread as unknown as CodexThread;
 }
 
 function turnIdFromRpcResponse(response: Record<string, unknown>) {
-  return objectString(
-    objectRecord(objectRecord(response.result)?.turn),
-    "id",
-  );
+  return objectString(objectRecord(objectRecord(response.result)?.turn), "id");
 }
 
 function requireRpcResult(
@@ -3461,7 +3485,11 @@ function requireRpcResult(
   message: string,
 ) {
   if (response.error) {
-    throw new HttpError(502, code, `${message} ${rpcErrorMessage(response.error)}`);
+    throw new HttpError(
+      502,
+      code,
+      `${message} ${rpcErrorMessage(response.error)}`,
+    );
   }
   const result = objectRecord(response.result);
   if (!result) throw invalidCodexResponse(code, message);
@@ -3514,8 +3542,7 @@ function codexAccountRateLimits(
   if (
     main &&
     (limits.length === 0 ||
-      (main.id !== undefined &&
-        !limits.some((limit) => limit.id === main.id)))
+      (main.id !== undefined && !limits.some((limit) => limit.id === main.id)))
   ) {
     limits.unshift(main);
   }
@@ -3568,7 +3595,9 @@ function codexRateLimitSnapshot(
   };
 }
 
-function codexRateLimitWindow(value: unknown): CodexRateLimitWindow | undefined {
+function codexRateLimitWindow(
+  value: unknown,
+): CodexRateLimitWindow | undefined {
   const window = objectRecord(value);
   const usedPercent = normalizedPercent(window?.usedPercent);
   if (!window || usedPercent === undefined) return undefined;
@@ -3584,7 +3613,9 @@ function codexRateLimitWindow(value: unknown): CodexRateLimitWindow | undefined 
   };
 }
 
-function codexCreditsSnapshot(value: unknown): CodexCreditsSnapshot | undefined {
+function codexCreditsSnapshot(
+  value: unknown,
+): CodexCreditsSnapshot | undefined {
   const credits = objectRecord(value);
   const hasCredits = objectBoolean(credits, "hasCredits");
   const unlimited = objectBoolean(credits, "unlimited");
@@ -3660,7 +3691,9 @@ function normalizedUnixTimestamp(value: unknown) {
     : undefined;
 }
 
-function codexSkillsInventory(result: Record<string, unknown>): CodexSkillsInventory {
+function codexSkillsInventory(
+  result: Record<string, unknown>,
+): CodexSkillsInventory {
   if (!Array.isArray(result.data)) {
     throw invalidCodexResponse(
       "codex_skills_list_failed",
@@ -3669,7 +3702,9 @@ function codexSkillsInventory(result: Record<string, unknown>): CodexSkillsInven
   }
   const entry = result.data
     .map(objectRecord)
-    .find((candidate) => objectString(candidate, "cwd") === CODEX_ENVIRONMENT_CWD);
+    .find(
+      (candidate) => objectString(candidate, "cwd") === CODEX_ENVIRONMENT_CWD,
+    );
   if (!entry) {
     return { cwd: CODEX_ENVIRONMENT_CWD, skills: [], errors: [] };
   }
@@ -3716,7 +3751,12 @@ function codexSkillsInventory(result: Record<string, unknown>): CodexSkillsInven
 function isCodexSkillScope(
   value: string | undefined,
 ): value is CodexEnvironmentSkill["scope"] {
-  return value === "user" || value === "repo" || value === "system" || value === "admin";
+  return (
+    value === "user" ||
+    value === "repo" ||
+    value === "system" ||
+    value === "admin"
+  );
 }
 
 function codexSkillDependencies(value: unknown): CodexSkillDependency[] {
@@ -3778,7 +3818,8 @@ function codexMcpConfigValues(server: CodexMcpServerInput) {
     default_tools_approval_mode: server.defaultToolsApprovalMode ?? null,
     scopes: server.scopes?.length ? server.scopes : null,
     enabled_tools: server.enabledTools.length > 0 ? server.enabledTools : null,
-    disabled_tools: server.disabledTools.length > 0 ? server.disabledTools : null,
+    disabled_tools:
+      server.disabledTools.length > 0 ? server.disabledTools : null,
   };
 }
 
@@ -3800,10 +3841,10 @@ function codexMcpServer(
   const runtimeStatus = !enabled
     ? "disabled"
     : serverInfo
-        ? "connected"
-        : authStatus === "notLoggedIn"
-          ? "authentication-required"
-          : "unavailable";
+      ? "connected"
+      : authStatus === "notLoggedIn"
+        ? "authentication-required"
+        : "unavailable";
   const credentialState =
     transport === "stdio"
       ? "public"
@@ -3836,7 +3877,8 @@ function codexMcpServer(
     credentialState,
     readiness: !enabled ? "disabled" : serverInfo ? "ready" : "failed",
     hasServerInfo: Boolean(serverInfo),
-    serverTitle: objectString(serverInfo, "title") ?? objectString(serverInfo, "name"),
+    serverTitle:
+      objectString(serverInfo, "title") ?? objectString(serverInfo, "name"),
     serverVersion: objectString(serverInfo, "version"),
     toolCount: tools ? Object.keys(tools).length : 0,
     resourceCount: resources.length + resourceTemplates.length,
@@ -3886,7 +3928,8 @@ function modelListPage(result: unknown) {
   }
   return {
     data: page.data,
-    nextCursor: typeof nextCursor === "string" && nextCursor ? nextCursor : undefined,
+    nextCursor:
+      typeof nextCursor === "string" && nextCursor ? nextCursor : undefined,
   };
 }
 
@@ -3982,10 +4025,16 @@ function codexInputDeliveryTimeout() {
   );
 }
 
-function turnSubmissionCoordinates(sessionId: string) {
+function turnSubmissionCoordinates(
+  sessionId: string,
+  clientMessageId = `user-message:${randomUUID()}`,
+) {
   return {
     requestId: rpcId("turn-start", sessionId),
-    clientMessageId: `user-message:${randomUUID()}`,
+    // The browser may allocate this correlation ID before delivery so its
+    // ephemeral prompt can be replaced by the native userMessage in place.
+    // It is not a Sandpi transcript ID; Codex remains the message authority.
+    clientMessageId,
     stableInputId: `turn-input:${sessionId}:${randomUUID()}`,
   };
 }
@@ -4186,9 +4235,7 @@ function expiredEventCursorEarliest(error: unknown) {
   const match = error.message.match(/earliest available sequence is (\d+)/i);
   if (!match) return undefined;
   const earliest = Number(match[1]);
-  return Number.isSafeInteger(earliest) && earliest > 0
-    ? earliest
-    : undefined;
+  return Number.isSafeInteger(earliest) && earliest > 0 ? earliest : undefined;
 }
 
 function codexBackgroundRequestCancelled() {

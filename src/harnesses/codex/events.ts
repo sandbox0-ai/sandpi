@@ -3,6 +3,7 @@ import { toUnixTimestamp, type UnixTimestamp } from "@/lib/time";
 
 import type {
   CodexComposerImage,
+  CodexComposerReference,
   CodexEventEnvelope,
   CodexFileUpdateChange,
   CodexHarnessState,
@@ -32,12 +33,15 @@ export interface CodexMessageView {
   id: string;
   /** Native Codex Turn ID used by Turn-level actions such as fork. */
   turnId: string;
+  /** Native client correlation ID, present on Codex user messages. */
+  clientId?: string | null;
   role: "user" | "assistant";
   content: string;
   createdAt: UnixTimestamp;
   phase?: "commentary" | "final_answer" | null;
   streaming?: boolean;
   attachments?: CodexComposerImage[];
+  references?: CodexComposerReference[];
 }
 
 export interface CodexCommandActivityView {
@@ -177,6 +181,7 @@ export interface CodexActiveTurnView {
   turnId: string;
   startedAt: UnixTimestamp;
   state:
+    | "submitting"
     | "working"
     | "thinking"
     | "responding"
@@ -419,10 +424,31 @@ function userMessageView(
       sizeBytes: 0,
       previewUrl: input.url,
     }));
+  const references = item.content.flatMap(
+    (input, index): CodexComposerReference[] => {
+      if (input.type !== "mention" && input.type !== "localImage") return [];
+      const filePath = input.path;
+      return [
+        {
+          id: `${item.id}-reference-${index}`,
+          name:
+            input.type === "mention"
+              ? input.name
+              : filePath.split("/").at(-1) || "image",
+          path: filePath,
+          kind: input.type,
+          source: filePath.startsWith("/workspace/.sandpi/uploads/")
+            ? "upload"
+            : "workspace",
+        },
+      ];
+    },
+  );
   return {
     kind: "message",
     id: item.id,
     turnId,
+    clientId: item.clientId,
     role: "user",
     content: item.content
       .filter(
@@ -433,6 +459,7 @@ function userMessageView(
       .join("\n"),
     createdAt,
     attachments: attachments.length ? attachments : undefined,
+    references: references.length ? references : undefined,
   };
 }
 

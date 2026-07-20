@@ -1,4 +1,9 @@
 import { HttpError } from "@/server/http-error";
+import {
+  codexComposerReference,
+  MAX_CODEX_INPUT_REFERENCES,
+  type EncodedCodexInputReference,
+} from "./input-references";
 
 export const MAX_CODEX_INPUT_IMAGES = 6;
 export const MAX_CODEX_INPUT_IMAGE_BYTES = 10 * 1024 * 1024;
@@ -16,12 +21,20 @@ export interface EncodedCodexInputImage {
 export function nativeCodexTurnInput(
   text: string,
   images: readonly EncodedCodexInputImage[],
+  references: readonly EncodedCodexInputReference[] = [],
 ) {
-  if (!text.trim() && images.length === 0) {
-    throw invalidImage("A Turn requires text or at least one image.");
+  if (!text.trim() && images.length === 0 && references.length === 0) {
+    throw invalidImage(
+      "A Turn requires text, an image, or a referenced Workspace file.",
+    );
   }
   if (images.length > MAX_CODEX_INPUT_IMAGES) {
     throw invalidImage(`A Turn accepts at most ${MAX_CODEX_INPUT_IMAGES} images.`);
+  }
+  if (references.length > MAX_CODEX_INPUT_REFERENCES) {
+    throw invalidImage(
+      `A Turn accepts at most ${MAX_CODEX_INPUT_REFERENCES} file references.`,
+    );
   }
 
   let totalBytes = 0;
@@ -47,7 +60,10 @@ export function nativeCodexTurnInput(
   }
 
   return [
-    ...(text.trim() ? [{ type: "text" as const, text: text.trim() }] : []),
+    ...(text.trim()
+      ? [{ type: "text" as const, text: text.trim(), text_elements: [] }]
+      : []),
+    ...references.map(codexComposerReference),
     ...nativeImages,
   ];
 }

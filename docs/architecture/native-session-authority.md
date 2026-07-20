@@ -121,6 +121,16 @@ a Sandbox0 resource. Subsequent Turns call `turn/start` with that native Thread
 id. Codex app-server can own many Threads, so one Environment Supervisor is
 sufficient.
 
+The browser allocates `clientUserMessageId` before submitting a Turn and may
+render that prompt as an ephemeral pending row while HTTP admission and native
+events race. Codex echoes the same value on its native `userMessage.clientId`;
+that item replaces the pending row in place. The returned or observed native
+Turn id is a compatibility fallback when a native version omits the echoed
+client id. The pending row exists only in browser memory, is restored to the
+composer if submission fails before native acceptance, and is never written to
+PostgreSQL or treated as conversation authority. Tool Activity can therefore
+remain below its prompt without introducing a second transcript.
+
 When Sandpi starts or recovers an Environment app-server, it restores and
 initializes only that shared transport. It does not bulk-read or resume product
 Threads. Conversation reconnect reads the selected persisted Thread directly
@@ -239,6 +249,30 @@ Every future coding-agent adapter follows the same capability-discovery rule:
 models and model-specific options come from the running native agent, unknown
 option values remain forward-compatible strings, and shared Sandpi code must
 not introduce a fallback catalog or capability enum.
+
+The two Codex composer surfaces share a harness-owned toolbar so model,
+reasoning, upload and `@` behavior cannot drift between New Session and an
+existing conversation. Workspace discovery itself is not a Codex capability:
+the Environment API delegates a bounded search of the mounted `/workspace` to
+the harness-neutral Sandbox0 `RuntimeAdapter`. The scan does not follow symbolic
+links, prunes hidden, Sandpi-internal and dependency directories before
+matching, and caps candidate output. It neither walks the Workspace from the
+browser nor persists a parallel file index. Codex-specific code only converts
+the selected generic path into the native `mention` passed to `thread/start` or
+`turn/start`; future coding-agent harnesses reuse the same Workspace search
+contract and map the result to their own input protocol.
+
+Uploaded composer files use the Sandbox0 File API and live under
+`/workspace/.sandpi/uploads/{upload-id}/{safe-name}`. Sandpi validates a
+bounded canonical payload before writing it, rejects symbolic-link path
+components, and accepts subsequent browser references only from that exact
+subtree. PNG, JPEG, GIF and WebP uploads whose bytes match their declared type
+become native `localImage` inputs; other uploads remain native `mention`
+inputs. Existing Workspace mentions must resolve under the user-visible
+`/workspace` policy. The broader `.sandpi` internal tree is never referenceable,
+and the upload subtree remains absent from the Workspace IDE and Workspace
+search results. PostgreSQL stores neither uploaded bytes nor a file-reference
+catalog.
 
 The native `threadId` is the exact product-Session attribution key. The shared
 Sandbox0 Supervisor Session and journal identify transport provenance only;

@@ -95,21 +95,15 @@ test("claims exactly one Environment Sandbox around its shared Workspace Volume"
     hardExpiresAt,
   });
   assert.equal(volumeCreates, 0);
-  assert.deepEqual(
-    (claimInput?.mounts as Array<Record<string, unknown>>)[0],
-    {
-      sandboxvolumeId: "volume-environment",
-      mountPoint: "/workspace",
-    },
-  );
+  assert.deepEqual((claimInput?.mounts as Array<Record<string, unknown>>)[0], {
+    sandboxvolumeId: "volume-environment",
+    mountPoint: "/workspace",
+  });
   assert.equal(
     ((claimInput?.config ?? {}) as Record<string, unknown>).hardTtl,
     30 * 24 * 60 * 60,
   );
-  assert.equal(
-    ((claimInput?.config ?? {}) as Record<string, unknown>).ttl,
-    0,
-  );
+  assert.equal(((claimInput?.config ?? {}) as Record<string, unknown>).ttl, 0);
   assert.equal(
     ((claimInput?.config ?? {}) as Record<string, unknown>).autoResume,
     true,
@@ -148,7 +142,10 @@ test("creates one Workspace Volume when provisioning a new Environment", async (
       },
     },
     sandboxes: {
-      async claim(_templateId: string, input: { mounts: Array<{ sandboxvolumeId: string }> }) {
+      async claim(
+        _templateId: string,
+        input: { mounts: Array<{ sandboxvolumeId: string }> },
+      ) {
         assert.equal(input.mounts[0]?.sandboxvolumeId, "volume-new");
         return { id: "sandbox-new" };
       },
@@ -682,10 +679,7 @@ test("snapshots and atomically installs MCP OAuth credentials under the Codex na
     undefined,
   );
   await runtime.installCodexMcpOauthCredentials(coordinates, secret);
-  assert.equal(
-    await runtime.readCodexMcpOauthCredentials(coordinates),
-    secret,
-  );
+  assert.equal(await runtime.readCodexMcpOauthCredentials(coordinates), secret);
   assert.equal(writes.length, 1);
   assert.match(
     writes[0]!.path,
@@ -732,37 +726,26 @@ test("snapshots and atomically installs MCP OAuth credentials under the Codex na
   const firstSnapshotCommand = operations.indexOf(
     "cmd:snapshot-codex-mcp-oauth-credential",
   );
-  const firstSnapshotCleanup = operations.findIndex(
-    (operation) =>
-      operation.startsWith(
-        "delete:/dev/shm/.sandpi-codex-mcp-oauth.snapshot.",
-      ),
+  const firstSnapshotCleanup = operations.findIndex((operation) =>
+    operation.startsWith("delete:/dev/shm/.sandpi-codex-mcp-oauth.snapshot."),
   );
   const installWrite = operations.findIndex((operation) =>
-    operation.startsWith(
-      "write:/dev/shm/.sandpi-codex-mcp-oauth.install.",
-    ),
+    operation.startsWith("write:/dev/shm/.sandpi-codex-mcp-oauth.install."),
   );
   const installCommand = operations.indexOf(
     "cmd:install-codex-mcp-oauth-credential",
   );
   const installCleanup = operations.findIndex((operation) =>
-    operation.startsWith(
-      "delete:/dev/shm/.sandpi-codex-mcp-oauth.install.",
-    ),
+    operation.startsWith("delete:/dev/shm/.sandpi-codex-mcp-oauth.install."),
   );
   const finalSnapshotCommand = operations.lastIndexOf(
     "cmd:snapshot-codex-mcp-oauth-credential",
   );
   const snapshotRead = operations.findIndex((operation) =>
-    operation.startsWith(
-      "read:/dev/shm/.sandpi-codex-mcp-oauth.snapshot.",
-    ),
+    operation.startsWith("read:/dev/shm/.sandpi-codex-mcp-oauth.snapshot."),
   );
   const finalSnapshotCleanup = operations.findLastIndex((operation) =>
-    operation.startsWith(
-      "delete:/dev/shm/.sandpi-codex-mcp-oauth.snapshot.",
-    ),
+    operation.startsWith("delete:/dev/shm/.sandpi-codex-mcp-oauth.snapshot."),
   );
   assert.ok(firstSnapshotCommand < firstSnapshotCleanup);
   assert.ok(installWrite < installCommand);
@@ -1548,7 +1531,10 @@ test("starts one Environment-scoped Codex app-server with native state on the Vo
     HOME: "/workspace",
     CODEX_HOME: "/workspace/.sandpi/harnesses/codex",
   });
-  assert.equal(JSON.stringify(sessions[0]?.spec).includes("mcp-oauth-secret"), false);
+  assert.equal(
+    JSON.stringify(sessions[0]?.spec).includes("mcp-oauth-secret"),
+    false,
+  );
   assert.equal(JSON.stringify(commands).includes("mcp-oauth-secret"), false);
   const mcpInstallCommand = commands.find(
     (command) => command.name === "install-codex-mcp-oauth-credential",
@@ -1934,10 +1920,7 @@ test("reports exhausted Sandbox0 transport failures as retryable unavailability"
     (error: unknown) => {
       assert.equal((error as { statusCode?: number }).statusCode, 503);
       assert.equal((error as { code?: string }).code, "sandbox0_unavailable");
-      assert.match(
-        (error as Error).message,
-        /temporarily unreachable/i,
-      );
+      assert.match((error as Error).message, /temporarily unreachable/i);
       return true;
     },
   );
@@ -2085,7 +2068,10 @@ test("reads a native Codex rollout only from its bound managed path", async () =
       nativeSessionId,
     ),
     (error: unknown) => {
-      assert.equal((error as { code?: string }).code, "codex_rollout_path_invalid");
+      assert.equal(
+        (error as { code?: string }).code,
+        "codex_rollout_path_invalid",
+      );
       return true;
     },
   );
@@ -2126,7 +2112,10 @@ test("rejects a Codex rollout reached through a symbolic link", async () => {
   await assert.rejects(
     runtime.readCodexRollout(coordinates, rolloutPath, nativeSessionId),
     (error: unknown) => {
-      assert.equal((error as { code?: string }).code, "codex_rollout_path_symlink");
+      assert.equal(
+        (error as { code?: string }).code,
+        "codex_rollout_path_symlink",
+      );
       return true;
     },
   );
@@ -2180,10 +2169,7 @@ test("falls back to Codex's compressed rollout sibling", async () => {
     nativeSessionId,
   );
 
-  assert.equal(
-    Buffer.from(content).toString("utf8"),
-    "compressed rollout\n",
-  );
+  assert.equal(Buffer.from(content).toString("utf8"), "compressed rollout\n");
   assert.deepEqual(readPaths, [compressedPath]);
 });
 
@@ -2228,7 +2214,10 @@ test("bounds decompressed Codex rollout output", async () => {
   await assert.rejects(
     runtime.readCodexRollout(coordinates, rolloutPath, nativeSessionId),
     (error: unknown) => {
-      assert.equal((error as { code?: string }).code, "codex_rollout_too_large");
+      assert.equal(
+        (error as { code?: string }).code,
+        "codex_rollout_too_large",
+      );
       return true;
     },
   );
@@ -2379,6 +2368,167 @@ test("lists one Workspace directory without recursively expanding folders", asyn
       { name: "README.md", kind: "file", children: undefined },
     ],
   );
+});
+
+test("searches Workspace files through the harness-neutral Sandbox0 runtime", async () => {
+  const commands: Array<{
+    name: string;
+    options: {
+      command: string[];
+      cwd?: string;
+      envVars?: Record<string, string>;
+      ttlSec?: number;
+    };
+  }> = [];
+  const runtime = runtimeWithClient({
+    sandboxes: {
+      sandbox(sandboxId: string) {
+        assert.equal(sandboxId, "sandbox-environment");
+        return {
+          async cmd(
+            name: string,
+            options: {
+              command: string[];
+              cwd?: string;
+              envVars?: Record<string, string>;
+              ttlSec?: number;
+            },
+          ) {
+            commands.push({ name, options });
+            return {
+              exitCode: 0,
+              stderr: "",
+              stdout: [
+                "f",
+                "./src/server.ts",
+                "d",
+                "./src/server",
+                "f",
+                "./src/my-server-test.ts",
+                "f",
+                "./src/components.ts",
+                "f",
+                "./.sandpi/server-secret.json",
+                "d",
+                "./node_modules/server",
+                "l",
+                "./server-link",
+                "f",
+                "/outside/server.ts",
+                "f",
+                "./src/server.ts",
+                "",
+              ].join("\0"),
+            };
+          },
+        };
+      },
+    },
+  });
+  const coordinates: EnvironmentRuntimeRecord = {
+    id: environment.id,
+    sandboxId: environment.sandboxId,
+    workspaceVolumeId: environment.workspaceVolumeId,
+    runtimeGeneration: 1,
+    decoder: { supervisorCursor: 0, tailBase64: "", runtimeGeneration: 1 },
+  };
+
+  assert.deepEqual(await runtime.searchFiles(coordinates, " server "), [
+    {
+      name: "server",
+      path: "/workspace/src/server",
+      kind: "folder",
+    },
+    {
+      name: "server.ts",
+      path: "/workspace/src/server.ts",
+      kind: "file",
+    },
+    {
+      name: "my-server-test.ts",
+      path: "/workspace/src/my-server-test.ts",
+      kind: "file",
+    },
+  ]);
+  assert.equal(commands.length, 1);
+  assert.equal(commands[0]?.name, "search-workspace-files");
+  assert.equal(commands[0]?.options.cwd, "/workspace");
+  assert.equal(commands[0]?.options.ttlSec, 10);
+  assert.equal(commands[0]?.options.envVars?.LC_ALL, "C");
+  assert.equal(commands[0]?.options.command[0], "/bin/sh");
+  assert.match(commands[0]?.options.command[2] ?? "", /node_modules/);
+  assert.match(commands[0]?.options.command[2] ?? "", /-name '\.\*'/);
+  assert.equal(commands[0]?.options.command.at(-1), "*s*e*r*v*e*r*");
+
+  assert.deepEqual(await runtime.searchFiles(coordinates, "*?["), []);
+  assert.equal(commands[1]?.options.command.at(-1), "*\\**\\?*\\[*");
+  assert.deepEqual(await runtime.searchFiles(coordinates, " "), []);
+  assert.equal(commands.length, 2);
+});
+
+test("writes composer uploads only below the protected Workspace upload root", async () => {
+  const uploadPath = "/workspace/.sandpi/uploads/upload-1/requirements.pdf";
+  const directories: string[] = [];
+  const writes: Array<{ path: string; content: string }> = [];
+  const missing = () =>
+    new APIError({
+      statusCode: 404,
+      code: "not_found",
+      message: "not found",
+    });
+  const runtime = runtimeWithClient({
+    sandboxes: {
+      sandbox(sandboxId: string) {
+        assert.equal(sandboxId, "sandbox-environment");
+        return {
+          async mkdir(directory: string) {
+            directories.push(directory);
+          },
+          async statFile(filePath: string) {
+            if (filePath === uploadPath) throw missing();
+            return { type: "dir", size: 0, isLink: false };
+          },
+          async writeFile(filePath: string, content: Uint8Array) {
+            writes.push({
+              path: filePath,
+              content: Buffer.from(content).toString("utf8"),
+            });
+          },
+        };
+      },
+    },
+  });
+  const coordinates: EnvironmentRuntimeRecord = {
+    id: environment.id,
+    sandboxId: environment.sandboxId,
+    workspaceVolumeId: environment.workspaceVolumeId,
+    runtimeGeneration: 1,
+    decoder: { supervisorCursor: 0, tailBase64: "", runtimeGeneration: 1 },
+  };
+
+  await runtime.writeCodexComposerUpload(
+    coordinates,
+    uploadPath,
+    Buffer.from("requirements"),
+  );
+
+  assert.deepEqual(directories, ["/workspace/.sandpi/uploads/upload-1"]);
+  assert.deepEqual(writes, [{ path: uploadPath, content: "requirements" }]);
+  await assert.rejects(
+    runtime.writeCodexComposerUpload(
+      coordinates,
+      "/workspace/.sandpi/harnesses/codex/auth.json",
+      Buffer.from("must not write"),
+    ),
+    (error: unknown) => {
+      assert.equal(
+        (error as { code?: string }).code,
+        "invalid_codex_file_upload_path",
+      );
+      return true;
+    },
+  );
+  assert.equal(writes.length, 1);
 });
 
 test("continues Environment audit history from the opaque Sandbox0 cursor", async () => {

@@ -10,7 +10,7 @@ import {
   Wrench,
   X,
 } from "lucide-react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import type {
   CodexActivityStatus,
@@ -253,9 +253,6 @@ export function CodexCommandActivity({
                         className="codex-command-output"
                         tabIndex={0}
                         aria-label={ui.activityOutput}
-                        aria-live={
-                          activity.status === "running" ? "polite" : undefined
-                        }
                       >
                         <code>{output}</code>
                       </pre>
@@ -311,7 +308,6 @@ export function CodexCommandActivity({
             className="codex-command-output"
             tabIndex={0}
             aria-label={ui.activityOutput}
-            aria-live={activity.status === "running" ? "polite" : undefined}
           >
             <code>{output}</code>
           </pre>
@@ -1064,13 +1060,17 @@ export function CodexTurnResult({
 }) {
   const ui = getCodexUiCopy(language).conversation;
   return (
-    <article className="message message-codex-activity">
+    <article className="message message-codex-turn-activity message-codex-turn-result">
       <div className="codex-turn-result" role="status">
         <span className="activity-status status-failed" aria-hidden="true">
           <X size={13} strokeWidth={2.6} />
         </span>
         <div>
-          <strong>{result.status === "failed" ? ui.turnFailed : ui.turnInterrupted}</strong>
+          <strong>
+            <span>Codex</span>
+            <span aria-hidden="true">·</span>
+            {result.status === "failed" ? ui.turnFailed : ui.turnInterrupted}
+          </strong>
           {result.detail ? <small>{result.detail}</small> : null}
         </div>
       </div>
@@ -1094,17 +1094,9 @@ export function CodexTurnActivity({
   const ui = getCodexUiCopy(language).conversation;
   const running = Boolean(activeTurn);
   const [open, setOpen] = useState(running);
-  const wasRunningRef = useRef(running);
 
   useEffect(() => {
-    if (running) {
-      setOpen(true);
-    } else if (wasRunningRef.current) {
-      // A live Turn folds as soon as Codex reports turn/completed. Keep the
-      // prompt and final answer outside this disclosure in every client.
-      setOpen(false);
-    }
-    wasRunningRef.current = running;
+    if (running) setOpen(true);
   }, [running]);
 
   const durationMs = activeTurn
@@ -1121,14 +1113,23 @@ export function CodexTurnActivity({
 
   return (
     <article className="message message-codex-turn-activity">
+      <span
+        className="sr-only"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+      >
+        {summary}
+      </span>
       <details
         className={`codex-turn-activity${running ? " is-running" : ""}`}
         open={open}
         onToggle={(event) => setOpen(event.currentTarget.open)}
       >
         <summary
-          aria-label={open ? ui.collapseTurnActivity : ui.expandTurnActivity}
-          aria-live={running ? "polite" : undefined}
+          aria-label={`${summary}. ${
+            open ? ui.collapseTurnActivity : ui.expandTurnActivity
+          }`}
         >
           <ChevronRight
             className="codex-turn-activity-chevron"
@@ -1147,7 +1148,7 @@ export function CodexTurnActivity({
             </small>
           ) : null}
           {activeTurn && durationMs !== null ? (
-            <span className="codex-turn-running-duration">
+            <span className="codex-turn-running-duration" aria-hidden="true">
               {ui.runningFor(formatElapsed(durationMs))}
             </span>
           ) : null}

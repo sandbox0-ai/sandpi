@@ -4,6 +4,7 @@ import {
   useCallback,
   useLayoutEffect,
   useRef,
+  useState,
   type RefObject,
   type UIEventHandler,
 } from "react";
@@ -26,11 +27,12 @@ interface ConversationAutoScroll {
   contentRef: RefObject<HTMLDivElement | null>;
   onScroll: UIEventHandler<HTMLDivElement>;
   scrollToBottom: () => void;
+  following: boolean;
 }
 
 export function isNearConversationBottom(
   geometry: ScrollGeometry,
-  threshold = 8,
+  threshold = 48,
 ) {
   const distance =
     geometry.scrollHeight - geometry.clientHeight - geometry.scrollTop;
@@ -44,15 +46,19 @@ export function isNearConversationBottom(
  */
 export function useConversationAutoScroll({
   resetKey,
-  bottomThreshold = 8,
+  bottomThreshold = 48,
 }: ConversationAutoScrollOptions): ConversationAutoScroll {
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const followingRef = useRef(true);
+  const [following, setFollowing] = useState(true);
   const frameRef = useRef<number | null>(null);
 
   const scheduleScrollToBottom = useCallback((force = false) => {
-    if (force) followingRef.current = true;
+    if (force) {
+      followingRef.current = true;
+      setFollowing(true);
+    }
     if (frameRef.current !== null) {
       window.cancelAnimationFrame(frameRef.current);
     }
@@ -66,6 +72,7 @@ export function useConversationAutoScroll({
 
   useLayoutEffect(() => {
     followingRef.current = true;
+    setFollowing(true);
     scheduleScrollToBottom();
 
     const scrollRegion = scrollRef.current;
@@ -93,10 +100,12 @@ export function useConversationAutoScroll({
 
   const onScroll = useCallback<UIEventHandler<HTMLDivElement>>(
     (event) => {
-      followingRef.current = isNearConversationBottom(
+      const nextFollowing = isNearConversationBottom(
         event.currentTarget,
         bottomThreshold,
       );
+      followingRef.current = nextFollowing;
+      setFollowing(nextFollowing);
     },
     [bottomThreshold],
   );
@@ -106,5 +115,5 @@ export function useConversationAutoScroll({
     [scheduleScrollToBottom],
   );
 
-  return { scrollRef, contentRef, onScroll, scrollToBottom };
+  return { scrollRef, contentRef, onScroll, scrollToBottom, following };
 }

@@ -115,6 +115,56 @@ test("projects a native thread/read snapshot without DTO event history", () => {
   assert.equal(state.historyRevision, 0);
 });
 
+test("projects native Workspace mentions and uploaded local images", () => {
+  const turn = createMockCodexTurn({
+    content: "Compare these files",
+    assistantText: "Done",
+    createdAt: timestamp("2026-07-12T00:00:00Z"),
+  });
+  turn.items[0] = {
+    type: "userMessage",
+    id: "user-with-references",
+    clientId: "client-with-references",
+    content: [
+      {
+        type: "text",
+        text: "Compare these files",
+        text_elements: [],
+      },
+      {
+        type: "mention",
+        name: "README.md",
+        path: "/workspace/README.md",
+      },
+      {
+        type: "localImage",
+        path: "/workspace/.sandpi/uploads/upload-1/diagram.png",
+      },
+    ],
+  };
+
+  const [message] = projectCodexConversation(
+    createMockCodexThread("thread-with-references", [turn]),
+  );
+  assert.equal(message?.clientId, "client-with-references");
+  assert.deepEqual(message?.references, [
+    {
+      id: "user-with-references-reference-1",
+      name: "README.md",
+      path: "/workspace/README.md",
+      kind: "mention",
+      source: "workspace",
+    },
+    {
+      id: "user-with-references-reference-2",
+      name: "diagram.png",
+      path: "/workspace/.sandpi/uploads/upload-1/diagram.png",
+      kind: "localImage",
+      source: "upload",
+    },
+  ]);
+});
+
 test("groups completed Codex work behind its prompt and final answer", () => {
   const completedTurn: CodexTurn = {
     id: "turn-with-activity",
@@ -169,15 +219,108 @@ test("groups completed Codex work behind its prompt and final answer", () => {
     ),
   );
   assert.ok(group);
-  assert.deepEqual(group.userMessages.map((message) => message.content), [
-    "Inspect the project",
-  ]);
-  assert.equal(group.finalMessage?.content, "The project is ready.");
   assert.deepEqual(
-    group.activityEntries.map((entry) => entry.kind),
-    ["message", "command"],
+    group.blocks.map((block) =>
+      block.kind === "message"
+        ? `message:${block.entry.role}:${block.entry.content}`
+        : block.kind === "activity"
+          ? `activity:${block.entries.map((entry) => entry.kind).join(",")}`
+          : `result:${block.entry.status}`,
+    ),
+    [
+      "message:user:Inspect the project",
+      "activity:message,command",
+      "message:assistant:The project is ready.",
+    ],
   );
   assert.equal(group.turn?.durationMs, 12_000);
+});
+
+test("preserves steering messages between native activity blocks", () => {
+  const steeredTurn: CodexTurn = {
+    id: "turn-with-steering",
+    itemsView: "full",
+    status: "completed",
+    error: null,
+    startedAt: timestamp("2026-07-12T02:00:00Z"),
+    completedAt: timestamp("2026-07-12T02:00:12Z"),
+    durationMs: 12_000,
+    items: [
+      {
+        type: "userMessage",
+        id: "steering-user-one",
+        clientId: "client-user-one",
+        content: [{ type: "text", text: "Inspect first", text_elements: [] }],
+      },
+      {
+        type: "commandExecution",
+        id: "steering-command-one",
+        command: "rg --files",
+        cwd: "/workspace",
+        processId: null,
+        source: "agent",
+        status: "completed",
+        commandActions: [
+          { type: "listFiles", command: "rg --files", path: "/workspace" },
+        ],
+        aggregatedOutput: "app/page.tsx\n",
+        exitCode: 0,
+        durationMs: 80,
+      },
+      {
+        type: "userMessage",
+        id: "steering-user-two",
+        clientId: "client-user-two",
+        content: [{ type: "text", text: "Focus on tests", text_elements: [] }],
+      },
+      {
+        type: "commandExecution",
+        id: "steering-command-two",
+        command: "npm test",
+        cwd: "/workspace",
+        processId: null,
+        source: "agent",
+        status: "completed",
+        commandActions: [
+          { type: "unknown", command: "npm test" },
+        ],
+        aggregatedOutput: "ok\n",
+        exitCode: 0,
+        durationMs: 500,
+      },
+      {
+        type: "agentMessage",
+        id: "steering-final",
+        text: "The tests pass.",
+        phase: "final_answer",
+        memoryCitation: null,
+      },
+    ],
+  };
+
+  const [group] = groupCodexTimelineByTurn(
+    projectCodexTimeline(
+      createMockCodexThread("thread-with-steering", [steeredTurn]),
+    ),
+  );
+  assert.ok(group);
+  assert.deepEqual(
+    group.blocks.map((block) =>
+      block.kind === "message"
+        ? `${block.entry.role}:${block.entry.content}`
+        : block.kind,
+    ),
+    [
+      "user:Inspect first",
+      "activity",
+      "user:Focus on tests",
+      "activity",
+      "assistant:The tests pass.",
+    ],
+  );
+  const firstMessage = group.blocks[0];
+  assert.ok(firstMessage?.kind === "message");
+  assert.equal(firstMessage.entry.clientId, "client-user-one");
 });
 
 test("a replacement snapshot does not inherit a prior live suffix", () => {
