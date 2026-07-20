@@ -3,29 +3,16 @@ import test from "node:test";
 
 import {
   CODEX_COMPOSER_UPLOAD_ROOT,
-  codexComposerReference,
-  codexComposerUploadReference,
+  codexComposerLocalImage,
+  codexComposerUpload,
   codexComposerUploadPath,
   decodeCodexComposerUpload,
   isCodexComposerUploadPath,
-} from "./input-references";
+} from "./input-files";
 
-test("maps visible Workspace and protected upload references to native Codex inputs", () => {
+test("maps protected uploaded images to native Codex localImage inputs", () => {
   assert.deepEqual(
-    codexComposerReference({
-      kind: "mention",
-      name: "server.ts",
-      path: "/workspace/src/server.ts",
-    }),
-    {
-      type: "mention",
-      name: "server.ts",
-      path: "/workspace/src/server.ts",
-    },
-  );
-  assert.deepEqual(
-    codexComposerReference({
-      kind: "localImage",
+    codexComposerLocalImage({
       name: "diagram.png",
       path: `${CODEX_COMPOSER_UPLOAD_ROOT}/upload-1/diagram.png`,
     }),
@@ -36,11 +23,10 @@ test("maps visible Workspace and protected upload references to native Codex inp
   );
 });
 
-test("does not expose other Sandpi-managed Workspace state as mentions", () => {
+test("does not accept arbitrary Workspace paths as local image attachments", () => {
   assert.throws(
     () =>
-      codexComposerReference({
-        kind: "mention",
+      codexComposerLocalImage({
         name: "auth.json",
         path: "/workspace/.sandpi/harnesses/codex/auth.json",
       }),
@@ -53,8 +39,7 @@ test("does not expose other Sandpi-managed Workspace state as mentions", () => {
     },
   );
   assert.throws(() =>
-    codexComposerReference({
-      kind: "localImage",
+    codexComposerLocalImage({
       name: "outside.png",
       path: "/workspace/outside.png",
     }),
@@ -79,13 +64,34 @@ test("creates normalized upload paths and decodes bounded canonical bytes", () =
   assert.throws(() => decodeCodexComposerUpload("not base64"));
 });
 
+test("classifies regular uploads as visible file mentions", () => {
+  assert.deepEqual(
+    codexComposerUpload({
+      id: "upload:document",
+      name: "requirements.pdf",
+      path: `${CODEX_COMPOSER_UPLOAD_ROOT}/upload-document/requirements.pdf`,
+      mimeType: "application/pdf",
+      content: Buffer.from("%PDF-test"),
+    }),
+    {
+      id: "upload:document",
+      name: "requirements.pdf",
+      path: `${CODEX_COMPOSER_UPLOAD_ROOT}/upload-document/requirements.pdf`,
+      mimeType: "application/pdf",
+      sizeBytes: 9,
+      kind: "file",
+      source: "upload",
+    },
+  );
+});
+
 test("uses localImage only for uploads with a valid native image signature", () => {
   const png = Buffer.from(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
     "base64",
   );
   assert.equal(
-    codexComposerUploadReference({
+    codexComposerUpload({
       id: "upload:1",
       name: "pixel.png",
       path: `${CODEX_COMPOSER_UPLOAD_ROOT}/upload-1/pixel.png`,
@@ -95,7 +101,7 @@ test("uses localImage only for uploads with a valid native image signature", () 
     "localImage",
   );
   assert.throws(() =>
-    codexComposerUploadReference({
+    codexComposerUpload({
       id: "upload:2",
       name: "fake.png",
       path: `${CODEX_COMPOSER_UPLOAD_ROOT}/upload-2/fake.png`,

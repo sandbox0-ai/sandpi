@@ -33,31 +33,20 @@ test("rejects image content that does not match its declared type", () => {
   );
 });
 
-test("preserves native Codex file mentions and local image inputs", () => {
+test("preserves visible file path text and native local image inputs", () => {
   assert.deepEqual(
     nativeCodexTurnInput(
-      "Compare these",
+      "Compare README.md",
       [],
       [
         {
-          kind: "mention",
-          name: "README.md",
-          path: "/workspace/README.md",
-        },
-        {
-          kind: "localImage",
           name: "diagram.png",
           path: "/workspace/.sandpi/uploads/upload-1/diagram.png",
         },
       ],
     ),
     [
-      { type: "text", text: "Compare these", text_elements: [] },
-      {
-        type: "mention",
-        name: "README.md",
-        path: "/workspace/README.md",
-      },
+      { type: "text", text: "Compare README.md", text_elements: [] },
       {
         type: "localImage",
         path: "/workspace/.sandpi/uploads/upload-1/diagram.png",

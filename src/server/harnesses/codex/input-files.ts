@@ -1,32 +1,32 @@
+/**
+ * Browser upload handling for the Codex composer. Ordinary files return to the
+ * browser as visible path text; only verified images cross the app-server
+ * boundary as structured localImage inputs. Filesystem paths must never be
+ * converted into app/plugin `mention` inputs or hidden prompt instructions.
+ */
 import path from "node:path";
 
-import type {
-  CodexComposerReference,
-  CodexComposerReferenceKind,
-} from "@/harnesses/codex/types";
+import type { CodexComposerUpload } from "@/harnesses/codex/types";
 import {
-  MAX_CODEX_COMPOSER_REFERENCES,
+  MAX_CODEX_COMPOSER_UPLOAD_FILES,
   MAX_CODEX_COMPOSER_UPLOAD_BYTES,
 } from "@/harnesses/codex/types";
 import {
-  isWorkspaceInternalPath,
   normalizeWorkspacePath,
-  userVisibleWorkspacePath,
   WORKSPACE_INTERNAL_ROOT,
 } from "@/lib/workspace-path-policy";
 import { HttpError } from "@/server/http-error";
 
 export const CODEX_COMPOSER_UPLOAD_ROOT =
   `${WORKSPACE_INTERNAL_ROOT}/uploads`;
-export const MAX_CODEX_INPUT_REFERENCES = MAX_CODEX_COMPOSER_REFERENCES;
+export const MAX_CODEX_INPUT_LOCAL_IMAGES = MAX_CODEX_COMPOSER_UPLOAD_FILES;
 export { MAX_CODEX_COMPOSER_UPLOAD_BYTES };
 export const MAX_CODEX_COMPOSER_UPLOAD_BASE64_LENGTH =
   Math.ceil((MAX_CODEX_COMPOSER_UPLOAD_BYTES * 4) / 3) + 4;
 
-export interface EncodedCodexInputReference {
+export interface EncodedCodexLocalImage {
   name: string;
   path: string;
-  kind: CodexComposerReferenceKind;
 }
 
 export function codexComposerUploadPath(
@@ -40,38 +40,21 @@ export function codexComposerUploadPath(
   );
 }
 
-export function codexComposerReference(
-  input: EncodedCodexInputReference,
-) {
+export function codexComposerLocalImage(input: EncodedCodexLocalImage) {
   const name = input.name.trim();
   if (!name || name.length > 512 || /[\u0000\r\n]/.test(name)) {
-    throw invalidReference("A referenced file has an invalid name.");
+    throw invalidReference("A local image has an invalid name.");
   }
   const normalized = normalizeWorkspacePath(input.path);
   if (!normalized) {
-    throw invalidReference("Referenced files must stay under /workspace.");
+    throw invalidReference("Local images must stay under /workspace.");
   }
-
-  if (input.kind === "localImage") {
-    if (!isCodexComposerUploadPath(normalized)) {
-      throw invalidReference(
-        "Local image inputs must come from Sandpi's protected upload directory.",
-      );
-    }
-    return { type: "localImage" as const, path: normalized };
-  }
-
-  if (
-    !userVisibleWorkspacePath(normalized) &&
-    !isCodexComposerUploadPath(normalized)
-  ) {
+  if (!isCodexComposerUploadPath(normalized)) {
     throw invalidReference(
-      isWorkspaceInternalPath(normalized)
-        ? "Sandpi-managed Workspace state cannot be referenced."
-        : "Referenced files must stay under /workspace.",
+      "Local image inputs must come from Sandpi's protected upload directory.",
     );
   }
-  return { type: "mention" as const, name, path: normalized };
+  return { type: "localImage" as const, path: normalized };
 }
 
 export function isCodexComposerUploadPath(candidate: string) {
@@ -101,13 +84,13 @@ export function decodeCodexComposerUpload(dataBase64: string) {
   return content;
 }
 
-export function codexComposerUploadReference(input: {
+export function codexComposerUpload(input: {
   id: string;
   name: string;
   path: string;
   mimeType: string;
   content: Uint8Array;
-}): CodexComposerReference {
+}): CodexComposerUpload {
   const mimeType = input.mimeType.toLowerCase();
   const nativeLocalImage = isNativeLocalImage(mimeType);
   if (
@@ -124,7 +107,7 @@ export function codexComposerUploadReference(input: {
     path: input.path,
     mimeType: input.mimeType,
     sizeBytes: input.content.byteLength,
-    kind: nativeLocalImage ? "localImage" : "mention",
+    kind: nativeLocalImage ? "localImage" : "file",
     source: "upload",
   };
 }

@@ -288,7 +288,7 @@ test("waits for native New Session models and scopes reasoning effort by model",
             path: "/workspace/.sandpi/uploads/e2e-requirements/requirements.pdf",
             mimeType: "application/pdf",
             sizeBytes: 13,
-            kind: "mention",
+            kind: "file",
             source: "upload",
           },
         },
@@ -344,14 +344,20 @@ test("waits for native New Session models and scopes reasoning effort by model",
   await expect(fastEffortPicker).toHaveValue("high");
   await expect(fastEffortPicker.locator("option")).toHaveText(["Low", "High"]);
 
+  const newSessionComposer = page.getByPlaceholder(
+    `Ask ${environment.codingAgent.label} to work on something…`,
+  );
+  await newSessionComposer.fill("Verify native model settings.");
+
   await page.getByTestId("codex-composer-upload-input").setInputFiles({
     name: "requirements.pdf",
     mimeType: "application/pdf",
     buffer: Buffer.from("%PDF-e2e-test"),
   });
-  await expect(
-    page.getByText("requirements.pdf", { exact: true }),
-  ).toBeVisible();
+  await expect(newSessionComposer).toHaveValue(
+    "Verify native model settings. " +
+      ".sandpi/uploads/e2e-requirements/requirements.pdf ",
+  );
   await expect
     .poll(() => uploadBody)
     .toMatchObject({
@@ -362,9 +368,10 @@ test("waits for native New Session models and scopes reasoning effort by model",
   await page.getByRole("button", { name: "Mention a Workspace file" }).click();
   await page.getByPlaceholder("Search /workspace").fill("README");
   await page.getByRole("option").filter({ hasText: "README.md" }).click();
-  await expect(
-    page.locator(".composer-file-reference").filter({ hasText: "README.md" }),
-  ).toBeVisible();
+  await expect(newSessionComposer).toHaveValue(
+    "Verify native model settings. " +
+      ".sandpi/uploads/e2e-requirements/requirements.pdf README.md ",
+  );
 
   await modelPicker.selectOption("e2e-codex-deep");
   const deepEffortPicker = page.getByRole("combobox", {
@@ -381,11 +388,6 @@ test("waits for native New Session models and scopes reasoning effort by model",
   await modelPicker.selectOption("e2e-codex-deep");
   await expect(deepEffortPicker).toHaveValue("medium");
   await page
-    .getByPlaceholder(
-      `Ask ${environment.codingAgent.label} to work on something…`,
-    )
-    .fill("Verify native model settings.");
-  await page
     .getByRole("button", {
       name: "Send instruction and start Session",
     })
@@ -396,19 +398,12 @@ test("waits for native New Session models and scopes reasoning effort by model",
       environmentId: environment.id,
       modelId: "e2e-codex-deep",
       reasoningEffort: "medium",
-      references: [
-        {
-          name: "requirements.pdf",
-          path: "/workspace/.sandpi/uploads/e2e-requirements/requirements.pdf",
-          kind: "mention",
-        },
-        {
-          name: "README.md",
-          path: "/workspace/README.md",
-          kind: "mention",
-        },
-      ],
+      prompt:
+        "Verify native model settings. " +
+        ".sandpi/uploads/e2e-requirements/requirements.pdf README.md",
+      localImages: [],
     });
+  expect(createSessionBody).not.toHaveProperty("references");
   await page.reload();
   await expect(modelPicker).toBeEnabled();
   await expect(modelPicker).toHaveValue("e2e-codex-deep");
@@ -1129,10 +1124,10 @@ test("keeps an optimistic prompt ahead of native Activity without duplicating it
   let turnRequestBody:
     | {
         clientMessageId?: string;
-        references?: Array<{
+        text?: string;
+        localImages?: Array<{
           name: string;
           path: string;
-          kind: string;
         }>;
       }
     | undefined;
@@ -1170,10 +1165,10 @@ test("keeps an optimistic prompt ahead of native Activity without duplicating it
     async (route) => {
       turnRequestBody = route.request().postDataJSON() as {
         clientMessageId?: string;
-        references?: Array<{
+        text?: string;
+        localImages?: Array<{
           name: string;
           path: string;
-          kind: string;
         }>;
       };
       await turnResponseGate;
@@ -1216,26 +1211,24 @@ test("keeps an optimistic prompt ahead of native Activity without duplicating it
   const composer = page.getByRole("textbox", {
     name: `Message ${environment.codingAgent.label}`,
   });
+  const submittedPrompt = `${prompt} app/page.tsx`;
   await expect(page.getByTestId("codex-composer-upload-input")).toHaveCount(1);
+  await composer.fill(prompt);
   await page.getByRole("button", { name: "Mention a Workspace file" }).click();
   await page.getByPlaceholder("Search /workspace").fill("page");
   await page.getByRole("option").filter({ hasText: "app/page.tsx" }).click();
-  await composer.fill(prompt);
+  await expect(composer).toHaveValue(`${submittedPrompt} `);
   await page.getByRole("button", { name: "Send message" }).click();
   await expect
     .poll(() => turnRequestBody?.clientMessageId)
     .toMatch(/^user-message-/);
   const clientMessageId = turnRequestBody?.clientMessageId;
   expect(clientMessageId).toBeTruthy();
-  expect(turnRequestBody?.references).toEqual([
-    {
-      name: "page.tsx",
-      path: "/workspace/app/page.tsx",
-      kind: "mention",
-    },
-  ]);
+  expect(turnRequestBody?.text).toBe(submittedPrompt);
+  expect(turnRequestBody?.localImages).toEqual([]);
+  expect(turnRequestBody).not.toHaveProperty("references");
   await expect(composer).toHaveValue("");
-  await expect(page.getByText(prompt, { exact: true })).toHaveCount(1);
+  await expect(page.getByText(submittedPrompt, { exact: true })).toHaveCount(1);
   await expect(
     page.getByRole("button", { name: "Starting Codex turn" }),
   ).toHaveAttribute("aria-busy", "true");
@@ -1269,12 +1262,7 @@ test("keeps an optimistic prompt ahead of native Activity without duplicating it
     id: "native-user-e2e-order",
     clientId: clientMessageId!,
     content: [
-      { type: "text", text: prompt, text_elements: [] },
-      {
-        type: "mention",
-        name: "page.tsx",
-        path: "/workspace/app/page.tsx",
-      },
+      { type: "text", text: submittedPrompt, text_elements: [] },
     ],
   };
   const runningCommand: CodexThreadItem = {
@@ -1327,7 +1315,7 @@ test("keeps an optimistic prompt ahead of native Activity without duplicating it
       },
     }),
   );
-  await expect(page.getByText(prompt, { exact: true })).toHaveCount(1);
+  await expect(page.getByText(submittedPrompt, { exact: true })).toHaveCount(1);
   releaseTurnResponse();
   await emitControlledEvent(
     page,
@@ -1380,7 +1368,7 @@ test("keeps an optimistic prompt ahead of native Activity without duplicating it
     }),
   );
 
-  await expect(page.getByText(prompt, { exact: true })).toHaveCount(1);
+  await expect(page.getByText(submittedPrompt, { exact: true })).toHaveCount(1);
   await expect(
     page.getByText("The ordering is stable.", { exact: true }),
   ).toBeVisible();

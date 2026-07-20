@@ -45,7 +45,7 @@ import { ENVIRONMENT_SANDBOX_HARD_TTL_SECONDS } from "@/server/environments/life
 import {
   isCodexComposerUploadPath,
   MAX_CODEX_COMPOSER_UPLOAD_BYTES,
-} from "@/server/harnesses/codex/input-references";
+} from "@/server/harnesses/codex/input-files";
 import { toSandbox0NetworkPolicy } from "./network-policy";
 import {
   CODEX_ENVIRONMENT_CREDENTIAL_PATH,

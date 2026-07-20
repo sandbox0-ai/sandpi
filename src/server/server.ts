@@ -45,11 +45,11 @@ import {
 } from "@/server/harnesses/codex/input-images";
 import {
   MAX_CODEX_COMPOSER_UPLOAD_BASE64_LENGTH,
-  MAX_CODEX_INPUT_REFERENCES,
+  MAX_CODEX_INPUT_LOCAL_IMAGES,
+  codexComposerUpload,
   codexComposerUploadPath,
-  codexComposerUploadReference,
   decodeCodexComposerUpload,
-} from "@/server/harnesses/codex/input-references";
+} from "@/server/harnesses/codex/input-files";
 import type { CodexRolloutActivityFeed } from "@/harnesses/codex/rollout-activity";
 import { HttpError } from "@/server/http-error";
 import { createRuntime } from "@/server/runtime";
@@ -82,14 +82,13 @@ const codexReferenceNameSchema = z
   .min(1)
   .max(512)
   .refine((value) => !/[\u0000\r\n]/.test(value));
-const codexInputReferenceSchema = z.object({
+const codexLocalImageSchema = z.object({
   name: codexReferenceNameSchema,
   path: z.string().trim().min(1).max(4_096),
-  kind: z.enum(["mention", "localImage"]),
 });
-const codexInputReferencesSchema = z
-  .array(codexInputReferenceSchema)
-  .max(MAX_CODEX_INPUT_REFERENCES)
+const codexLocalImagesSchema = z
+  .array(codexLocalImageSchema)
+  .max(MAX_CODEX_INPUT_LOCAL_IMAGES)
   .default([]);
 const codexComposerUploadSchema = z.object({
   name: codexReferenceNameSchema,
@@ -597,7 +596,7 @@ function registerApiRoutes(
       const content = decodeCodexComposerUpload(body.dataBase64);
       const uploadId = randomUUID();
       const filePath = codexComposerUploadPath(uploadId, body.name);
-      const reference = codexComposerUploadReference({
+      const upload = codexComposerUpload({
         id: `upload:${uploadId}`,
         name: body.name,
         path: filePath,
@@ -611,7 +610,7 @@ function registerApiRoutes(
           services.runtime.writeCodexComposerUpload(runtime, filePath, content),
       );
       return reply.status(201).send({
-        data: reference,
+        data: upload,
       });
     },
   );
@@ -806,16 +805,15 @@ function registerApiRoutes(
           modelId: z.string().max(200).optional(),
           reasoningEffort: codexReasoningEffortSchema.optional(),
           images: codexInputImagesSchema,
-          references: codexInputReferencesSchema,
+          localImages: codexLocalImagesSchema,
         })
         .refine(
           (value) =>
             value.prompt.length > 0 ||
             value.images.length > 0 ||
-            value.references.length > 0,
+            value.localImages.length > 0,
           {
-            message:
-              "A Session requires text, an image, or a referenced Workspace file.",
+            message: "A Session requires text or an image.",
           },
         )
         .parse(request.body);
@@ -836,7 +834,7 @@ function registerApiRoutes(
         title: body.title || body.prompt.slice(0, 56) || "File task",
         prompt: body.prompt,
         images: body.images,
-        references: body.references,
+        localImages: body.localImages,
         modelId: body.modelId,
         reasoningEffort: body.reasoningEffort,
       });
@@ -894,16 +892,15 @@ function registerApiRoutes(
           modelId: z.string().trim().min(1).max(200).optional(),
           reasoningEffort: codexReasoningEffortSchema.optional(),
           clientMessageId: z.string().trim().min(1).max(200).optional(),
-          references: codexInputReferencesSchema,
+          localImages: codexLocalImagesSchema,
         })
         .refine(
           (value) =>
             value.text.length > 0 ||
             value.images.length > 0 ||
-            value.references.length > 0,
+            value.localImages.length > 0,
           {
-            message:
-              "A Turn requires text, an image, or a referenced Workspace file.",
+            message: "A Turn requires text or an image.",
           },
         )
         .parse(request.body);
@@ -915,7 +912,7 @@ function registerApiRoutes(
         modelId: body.modelId,
         reasoningEffort: body.reasoningEffort,
         clientMessageId: body.clientMessageId,
-        references: body.references,
+        localImages: body.localImages,
       });
       return reply.status(202).send({ data: result });
     },

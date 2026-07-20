@@ -115,9 +115,9 @@ test("projects a native thread/read snapshot without DTO event history", () => {
   assert.equal(state.historyRevision, 0);
 });
 
-test("projects native Workspace mentions and uploaded local images", () => {
+test("projects local images without treating tool mentions as files", () => {
   const turn = createMockCodexTurn({
-    content: "Compare these files",
+    content: "Compare README.md",
     assistantText: "Done",
     createdAt: timestamp("2026-07-12T00:00:00Z"),
   });
@@ -128,13 +128,13 @@ test("projects native Workspace mentions and uploaded local images", () => {
     content: [
       {
         type: "text",
-        text: "Compare these files",
+        text: "Compare README.md",
         text_elements: [],
       },
       {
         type: "mention",
-        name: "README.md",
-        path: "/workspace/README.md",
+        name: "Demo App",
+        path: "app://demo-app",
       },
       {
         type: "localImage",
@@ -147,16 +147,9 @@ test("projects native Workspace mentions and uploaded local images", () => {
     createMockCodexThread("thread-with-references", [turn]),
   );
   assert.equal(message?.clientId, "client-with-references");
-  assert.deepEqual(message?.references, [
+  assert.deepEqual(message?.localImages, [
     {
-      id: "user-with-references-reference-1",
-      name: "README.md",
-      path: "/workspace/README.md",
-      kind: "mention",
-      source: "workspace",
-    },
-    {
-      id: "user-with-references-reference-2",
+      id: "user-with-references-local-image-2",
       name: "diagram.png",
       path: "/workspace/.sandpi/uploads/upload-1/diagram.png",
       kind: "localImage",

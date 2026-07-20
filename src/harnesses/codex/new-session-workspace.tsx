@@ -16,10 +16,11 @@ import {
 import { useEffect, useRef, useState } from "react";
 
 import {
-  CodexComposerReferences,
+  CodexComposerLocalImages,
   CodexComposerToolbar,
-  encodeCodexComposerReferences,
+  encodeCodexComposerLocalImages,
 } from "@/harnesses/codex/composer";
+import { insertCodexFileMentions } from "@/harnesses/codex/file-mentions";
 import {
   shouldSubmitComposer,
   type OperationLanguage,
@@ -28,7 +29,7 @@ import {
 import { getCodexUiCopy } from "@/harnesses/codex/ui";
 import type {
   CodexComposerImage,
-  CodexComposerReference,
+  CodexComposerLocalImage,
   CodexSession,
 } from "@/harnesses/codex/types";
 import {
@@ -92,7 +93,7 @@ export function CodexNewSessionWorkspace({
   const [retryingEnvironment, setRetryingEnvironment] = useState(false);
   const [error, setError] = useState("");
   const [images, setImages] = useState<CodexComposerImage[]>([]);
-  const [references, setReferences] = useState<CodexComposerReference[]>([]);
+  const [localImages, setLocalImages] = useState<CodexComposerLocalImage[]>([]);
   const promptRef = useRef<HTMLTextAreaElement>(null);
   const selectedModel = modelOptions.find(
     (model) => model.id === selectedModelId,
@@ -201,6 +202,23 @@ export function CodexNewSessionWorkspace({
     rememberComposerPreference(selectedModel.id, nextReasoningEfforts);
   }
 
+  function insertFileMentions(filePaths: string[]) {
+    if (filePaths.length === 0) return;
+    const textarea = promptRef.current;
+    const insertion = insertCodexFileMentions(
+      textarea?.value ?? prompt,
+      filePaths,
+      textarea?.selectionStart ?? Number.POSITIVE_INFINITY,
+      textarea?.selectionEnd ?? Number.POSITIVE_INFINITY,
+    );
+    setPrompt(insertion.text);
+    setError("");
+    window.requestAnimationFrame(() => {
+      promptRef.current?.focus();
+      promptRef.current?.setSelectionRange(insertion.cursor, insertion.cursor);
+    });
+  }
+
   async function createSession() {
     if (environment.status !== "ready") {
       setError(
@@ -221,7 +239,7 @@ export function CodexNewSessionWorkspace({
       return;
     }
     const instruction = prompt.trim();
-    if (!instruction && images.length === 0 && references.length === 0) {
+    if (!instruction && images.length === 0 && localImages.length === 0) {
       setError(ui.emptyInstruction(environment.codingAgent.label));
       promptRef.current?.focus();
       return;
@@ -238,7 +256,7 @@ export function CodexNewSessionWorkspace({
             environmentId: environment.id,
             prompt: instruction,
             images: images.map(encodeCodexComposerImage),
-            references: encodeCodexComposerReferences(references),
+            localImages: encodeCodexComposerLocalImages(localImages),
             modelId: selectedModel.id,
             ...(selectedReasoningEffort
               ? { reasoningEffort: selectedReasoningEffort }
@@ -401,12 +419,12 @@ export function CodexNewSessionWorkspace({
               ))}
             </div>
           ) : null}
-          <CodexComposerReferences
+          <CodexComposerLocalImages
             language={language}
-            references={references}
+            localImages={localImages}
             onRemove={(id) => {
-              setReferences((current) =>
-                current.filter((reference) => reference.id !== id),
+              setLocalImages((current) =>
+                current.filter((localImage) => localImage.id !== id),
               );
               setError("");
             }}
@@ -457,8 +475,9 @@ export function CodexNewSessionWorkspace({
             language={language}
             environmentId={environment.id}
             agentLabel={environment.codingAgent.label}
-            references={references}
-            onReferencesChange={setReferences}
+            localImages={localImages}
+            onLocalImagesChange={setLocalImages}
+            onInsertFileMentions={insertFileMentions}
             onAttachmentError={setError}
             attachmentDisabled={
               creating ||
@@ -509,7 +528,7 @@ export function CodexNewSessionWorkspace({
                   !selectedModel ||
                   (!prompt.trim() &&
                     images.length === 0 &&
-                    references.length === 0)
+                    localImages.length === 0)
                 }
                 onClick={() => void createSession()}
               >

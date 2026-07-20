@@ -18,20 +18,30 @@ export type CodexUserInput =
   | { type: "localImage"; path: string; detail?: "auto" | "low" | "high" }
   | { type: "mention"; name: string; path: string };
 
-export type CodexComposerReferenceKind = "mention" | "localImage";
-export const MAX_CODEX_COMPOSER_REFERENCES = 20;
+export const MAX_CODEX_COMPOSER_UPLOAD_FILES = 20;
 export const MAX_CODEX_COMPOSER_UPLOAD_BYTES = 20 * 1024 * 1024;
 
 /**
- * A native Codex composer input backed by the Environment Workspace.
- * `workspace` references come from the harness-neutral Environment search;
- * `upload` references point only into Sandpi's protected Workspace upload root.
+ * A browser upload after Sandpi has written it into the Environment Workspace.
+ * A regular file becomes visible path text in the composer, matching Codex
+ * CLI file mention behavior. Only verified images remain structured inputs.
  */
-export interface CodexComposerReference {
+export interface CodexComposerUpload {
   id: string;
   name: string;
   path: string;
-  kind: CodexComposerReferenceKind;
+  kind: "file" | "localImage";
+  source: "upload";
+  mimeType?: string;
+  sizeBytes?: number;
+}
+
+/** A native Codex localImage input already stored in the Environment Workspace. */
+export interface CodexComposerLocalImage {
+  id: string;
+  name: string;
+  path: string;
+  kind: "localImage";
   source: "workspace" | "upload";
   mimeType?: string;
   sizeBytes?: number;

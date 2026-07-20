@@ -102,16 +102,19 @@ Web today; iOS / Android / HarmonyOS later
   content.
   The Codex New Session and conversation composers also share one
   harness-owned attachment toolbar. `@` discovery uses the harness-neutral
-  Environment Workspace search backed by Sandbox0, then sends the selected
-  result as a native Codex `mention`. The bounded runtime scan excludes hidden,
+  Environment Workspace search backed by Sandbox0. Matching Codex CLI file
+  completion, selecting a result replaces the active composer selection with
+  the user-visible Workspace-relative path, which remains part of the submitted
+  user text. The bounded runtime scan excludes hidden,
   internal and dependency directories and does not maintain a persistent file
   index or require a running coding-agent app-server.
   Browser uploads are written through Sandbox0 into
   `/workspace/.sandpi/uploads/{id}/` and referenced from there. Valid native
-  image formats become `localImage` inputs and other files become `mention`
-  inputs. The upload root stays hidden from Workspace browsing and Workspace
-  search, and other Sandpi-managed `.sandpi` state cannot be
-  referenced.
+  image formats become `localImage` inputs; other files insert their protected
+  Workspace-relative path into the visible composer text. Sandpi never appends
+  a hidden attachment instruction or other prompt text. The upload root stays
+  hidden from Workspace browsing and Workspace search, and arbitrary paths in
+  other Sandpi-managed `.sandpi` state cannot be submitted as local images.
 - **Runtime authority:** Sandbox0 is authoritative for the live Sandbox,
   Supervisor attempt and runtime generation. PostgreSQL records only the last
   credential-hydrated Codex epoch for recovery/CAS and keeps independent

@@ -1,9 +1,9 @@
 import { HttpError } from "@/server/http-error";
 import {
-  codexComposerReference,
-  MAX_CODEX_INPUT_REFERENCES,
-  type EncodedCodexInputReference,
-} from "./input-references";
+  codexComposerLocalImage,
+  MAX_CODEX_INPUT_LOCAL_IMAGES,
+  type EncodedCodexLocalImage,
+} from "./input-files";
 
 export const MAX_CODEX_INPUT_IMAGES = 6;
 export const MAX_CODEX_INPUT_IMAGE_BYTES = 10 * 1024 * 1024;
@@ -21,19 +21,19 @@ export interface EncodedCodexInputImage {
 export function nativeCodexTurnInput(
   text: string,
   images: readonly EncodedCodexInputImage[],
-  references: readonly EncodedCodexInputReference[] = [],
+  localImages: readonly EncodedCodexLocalImage[] = [],
 ) {
-  if (!text.trim() && images.length === 0 && references.length === 0) {
+  if (!text.trim() && images.length === 0 && localImages.length === 0) {
     throw invalidImage(
-      "A Turn requires text, an image, or a referenced Workspace file.",
+      "A Turn requires text or an image.",
     );
   }
   if (images.length > MAX_CODEX_INPUT_IMAGES) {
     throw invalidImage(`A Turn accepts at most ${MAX_CODEX_INPUT_IMAGES} images.`);
   }
-  if (references.length > MAX_CODEX_INPUT_REFERENCES) {
+  if (localImages.length > MAX_CODEX_INPUT_LOCAL_IMAGES) {
     throw invalidImage(
-      `A Turn accepts at most ${MAX_CODEX_INPUT_REFERENCES} file references.`,
+      `A Turn accepts at most ${MAX_CODEX_INPUT_LOCAL_IMAGES} local images.`,
     );
   }
 
@@ -63,7 +63,7 @@ export function nativeCodexTurnInput(
     ...(text.trim()
       ? [{ type: "text" as const, text: text.trim(), text_elements: [] }]
       : []),
-    ...references.map(codexComposerReference),
+    ...localImages.map(codexComposerLocalImage),
     ...nativeImages,
   ];
 }

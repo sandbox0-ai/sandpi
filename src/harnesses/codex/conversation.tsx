@@ -31,10 +31,11 @@ import { Inspector, type InspectorTab } from "@/components/inspector";
 import { MarkdownContent } from "@/components/markdown-content";
 import type { WorkspaceFileNavigationRequest } from "@/components/workspace-ide";
 import {
-  CodexComposerReferences,
+  CodexComposerLocalImages,
   CodexComposerToolbar,
-  encodeCodexComposerReferences,
+  encodeCodexComposerLocalImages,
 } from "@/harnesses/codex/composer";
+import { insertCodexFileMentions } from "@/harnesses/codex/file-mentions";
 import {
   codexModelOptionsFromNativeResult,
   codexReasoningEffortForModel,
@@ -67,7 +68,7 @@ import {
 } from "@/harnesses/codex/timeline";
 import type {
   CodexComposerImage,
-  CodexComposerReference,
+  CodexComposerLocalImage,
   CodexEventEnvelope,
   CodexNativeActivityUpdate,
   CodexNativeInvalidation,
@@ -75,7 +76,7 @@ import type {
   CodexNativeStreamFailure,
   CodexSession,
 } from "@/harnesses/codex/types";
-import { MAX_CODEX_COMPOSER_REFERENCES } from "@/harnesses/codex/types";
+import { MAX_CODEX_COMPOSER_UPLOAD_FILES } from "@/harnesses/codex/types";
 import {
   projectCodexTimeline,
   shouldRefreshCodexNativeSnapshot,
@@ -145,7 +146,7 @@ interface PendingCodexTurn {
   nativeTurnId?: string;
   content: string;
   images: CodexComposerImage[];
-  references: CodexComposerReference[];
+  localImages: CodexComposerLocalImage[];
   startedAt: number;
   phase: "submitting" | "accepted";
 }
@@ -210,7 +211,7 @@ export function CodexConversation({
   const [draft, setDraft] = useState("");
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [pastedImages, setPastedImages] = useState<CodexComposerImage[]>([]);
-  const [references, setReferences] = useState<CodexComposerReference[]>([]);
+  const [localImages, setLocalImages] = useState<CodexComposerLocalImage[]>([]);
   const [attachmentError, setAttachmentError] = useState("");
   const [sending, setSending] = useState(false);
   const [interrupting, setInterrupting] = useState(false);
@@ -324,7 +325,7 @@ export function CodexConversation({
     setPendingTurn(null);
     setDraft("");
     setPastedImages([]);
-    setReferences([]);
+    setLocalImages([]);
     setAttachmentError("");
     setSending(false);
     setInterrupting(false);
@@ -760,15 +761,34 @@ export function CodexConversation({
     rememberComposerPreference(selectedModel.id, nextReasoningEfforts);
   }
 
+  function insertFileMentions(filePaths: string[]) {
+    if (filePaths.length === 0) return;
+    const textarea = composerRef.current;
+    const insertion = insertCodexFileMentions(
+      textarea?.value ?? draft,
+      filePaths,
+      textarea?.selectionStart ?? Number.POSITIVE_INFINITY,
+      textarea?.selectionEnd ?? Number.POSITIVE_INFINITY,
+    );
+    setDraft(insertion.text);
+    setAttachmentError("");
+    window.requestAnimationFrame(() => {
+      if (!composerRef.current) return;
+      composerRef.current.focus();
+      composerRef.current.setSelectionRange(insertion.cursor, insertion.cursor);
+      syncComposerHeight(composerRef.current);
+    });
+  }
+
   async function submitMessage() {
     const submittedDraft = draft;
     const submittedImages = pastedImages;
-    const submittedReferences = references;
+    const submittedLocalImages = localImages;
     const content = draft.trim();
     if (
       !content &&
       submittedImages.length === 0 &&
-      submittedReferences.length === 0
+      submittedLocalImages.length === 0
     ) {
       return;
     }
@@ -782,14 +802,14 @@ export function CodexConversation({
       clientMessageId,
       content,
       images: submittedImages,
-      references: submittedReferences,
+      localImages: submittedLocalImages,
       startedAt,
       phase: "submitting",
     });
     setSending(true);
     setDraft("");
     setPastedImages([]);
-    setReferences([]);
+    setLocalImages([]);
     setAttachmentError("");
     try {
       const response = await apiFetch<
@@ -805,7 +825,7 @@ export function CodexConversation({
           body: JSON.stringify({
             text: content,
             images: submittedImages.map(encodeCodexComposerImage),
-            references: encodeCodexComposerReferences(submittedReferences),
+            localImages: encodeCodexComposerLocalImages(submittedLocalImages),
             clientMessageId,
             ...(selectedModel.id !== "default"
               ? { modelId: selectedModel.id }
@@ -855,16 +875,16 @@ export function CodexConversation({
       setPastedImages((current) =>
         [...submittedImages, ...current].slice(0, MAX_CODEX_COMPOSER_IMAGES),
       );
-      setReferences((current) => {
+      setLocalImages((current) => {
         const restored = new Map(
-          [...submittedReferences, ...current].map((reference) => [
-            reference.path,
-            reference,
+          [...submittedLocalImages, ...current].map((localImage) => [
+            localImage.path,
+            localImage,
           ]),
         );
         return [...restored.values()].slice(
           0,
-          MAX_CODEX_COMPOSER_REFERENCES,
+          MAX_CODEX_COMPOSER_UPLOAD_FILES,
         );
       });
       setAttachmentError(
@@ -1058,10 +1078,10 @@ export function CodexConversation({
               ))}
             </div>
           ) : null}
-          {message.references?.length ? (
-            <CodexComposerReferences
+          {message.localImages?.length ? (
+            <CodexComposerLocalImages
               language={language}
-              references={message.references}
+              localImages={message.localImages}
             />
           ) : null}
           {message.content ? (
@@ -1193,8 +1213,8 @@ export function CodexConversation({
           attachments: pendingTurn.images.length
             ? pendingTurn.images
             : undefined,
-          references: pendingTurn.references.length
-            ? pendingTurn.references
+          localImages: pendingTurn.localImages.length
+            ? pendingTurn.localImages
             : undefined,
         }
       : undefined;
@@ -1400,12 +1420,12 @@ export function CodexConversation({
                 {attachmentError}
               </div>
             ) : null}
-            <CodexComposerReferences
+            <CodexComposerLocalImages
               language={language}
-              references={references}
+              localImages={localImages}
               onRemove={(id) => {
-                setReferences((current) =>
-                  current.filter((reference) => reference.id !== id),
+                setLocalImages((current) =>
+                  current.filter((localImage) => localImage.id !== id),
                 );
                 setAttachmentError("");
               }}
@@ -1458,8 +1478,9 @@ export function CodexConversation({
               language={language}
               environmentId={environment.id}
               agentLabel={environment.codingAgent.label}
-              references={references}
-              onReferencesChange={setReferences}
+              localImages={localImages}
+              onLocalImagesChange={setLocalImages}
+              onInsertFileMentions={insertFileMentions}
               onAttachmentError={setAttachmentError}
               modelOptions={
                 modelOptions.length > 0 ? modelOptions : [selectedModel]
@@ -1521,7 +1542,7 @@ export function CodexConversation({
                       !nativeReady ||
                       (!draft.trim() &&
                         pastedImages.length === 0 &&
-                        references.length === 0)
+                        localImages.length === 0)
                     }
                     aria-label={ui.sendMessage}
                     onClick={() => void submitMessage()}

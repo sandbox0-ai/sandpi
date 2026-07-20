@@ -25,13 +25,16 @@ import {
   codexReasoningEffortLabel,
   type CodexModelOption,
 } from "@/harnesses/codex/models";
-import type { CodexComposerReference } from "@/harnesses/codex/types";
+import { workspaceRelativePath } from "@/harnesses/codex/file-mentions";
+import type {
+  CodexComposerLocalImage,
+  CodexComposerUpload,
+} from "@/harnesses/codex/types";
 import {
-  MAX_CODEX_COMPOSER_REFERENCES,
+  MAX_CODEX_COMPOSER_UPLOAD_FILES,
   MAX_CODEX_COMPOSER_UPLOAD_BYTES,
 } from "@/harnesses/codex/types";
 import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
-import { createId } from "@/lib/id";
 import type { OperationLanguage } from "@/lib/operation-ui";
 import type { WorkspaceFileSearchResult } from "@/lib/types";
 
@@ -44,8 +47,9 @@ interface CodexComposerToolbarProps {
   language: OperationLanguage;
   environmentId: string;
   agentLabel: string;
-  references: CodexComposerReference[];
-  onReferencesChange: Dispatch<SetStateAction<CodexComposerReference[]>>;
+  localImages: CodexComposerLocalImage[];
+  onLocalImagesChange: Dispatch<SetStateAction<CodexComposerLocalImage[]>>;
+  onInsertFileMentions: (filePaths: string[]) => void;
   onAttachmentError: (message: string) => void;
   attachmentDisabled?: boolean;
   modelOptions: CodexModelOption[];
@@ -72,9 +76,9 @@ const composerCopy = {
     noFiles: "No matching files",
     searchFailed: "Workspace search is temporarily unavailable.",
     removeReference: (name: string) => `Remove ${name}`,
-    referencedFiles: "Referenced files",
+    attachedImages: "Attached images",
     uploadedFile: "Uploaded file",
-    tooManyFiles: `Reference up to ${MAX_CODEX_COMPOSER_REFERENCES} files.`,
+    tooManyFiles: `Upload up to ${MAX_CODEX_COMPOSER_UPLOAD_FILES} files at once.`,
     fileTooLarge: "Each uploaded file must be 20 MiB or smaller.",
     uploadFailed: "The selected file could not be uploaded.",
     boundToEnvironment: "Bound to this Environment",
@@ -91,9 +95,9 @@ const composerCopy = {
     noFiles: "没有匹配文件",
     searchFailed: "工作区搜索暂时不可用。",
     removeReference: (name: string) => `移除 ${name}`,
-    referencedFiles: "已引用文件",
+    attachedImages: "已附加图片",
     uploadedFile: "已上传文件",
-    tooManyFiles: `最多引用 ${MAX_CODEX_COMPOSER_REFERENCES} 个文件。`,
+    tooManyFiles: `每次最多上传 ${MAX_CODEX_COMPOSER_UPLOAD_FILES} 个文件。`,
     fileTooLarge: "每个上传文件不能超过 20 MiB。",
     uploadFailed: "无法上传所选文件。",
     boundToEnvironment: "绑定到此环境",
@@ -104,51 +108,50 @@ const composerCopy = {
 
 const WORKSPACE_FILE_SEARCH_DEBOUNCE_MS = 250;
 
-export function encodeCodexComposerReferences(
-  references: readonly CodexComposerReference[],
+export function encodeCodexComposerLocalImages(
+  localImages: readonly CodexComposerLocalImage[],
 ) {
-  return references.map(({ name, path, kind }) => ({ name, path, kind }));
+  return localImages.map(({ name, path }) => ({ name, path }));
 }
 
-export function CodexComposerReferences({
+export function CodexComposerLocalImages({
   language,
-  references,
+  localImages,
   onRemove,
 }: {
   language: OperationLanguage;
-  references: readonly CodexComposerReference[];
+  localImages: readonly CodexComposerLocalImage[];
   onRemove?: (id: string) => void;
 }) {
-  if (references.length === 0) return null;
+  if (localImages.length === 0) return null;
   const copy = composerCopy[language];
   return (
     <div
       className={`composer-file-references ${onRemove ? "" : "is-readonly"}`}
-      aria-label={copy.referencedFiles}
+      aria-label={copy.attachedImages}
     >
-      {references.map((reference) => {
-        const Icon = reference.kind === "localImage" ? FileImage : File;
+      {localImages.map((localImage) => {
         return (
           <span
             className="composer-file-reference"
-            title={reference.path}
-            key={reference.id}
+            title={localImage.path}
+            key={localImage.id}
           >
-            <Icon size={13} aria-hidden="true" />
+            <FileImage size={13} aria-hidden="true" />
             <span>
-              <strong>{reference.name}</strong>
+              <strong>{localImage.name}</strong>
               <small>
-                {reference.source === "workspace"
-                  ? workspaceRelativePath(reference.path)
+                {localImage.source === "workspace"
+                  ? workspaceRelativePath(localImage.path)
                   : copy.uploadedFile}
               </small>
             </span>
             {onRemove ? (
               <button
                 type="button"
-                aria-label={copy.removeReference(reference.name)}
-                title={copy.removeReference(reference.name)}
-                onClick={() => onRemove(reference.id)}
+                aria-label={copy.removeReference(localImage.name)}
+                title={copy.removeReference(localImage.name)}
+                onClick={() => onRemove(localImage.id)}
               >
                 <X size={11} aria-hidden="true" />
               </button>
@@ -164,8 +167,9 @@ export function CodexComposerToolbar({
   language,
   environmentId,
   agentLabel,
-  references,
-  onReferencesChange,
+  localImages,
+  onLocalImagesChange,
+  onInsertFileMentions,
   onAttachmentError,
   attachmentDisabled = false,
   modelOptions,
@@ -258,33 +262,15 @@ export function CodexComposerToolbar({
   }, [environmentId, mentionOpen, mentionQuery]);
 
   function selectMention(result: WorkspaceFileSearchResult) {
-    onReferencesChange((current) => {
-      if (current.some((reference) => reference.path === result.path)) {
-        return current;
-      }
-      if (current.length >= MAX_CODEX_COMPOSER_REFERENCES) {
-        onAttachmentError(copy.tooManyFiles);
-        return current;
-      }
-      onAttachmentError("");
-      return [
-        ...current,
-        {
-          id: createId("workspace-reference", 20),
-          name: result.name,
-          path: result.path,
-          kind: "mention",
-          source: "workspace",
-        },
-      ];
-    });
+    onAttachmentError("");
+    onInsertFileMentions([result.path]);
     setMentionOpen(false);
     setMentionQuery("");
   }
 
   async function uploadFiles(files: File[]) {
     if (files.length === 0 || uploading) return;
-    const available = MAX_CODEX_COMPOSER_REFERENCES - references.length;
+    const available = MAX_CODEX_COMPOSER_UPLOAD_FILES - localImages.length;
     if (available <= 0) {
       onAttachmentError(copy.tooManyFiles);
       return;
@@ -305,9 +291,9 @@ export function CodexComposerToolbar({
     setUploading(true);
     onAttachmentError("");
     try {
-      const uploaded: CodexComposerReference[] = [];
+      const uploaded: CodexComposerUpload[] = [];
       for (const file of selected) {
-        const response = await apiFetch<ApiEnvelope<CodexComposerReference>>(
+        const response = await apiFetch<ApiEnvelope<CodexComposerUpload>>(
           `/api/v1/environments/${encodeURIComponent(environmentId)}/harnesses/codex/uploads`,
           {
             method: "POST",
@@ -320,9 +306,22 @@ export function CodexComposerToolbar({
         );
         uploaded.push(response.data);
       }
-      onReferencesChange((current) =>
-        [...current, ...uploaded].slice(0, MAX_CODEX_COMPOSER_REFERENCES),
+      onInsertFileMentions(
+        uploaded
+          .filter((candidate) => candidate.kind === "file")
+          .map((candidate) => candidate.path),
       );
+      const uploadedLocalImages: CodexComposerLocalImage[] = uploaded
+        .filter((candidate) => candidate.kind === "localImage")
+        .map((candidate) => ({ ...candidate, kind: "localImage" as const }));
+      if (uploadedLocalImages.length > 0) {
+        onLocalImagesChange((current) =>
+          [...current, ...uploadedLocalImages].slice(
+            0,
+            MAX_CODEX_COMPOSER_UPLOAD_FILES,
+          ),
+        );
+      }
     } catch (error) {
       onAttachmentError(
         error instanceof Error ? error.message : copy.uploadFailed,
@@ -557,12 +556,6 @@ export function CodexComposerToolbar({
       </div>
     </div>
   );
-}
-
-function workspaceRelativePath(filePath: string) {
-  return filePath === "/workspace"
-    ? "/workspace"
-    : filePath.replace(/^\/workspace\//, "");
 }
 
 async function browserFileBase64(file: File) {

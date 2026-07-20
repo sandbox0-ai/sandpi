@@ -270,22 +270,28 @@ the Environment API delegates a bounded search of the mounted `/workspace` to
 the harness-neutral Sandbox0 `RuntimeAdapter`. The scan does not follow symbolic
 links, prunes hidden, Sandpi-internal and dependency directories before
 matching, and caps candidate output. It neither walks the Workspace from the
-browser nor persists a parallel file index. Codex-specific code only converts
-the selected generic path into the native `mention` passed to `thread/start` or
-`turn/start`; future coding-agent harnesses reuse the same Workspace search
-contract and map the result to their own input protocol.
+browser nor persists a parallel file index. Codex-specific code reproduces the
+Codex CLI completion boundary: Sandpi's `@` affordance opens search, and choosing
+a result inserts a visible Workspace-relative path at the active composer
+selection, matching the path the CLI leaves after replacing its temporary
+`@token`. `thread/start` and `turn/start` receive that visible path as part of
+the native text input, not a filesystem-shaped app/plugin `mention`. Future
+coding-agent harnesses reuse the same Workspace search contract and own their
+corresponding visible composer and native input mapping.
 
 Uploaded composer files use the Sandbox0 File API and live under
 `/workspace/.sandpi/uploads/{upload-id}/{safe-name}`. Sandpi validates a
 bounded canonical payload before writing it, rejects symbolic-link path
-components, and accepts subsequent browser references only from that exact
-subtree. PNG, JPEG, GIF and WebP uploads whose bytes match their declared type
-become native `localImage` inputs; other uploads remain native `mention`
-inputs. Existing Workspace mentions must resolve under the user-visible
-`/workspace` policy. The broader `.sandpi` internal tree is never referenceable,
-and the upload subtree remains absent from the Workspace IDE and Workspace
-search results. PostgreSQL stores neither uploaded bytes nor a file-reference
-catalog.
+components, and accepts structured browser local-image inputs only from that
+exact subtree. PNG, JPEG, GIF and WebP uploads whose bytes match their declared
+type become native `localImage` inputs; other uploads insert the protected
+Workspace-relative upload path into the visible composer text at the current
+selection. Sandpi submits only that visible user text and native image inputs;
+it does not append an attachment explanation, instruction or any other hidden
+prompt. The broader `.sandpi` internal tree cannot be submitted as a local
+image, and the upload subtree remains absent from the Workspace IDE and
+Workspace search results. PostgreSQL stores neither uploaded bytes nor a
+file-reference catalog.
 
 The native `threadId` is the exact product-Session attribution key. The shared
 Sandbox0 Supervisor Session and journal identify transport provenance only;

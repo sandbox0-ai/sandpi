@@ -53,7 +53,7 @@ import {
   nativeCodexTurnInput,
   type EncodedCodexInputImage,
 } from "./input-images";
-import type { EncodedCodexInputReference } from "./input-references";
+import type { EncodedCodexLocalImage } from "./input-files";
 import { parseCodexRolloutActivity } from "./rollout-activity";
 
 const STREAM_RECONNECT_DELAY_MS = 250;
@@ -333,7 +333,7 @@ export class CodexService {
     title: string;
     prompt: string;
     images: EncodedCodexInputImage[];
-    references?: EncodedCodexInputReference[];
+    localImages?: EncodedCodexLocalImage[];
     modelId?: string;
     reasoningEffort?: string;
   }) {
@@ -380,7 +380,7 @@ export class CodexService {
         sessionId,
         text: input.prompt,
         images: input.images,
-        references: input.references,
+        localImages: input.localImages,
         modelId: input.modelId,
         reasoningEffort: input.reasoningEffort,
       });
@@ -1138,7 +1138,7 @@ export class CodexService {
     sessionId: string;
     text: string;
     images: EncodedCodexInputImage[];
-    references?: EncodedCodexInputReference[];
+    localImages?: EncodedCodexLocalImage[];
     modelId?: string;
     reasoningEffort?: string;
     clientMessageId?: string;
@@ -1196,7 +1196,7 @@ export class CodexService {
               input: nativeCodexTurnInput(
                 input.text,
                 input.images,
-                input.references ?? [],
+                input.localImages ?? [],
               ),
               ...(input.modelId ? { model: input.modelId } : {}),
               ...(input.reasoningEffort

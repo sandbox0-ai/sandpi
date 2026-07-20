@@ -3,7 +3,7 @@ import { toUnixTimestamp, type UnixTimestamp } from "@/lib/time";
 
 import type {
   CodexComposerImage,
-  CodexComposerReference,
+  CodexComposerLocalImage,
   CodexEventEnvelope,
   CodexFileUpdateChange,
   CodexHarnessState,
@@ -41,7 +41,7 @@ export interface CodexMessageView {
   phase?: "commentary" | "final_answer" | null;
   streaming?: boolean;
   attachments?: CodexComposerImage[];
-  references?: CodexComposerReference[];
+  localImages?: CodexComposerLocalImage[];
 }
 
 export interface CodexCommandActivityView {
@@ -424,19 +424,16 @@ function userMessageView(
       sizeBytes: 0,
       previewUrl: input.url,
     }));
-  const references = item.content.flatMap(
-    (input, index): CodexComposerReference[] => {
-      if (input.type !== "mention" && input.type !== "localImage") return [];
+  const localImages = item.content.flatMap(
+    (input, index): CodexComposerLocalImage[] => {
+      if (input.type !== "localImage") return [];
       const filePath = input.path;
       return [
         {
-          id: `${item.id}-reference-${index}`,
-          name:
-            input.type === "mention"
-              ? input.name
-              : filePath.split("/").at(-1) || "image",
+          id: `${item.id}-local-image-${index}`,
+          name: filePath.split("/").at(-1) || "image",
           path: filePath,
-          kind: input.type,
+          kind: "localImage",
           source: filePath.startsWith("/workspace/.sandpi/uploads/")
             ? "upload"
             : "workspace",
@@ -459,7 +456,7 @@ function userMessageView(
       .join("\n"),
     createdAt,
     attachments: attachments.length ? attachments : undefined,
-    references: references.length ? references : undefined,
+    localImages: localImages.length ? localImages : undefined,
   };
 }
 
