@@ -409,6 +409,14 @@ test("waits for native New Session models and scopes reasoning effort by model",
         },
       ],
     });
+  await page.reload();
+  await expect(modelPicker).toBeEnabled();
+  await expect(modelPicker).toHaveValue("e2e-codex-deep");
+  await expect(
+    page.getByRole("combobox", {
+      name: "Select reasoning effort for E2E Codex Deep",
+    }),
+  ).toHaveValue("medium");
   expect(browserErrors).toEqual([]);
 });
 
@@ -1839,6 +1847,25 @@ test("keeps Codex Session Activity native and Environment Audit separate", async
     .getByRole("combobox", { name: "Filter loaded Environment audit" })
     .selectOption("attention");
   await expect(auditRegion.locator(".audit-activity-item")).toHaveCount(1);
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const stored = JSON.parse(
+          window.localStorage.getItem("sandpi.local-ui-preferences.v1") ??
+            "{}",
+        ) as {
+          filters?: {
+            codexSessionActivity?: string;
+            environmentAudit?: string;
+          };
+        };
+        return stored.filters;
+      }),
+    )
+    .toEqual({
+      codexSessionActivity: "external",
+      environmentAudit: "attention",
+    });
 
   const auditRequestsBeforePagination = auditRequests;
   await auditRegion
@@ -2620,6 +2647,23 @@ test("shows a matching skeleton while each Inspector tab loads", async ({
   await expect(reasoningEffortPicker).toHaveValue("high");
   await reasoningEffortPicker.selectOption("low");
   await expect(reasoningEffortPicker).toHaveValue("low");
+
+  await page.reload();
+  await expect(tabs).toBeVisible();
+  await expect(
+    tabs.getByRole("button", { name: "Metrics" }),
+  ).toHaveClass(/is-active/);
+  await expect(metricsRange).toHaveValue("21600");
+  await expect(reasoningEffortPicker).toHaveValue("low");
+  await page
+    .getByRole("complementary", { name: "Inspector" })
+    .getByRole("button", { name: "Close inspector" })
+    .click();
+  await expect(tabs).toBeHidden();
+
+  await page.reload();
+  await expect(page.getByRole("button", { name: "Open inspector" })).toBeVisible();
+  await expect(tabs).toBeHidden();
   expect(browserErrors).toEqual([]);
 });
 

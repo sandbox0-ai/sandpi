@@ -24,11 +24,12 @@ import {
 import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
 import { getOperationUiCopy, type OperationLanguage } from "@/lib/operation-ui";
 import {
-  DEFAULT_ENVIRONMENT_METRIC_RANGE_SECONDS,
   isEnvironmentMetricRangeSeconds,
   type EnvironmentMetricRangeSeconds,
 } from "@/lib/environment-metrics";
+import { updateLocalUiPreferences } from "@/lib/local-ui-preferences";
 import { formatUnixTimestamp } from "@/lib/time";
+import { useLocalUiPreferences } from "@/lib/use-local-ui-preferences";
 import type {
   CodingSession,
   Environment,
@@ -291,10 +292,8 @@ export function Inspector({
   onClose,
 }: InspectorProps) {
   const ui = getOperationUiCopy(language).inspector;
-  const [metricsRangeSeconds, setMetricsRangeSeconds] =
-    useState<EnvironmentMetricRangeSeconds>(
-      DEFAULT_ENVIRONMENT_METRIC_RANGE_SECONDS,
-    );
+  const metricsRangeSeconds =
+    useLocalUiPreferences().workspace.metricsRangeSeconds;
   const metricRangeOptions = [
     {
       seconds: 15 * 60,
@@ -499,7 +498,13 @@ export function Inspector({
                 onChange={(event) => {
                   const value = Number(event.target.value);
                   if (isEnvironmentMetricRangeSeconds(value)) {
-                    setMetricsRangeSeconds(value);
+                    updateLocalUiPreferences((current) => ({
+                      ...current,
+                      workspace: {
+                        ...current.workspace,
+                        metricsRangeSeconds: value,
+                      },
+                    }));
                   }
                 }}
               >

@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   codexModelOptionsFromNativeResult,
   codexReasoningEffortLabel,
+  reconcileCodexComposerPreference,
 } from "./models";
 
 test("projects the native Codex model/list result without sharing a cross-harness catalog", () => {
@@ -85,4 +86,42 @@ test("keeps a future model-defined effort without requiring a Sandpi enum", () =
 
 test("uses the Codex CLI label for extra-high reasoning", () => {
   assert.equal(codexReasoningEffortLabel("xhigh"), "Extra high");
+});
+
+test("reconciles opaque local choices against the live Codex catalog", () => {
+  const models = codexModelOptionsFromNativeResult({
+    data: [
+      {
+        id: "native-default",
+        isDefault: true,
+        defaultReasoningEffort: "medium",
+        supportedReasoningEfforts: [
+          { reasoningEffort: "medium" },
+          { reasoningEffort: "high" },
+        ],
+      },
+      {
+        id: "native-next",
+        defaultReasoningEffort: "focused",
+        supportedReasoningEfforts: [{ reasoningEffort: "focused" }],
+      },
+    ],
+  });
+
+  assert.deepEqual(
+    reconcileCodexComposerPreference(models, {
+      modelId: "removed-after-upgrade",
+      reasoningEfforts: {
+        "native-default": "removed-effort",
+        "native-next": "focused",
+      },
+    }),
+    {
+      model: models[0],
+      reasoningEfforts: {
+        "native-default": "medium",
+        "native-next": "focused",
+      },
+    },
+  );
 });

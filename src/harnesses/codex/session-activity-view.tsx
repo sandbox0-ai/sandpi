@@ -8,7 +8,7 @@ import {
   SearchX,
   ShieldCheck,
 } from "lucide-react";
-import { useId, useMemo, useState } from "react";
+import { useId, useMemo } from "react";
 
 import {
   CodexCommandActivity,
@@ -32,6 +32,8 @@ import {
   unixTimestampToIso,
 } from "@/lib/time";
 import type { OperationLanguage } from "@/lib/operation-ui";
+import { updateLocalUiPreferences } from "@/lib/local-ui-preferences";
+import { useLocalUiPreferences } from "@/lib/use-local-ui-preferences";
 
 interface CodexSessionActivityViewProps {
   language: OperationLanguage;
@@ -134,7 +136,7 @@ export function CodexSessionActivityView({
 }: CodexSessionActivityViewProps) {
   const ui = getCodexUiCopy(language).conversation;
   const headingId = useId();
-  const [filter, setFilter] = useState<CodexSessionActivityFilter>("all");
+  const filter = useLocalUiPreferences().filters.codexSessionActivity;
   const presentation = useMemo(
     () => projectCodexSessionActivity(projection, rolloutActivity),
     [projection, rolloutActivity],
@@ -174,9 +176,16 @@ export function CodexSessionActivityView({
               aria-label={ui.sessionActivityFilter}
               value={filter}
               disabled={summary.total === 0}
-              onChange={(event) =>
-                setFilter(event.target.value as CodexSessionActivityFilter)
-              }
+              onChange={(event) => {
+                const next = event.target.value as CodexSessionActivityFilter;
+                updateLocalUiPreferences((current) => ({
+                  ...current,
+                  filters: {
+                    ...current.filters,
+                    codexSessionActivity: next,
+                  },
+                }));
+              }}
             >
               <option value="all">{ui.allSessionActivity}</option>
               <option value="issues">

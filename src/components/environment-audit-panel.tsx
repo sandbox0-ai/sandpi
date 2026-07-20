@@ -11,7 +11,7 @@ import {
   RotateCcw,
   ShieldCheck,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 import { copyTextToClipboard } from "@/lib/clipboard";
 import {
@@ -31,7 +31,9 @@ import {
   getOperationUiCopy,
   type OperationLanguage,
 } from "@/lib/operation-ui";
+import { updateLocalUiPreferences } from "@/lib/local-ui-preferences";
 import { unixTimestampToIso } from "@/lib/time";
+import { useLocalUiPreferences } from "@/lib/use-local-ui-preferences";
 import type {
   EnvironmentAuditEvent,
   EnvironmentAuditFeed,
@@ -40,7 +42,6 @@ import type {
 interface EnvironmentAuditPanelProps {
   language: OperationLanguage;
   timeZone: string;
-  environmentId: string;
   audit: EnvironmentAuditFeed;
   loadingNewer: boolean;
   loadNewerError: string;
@@ -783,14 +784,13 @@ function AuditActivity({
 export function EnvironmentAuditPanel({
   language,
   timeZone,
-  environmentId,
   audit,
   loadingNewer,
   loadNewerError,
   onLoadNewer,
 }: EnvironmentAuditPanelProps) {
   const copy = localCopy(language);
-  const [view, setView] = useState<AuditPanelView>("all");
+  const view = useLocalUiPreferences().filters.environmentAudit;
   const allOperations = useMemo(
     () => groupEnvironmentAuditOperations(audit.events),
     [audit.events],
@@ -829,8 +829,6 @@ export function EnvironmentAuditPanel({
   const changeCount = allActivities.filter(isChangeActivity).length;
   const routineCount = allActivities.filter(isRoutineActivity).length;
 
-  useEffect(() => setView("all"), [environmentId]);
-
   return (
     <section className="settings-card audit-panel" aria-label="Environment audit">
       <div className="audit-toolbar">
@@ -857,9 +855,16 @@ export function EnvironmentAuditPanel({
           <span className="sr-only">{copy.filter}</span>
           <select
             value={view}
-            onChange={(event) =>
-              setView(event.target.value as AuditPanelView)
-            }
+            onChange={(event) => {
+              const next = event.target.value as AuditPanelView;
+              updateLocalUiPreferences((current) => ({
+                ...current,
+                filters: {
+                  ...current.filters,
+                  environmentAudit: next,
+                },
+              }));
+            }}
             aria-label={copy.filter}
             disabled={audit.events.length === 0}
           >

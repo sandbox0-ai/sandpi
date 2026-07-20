@@ -36,10 +36,10 @@ import {
   encodeCodexComposerReferences,
 } from "@/harnesses/codex/composer";
 import {
-  codexDefaultModel,
   codexModelOptionsFromNativeResult,
   codexReasoningEffortForModel,
   codexReasoningEffortLabel,
+  reconcileCodexComposerPreference,
   type CodexModelOption,
 } from "@/harnesses/codex/models";
 import { codexTurnCapabilitySets } from "@/harnesses/codex/capabilities";
@@ -90,6 +90,10 @@ import {
 } from "@/lib/api-client";
 import { copyTextToClipboard } from "@/lib/clipboard";
 import { createId } from "@/lib/id";
+import {
+  codingAgentComposerPreference,
+  rememberCodingAgentComposerPreference,
+} from "@/lib/local-ui-preferences";
 import { useConversationAutoScroll } from "@/lib/use-conversation-auto-scroll";
 import {
   shouldSubmitComposer,
@@ -232,6 +236,7 @@ export function CodexConversation({
   const liveNotificationSequencesRef = useRef(new Set<number>());
   const liveNotificationCountRef = useRef(0);
   const nativeSnapshotRefreshRequestedRef = useRef(false);
+  const localComposerPreferenceActiveRef = useRef(false);
   const sessionRef = useRef(session);
   const visibleTimeline = useMemo(() => {
     return projectCodexTimeline(nativeSnapshot?.thread, liveNotifications);
@@ -334,6 +339,7 @@ export function CodexConversation({
     liveNotificationSequencesRef.current.clear();
     liveNotificationCountRef.current = 0;
     nativeSnapshotRefreshRequestedRef.current = false;
+    localComposerPreferenceActiveRef.current = false;
   }, [session.id]);
 
   useEffect(() => {
@@ -357,6 +363,7 @@ export function CodexConversation({
   }, [runningTurnId]);
 
   useEffect(() => {
+    if (localComposerPreferenceActiveRef.current) return;
     setSelectedModelId(session.harnessState.modelId);
     setReasoningEfforts(
       session.harnessState.modelId && session.harnessState.reasoningEffort
@@ -389,22 +396,35 @@ export function CodexConversation({
               : ui.modelListUnavailable
             : "",
         );
-        const nextModel =
-          models.find(
-            (model) => model.id === session.harnessState.modelId,
-          ) ?? codexDefaultModel(models);
-        if (nextModel) {
-          setSelectedModelId(nextModel.id);
-          setReasoningEfforts((efforts) => ({
-            ...efforts,
-            [nextModel.id]: codexReasoningEffortForModel(
-              nextModel,
-              efforts[nextModel.id] ??
-                (nextModel.id === session.harnessState.modelId
-                  ? session.harnessState.reasoningEffort
-                  : undefined),
-            ),
-          }));
+        const localPreference = codingAgentComposerPreference({
+          environmentId: environment.id,
+          harness: environment.codingAgent.harness,
+          sessionId: session.id,
+        });
+        const localModelAvailable = Boolean(
+          localPreference &&
+          models.some((model) => model.id === localPreference.modelId),
+        );
+        const selection = reconcileCodexComposerPreference(
+          models,
+          localModelAvailable
+            ? localPreference
+            : {
+                modelId: session.harnessState.modelId,
+                reasoningEfforts:
+                  session.harnessState.modelId &&
+                  session.harnessState.reasoningEffort
+                    ? {
+                        [session.harnessState.modelId]:
+                          session.harnessState.reasoningEffort,
+                      }
+                    : {},
+              },
+        );
+        localComposerPreferenceActiveRef.current = localModelAvailable;
+        if (selection.model) {
+          setSelectedModelId(selection.model.id);
+          setReasoningEfforts(selection.reasoningEfforts);
         }
       })
       .catch((error) => {
@@ -417,6 +437,8 @@ export function CodexConversation({
       });
     return () => controller.abort();
   }, [
+    environment.codingAgent.harness,
+    environment.id,
     session.harnessState.modelId,
     session.harnessState.reasoningEffort,
     session.id,
@@ -461,8 +483,14 @@ export function CodexConversation({
         setNativeHistoryError("");
         // Empty snapshot metadata means the native model is not known yet; it
         // must not overwrite a model just returned by the native model catalog.
-        if (snapshot.modelId) setSelectedModelId(snapshot.modelId);
-        if (snapshot.modelId && snapshot.reasoningEffort) {
+        if (snapshot.modelId && !localComposerPreferenceActiveRef.current) {
+          setSelectedModelId(snapshot.modelId);
+        }
+        if (
+          snapshot.modelId &&
+          snapshot.reasoningEffort &&
+          !localComposerPreferenceActiveRef.current
+        ) {
           setReasoningEfforts((current) => ({
             ...current,
             [snapshot.modelId]: snapshot.reasoningEffort!,
@@ -685,6 +713,52 @@ export function CodexConversation({
     },
     [],
   );
+
+  function rememberComposerPreference(
+    modelId: string,
+    nextReasoningEfforts: Record<string, string>,
+  ) {
+    const preference = {
+      environmentId: environment.id,
+      harness: environment.codingAgent.harness,
+      modelId,
+      reasoningEfforts: nextReasoningEfforts,
+    };
+    rememberCodingAgentComposerPreference({
+      ...preference,
+      sessionId: session.id,
+    });
+    // A deliberate Session choice also becomes the New Session default for
+    // this Environment. The Session entry separately preserves an unsubmitted
+    // choice across a refresh of the current conversation.
+    rememberCodingAgentComposerPreference(preference);
+  }
+
+  function selectModel(modelId: string) {
+    const model = modelOptions.find((candidate) => candidate.id === modelId);
+    if (!model) return;
+    const nextReasoningEfforts = {
+      ...reasoningEfforts,
+      [model.id]: codexReasoningEffortForModel(
+        model,
+        reasoningEfforts[model.id],
+      ),
+    };
+    localComposerPreferenceActiveRef.current = true;
+    setSelectedModelId(model.id);
+    setReasoningEfforts(nextReasoningEfforts);
+    rememberComposerPreference(model.id, nextReasoningEfforts);
+  }
+
+  function selectReasoningEffort(effort: string) {
+    const nextReasoningEfforts = {
+      ...reasoningEfforts,
+      [selectedModel.id]: effort,
+    };
+    localComposerPreferenceActiveRef.current = true;
+    setReasoningEfforts(nextReasoningEfforts);
+    rememberComposerPreference(selectedModel.id, nextReasoningEfforts);
+  }
 
   async function submitMessage() {
     const submittedDraft = draft;
@@ -1396,26 +1470,8 @@ export function CodexConversation({
               modelDisabled={modelOptions.length === 0 || sending}
               reasoningDisabled={sending}
               selectedReasoningEffort={selectedReasoningEffort}
-              onModelChange={(modelId) => {
-                const model = modelOptions.find(
-                  (candidate) => candidate.id === modelId,
-                );
-                if (!model) return;
-                setSelectedModelId(model.id);
-                setReasoningEfforts((current) => ({
-                  ...current,
-                  [model.id]: codexReasoningEffortForModel(
-                    model,
-                    current[model.id],
-                  ),
-                }));
-              }}
-              onReasoningEffortChange={(effort) =>
-                setReasoningEfforts((current) => ({
-                  ...current,
-                  [selectedModel.id]: effort,
-                }))
-              }
+              onModelChange={selectModel}
+              onReasoningEffortChange={selectReasoningEffort}
               status={{
                 state: nativeHistoryError
                   ? "unavailable"

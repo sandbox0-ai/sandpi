@@ -1094,7 +1094,6 @@ export function EnvironmentSettings({
                 ) : environmentAudit ? (
                   <EnvironmentAuditPanel
                     audit={environmentAudit}
-                    environmentId={environment.id}
                     language={language}
                     loadNewerError={environmentAuditNewerError}
                     loadingNewer={environmentAuditLoadingNewer}

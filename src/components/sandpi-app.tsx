@@ -28,9 +28,14 @@ import {
   CLIENT_PREFERENCES_STORAGE_KEY,
   loadClientPreferences,
 } from "@/lib/client-preferences";
+import {
+  loadLocalUiPreferences,
+  updateLocalUiPreferences,
+} from "@/lib/local-ui-preferences";
 import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
 import { visibleSessionsForEnvironment } from "@/lib/session-list";
 import { environmentsForTeam, sessionsForTeam } from "@/lib/team";
+import { useLocalUiPreferences } from "@/lib/use-local-ui-preferences";
 import { userVisibleWorkspacePath } from "@/lib/workspace-path-policy";
 import type {
   CodingSession,
@@ -98,11 +103,14 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
   const [terminalHeight, setTerminalHeight] = useState(320);
   const [terminalMaximized, setTerminalMaximized] = useState(false);
   const [terminalRestoreHeight, setTerminalRestoreHeight] = useState(320);
-  const [inspectorTab, setInspectorTab] = useState<InspectorTab>("files");
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [workspaceNavigationRequest, setWorkspaceNavigationRequest] =
     useState<WorkspaceFileNavigationRequest>();
+  const localUiPreferences = useLocalUiPreferences();
+  const inspectorTab = localUiPreferences.workspace.inspectorTab;
+  const sidebarCollapsed = localUiPreferences.workspace.sidebarCollapsed;
+  const storedInspectorOpen = localUiPreferences.workspace.inspectorOpen;
+  const storedTerminalHeight = localUiPreferences.workspace.terminalHeight;
   const workspaceNavigationRequestIdRef = useRef(0);
   const restoredWorkspaceNavigationRef = useRef(false);
 
@@ -149,12 +157,24 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
   }, [initialData.preferences]);
 
   useEffect(() => {
+    setInspectorOpen(storedInspectorOpen);
+  }, [storedInspectorOpen]);
+
+  useEffect(() => {
+    if (terminalMaximized) return;
+    setTerminalHeight(storedTerminalHeight);
+    setTerminalRestoreHeight(storedTerminalHeight);
+  }, [storedTerminalHeight, terminalMaximized]);
+
+  useEffect(() => {
     const narrowViewport = window.matchMedia("(max-width: 960px)");
     const closeInspectorOnNarrowViewport = (
       event: MediaQueryListEvent | MediaQueryList,
     ) => {
       if (event.matches) {
         setInspectorOpen(false);
+      } else {
+        setInspectorOpen(loadLocalUiPreferences().workspace.inspectorOpen);
       }
     };
 
@@ -216,7 +236,14 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
       const url = new URL(window.location.href);
       url.searchParams.set("path", path);
       window.history.replaceState(window.history.state, "", url);
-      setInspectorTab("files");
+      updateLocalUiPreferences((current) => ({
+        ...current,
+        workspace: {
+          ...current.workspace,
+          inspectorOpen: true,
+          inspectorTab: "files",
+        },
+      }));
       setInspectorOpen(true);
     },
     [selectedEnvironment],
@@ -363,7 +390,6 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
       setSelectedSessionId(nextSession?.id ?? "");
       if (nextSession) void hydrateSession(nextSession.id);
       setSettingsEnvironmentId(null);
-      setInspectorOpen(false);
       setTerminalOpen(false);
       setSidebarOpen(false);
       if (nextEnvironment) {
@@ -413,7 +439,10 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
       setSidebarOpen((open) => !open);
       return;
     }
-    setSidebarCollapsed(false);
+    updateLocalUiPreferences((current) => ({
+      ...current,
+      workspace: { ...current.workspace, sidebarCollapsed: false },
+    }));
   }, []);
 
   const handleSelectSession = useCallback(
@@ -479,7 +508,6 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
         current.filter((session) => session.environmentId !== environmentId),
       );
       setSettingsEnvironmentId(null);
-      setInspectorOpen(false);
       setTerminalOpen(false);
 
       if (selectedEnvironmentId === environmentId) {
@@ -515,7 +543,6 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
       setSelectedEnvironmentId(session.environmentId);
       setSelectedSessionId(session.id);
       replaceWorkspaceUrl(selectedTeamId, session.environmentId, session.id);
-      setInspectorOpen(false);
       setTerminalOpen(false);
     },
     [selectedTeamId],
@@ -634,7 +661,6 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
     setSelectedEnvironmentId(environment.id);
     setSelectedSessionId("");
     replaceWorkspaceUrl(selectedTeamId, environment.id);
-    setInspectorOpen(false);
     setTerminalOpen(false);
     setNewEnvironmentOpen(false);
   }, [selectedTeamId]);
@@ -650,6 +676,32 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
   const handleTerminalHeightChange = useCallback((height: number) => {
     setTerminalHeight(height);
     setTerminalMaximized(false);
+    updateLocalUiPreferences((current) => ({
+      ...current,
+      workspace: { ...current.workspace, terminalHeight: height },
+    }));
+  }, []);
+
+  const handleInspectorTabChange = useCallback((tab: InspectorTab) => {
+    updateLocalUiPreferences((current) => ({
+      ...current,
+      workspace: { ...current.workspace, inspectorTab: tab },
+    }));
+  }, []);
+
+  const handleInspectorOpenChange = useCallback((open: boolean) => {
+    setInspectorOpen(open);
+    updateLocalUiPreferences((current) => ({
+      ...current,
+      workspace: { ...current.workspace, inspectorOpen: open },
+    }));
+  }, []);
+
+  const handleSidebarCollapsedChange = useCallback((collapsed: boolean) => {
+    updateLocalUiPreferences((current) => ({
+      ...current,
+      workspace: { ...current.workspace, sidebarCollapsed: collapsed },
+    }));
   }, []);
 
   const handleToggleTerminalMaximize = useCallback(() => {
@@ -700,7 +752,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
       onArchiveSession={handleArchiveSession}
       onTogglePinSession={handleTogglePinSession}
       onCollapse={() => {
-        setSidebarCollapsed(true);
+        handleSidebarCollapsedChange(true);
         setSidebarOpen(false);
       }}
       onCloseMobile={() => setSidebarOpen(false)}
@@ -730,7 +782,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
               type="button"
               className="icon-button sidebar-expand-button"
               aria-label="Expand sidebar"
-              onClick={() => setSidebarCollapsed(false)}
+              onClick={() => handleSidebarCollapsedChange(false)}
             >
               <PanelLeftOpen size={17} aria-hidden="true" />
             </button>
@@ -814,15 +866,15 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
           inspectorTab={inspectorTab}
           terminalOpen={showTerminal}
           onToggleSidebar={handleToggleNavigation}
-          onToggleInspector={() => setInspectorOpen((open) => !open)}
-          onInspectorTabChange={setInspectorTab}
+          onToggleInspector={() => handleInspectorOpenChange(!showInspector)}
+          onInspectorTabChange={handleInspectorTabChange}
           onToggleTerminal={() => setTerminalOpen((open) => !open)}
           onOpenSettings={(tab = "general") =>
             openEnvironmentSettings(selectedEnvironment.id, tab)
           }
           onOpenInspector={(tab) => {
-            setInspectorTab(tab);
-            setInspectorOpen(true);
+            handleInspectorTabChange(tab);
+            handleInspectorOpenChange(true);
           }}
           workspaceNavigationRequest={workspaceNavigationRequest}
           onOpenWorkspacePath={openWorkspacePath}
@@ -852,8 +904,8 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
           timeZone={preferences.general.timeZone}
           environment={selectedEnvironment}
           activeTab={inspectorTab === "activity" ? "files" : inspectorTab}
-          onTabChange={setInspectorTab}
-          onClose={() => setInspectorOpen(false)}
+          onTabChange={handleInspectorTabChange}
+          onClose={() => handleInspectorOpenChange(false)}
         />
       ) : null}
 

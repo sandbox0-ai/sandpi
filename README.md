@@ -91,6 +91,15 @@ Web today; iOS / Android / HarmonyOS later
   Codex model or reasoning catalog. Future harness adapters must follow the
   same live capability-discovery rule and preserve unknown native option values
   instead of adding shared Sandpi enums.
+  Browser-only UI choices use the versioned
+  `sandpi.local-ui-preferences.v1` store rather than the server-synchronized
+  account preference contract. Model and reasoning choices are scoped to their
+  Environment and Session, then reconciled against the next live native model
+  catalog so a coding-agent upgrade cannot revive a removed capability. The
+  same local store remembers device-specific sidebar and Inspector
+  open/collapsed state, Inspector tab, Terminal height, metric range and
+  activity filter controls without storing prompts, attachments or Workspace
+  content.
   The Codex New Session and conversation composers also share one
   harness-owned attachment toolbar. `@` discovery uses the harness-neutral
   Environment Workspace search backed by Sandbox0, then sends the selected

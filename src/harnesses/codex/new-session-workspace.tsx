@@ -40,12 +40,16 @@ import {
   type CodexImageSelectionIssue,
 } from "@/harnesses/codex/composer-images";
 import {
-  codexDefaultModel,
   codexModelOptionsFromNativeResult,
   codexReasoningEffortForModel,
+  reconcileCodexComposerPreference,
   type CodexModelOption,
 } from "@/harnesses/codex/models";
 import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
+import {
+  codingAgentComposerPreference,
+  rememberCodingAgentComposerPreference,
+} from "@/lib/local-ui-preferences";
 import type { Environment } from "@/lib/types";
 
 import styles from "@/components/new-session-workspace.module.css";
@@ -131,13 +135,15 @@ export function CodexNewSessionWorkspace({
     )
       .then((response) => {
         const models = codexModelOptionsFromNativeResult(response.data);
-        const defaultModel = codexDefaultModel(models);
-        if (!defaultModel) throw new Error(ui.modelListEmpty);
-        setModelOptions(models);
-        setSelectedModelId(defaultModel.id);
-        setReasoningEfforts({
-          [defaultModel.id]: defaultModel.defaultReasoningEffort,
+        const preference = codingAgentComposerPreference({
+          environmentId: environment.id,
+          harness: environment.codingAgent.harness,
         });
+        const selection = reconcileCodexComposerPreference(models, preference);
+        if (!selection.model) throw new Error(ui.modelListEmpty);
+        setModelOptions(models);
+        setSelectedModelId(selection.model.id);
+        setReasoningEfforts(selection.reasoningEfforts);
         setModelCatalogState("ready");
       })
       .catch((cause) => {
@@ -150,12 +156,50 @@ export function CodexNewSessionWorkspace({
       });
     return () => controller.abort();
   }, [
+    environment.codingAgent.harness,
     environment.codingAgent.status,
     environment.id,
     environment.status,
     ui.modelListEmpty,
     ui.modelListFailed,
   ]);
+
+  function rememberComposerPreference(
+    modelId: string,
+    nextReasoningEfforts: Record<string, string>,
+  ) {
+    rememberCodingAgentComposerPreference({
+      environmentId: environment.id,
+      harness: environment.codingAgent.harness,
+      modelId,
+      reasoningEfforts: nextReasoningEfforts,
+    });
+  }
+
+  function selectModel(modelId: string) {
+    const model = modelOptions.find((candidate) => candidate.id === modelId);
+    if (!model) return;
+    const nextReasoningEfforts = {
+      ...reasoningEfforts,
+      [model.id]: codexReasoningEffortForModel(
+        model,
+        reasoningEfforts[model.id],
+      ),
+    };
+    setSelectedModelId(model.id);
+    setReasoningEfforts(nextReasoningEfforts);
+    rememberComposerPreference(model.id, nextReasoningEfforts);
+  }
+
+  function selectReasoningEffort(effort: string) {
+    if (!selectedModel) return;
+    const nextReasoningEfforts = {
+      ...reasoningEfforts,
+      [selectedModel.id]: effort,
+    };
+    setReasoningEfforts(nextReasoningEfforts);
+    rememberComposerPreference(selectedModel.id, nextReasoningEfforts);
+  }
 
   async function createSession() {
     if (environment.status !== "ready") {
@@ -436,27 +480,8 @@ export function CodexNewSessionWorkspace({
             }
             reasoningDisabled={creating}
             selectedReasoningEffort={selectedReasoningEffort}
-            onModelChange={(modelId) => {
-              const model = modelOptions.find(
-                (candidate) => candidate.id === modelId,
-              );
-              if (!model) return;
-              setSelectedModelId(model.id);
-              setReasoningEfforts((current) => ({
-                ...current,
-                [model.id]: codexReasoningEffortForModel(
-                  model,
-                  current[model.id],
-                ),
-              }));
-            }}
-            onReasoningEffortChange={(effort) => {
-              if (!selectedModel) return;
-              setReasoningEfforts((current) => ({
-                ...current,
-                [selectedModel.id]: effort,
-              }));
-            }}
+            onModelChange={selectModel}
+            onReasoningEffortChange={selectReasoningEffort}
             status={{
               state:
                 modelCatalogState === "error"

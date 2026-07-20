@@ -250,6 +250,19 @@ models and model-specific options come from the running native agent, unknown
 option values remain forward-compatible strings, and shared Sandpi code must
 not introduce a fallback catalog or capability enum.
 
+Model and reasoning pickers may remember an opaque browser-local choice, but
+that preference is not native capability state and is not written to the
+server-synchronized `SandpiPreferences` record. Sandpi scopes New Session
+choices to an Environment and unsubmitted conversation choices to a product
+Session under `sandpi.local-ui-preferences.v1`. A stored model or effort is
+applied only after the running harness returns its current catalog; unavailable
+values fall back to the live native model defaults. Selecting a control updates
+only browser UI state until `thread/start` or `turn/start` submits it. The same
+versioned browser-only record contains device layout choices, including the
+sidebar and Inspector open/collapsed state, as well as filter choices. It never
+contains prompts, attachments, credentials, native history or Workspace
+content.
+
 The two Codex composer surfaces share a harness-owned toolbar so model,
 reasoning, upload and `@` behavior cannot drift between New Session and an
 existing conversation. Workspace discovery itself is not a Codex capability:

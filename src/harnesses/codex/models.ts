@@ -114,6 +114,33 @@ export function codexReasoningEffortForModel(
     : model.defaultReasoningEffort;
 }
 
+/**
+ * Reconciles an opaque browser preference against the current native catalog.
+ * Coding-agent upgrades may remove or add models and effort values, so stored
+ * strings never become a fallback catalog or bypass live capability discovery.
+ */
+export function reconcileCodexComposerPreference(
+  models: readonly CodexModelOption[],
+  preference?: {
+    modelId?: string;
+    reasoningEfforts?: Record<string, string>;
+  },
+) {
+  const model =
+    models.find((candidate) => candidate.id === preference?.modelId) ??
+    codexDefaultModel(models);
+  const reasoningEfforts = Object.fromEntries(
+    models.map((candidate) => [
+      candidate.id,
+      codexReasoningEffortForModel(
+        candidate,
+        preference?.reasoningEfforts?.[candidate.id],
+      ),
+    ]),
+  );
+  return { model, reasoningEfforts };
+}
+
 export function codexReasoningEffortLabel(effort: string) {
   if (effort === "xhigh") return "Extra high";
   return effort
