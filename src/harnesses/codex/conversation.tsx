@@ -117,7 +117,7 @@ interface ConversationProps {
   onToggleInspector: () => void;
   onInspectorTabChange: (tab: InspectorTab) => void;
   onToggleTerminal: () => void;
-  onOpenSettings: (tab?: "general" | "audit") => void;
+  onOpenSettings: () => void;
   onOpenInspector: (tab: InspectorTab) => void;
   workspaceNavigationRequest?: WorkspaceFileNavigationRequest;
   onOpenWorkspacePath: (path: string) => void;
@@ -1582,16 +1582,8 @@ export function CodexConversation({
                 timeZone={timeZone}
                 projection={visibleTimeline}
                 rolloutActivity={nativeSnapshot?.activity}
-                nativeThreadId={
-                  nativeSnapshot?.thread.id ?? session.harnessState.threadId
-                }
-                historyRevision={
-                  nativeSnapshot?.historyRevision ??
-                  session.harnessState.historyRevision
-                }
                 loading={nativeHistoryLoading}
                 error={nativeHistoryError}
-                onOpenEnvironmentAudit={() => onOpenSettings("audit")}
                 onOpenFiles={() => onOpenInspector("files")}
               />
             ),

@@ -2040,7 +2040,9 @@ export class SandpiStore {
 
   async getPreferences(userId: string): Promise<SandpiPreferences> {
     const result = await this.pool.query(
-      "SELECT * FROM user_preferences WHERE user_id = $1",
+      `SELECT language, time_zone, send_shortcut, theme, density
+       FROM user_preferences
+       WHERE user_id = $1`,
       [userId],
     );
     const row = result.rows[0];
@@ -2052,10 +2054,6 @@ export class SandpiStore {
         sendShortcut: row.send_shortcut,
       },
       appearance: { theme: row.theme, density: row.density },
-      notifications: {
-        sessionCompleted: row.notify_session_completed,
-        needsAttention: row.notify_needs_attention,
-      },
     };
   }
 
@@ -2063,8 +2061,7 @@ export class SandpiStore {
     await this.pool.query(
       `UPDATE user_preferences
        SET language = $2, time_zone = $3, send_shortcut = $4,
-           theme = $5, density = $6, notify_session_completed = $7,
-           notify_needs_attention = $8
+           theme = $5, density = $6
        WHERE user_id = $1`,
       [
         userId,
@@ -2073,8 +2070,6 @@ export class SandpiStore {
         value.general.sendShortcut,
         value.appearance.theme,
         value.appearance.density,
-        value.notifications.sessionCompleted,
-        value.notifications.needsAttention,
       ],
     );
     return this.getPreferences(userId);

@@ -20,10 +20,7 @@ import type {
   CodexThreadItem,
   CodexTurn,
 } from "../src/harnesses/codex/types";
-import {
-  mockEnvironmentAudit,
-  mockEnvironmentMetrics,
-} from "../src/lib/mock-data";
+import { mockEnvironmentMetrics } from "../src/lib/mock-data";
 
 interface ControlledEventWindow extends Window {
   __sandpiEmitEvent?: (
@@ -948,6 +945,27 @@ test("serves shared Preferences and Team layouts", async ({ page }) => {
       "Environment and coding agent settings live with each Environment.",
     ),
   ).toBeVisible();
+  const preferenceSections = page.getByRole("navigation", {
+    name: "Preference sections",
+  });
+  await expect(preferenceSections.getByRole("button")).toHaveCount(2);
+  await expect(
+    preferenceSections.getByRole("button", { name: "General", exact: true }),
+  ).toBeVisible();
+  await expect(
+    preferenceSections.getByRole("button", {
+      name: "Appearance",
+      exact: true,
+    }),
+  ).toBeVisible();
+  for (const removedSection of ["Notifications", "Security", "Advanced"]) {
+    await expect(
+      preferenceSections.getByRole("button", {
+        name: removedSection,
+        exact: true,
+      }),
+    ).toHaveCount(0);
+  }
 
   await page.goto("/team");
   await expect(page).toHaveURL(/\/team\/?$/);
@@ -1387,7 +1405,7 @@ test("keeps an optimistic prompt ahead of native Activity without duplicating it
   ]);
 });
 
-test("keeps Codex Session Activity native and Environment Audit separate", async ({
+test("keeps Codex Session Activity native", async ({
   page,
   request,
 }) => {
@@ -1399,12 +1417,6 @@ test("keeps Codex Session Activity native and Environment Audit separate", async
   const nativeThreadId = "thread-e2e-native-activity";
   const nativeTurnId = "turn-e2e-native-activity";
   let auditRequests = 0;
-  const auditCursors: string[] = [];
-  let environmentUpdates = 0;
-  let releaseAuditResponse!: () => void;
-  const auditResponseGate = new Promise<void>((resolve) => {
-    releaseAuditResponse = resolve;
-  });
   const snapshot: CodexNativeSnapshot = {
     protocol: "codex-app-server",
     nativeSessionId: nativeThreadId,
@@ -1614,15 +1626,6 @@ test("keeps Codex Session Activity native and Environment Audit separate", async
         `/api/v1/environments/${encodeURIComponent(environment.id)}/audit`
     ) {
       auditRequests += 1;
-      const cursor = requestUrl.searchParams.get("cursor");
-      if (cursor) auditCursors.push(cursor);
-    }
-    if (
-      browserRequest.method() === "PUT" &&
-      requestUrl.pathname ===
-        `/api/v1/environments/${encodeURIComponent(environment.id)}`
-    ) {
-      environmentUpdates += 1;
     }
   });
 
@@ -1657,24 +1660,6 @@ test("keeps Codex Session Activity native and Environment Audit separate", async
       },
     });
   });
-  await page.route("**/api/v1/environments/**/audit**", async (route) => {
-    const cursor = new URL(route.request().url()).searchParams.get("cursor");
-    if (cursor) {
-      await route.fulfill({
-        json: {
-          data: {
-            ...mockEnvironmentAudit,
-            events: [],
-            nextCursor: undefined,
-          },
-        },
-      });
-      return;
-    }
-    await auditResponseGate;
-    await route.fulfill({ json: { data: mockEnvironmentAudit } });
-  });
-
   await page.goto(
     `/?team=${encodeURIComponent(environment.teamId)}&environment=${encodeURIComponent(environment.id)}&session=${encodeURIComponent(session.id)}`,
   );
@@ -1721,14 +1706,8 @@ test("keeps Codex Session Activity native and Environment Audit separate", async
     }),
   ).toBeVisible();
   await expect(
-    activityView.getByText(nativeThreadId, { exact: false }),
-  ).toBeHidden();
-  await activityView
-    .locator(".codex-session-activity-boundary summary")
-    .click();
-  await expect(
-    activityView.getByText(nativeThreadId, { exact: false }),
-  ).toBeVisible();
+    activityView.getByText("How this activity is sourced", { exact: true }),
+  ).toHaveCount(0);
   await expect(
     activityView.locator(".codex-session-activity-intro"),
   ).toContainText("3 actions · 5 native records");
@@ -1768,80 +1747,9 @@ test("keeps Codex Session Activity native and Environment Audit separate", async
   await expect(activityView.getByText("sandpi v1.2.3")).toBeVisible();
   await expect.poll(() => auditRequests).toBe(0);
 
-  const auditRequest = page.waitForRequest((candidate) => {
-    const requestUrl = new URL(candidate.url());
-    return (
-      candidate.method() === "GET" &&
-      requestUrl.pathname ===
-        `/api/v1/environments/${encodeURIComponent(environment.id)}/audit`
-    );
-  });
-  await activityView
-    .getByRole("button", { name: "Open Environment Audit" })
-    .click();
-  await auditRequest;
-
-  const settingsDialog = page.getByRole("dialog", {
-    name: `${environment.name} settings`,
-  });
-  await expect(settingsDialog).toBeVisible();
   await expect(
-    settingsDialog.getByRole("heading", { name: "Environment audit" }),
-  ).toBeVisible();
-  await expect(
-    settingsDialog.locator(".settings-nav button.is-active"),
-  ).toHaveText("Audit");
-  await expect(
-    settingsDialog.getByRole("status").getByText("Loading Environment audit…"),
-  ).toBeVisible();
-  releaseAuditResponse();
-  await expect(
-    settingsDialog.getByRole("region", { name: "Environment audit" }),
-  ).toBeVisible();
-  const auditRegion = settingsDialog.getByRole("region", {
-    name: "Environment audit",
-  });
-  await expect(auditRegion).toContainText(
-    "8 signed records · 4 operations · 1 issue",
-  );
-  await expect(auditRegion).toContainText(
-    "Earliest loaded range; newer records are available",
-  );
-  await expect(
-    auditRegion.getByText("All 8 loaded records are verified"),
-  ).toBeVisible();
-  await expect(auditRegion.locator(".audit-technical-content pre")).toHaveCount(
-    0,
-  );
-
-  const firstAuditActivity = auditRegion.locator(".audit-activity").first();
-  await expect(firstAuditActivity).toContainText(
-    "Blocked connection to telemetry.example.dev:443",
-  );
-  await firstAuditActivity.locator(":scope > summary").click();
-  await expect(
-    firstAuditActivity.locator(".audit-activity-facts"),
-  ).toBeVisible();
-  await expect(
-    firstAuditActivity.locator(".audit-technical-content pre"),
+    activityView.getByRole("button", { name: "Open Environment Audit" }),
   ).toHaveCount(0);
-  await firstAuditActivity
-    .locator(".audit-technical-details > summary")
-    .first()
-    .click();
-  const signedEventJson = firstAuditActivity
-    .locator(".audit-technical-content pre")
-    .first();
-  await expect(signedEventJson).toBeVisible();
-  await expect(signedEventJson).toHaveAttribute("tabindex", "0");
-  await expect(signedEventJson).toContainText(
-    "55555555-5555-4555-8555-555555555555",
-  );
-
-  await auditRegion
-    .getByRole("combobox", { name: "Filter loaded Environment audit" })
-    .selectOption("attention");
-  await expect(auditRegion.locator(".audit-activity-item")).toHaveCount(1);
   await expect
     .poll(() =>
       page.evaluate(() => {
@@ -1851,7 +1759,6 @@ test("keeps Codex Session Activity native and Environment Audit separate", async
         ) as {
           filters?: {
             codexSessionActivity?: string;
-            environmentAudit?: string;
           };
         };
         return stored.filters;
@@ -1859,32 +1766,24 @@ test("keeps Codex Session Activity native and Environment Audit separate", async
     )
     .toEqual({
       codexSessionActivity: "external",
-      environmentAudit: "attention",
     });
 
-  const auditRequestsBeforePagination = auditRequests;
-  await auditRegion
-    .getByRole("button", { name: "Load newer signed records" })
+  await page
+    .getByLabel("Codex conversation", { exact: true })
+    .getByRole("button", { name: environment.name, exact: true })
     .click();
-  await expect.poll(() => auditCursors).toEqual(["mock-history-cursor"]);
+  const settingsDialog = page.getByRole("dialog", {
+    name: `${environment.name} settings`,
+  });
+  await expect(settingsDialog).toBeVisible();
   await expect(
-    auditRegion.getByRole("button", { name: "Load newer signed records" }),
+    settingsDialog.getByRole("button", { name: "Audit", exact: true }),
   ).toHaveCount(0);
-  await expect(auditRegion).toContainText(
-    "8 signed records · 4 operations · 1 issue",
-  );
-  await expect(auditRegion).toContainText("All available records loaded");
-  await expect
-    .poll(() => auditRequests)
-    .toBe(auditRequestsBeforePagination + 1);
-  await expect(
-    settingsDialog.getByText("Environment audit records are read-only."),
-  ).toBeVisible();
-  await expect(page.getByText("Session audit")).toHaveCount(0);
-
-  await settingsDialog.getByRole("button", { name: "Done" }).click();
+  await settingsDialog
+    .getByRole("button", { name: "Close Environment settings" })
+    .click();
   await expect(settingsDialog).toBeHidden();
-  await expect.poll(() => environmentUpdates).toBe(0);
+  await expect.poll(() => auditRequests).toBe(0);
   expect(browserErrors).toEqual([]);
 });
 
@@ -2686,6 +2585,12 @@ test("renders the dedicated live Web IDE with Git state and changed lines", asyn
         kind: "folder",
         children: [
           {
+            id: "github-config",
+            name: ".github",
+            path: "/workspace/.github",
+            kind: "folder",
+          },
+          {
             id: "src",
             name: "src",
             path: "/workspace/src",
@@ -2839,6 +2744,9 @@ test("renders the dedicated live Web IDE with Git state and changed lines", asyn
   await expect(page.getByText(`sandpi / ${environment.name}`)).toBeVisible();
   await expect(page.getByText("workspace", { exact: true })).toBeVisible();
   await expect(
+    page.locator('button[title="/workspace/.github"]'),
+  ).toBeVisible();
+  await expect(
     page.locator('button[title="/workspace/src/demo.ts"]'),
   ).toHaveCount(0);
   const sourceFolder = page.locator('button[title="/workspace/src"]');
@@ -2925,7 +2833,6 @@ test("restores a new-Session deep link and keeps overlays usable in dark mode", 
           sendShortcut: "enter",
         },
         appearance: { theme: "dark", density: "comfortable" },
-        notifications: { sessionCompleted: true, needsAttention: true },
       }),
     );
   });

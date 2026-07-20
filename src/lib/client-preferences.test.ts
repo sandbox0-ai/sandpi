@@ -16,7 +16,6 @@ const defaults: SandpiPreferences = {
     sendShortcut: "enter",
   },
   appearance: { theme: "system", density: "comfortable" },
-  notifications: { sessionCompleted: true, needsAttention: true },
 };
 
 test("merges valid stored preferences with defaults", () => {
@@ -24,7 +23,6 @@ test("merges valid stored preferences with defaults", () => {
     JSON.stringify({
       general: { language: "zh-CN", sendShortcut: "mod-enter" },
       appearance: { theme: "dark", density: "compact" },
-      notifications: { sessionCompleted: false },
     }),
     defaults,
   );
@@ -36,7 +34,6 @@ test("merges valid stored preferences with defaults", () => {
       sendShortcut: "mod-enter",
     },
     appearance: { theme: "dark", density: "compact" },
-    notifications: { sessionCompleted: false, needsAttention: true },
   });
 });
 
@@ -47,7 +44,6 @@ test("falls back field by field for malformed or unsupported values", () => {
     JSON.stringify({
       general: { language: "xx", timeZone: 42 },
       appearance: { theme: "sepia", density: null },
-      notifications: { needsAttention: "yes" },
     }),
     defaults,
   );
@@ -62,7 +58,7 @@ test("bootstrap script applies the same storage contract before hydration", () =
   assert.match(script, /root\.lang/);
 });
 
-test("appearance preview preserves every saved non-appearance preference", () => {
+test("appearance preview preserves saved general preferences", () => {
   const preview = buildAppearancePreviewPreferences(defaults, {
     theme: "dark",
     density: "compact",
@@ -70,6 +66,5 @@ test("appearance preview preserves every saved non-appearance preference", () =>
 
   assert.deepEqual(preview.appearance, { theme: "dark", density: "compact" });
   assert.equal(preview.general, defaults.general);
-  assert.equal(preview.notifications, defaults.notifications);
   assert.equal(preview.general.language, "en");
 });

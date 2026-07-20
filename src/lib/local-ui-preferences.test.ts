@@ -19,7 +19,6 @@ test("normalizes browser-only UI preferences field by field", () => {
       },
       filters: {
         codexSessionActivity: "commands",
-        environmentAudit: "network",
       },
     }),
     {
@@ -32,7 +31,6 @@ test("normalizes browser-only UI preferences field by field", () => {
       },
       filters: {
         codexSessionActivity: "commands",
-        environmentAudit: "network",
       },
       codingAgentComposers: [],
     },
@@ -51,7 +49,6 @@ test("falls back safely for malformed local UI preferences", () => {
       },
       filters: {
         codexSessionActivity: "messages",
-        environmentAudit: "credentials",
       },
       codingAgentComposers: [{ modelId: "missing-scope" }],
     }),

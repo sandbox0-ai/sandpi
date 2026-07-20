@@ -20,7 +20,7 @@ server. The current implementation includes PostgreSQL persistence,
 deployment-level identity configuration, Environment and Session APIs,
 Sandbox0 runtime wiring, Codex app-server event transport, native model
 discovery, image input, native Session/Turn branching, a live Web IDE,
-Environment terminal, signed audit and runtime metrics.
+Environment terminal and runtime metrics.
 
 Webhooks, cron jobs, mobile clients, explicit Environment sharing and additional
 native harness integrations remain future work. Sandpi's `/api/v1` contract is
@@ -78,10 +78,9 @@ Web today; iOS / Android / HarmonyOS later
   Startup recovery is likewise limited to visible active or pending Session
   control state; ordinary waiting and archived Sessions remain lazy.
 - **Native harness boundary:** shared code owns Sandbox lifecycle, durable
-  transport, files, terminal, signed Environment Audit and metrics. Environment
-  Audit is harness-agnostic Sandbox evidence. Each harness owns its native
-  Session Activity, message/tool rendering, approvals, slash commands and model
-  list; Sandpi does not normalize different coding agents into a
+  transport, files, terminal and metrics. Each harness owns its native Session
+  Activity, message/tool rendering, approvals, slash commands and model list;
+  Sandpi does not normalize different coding agents into a
   lowest-common-denominator activity or chat protocol. The Codex adapter reads
   `model/list` from the authenticated Environment-native app-server. Opening
   New Session wakes that runtime and waits for the native catalog instead of
@@ -136,9 +135,10 @@ Web today; iOS / Android / HarmonyOS later
 - **Live workspace contract:** the embedded file view and dedicated `/ide/`
   workbench consume the same Sandpi API. The initial snapshot contains only the
   direct children of `/workspace`; clients request one shallow directory page
-  when the user expands a folder and cache already loaded pages. Hidden
-  directories and known generated dependency trees are omitted, while the
-  recursive Sandbox0 stream is used only for invalidation. Loaded shallow pages
+  when the user expands a folder and cache already loaded pages. User-owned
+  dot-files and dot-directories are visible; Sandpi's internal subtree and known
+  generated dependency trees are omitted. The recursive Sandbox0 stream is used
+  only for invalidation. Loaded shallow pages
   are reconciled while that native watch is connecting or unavailable, so files
   created by a running agent do not remain hidden until Turn completion. Sandpi discovers
   zero or more Git working trees beneath the visible tree, parses porcelain v2
@@ -159,21 +159,15 @@ Web today; iOS / Android / HarmonyOS later
   Sandbox0's two native fallback modes: `block-all` adds domain allow
   exceptions, while `allow-all` adds domain deny exceptions. Sandpi submits
   those exceptions as native `trafficRules`.
-- **Audit and activity boundary:** signed Sandbox audit is displayed as common
-  Environment evidence in **Environment Settings → Audit**. The current
-  Session's Inspector exposes **Activity** as a harness-native execution record;
-  each harness supplies its own renderer instead of a normalized shared event
-  model. Codex attributes native tool activity by Thread id and reconstructs
-  durable calls and every recorded output from that Thread's bounded rollout
-  JSONL (or its compressed sibling); it does not use diagnostic logs SQLite.
-  The Activity feed places the newest Turn first while retaining native
-  chronological action order within each Turn.
-  The shared Supervisor Session identifies only transport provenance. Native
-  external-tool semantics and Environment network audit remain separate views
-  because the audit feed has no Thread correlation key, so Sandpi neither
-  normalizes their timestamps nor infers a correlation from temporal
-  proximity. An unavailable or partially parseable rollout is reported in
-  Activity without blocking the app-server conversation.
+- **Native activity boundary:** the current Session's Inspector exposes
+  **Activity** as a harness-native execution record; each harness supplies its
+  own renderer instead of a normalized shared event model. Codex attributes
+  native tool activity by Thread id and reconstructs durable calls and every
+  recorded output from that Thread's bounded rollout JSONL (or its compressed
+  sibling); it does not use diagnostic logs SQLite. The Activity feed places
+  the newest Turn first while retaining native chronological action order
+  within each Turn. An unavailable or partially parseable rollout is reported
+  in Activity without blocking the app-server conversation.
 - **Durable lifecycle:** every Environment Sandbox has a 30-day Sandbox0 hard
   TTL. A native `turn/completed` event writes a PostgreSQL pause deadline thirty
   minutes later; any Sandpi replica may scan it, but a per-Environment advisory
@@ -251,10 +245,6 @@ reload the harness-native snapshot.
 - A Sandbox0 `coding-agent` template; Sandpi mounts each Environment's
   Workspace Volume at `/workspace`
 - Docker Engine with Compose v2 for the container workflow
-
-Signed Sandbox audit additionally requires the Sandbox0 `sandbox_audit` feature
-and `sandboxaudit:read` permission. Sandpi distinguishes unavailable or
-unlicensed audit from an available feed with no events.
 
 ## Local development
 

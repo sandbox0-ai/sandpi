@@ -20,8 +20,8 @@ Environment
 ```
 
 - An Environment owns the Sandbox0 resource allocation. Its Sandbox, Workspace
-  Volume, Supervisor decoder cursor, Terminal, signed Environment Audit and
-  metrics are shared by every product Session in that Environment.
+  Volume, Supervisor decoder cursor, Terminal and metrics are shared by every
+  product Session in that Environment.
 - A Sandpi Session stores product metadata and one opaque harness-native Session
   id. It owns no Sandbox, Volume, Terminal or transcript.
 - PostgreSQL stores scalar recovery state: native Session id, selected model,
@@ -191,33 +191,7 @@ until `turn/completed`. The browser SSE follows the lifetime of its streaming
 response rather than the already-finished GET request body. Browser disconnects
 therefore have no effect on the native process or rollout.
 
-## Environment Audit and native Session Activity
-
-Environment Audit is harness-agnostic, signed Sandbox0 evidence. It belongs to
-the Environment because all product Sessions use the same Sandbox; it must not
-be presented as if a Sandbox-level event were attributable to one product
-Session. The product exposes this feed from the Environment's **Settings →
-Audit** section rather than from a Session surface.
-
-The canonical layer preserves every signed event identity, payload hash, phase,
-producer and integrity result. It correlates facts only by Sandbox0's exact
-`operationId`; it never joins by timestamp. Sandbox0 audit cursors move from the
-oldest records toward newer records, so the UI labels the currently loaded time
-range and whether it is partial. **Load newer signed records** advances the
-opaque cursor on demand. Overlapping pages discard only an exact
-`eventId + payloadHash` duplicate, while conflicting payload variants remain
-visible as evidence. The UI does not poll this endpoint automatically because
-reading Environment Audit is itself an auditable operation.
-
-The compact activity list is a presentation read model, not another audit
-store. It can collapse successful allowlisted routine reads into short bursts
-and summarize successful external connections by a signed host and port across
-the loaded range. Denied, failed, unknown, integrity-affected, mutating and
-effect records remain independently visible. The overview reports loaded event
-and operation counts, puts issues first, and scopes verification claims to the
-loaded records. Expanding an activity reveals canonical operations and
-attempt/result/effect evidence; raw signed JSON is mounted only when its
-technical disclosure is opened.
+## Native Session Activity
 
 Session Activity is instead a harness-native execution record. Each harness
 defines and renders its own tool kinds, statuses and payloads rather than
@@ -312,12 +286,9 @@ signature is unique within the Turn; neither grouping rule relies on timestamp
 proximity. The UI reports both logical action count and retained native-record
 count so progressive disclosure never hides evidence.
 
-External interactions preserve the same separation. Codex-native MCP, dynamic
-tool and web-search activity describes the semantic tool execution in Session
-Activity, while Sandbox0 network events remain signed Environment Audit
-evidence. The network audit feed has no native Thread correlation key, so
-Sandpi displays the two views separately, does not normalize their timestamps
-onto a common timeline, and never infers a join from temporal proximity.
+Codex-native MCP, dynamic tool and web-search activity describes semantic tool
+execution in Session Activity. Environment network policy remains shared
+runtime configuration and is not projected into a product Session timeline.
 
 ## MCP integration authority
 

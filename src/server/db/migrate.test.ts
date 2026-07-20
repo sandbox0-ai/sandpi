@@ -60,6 +60,7 @@ test("migration history contains every durable Sandpi boundary", async () => {
       "0033_drop_environment_functions",
       "0034_session_reasoning_effort",
       "0035_environment_pause_intervals",
+      "0036_drop_notification_preferences",
     ],
   );
 

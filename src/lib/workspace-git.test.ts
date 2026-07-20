@@ -76,7 +76,7 @@ test("formats repository roots relative to the Workspace mount", () => {
   assert.equal(workspaceRepositoryLabel("/workspace/apps/web"), "apps/web");
 });
 
-test("filters internal and hidden repositories and changes from client Git state", () => {
+test("filters internal Git data while retaining user-owned dot-paths", () => {
   const rootRepository = repository("/workspace", [
     {
       path: "/workspace/.sandpi/codex/rollout.jsonl",
@@ -126,13 +126,13 @@ test("filters internal and hidden repositories and changes from client Git state
   assert.deepEqual(state.repositories.map((item) => item.root), ["/workspace"]);
   assert.deepEqual(
     state.repositories[0]?.files.map((file) => file.path),
-    ["/workspace/notes.md"],
+    ["/workspace/.sandpi-other/notes.md", "/workspace/notes.md"],
   );
   assert.deepEqual(
     workspaceGitChanges({ repositories: [rootRepository] }).map(
       (file) => file.path,
     ),
-    ["/workspace/notes.md"],
+    ["/workspace/.sandpi-other/notes.md", "/workspace/notes.md"],
   );
   assert.equal(
     repositoryForWorkspacePath(

@@ -12,10 +12,7 @@ import {
 
 import { Conversation } from "@/components/conversation";
 import { AppFrame } from "@/components/app-frame";
-import {
-  EnvironmentSettings,
-  type EnvironmentSettingsTab,
-} from "@/components/environment-settings";
+import { EnvironmentSettings } from "@/components/environment-settings";
 import { Inspector, type InspectorTab } from "@/components/inspector";
 import { NewEnvironmentDialog } from "@/components/new-environment-dialog";
 import { NewSessionWorkspace } from "@/components/new-session-workspace";
@@ -95,8 +92,6 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
   const [settingsEnvironmentId, setSettingsEnvironmentId] = useState<
     string | null
   >(null);
-  const [settingsEnvironmentTab, setSettingsEnvironmentTab] =
-    useState<EnvironmentSettingsTab>("general");
   const [newEnvironmentOpen, setNewEnvironmentOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(false);
@@ -362,16 +357,9 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
     [settingsEnvironmentId, teamEnvironments],
   );
 
-  const openEnvironmentSettings = useCallback(
-    (
-      environmentId: string,
-      initialTab: EnvironmentSettingsTab = "general",
-    ) => {
-      setSettingsEnvironmentTab(initialTab);
-      setSettingsEnvironmentId(environmentId);
-    },
-    [],
-  );
+  const openEnvironmentSettings = useCallback((environmentId: string) => {
+    setSettingsEnvironmentId(environmentId);
+  }, []);
 
   const handleSelectTeam = useCallback(
     (teamId: string) => {
@@ -869,9 +857,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
           onToggleInspector={() => handleInspectorOpenChange(!showInspector)}
           onInspectorTabChange={handleInspectorTabChange}
           onToggleTerminal={() => setTerminalOpen((open) => !open)}
-          onOpenSettings={(tab = "general") =>
-            openEnvironmentSettings(selectedEnvironment.id, tab)
-          }
+          onOpenSettings={() => openEnvironmentSettings(selectedEnvironment.id)}
           onOpenInspector={(tab) => {
             handleInspectorTabChange(tab);
             handleInspectorOpenChange(true);
@@ -924,7 +910,6 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
         <EnvironmentSettings
           key={settingsEnvironment.id}
           environment={settingsEnvironment}
-          initialTab={settingsEnvironmentTab}
           teamName={selectedTeam.name}
           language={preferences.general.language}
           timeZone={preferences.general.timeZone}

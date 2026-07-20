@@ -69,7 +69,6 @@ const CODEX_IMAGE_BODY_LIMIT_BYTES = 36 * 1024 * 1024;
 const CODEX_UPLOAD_BODY_LIMIT_BYTES =
   MAX_CODEX_COMPOSER_UPLOAD_BASE64_LENGTH + 64 * 1024;
 const WORKSPACE_FILE_BODY_LIMIT_BYTES = 7 * 1024 * 1024;
-const MAX_ENVIRONMENT_AUDIT_CURSOR_LENGTH = 4_096;
 const workspaceFileSearchQuerySchema = z
   .string()
   .trim()
@@ -1181,21 +1180,6 @@ function registerApiRoutes(
     },
   );
   app.get<{ Params: { environmentId: string } }>(
-    "/api/v1/environments/:environmentId/audit",
-    async (request) => {
-      const cursor = parseEnvironmentAuditCursor(
-        queryString(request, "cursor"),
-      );
-      const runtime = await services.store.getEnvironmentRuntime(
-        request.principal.userId,
-        request.params.environmentId,
-      );
-      return {
-        data: await services.runtime.getEnvironmentAudit(runtime, { cursor }),
-      };
-    },
-  );
-  app.get<{ Params: { environmentId: string } }>(
     "/api/v1/environments/:environmentId/metrics",
     async (request) => {
       const requestedRange = Number(
@@ -1741,26 +1725,6 @@ function queryString(request: FastifyRequest, name: string) {
   return typeof value === "string" ? value : undefined;
 }
 
-export function parseEnvironmentAuditCursor(value: string | undefined) {
-  if (value === undefined) return undefined;
-  if (value.trim().length === 0) {
-    throw new HttpError(
-      400,
-      "invalid_audit_cursor",
-      "The Environment audit cursor must not be blank.",
-    );
-  }
-  if (value.length > MAX_ENVIRONMENT_AUDIT_CURSOR_LENGTH) {
-    throw new HttpError(
-      400,
-      "invalid_audit_cursor",
-      "The Environment audit cursor exceeds the maximum length of 4,096 characters.",
-    );
-  }
-  // The cursor is opaque. Validate its transport envelope without normalizing it.
-  return value;
-}
-
 function normalizeError(error: unknown): HttpError {
   if (error instanceof HttpError) return error;
   if (error instanceof ZodError) {
@@ -1794,10 +1758,6 @@ const preferencesSchema: z.ZodType<SandpiPreferences> = z.object({
   appearance: z.object({
     theme: z.enum(["system", "light", "dark"]),
     density: z.enum(["comfortable", "compact"]),
-  }),
-  notifications: z.object({
-    sessionCompleted: z.boolean(),
-    needsAttention: z.boolean(),
   }),
 });
 

@@ -12,10 +12,6 @@ export const DEFAULT_CLIENT_PREFERENCES: SandpiPreferences = {
     theme: "system",
     density: "comfortable",
   },
-  notifications: {
-    sessionCompleted: true,
-    needsAttention: true,
-  },
 };
 
 const languageValues = ["en", "zh-CN"] as const;
@@ -85,9 +81,6 @@ export function normalizeClientPreferences(
   const source = isRecord(value) ? value : {};
   const general = isRecord(source.general) ? source.general : {};
   const appearance = isRecord(source.appearance) ? source.appearance : {};
-  const notifications = isRecord(source.notifications)
-    ? source.notifications
-    : {};
 
   return {
     general: {
@@ -109,16 +102,6 @@ export function normalizeClientPreferences(
       density: includes(densityValues, appearance.density)
         ? appearance.density
         : defaults.appearance.density,
-    },
-    notifications: {
-      sessionCompleted:
-        typeof notifications.sessionCompleted === "boolean"
-          ? notifications.sessionCompleted
-          : defaults.notifications.sessionCompleted,
-      needsAttention:
-        typeof notifications.needsAttention === "boolean"
-          ? notifications.needsAttention
-          : defaults.notifications.needsAttention,
     },
   };
 }

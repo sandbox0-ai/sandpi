@@ -21,9 +21,12 @@ test("protects only the Sandpi-owned Workspace root and its descendants", () => 
   assert.equal(isWorkspaceInternalPath("/workspace/src/index.ts"), false);
 });
 
-test("hides directories without hiding root-level dot-files", () => {
-  assert.equal(isWorkspaceIdePathHidden("/workspace/.codex", true), true);
-  assert.equal(isWorkspaceIdePathHidden("/workspace/.codex/state.sqlite"), true);
+test("keeps user dot-paths visible while excluding internal and dependency trees", () => {
+  assert.equal(isWorkspaceIdePathHidden("/workspace/.codex", true), false);
+  assert.equal(isWorkspaceIdePathHidden("/workspace/.codex/state.sqlite"), false);
+  assert.equal(isWorkspaceIdePathHidden("/workspace/.git", true), false);
+  assert.equal(isWorkspaceIdePathHidden("/workspace/project/.config", true), false);
+  assert.equal(isWorkspaceIdePathHidden("/workspace/.sandpi", true), true);
   assert.equal(isWorkspaceIdePathHidden("/workspace/node_modules/pkg/index.js"), true);
   assert.equal(isWorkspaceIdePathHidden("/workspace/.env"), false);
   assert.equal(isWorkspaceIdePathHidden("/workspace/src/.env"), false);

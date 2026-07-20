@@ -1,12 +1,9 @@
 "use client";
 
 import {
-  Braces,
   ChevronDown,
-  ChevronRight,
   LoaderCircle,
   SearchX,
-  ShieldCheck,
 } from "lucide-react";
 import { useId, useMemo } from "react";
 
@@ -40,11 +37,8 @@ interface CodexSessionActivityViewProps {
   timeZone: string;
   projection: CodexConversationProjection;
   rolloutActivity?: CodexRolloutActivityFeed;
-  nativeThreadId: string;
-  historyRevision: number;
   loading: boolean;
   error: string;
-  onOpenEnvironmentAudit: () => void;
   onOpenFiles: () => void;
 }
 
@@ -127,11 +121,8 @@ export function CodexSessionActivityView({
   timeZone,
   projection,
   rolloutActivity,
-  nativeThreadId,
-  historyRevision,
   loading,
   error,
-  onOpenEnvironmentAudit,
   onOpenFiles,
 }: CodexSessionActivityViewProps) {
   const ui = getCodexUiCopy(language).conversation;
@@ -209,25 +200,6 @@ export function CodexSessionActivityView({
             <ChevronDown size={13} aria-hidden="true" />
           </label>
         </header>
-
-        <section className="codex-session-activity-boundary">
-          <details>
-            <summary>
-              <Braces size={13} aria-hidden="true" />
-              <strong>{ui.activitySource}</strong>
-              <ChevronRight size={12} aria-hidden="true" />
-            </summary>
-            <div>
-              <code title={nativeThreadId}>
-                {nativeThreadId} · r{historyRevision}
-              </code>
-            </div>
-          </details>
-          <button type="button" onClick={onOpenEnvironmentAudit}>
-            <ShieldCheck size={13} aria-hidden="true" />
-            {ui.openEnvironmentAudit}
-          </button>
-        </section>
 
         {rolloutActivity?.error ? (
           <section

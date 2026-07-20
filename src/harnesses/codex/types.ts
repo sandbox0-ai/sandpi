@@ -414,7 +414,7 @@ export interface CodexNativeInvalidation {
 /**
  * A Codex-native event stream could not complete its initial Sandbox0
  * handshake. This remains a harness transport error rather than a normalized
- * cross-harness activity or audit record.
+ * cross-harness activity record.
  */
 export interface CodexNativeStreamFailure {
   status: number;

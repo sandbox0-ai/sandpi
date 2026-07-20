@@ -1,7 +1,6 @@
 import type {
   Environment,
   NetworkPolicy,
-  EnvironmentAuditFeed,
   RuntimeMetrics,
   WorkspaceDirectoryListing,
   WorkspaceFileSearchResult,
@@ -89,14 +88,6 @@ export interface RecoveredCodexEnvironmentRuntime {
 
 export interface EnvironmentLifecyclePolicyResult {
   hardExpiresAt: Date;
-}
-
-export interface EnvironmentAuditPageOptions {
-  /**
-   * Opaque Sandbox0 cursor. Event history is ordered ascending, so a cursor
-   * continues from the previous page toward newer signed records.
-   */
-  cursor?: string;
 }
 
 export interface RuntimeMetricWindow {
@@ -258,10 +249,6 @@ export interface RuntimeAdapter {
   watchWorkspaceFiles(
     runtime: EnvironmentRuntimeRecord,
   ): Promise<RuntimeWorkspaceWatchHandle>;
-  getEnvironmentAudit(
-    runtime: EnvironmentRuntimeRecord,
-    options?: EnvironmentAuditPageOptions,
-  ): Promise<EnvironmentAuditFeed>;
   getMetrics(
     runtime: EnvironmentRuntimeRecord,
     window: RuntimeMetricWindow,

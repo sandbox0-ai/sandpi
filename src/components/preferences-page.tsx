@@ -1,16 +1,11 @@
 "use client";
 
 import {
-  Bell,
   Check,
   CircleAlert,
-  Clock3,
-  Database,
   LoaderCircle,
   Palette,
   Settings2,
-  ShieldCheck,
-  SlidersHorizontal,
 } from "lucide-react";
 import {
   type ComponentType,
@@ -38,12 +33,7 @@ import type { SandpiPreferences, SandpiUser, Team } from "@/lib/types";
 
 import styles from "./preferences-page.module.css";
 
-type PreferenceTab =
-  | "general"
-  | "appearance"
-  | "notifications"
-  | "security"
-  | "advanced";
+type PreferenceTab = "general" | "appearance";
 
 interface PreferencesPageProps {
   initialPreferences: SandpiPreferences;
@@ -58,9 +48,6 @@ const tabs: Array<{
 }> = [
   { id: "general", label: "General", icon: Settings2 },
   { id: "appearance", label: "Appearance", icon: Palette },
-  { id: "notifications", label: "Notifications", icon: Bell },
-  { id: "security", label: "Security", icon: ShieldCheck },
-  { id: "advanced", label: "Advanced", icon: SlidersHorizontal },
 ];
 
 export function PreferencesPage({
@@ -170,19 +157,6 @@ export function PreferencesPage({
     markChanged();
   }
 
-  function updateNotification<
-    Key extends keyof SandpiPreferences["notifications"],
-  >(
-    key: Key,
-    value: SandpiPreferences["notifications"][Key],
-  ) {
-    setDraft((current) => ({
-      ...current,
-      notifications: { ...current.notifications, [key]: value },
-    }));
-    markChanged();
-  }
-
   async function savePreferences() {
     if (!hasChanges || saving) {
       return;
@@ -276,9 +250,6 @@ export function PreferencesPage({
                     {
                       General: "通用",
                       Appearance: "外观",
-                      Notifications: "通知",
-                      Security: "安全",
-                      Advanced: "高级",
                     }[tab.label] ?? tab.label,
                   )}
                 </span>
@@ -331,8 +302,8 @@ export function PreferencesPage({
               <PreferenceRow
                 title={text("Time zone", "时区")}
                 description={text(
-                  "Used for Session activity, Environment audit events and scheduled features.",
-                  "用于 Session 活动、Environment 审计事件和定时功能。",
+                  "Used for Session activity and scheduled features.",
+                  "用于 Session 活动和定时功能。",
                 )}
                 control={
                   <select
@@ -451,105 +422,6 @@ export function PreferencesPage({
             </PreferenceSection>
           ) : null}
 
-          {activeTab === "notifications" ? (
-            <PreferenceSection
-              eyebrow={text("Stay informed", "及时了解")}
-              title={text("Notifications", "通知")}
-              description={text(
-                "Choose which remote Session state changes should get your attention.",
-                "选择需要提醒你的远程 Session 状态变化。",
-              )}
-            >
-              <ToggleRow
-                title={text("Session completed", "Session 已完成")}
-                description={text(
-                  "Notify when a coding agent finishes a turn.",
-                  "coding agent 完成一轮任务时通知。",
-                )}
-                checked={draft.notifications.sessionCompleted}
-                onChange={(checked) =>
-                  updateNotification("sessionCompleted", checked)
-                }
-              />
-              <ToggleRow
-                title={text("Needs attention", "需要处理")}
-                description={text(
-                  "Notify when a Session needs approval, clarification or credentials.",
-                  "Session 需要审批、澄清或凭证时通知。",
-                )}
-                checked={draft.notifications.needsAttention}
-                onChange={(checked) =>
-                  updateNotification("needsAttention", checked)
-                }
-              />
-              <Callout icon={<Bell size={17} aria-hidden="true" />}>
-                {text(
-                  "Browser notifications require permission. Mobile push and email delivery will be configured here when those channels are available.",
-                  "浏览器通知需要授权。移动推送和邮件可用后也将在这里配置。",
-                )}
-              </Callout>
-            </PreferenceSection>
-          ) : null}
-
-          {activeTab === "security" ? (
-            <PreferenceSection
-              eyebrow={text("Account security", "账户安全")}
-              title={text("Security", "安全")}
-              description={text(
-                "Review and revoke your Sandpi account sessions independently from coding-agent credentials.",
-                "查看和撤销 Sandpi 账户会话；它与 coding agent 凭证相互独立。",
-              )}
-            >
-              <CapabilityCard
-                icon={<ShieldCheck size={18} aria-hidden="true" />}
-                title={text(
-                  "Active devices and sessions",
-                  "活跃设备与登录会话",
-                )}
-                badge={text("Coming later", "后续支持")}
-                description={text(
-                  "Review signed-in devices and revoke browser sessions from one place.",
-                  "集中查看已登录设备并撤销浏览器会话。",
-                )}
-              />
-            </PreferenceSection>
-          ) : null}
-
-          {activeTab === "advanced" ? (
-            <PreferenceSection
-              eyebrow={text("Local tools", "本地工具")}
-              title={text("Advanced", "高级")}
-              description={text(
-                "Troubleshooting controls will stay local to this browser unless a deployment explicitly enables upload.",
-                "除非部署明确启用上传，否则故障排查数据只保留在此浏览器。",
-              )}
-            >
-              <CapabilityCard
-                icon={<Database size={18} aria-hidden="true" />}
-                title={text("Diagnostics bundle", "诊断包")}
-                badge={text("Coming later", "后续支持")}
-                description={text(
-                  "Export local UI logs and browser metadata for support without including workspace files or prompts.",
-                  "导出本地界面日志和浏览器元数据用于支持，不包含 workspace 文件或提示词。",
-                )}
-              />
-              <CapabilityCard
-                icon={<Clock3 size={18} aria-hidden="true" />}
-                title={text("Local cache controls", "本地缓存控制")}
-                badge={text("Coming later", "后续支持")}
-                description={text(
-                  "Inspect and clear browser-only interface state without affecting running coding agent Sessions.",
-                  "查看和清理仅限浏览器的界面状态，不影响运行中的 coding agent Session。",
-                )}
-              />
-              <Callout icon={<CircleAlert size={17} aria-hidden="true" />}>
-                {text(
-                  "Advanced controls are intentionally read-only until their storage and privacy contracts are defined.",
-                  "在明确存储和隐私契约之前，高级控制保持只读。",
-                )}
-              </Callout>
-            </PreferenceSection>
-          ) : null}
         </main>
 
         <footer className={styles.saveBar}>
@@ -653,76 +525,11 @@ function PreferenceRow({
   );
 }
 
-function ToggleRow({
-  title,
-  description,
-  checked,
-  onChange,
-}: {
-  title: string;
-  description: string;
-  checked: boolean;
-  onChange: (checked: boolean) => void;
-}) {
-  return (
-    <PreferenceRow
-      title={title}
-      description={description}
-      control={
-        <button
-          type="button"
-          className={`${styles.toggle} ${checked ? styles.on : ""}`}
-          role="switch"
-          aria-checked={checked}
-          aria-label={title}
-          onClick={() => onChange(!checked)}
-        >
-          <span aria-hidden="true" />
-        </button>
-      }
-    />
-  );
-}
-
 function OptionGroup({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className={styles.optionGroup}>
       <span className={styles.optionLabel}>{label}</span>
       {children}
     </div>
-  );
-}
-
-function Callout({ icon, children }: { icon: ReactNode; children: ReactNode }) {
-  return (
-    <div className={styles.callout}>
-      {icon}
-      <p>{children}</p>
-    </div>
-  );
-}
-
-function CapabilityCard({
-  icon,
-  title,
-  badge,
-  description,
-}: {
-  icon: ReactNode;
-  title: string;
-  badge: string;
-  description: string;
-}) {
-  return (
-    <article className={styles.capabilityCard}>
-      <span className={styles.capabilityIcon}>{icon}</span>
-      <div>
-        <div className={styles.capabilityTitle}>
-          <h3>{title}</h3>
-          <span>{badge}</span>
-        </div>
-        <p>{description}</p>
-      </div>
-    </article>
   );
 }

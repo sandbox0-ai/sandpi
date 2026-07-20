@@ -77,7 +77,7 @@ test("does not duplicate a changed file already returned by Sandbox0", () => {
   assert.equal(merged[0]?.children?.[0]?.children?.length, 1);
 });
 
-test("removes internal and hidden directories from native and Git-only trees", () => {
+test("removes internal paths while retaining user-owned dot-directories", () => {
   const files: WorkspaceFile[] = [
     {
       id: "workspace",
@@ -130,7 +130,7 @@ test("removes internal and hidden directories from native and Git-only trees", (
   const visible = userVisibleWorkspaceFiles(files);
   assert.deepEqual(
     visible[0]?.children?.map((file) => file.path),
-    ["/workspace/notes.md"],
+    ["/workspace/.sandpi-other", "/workspace/notes.md"],
   );
   const merged = mergeWorkspaceGitFiles(files, [
     internalChange,
@@ -138,6 +138,6 @@ test("removes internal and hidden directories from native and Git-only trees", (
   ]);
   assert.deepEqual(
     merged[0]?.children?.map((file) => file.path),
-    ["/workspace/notes.md"],
+    ["/workspace/.sandpi-other", "/workspace/notes.md"],
   );
 });

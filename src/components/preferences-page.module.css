@@ -187,39 +187,6 @@
   font-size: 11px;
 }
 
-.toggle {
-  position: relative;
-  width: 38px;
-  height: 22px;
-  padding: 0;
-  border: 1px solid var(--line, #deddd7);
-  border-radius: 999px;
-  background: var(--selected, #dfddd5);
-  cursor: pointer;
-  transition: background 130ms ease;
-}
-
-.toggle span {
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: var(--panel-strong, #fff);
-  box-shadow: 0 1px 2px rgb(0 0 0 / 20%);
-  transition: transform 130ms ease;
-}
-
-.toggle.on {
-  border-color: var(--green, #258658);
-  background: var(--green, #258658);
-}
-
-.toggle.on span {
-  transform: translateX(16px);
-}
-
 .optionGroup {
   display: flex;
   flex-direction: column;
@@ -329,79 +296,6 @@
 
 .densityGrid button:last-child .densityPreview {
   gap: 2px;
-}
-
-.callout {
-  display: flex;
-  align-items: flex-start;
-  gap: 11px;
-  padding: 13px 14px;
-  border: 1px solid var(--line, #deddd7);
-  border-radius: 9px;
-  background: var(--sidebar, #efeee9);
-  color: var(--ink-soft, #62615c);
-}
-
-.callout > svg {
-  flex: 0 0 auto;
-  margin-top: 1px;
-  color: var(--blue, #416d9d);
-}
-
-.callout p {
-  margin: 0;
-  font-size: 10.5px;
-  line-height: 1.6;
-}
-
-.capabilityCard {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 13px;
-  padding: 15px;
-  border: 1px solid var(--line, #deddd7);
-  border-radius: 10px;
-  background: var(--panel-strong, #fff);
-}
-
-.capabilityIcon {
-  display: inline-flex;
-  width: 36px;
-  height: 36px;
-  align-items: center;
-  justify-content: center;
-  border-radius: 8px;
-  background: var(--sidebar, #efeee9);
-  color: var(--ink-soft, #62615c);
-}
-
-.capabilityTitle {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-}
-
-.capabilityTitle h3 {
-  margin: 0;
-  font-size: 12px;
-  font-weight: 680;
-}
-
-.capabilityTitle span {
-  padding: 3px 7px;
-  border-radius: 999px;
-  background: var(--blue-soft, #e8eef6);
-  color: var(--blue, #416d9d);
-  font-size: 8.5px;
-  font-weight: 680;
-}
-
-.capabilityCard p {
-  margin: 6px 0 0;
-  color: var(--ink-faint, #8a8982);
-  font-size: 10px;
-  line-height: 1.55;
 }
 
 .saveBar {
@@ -539,11 +433,6 @@
   height: 33px;
 }
 
-:global(html[data-density="compact"]) .capabilityCard,
-:global(html[data-density="compact"]) .callout {
-  padding: 10px 12px;
-}
-
 @keyframes spin {
   to {
     transform: rotate(360deg);
@@ -670,27 +559,9 @@
     max-width: none;
   }
 
-  .preferenceRow:has(.toggle) {
-    position: relative;
-    padding-right: 52px;
-  }
-
-  .preferenceRow:has(.toggle) .rowControl {
-    position: absolute;
-    top: 18px;
-    right: 1px;
-    width: auto;
-  }
-
-  .capabilityTitle {
-    align-items: flex-start;
-    flex-direction: column;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .toggle,
-  .toggle span,
   .spinner {
     transition: none;
     animation: none;

@@ -1,5 +1,4 @@
 import type { SandpiPreferences } from "./types";
-import { formatUnixTimestamp, type UnixTimestamp } from "./time";
 
 export type OperationLanguage = SandpiPreferences["general"]["language"];
 export type SendShortcut = SandpiPreferences["general"]["sendShortcut"];
@@ -25,42 +24,6 @@ export function shouldSubmitComposer(
   }
 
   return true;
-}
-
-export function getAuditTimeFormatOptions(timeZone: string) {
-  return {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-    ...(timeZone === "auto" ? {} : { timeZone }),
-  } satisfies Intl.DateTimeFormatOptions;
-}
-
-export function formatAuditTime(
-  timestamp: UnixTimestamp,
-  language: OperationLanguage,
-  timeZone: string,
-) {
-  return formatUnixTimestamp(
-    timestamp,
-    language,
-    timeZone,
-    getAuditTimeFormatOptions("auto"),
-  );
-}
-
-export function formatAuditDateTime(
-  timestamp: UnixTimestamp,
-  language: OperationLanguage,
-  timeZone: string,
-) {
-  const options: Intl.DateTimeFormatOptions = {
-    month: "short",
-    day: "numeric",
-    ...getAuditTimeFormatOptions("auto"),
-  };
-  return formatUnixTimestamp(timestamp, language, timeZone, options);
 }
 
 const copy = {
@@ -110,34 +73,6 @@ const copy = {
       openNewView: "Open in Sandpi Cloud IDE (coming later)",
       binaryFilePreview: "Binary files cannot be previewed here.",
       volumeLive: (volumeId: string) => `Volume live · ${volumeId}`,
-      auditEvents: "Environment audit",
-      phaseLabel: (phase: "attempt" | "result" | "effect") =>
-        ({ attempt: "Requested", result: "Request completed", effect: "Observed" })[
-          phase
-        ],
-      outcomeLabel: (
-        outcome:
-          | "completed"
-          | "denied"
-          | "error"
-          | "succeeded"
-          | "failed"
-          | "accepted"
-          | "unknown",
-      ) =>
-        ({
-          completed: "Completed",
-          succeeded: "Completed",
-          accepted: "Accepted",
-          denied: "Blocked",
-          failed: "Failed",
-          error: "Failed",
-          unknown: "Unknown",
-        })[outcome],
-      signatureVerified: "Signature verified",
-      signatureInvalid: "Invalid signature",
-      signatureUnavailable: "Verification unavailable",
-      eventIdConflict: "Event ID conflict",
       lastHour: "Last hour",
       last15Minutes: "Last 15 minutes",
       last6Hours: "Last 6 hours",
@@ -233,34 +168,6 @@ const copy = {
       openNewView: "在 Sandpi Cloud IDE 中打开（后续支持）",
       binaryFilePreview: "暂不支持在这里预览二进制文件。",
       volumeLive: (volumeId: string) => `Volume 在线 · ${volumeId}`,
-      auditEvents: "Environment 审计",
-      phaseLabel: (phase: "attempt" | "result" | "effect") =>
-        ({ attempt: "已请求", result: "请求已完成", effect: "已观察到结果" })[
-          phase
-        ],
-      outcomeLabel: (
-        outcome:
-          | "completed"
-          | "denied"
-          | "error"
-          | "succeeded"
-          | "failed"
-          | "accepted"
-          | "unknown",
-      ) =>
-        ({
-          completed: "已完成",
-          succeeded: "已完成",
-          accepted: "已接受",
-          denied: "已阻止",
-          failed: "失败",
-          error: "失败",
-          unknown: "未知",
-        })[outcome],
-      signatureVerified: "签名已验证",
-      signatureInvalid: "签名无效",
-      signatureUnavailable: "无法验证签名",
-      eventIdConflict: "事件 ID 冲突",
       lastHour: "最近一小时",
       last15Minutes: "最近 15 分钟",
       last6Hours: "最近 6 小时",

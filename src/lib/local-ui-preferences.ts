@@ -12,8 +12,6 @@ export const LOCAL_UI_PREFERENCES_CHANGED_EVENT =
 export type LocalInspectorTab = "files" | "activity" | "metrics";
 export type LocalCodexSessionActivityFilter =
   "all" | "issues" | "external" | "commands" | "files" | "agents" | "system";
-export type LocalEnvironmentAuditFilter =
-  "all" | "attention" | "network" | "changes" | "routine";
 
 export interface LocalCodingAgentComposerPreference {
   environmentId: string;
@@ -34,7 +32,6 @@ export interface SandpiLocalUiPreferences {
   };
   filters: {
     codexSessionActivity: LocalCodexSessionActivityFilter;
-    environmentAudit: LocalEnvironmentAuditFilter;
   };
   codingAgentComposers: LocalCodingAgentComposerPreference[];
 }
@@ -49,7 +46,6 @@ export const DEFAULT_LOCAL_UI_PREFERENCES: SandpiLocalUiPreferences = {
   },
   filters: {
     codexSessionActivity: "all",
-    environmentAudit: "all",
   },
   codingAgentComposers: [],
 };
@@ -66,13 +62,6 @@ const CODEX_SESSION_ACTIVITY_FILTERS = [
   "files",
   "agents",
   "system",
-] as const;
-const ENVIRONMENT_AUDIT_FILTERS = [
-  "all",
-  "attention",
-  "network",
-  "changes",
-  "routine",
 ] as const;
 const MAX_CODING_AGENT_COMPOSER_PREFERENCES = 100;
 const MAX_REASONING_EFFORTS_PER_COMPOSER = 50;
@@ -226,11 +215,6 @@ export function normalizeLocalUiPreferences(
         CODEX_SESSION_ACTIVITY_FILTERS,
         filters.codexSessionActivity,
         DEFAULT_LOCAL_UI_PREFERENCES.filters.codexSessionActivity,
-      ),
-      environmentAudit: oneOf(
-        ENVIRONMENT_AUDIT_FILTERS,
-        filters.environmentAudit,
-        DEFAULT_LOCAL_UI_PREFERENCES.filters.environmentAudit,
       ),
     },
     codingAgentComposers,

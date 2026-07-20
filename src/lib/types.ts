@@ -202,10 +202,6 @@ export interface SandpiPreferences {
     theme: "system" | "light" | "dark";
     density: "comfortable" | "compact";
   };
-  notifications: {
-    sessionCompleted: boolean;
-    needsAttention: boolean;
-  };
 }
 
 export interface WorkspaceFile {
@@ -337,33 +333,6 @@ export type WorkspaceIdeEvent =
       at: UnixTimestamp;
     };
 
-type SdkSandboxAuditEvent = SandboxObservabilityEvents["events"][number];
-
-/**
- * JSON-safe transport projection of sdk-js' canonical signed Sandbox0 event.
- * sdk-js converts timestamps to Date instances; Sandpi converts only those two
- * fields to Unix seconds at its server/client boundary and preserves every other
- * canonical field, including unknown attributes, without normalization.
- *
- * Supervisor and native harness events never belong in this feed. They have
- * separate replay contracts and must not be presented as signed Sandbox0 audit.
- */
-export type EnvironmentAuditEvent = Omit<
-  SdkSandboxAuditEvent,
-  "occurredAt" | "ingestedAt"
-> & {
-  occurredAt: UnixTimestamp;
-  ingestedAt: UnixTimestamp;
-};
-
-/** Pagination metadata is part of the SDK response and must survive API transport. */
-export type EnvironmentAuditFeed = Omit<
-  SandboxObservabilityEvents,
-  "events"
-> & {
-  events: EnvironmentAuditEvent[];
-};
-
 export interface MetricPoint {
   at: UnixTimestamp;
   value: number;
@@ -467,4 +436,3 @@ export interface SandpiBootstrap {
   selectedEnvironmentId: string;
   selectedSessionId: string;
 }
-import type { SandboxObservabilityEvents } from "sandbox0";

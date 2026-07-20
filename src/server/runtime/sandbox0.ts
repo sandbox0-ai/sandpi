@@ -18,7 +18,6 @@ import {
 import type {
   Environment,
   RuntimeMetricSeries,
-  EnvironmentAuditFeed,
   RuntimeMetrics,
   WorkspaceDirectoryListing,
   WorkspaceFile,
@@ -52,7 +51,6 @@ import {
   CODEX_MCP_OAUTH_CALLBACK_BASE_PATH,
   CODEX_MCP_OAUTH_CREDENTIAL_PATH,
   type CodexAuthRuntime,
-  type EnvironmentAuditPageOptions,
   type EnvironmentRuntimeRecord,
   type ProvisionedEnvironment,
   type RecoveredCodexEnvironmentRuntime,
@@ -1603,8 +1601,8 @@ export class Sandbox0Runtime implements RuntimeAdapter {
               continue;
             }
             if (isWorkspaceIdePathHidden(eventPath)) {
-              // Hidden directories are absent from the Workspace tree. Ignore
-              // their descendants without suppressing root-level hidden files.
+              // Excluded generated directories are absent from the Workspace
+              // tree. Sandpi-internal paths were rejected above.
               continue;
             }
             yield { event: message.event, path: eventPath };
@@ -1636,27 +1634,6 @@ export class Sandbox0Runtime implements RuntimeAdapter {
       );
     }
     return result.stdout;
-  }
-
-  async getEnvironmentAudit(
-    runtime: EnvironmentRuntimeRecord,
-    options: EnvironmentAuditPageOptions = {},
-  ): Promise<EnvironmentAuditFeed> {
-    try {
-      const response = await this.client.sandboxes
-        .sandbox(runtime.sandboxId)
-        .listObservabilityEvents({ limit: 250, cursor: options.cursor });
-      return {
-        ...response,
-        events: response.events.map((event) => ({
-          ...event,
-          occurredAt: toUnixTimestamp(event.occurredAt),
-          ingestedAt: toUnixTimestamp(event.ingestedAt),
-        })),
-      };
-    } catch (error) {
-      throw translateObservabilityError(error, "audit");
-    }
   }
 
   async getMetrics(
@@ -1715,7 +1692,7 @@ export class Sandbox0Runtime implements RuntimeAdapter {
         networkTransmit: metricProjection(transmit),
       };
     } catch (error) {
-      throw translateObservabilityError(error, "metrics");
+      throw translateMetricsError(error);
     }
   }
 
@@ -2639,10 +2616,7 @@ function metricProjection(series: SdkRuntimeMetricSeries): RuntimeMetricSeries {
   };
 }
 
-function translateObservabilityError(
-  error: unknown,
-  surface: "audit" | "metrics",
-) {
+function translateMetricsError(error: unknown) {
   if (
     error instanceof APIError &&
     (error.statusCode === 403 || error.statusCode === 503)
@@ -2650,11 +2624,11 @@ function translateObservabilityError(
     return new HttpError(
       error.statusCode,
       error.statusCode === 403
-        ? `${surface}_not_authorized`
-        : `${surface}_unavailable`,
+        ? "metrics_not_authorized"
+        : "metrics_unavailable",
       error.statusCode === 403
-        ? `${surface === "audit" ? "Signed audit" : "Runtime metrics"} is not licensed or authorized for this deployment.`
-        : `${surface === "audit" ? "Signed audit" : "Runtime metrics"} is not configured or temporarily unavailable.`,
+        ? "Runtime metrics is not licensed or authorized for this deployment."
+        : "Runtime metrics is not configured or temporarily unavailable.",
     );
   }
   return translateSandbox0Error(error);

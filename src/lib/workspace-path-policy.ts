@@ -63,8 +63,9 @@ export function workspaceFileParentDirectories(candidate: string) {
 }
 
 /**
- * Shared file-tree visibility rule. Dot-directories and generated dependency
- * trees are hidden, while root-level dot-files such as `.env` remain visible.
+ * Shared file-tree visibility rule. User-owned dot-files and dot-directories
+ * remain visible; only Sandpi-internal paths and generated dependency trees
+ * are excluded.
  */
 export function isWorkspaceIdePathHidden(
   candidate: string,
@@ -74,9 +75,7 @@ export function isWorkspaceIdePathHidden(
   if (!normalized) return true;
   const parts = normalized.slice(`${WORKSPACE_ROOT}/`.length).split("/");
   const directoryParts = leafIsDirectory ? parts : parts.slice(0, -1);
-  return directoryParts.some(
-    (component) =>
-      component.startsWith(".") ||
-      WORKSPACE_IGNORED_DIRECTORY_NAME_SET.has(component),
+  return directoryParts.some((component) =>
+    WORKSPACE_IGNORED_DIRECTORY_NAME_SET.has(component),
   );
 }
