@@ -295,11 +295,6 @@ export class CodexEnvironmentAuthService {
     );
   }
 
-  async modelsForEnvironment(userId: string, environmentId: string) {
-    const stored = await this.authStore.getCredential(userId, environmentId);
-    return stored?.metadata.models ?? { data: [] };
-  }
-
   async accountForEnvironment(
     userId: string,
     environmentId: string,
@@ -530,21 +525,6 @@ export class CodexEnvironmentAuthService {
     });
     if (account.error) throw rpcError("codex_account_read_failed", account.error);
     flow = await this.authStore.getFlowById(flow.id);
-    let models: unknown;
-    try {
-      const modelList = await this.rpc(flow, `model-list:${flow.id}`, {
-        method: "model/list",
-        id: `model-list:${flow.id}`,
-        params: {},
-      });
-      if (!modelList.error) models = modelList.result;
-    } catch (error) {
-      this.logger.warn(
-        { flowId: flow.id, error: errorMessage(error) },
-        "Codex model catalog could not be cached during login",
-      );
-    }
-    flow = await this.authStore.getFlowById(flow.id);
     const authJson = await this.runtime.readCodexAuthJson(flow.runtime!);
     validateCodexCredentialJson(authJson);
     const encrypted = this.requireEncryption().encrypt(
@@ -555,7 +535,7 @@ export class CodexEnvironmentAuthService {
       flowId: flow.id,
       environmentId: flow.environmentId,
       encrypted,
-      metadata: accountMetadata(account.result, models),
+      metadata: accountMetadata(account.result),
     });
     await this.cleanup(completed);
     return completed;
@@ -681,16 +661,15 @@ function loginCompletion(flow: CodexDeviceAuthFlow) {
   };
 }
 
-function accountMetadata(value: unknown, models?: unknown): Record<string, unknown> {
+function accountMetadata(value: unknown): Record<string, unknown> {
   if (!isRecord(value) || !isRecord(value.account)) {
-    return { type: "chatgpt", ...(models === undefined ? {} : { models }) };
+    return { type: "chatgpt" };
   }
   const account = value.account;
   return {
     type: account.type === "chatgpt" ? "chatgpt" : "unknown",
     ...(typeof account.email === "string" ? { email: account.email } : {}),
     ...(typeof account.planType === "string" ? { planType: account.planType } : {}),
-    ...(models === undefined ? {} : { models }),
   };
 }
 

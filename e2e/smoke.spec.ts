@@ -115,6 +115,149 @@ test("loads the live workspace and Environment credential surface", async ({
   expect(browserErrors).toEqual([]);
 });
 
+test("waits for native New Session models and scopes reasoning effort by model", async ({
+  page,
+  request,
+}) => {
+  const environment = await readyEnvironment(request);
+  test.skip(
+    !environment || environment.codingAgent.status !== "connected",
+    "A ready Environment with Codex connected is required for this check.",
+  );
+  if (!environment || environment.codingAgent.status !== "connected") return;
+
+  const browserErrors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") browserErrors.push(message.text());
+  });
+  page.on("pageerror", (error) => browserErrors.push(error.message));
+
+  let releaseCatalog!: () => void;
+  let createSessionBody: Record<string, unknown> | undefined;
+  const catalogGate = new Promise<void>((resolve) => {
+    releaseCatalog = resolve;
+  });
+  await page.route("**/api/v1/sessions", async (route) => {
+    if (route.request().method() !== "POST") {
+      await route.continue();
+      return;
+    }
+    createSessionBody = route.request().postDataJSON() as Record<
+      string,
+      unknown
+    >;
+    await route.fulfill({
+      // Stop after inspecting the request without creating a real Session or
+      // turning the intentional interception into a browser network error.
+      status: 204,
+    });
+  });
+  await page.route(
+    `**/api/v1/environments/${encodeURIComponent(environment.id)}/harnesses/codex/models`,
+    async (route) => {
+      await catalogGate;
+      await route.fulfill({
+        json: {
+          data: {
+            data: [
+              {
+                id: "e2e-codex-fast",
+                displayName: "E2E Codex Fast",
+                isDefault: true,
+                defaultReasoningEffort: "high",
+                supportedReasoningEfforts: [
+                  {
+                    reasoningEffort: "low",
+                    description: "Faster answers",
+                  },
+                  {
+                    reasoningEffort: "high",
+                    description: "Deeper reasoning",
+                  },
+                ],
+              },
+              {
+                id: "e2e-codex-deep",
+                displayName: "E2E Codex Deep",
+                isDefault: false,
+                defaultReasoningEffort: "max",
+                supportedReasoningEfforts: [
+                  {
+                    reasoningEffort: "medium",
+                    description: "Balanced reasoning",
+                  },
+                  {
+                    reasoningEffort: "max",
+                    description: "Maximum reasoning",
+                  },
+                ],
+              },
+            ],
+          },
+          meta: { availability: "available", source: "codex" },
+        },
+      });
+    },
+  );
+
+  await page.goto(
+    `/?team=${encodeURIComponent(environment.teamId)}&environment=${encodeURIComponent(environment.id)}&new=1`,
+  );
+  const modelPicker = page.getByRole("combobox", {
+    name: `Select ${environment.codingAgent.label} model`,
+  });
+  await expect(modelPicker).toBeDisabled();
+  await expect(modelPicker).toContainText(
+    `Starting ${environment.codingAgent.label}…`,
+  );
+  await expect(
+    page.getByRole("status").filter({
+      hasText: `Starting ${environment.codingAgent.label}…`,
+    }),
+  ).toBeVisible();
+  await expect(modelPicker.locator("option")).not.toContainText(
+    `${environment.codingAgent.label} default`,
+  );
+
+  releaseCatalog();
+  await expect(modelPicker).toBeEnabled();
+  await expect(modelPicker).toHaveValue("e2e-codex-fast");
+  const fastEffortPicker = page.getByRole("combobox", {
+    name: "Select reasoning effort for E2E Codex Fast",
+  });
+  await expect(fastEffortPicker).toHaveValue("high");
+  await expect(fastEffortPicker.locator("option")).toHaveText(["Low", "High"]);
+
+  await modelPicker.selectOption("e2e-codex-deep");
+  const deepEffortPicker = page.getByRole("combobox", {
+    name: "Select reasoning effort for E2E Codex Deep",
+  });
+  await expect(deepEffortPicker).toHaveValue("max");
+  await expect(deepEffortPicker.locator("option")).toHaveText([
+    "Medium",
+    "Max",
+  ]);
+  await deepEffortPicker.selectOption("medium");
+  await modelPicker.selectOption("e2e-codex-fast");
+  await expect(fastEffortPicker).toHaveValue("high");
+  await modelPicker.selectOption("e2e-codex-deep");
+  await expect(deepEffortPicker).toHaveValue("medium");
+  await page
+    .getByPlaceholder(`Ask ${environment.codingAgent.label} to work on something…`)
+    .fill("Verify native model settings.");
+  await page
+    .getByRole("button", {
+      name: "Send instruction and start Session",
+    })
+    .click();
+  await expect.poll(() => createSessionBody).toMatchObject({
+    environmentId: environment.id,
+    modelId: "e2e-codex-deep",
+    reasoningEffort: "medium",
+  });
+  expect(browserErrors).toEqual([]);
+});
+
 test("refreshes the Codex account and live limits after device login", async ({
   page,
   request,
@@ -1923,6 +2066,17 @@ test("shows a matching skeleton while each Inspector tab loads", async ({
                 id: "e2e-native-codex-model",
                 displayName: "E2E native Codex model",
                 isDefault: true,
+                defaultReasoningEffort: "high",
+                supportedReasoningEfforts: [
+                  {
+                    reasoningEffort: "low",
+                    description: "Faster answers",
+                  },
+                  {
+                    reasoningEffort: "high",
+                    description: "Deeper reasoning",
+                  },
+                ],
               },
             ],
           },
@@ -1976,6 +2130,18 @@ test("shows a matching skeleton while each Inspector tab loads", async ({
   expect(firstNativeModel).toBeTruthy();
   await modelPicker.selectOption(firstNativeModel ?? "");
   await expect(modelPicker).toHaveValue(firstNativeModel ?? "");
+  const reasoningEffortPicker = page.getByRole("combobox", {
+    name: "Select reasoning effort for E2E native Codex model",
+  });
+  await expect(
+    page.locator(
+      ".conversation-header-actions button[aria-haspopup='menu']",
+    ),
+  ).toHaveCount(0);
+  await expect(reasoningEffortPicker).toBeEnabled();
+  await expect(reasoningEffortPicker).toHaveValue("high");
+  await reasoningEffortPicker.selectOption("low");
+  await expect(reasoningEffortPicker).toHaveValue("low");
   expect(browserErrors).toEqual([]);
 });
 

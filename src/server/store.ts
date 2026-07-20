@@ -88,6 +88,7 @@ export interface StoredSessionRuntime {
   environmentId: string;
   nativeSessionId?: string;
   modelId?: string;
+  reasoningEffort?: string;
   historyRevision: number;
   activeNativeTurnId?: string;
   pendingTurnRequestId?: string;
@@ -164,6 +165,7 @@ interface SessionRow extends QueryResultRow {
   updated_at: Date;
   native_session_id: string | null;
   model_id: string | null;
+  reasoning_effort: string | null;
   history_revision: string | number | null;
 }
 
@@ -196,6 +198,7 @@ interface SessionRuntimeRow extends QueryResultRow {
   environment_id: string;
   native_session_id: string | null;
   model_id: string | null;
+  reasoning_effort: string | null;
   history_revision: string | number;
   active_native_turn_id: string | null;
   pending_turn_request_id: string | null;
@@ -1352,6 +1355,7 @@ export class SandpiStore {
     environment: Environment;
     title: string;
     modelId?: string;
+    reasoningEffort?: string;
   }) {
     return this.insertSessionMetadata({ ...input, kind: "environment" });
   }
@@ -1361,6 +1365,7 @@ export class SandpiStore {
     environment: Environment;
     source: CodingSession;
     modelId?: string;
+    reasoningEffort?: string;
     title?: string;
     kind?: "session" | "turn";
     sourceNativeItemId?: string;
@@ -1372,6 +1377,7 @@ export class SandpiStore {
         input.title ??
         `${input.source.title} (${input.kind === "turn" ? "turn fork" : "fork"})`,
       modelId: input.modelId,
+      reasoningEffort: input.reasoningEffort,
       kind: input.kind ?? "session",
       originLabel: input.source.title,
       sourceSessionId: input.source.id,
@@ -1384,6 +1390,7 @@ export class SandpiStore {
     environment: Environment;
     title: string;
     modelId?: string;
+    reasoningEffort?: string;
     kind: "environment" | "session" | "turn";
     originLabel?: string;
     sourceSessionId?: string;
@@ -1409,7 +1416,10 @@ export class SandpiStore {
           input.userId,
           input.title,
           JSON.stringify({ protocol: "codex-app-server" }),
-          JSON.stringify({ modelId: input.modelId ?? null }),
+          JSON.stringify({
+            modelId: input.modelId ?? null,
+            reasoningEffort: input.reasoningEffort ?? null,
+          }),
           input.environment.revision,
           input.kind,
           input.originLabel ?? input.environment.name,
@@ -1418,9 +1428,10 @@ export class SandpiStore {
         ],
       );
       await client.query(
-        `INSERT INTO session_runtime (session_id, model_id)
-         VALUES ($1, $2)`,
-        [id, input.modelId ?? null],
+        `INSERT INTO session_runtime (
+           session_id, model_id, reasoning_effort
+         ) VALUES ($1, $2, $3)`,
+        [id, input.modelId ?? null, input.reasoningEffort ?? null],
       );
       await client.query("COMMIT");
       return id;
@@ -1711,6 +1722,7 @@ export class SandpiStore {
     sessionId: string,
     modelId: string | undefined,
     submission: TurnSubmissionCoordinates,
+    reasoningEffort?: string,
   ) {
     await this.getSession(userId, sessionId);
     const deadline = Date.now() + 130_000;
@@ -1762,9 +1774,10 @@ export class SandpiStore {
           const result = await client.query(
             `UPDATE session_runtime runtime
              SET model_id = COALESCE($2, model_id),
-                 pending_turn_request_id = $3,
-                 pending_turn_client_message_id = $4,
-                 pending_turn_stable_input_id = $5,
+                 reasoning_effort = COALESCE($3, reasoning_effort),
+                 pending_turn_request_id = $4,
+                 pending_turn_client_message_id = $5,
+                 pending_turn_stable_input_id = $6,
                  pending_turn_phase = 'prepared',
                  pending_turn_started_at = NOW(),
                  version = version + 1
@@ -1779,6 +1792,7 @@ export class SandpiStore {
             [
               sessionId,
               modelId ?? null,
+              reasoningEffort ?? null,
               submission.requestId,
               submission.clientMessageId,
               submission.stableInputId,
@@ -2101,6 +2115,7 @@ const ENVIRONMENT_RUNTIME_SELECT = `
 
 const SESSION_SELECT = `
   SELECT session.*, runtime.native_session_id, runtime.model_id,
+         runtime.reasoning_effort,
          runtime.history_revision
   FROM sessions session
   JOIN team_memberships membership ON membership.team_id = session.team_id
@@ -2250,6 +2265,8 @@ function sessionFromRow(row: SessionRow): CodingSession {
     protocol: "codex-app-server",
     threadId: row.native_session_id ?? row.harness_state.threadId ?? "",
     modelId: row.model_id ?? row.harness_state.modelId ?? "",
+    reasoningEffort:
+      row.reasoning_effort ?? row.harness_state.reasoningEffort ?? "",
     harnessVersion: row.harness_state.harnessVersion ?? "runtime",
     protocolVersion: "v2",
     historyRevision: Number(row.history_revision ?? 0),
@@ -2286,6 +2303,7 @@ function sessionRuntimeFromRow(row: SessionRuntimeRow): StoredSessionRuntime {
     environmentId: row.environment_id,
     nativeSessionId: row.native_session_id ?? undefined,
     modelId: row.model_id ?? undefined,
+    reasoningEffort: row.reasoning_effort ?? undefined,
     historyRevision: Number(row.history_revision),
     activeNativeTurnId: row.active_native_turn_id ?? undefined,
     pendingTurnRequestId: row.pending_turn_request_id ?? undefined,

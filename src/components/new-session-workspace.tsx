@@ -19,7 +19,9 @@ interface NewSessionWorkspaceProps {
 
 /**
  * Environment-level dispatcher only. Each harness owns its complete empty-session page and
- * composer; this component must not grow a shared command, model or input abstraction.
+ * composer; this component must not grow a shared command, model or input abstraction. Every
+ * future harness adapter must discover its models and model-specific configuration options from
+ * the running coding agent. Do not add Sandpi-owned fallback catalogs or capability enums here.
  */
 export function NewSessionWorkspace(props: NewSessionWorkspaceProps) {
   if (props.environment.codingAgent.harness === "codex") {

@@ -1002,6 +1002,7 @@ test("Turn admission takes the Environment lifecycle lock before becoming pendin
       clientMessageId: "message-one",
       stableInputId: "input-one",
     },
+    "high",
   );
 
   const lockIndex = fixture.calls.findIndex((call) =>
@@ -1024,6 +1025,18 @@ test("Turn admission takes the Environment lifecycle lock before becoming pendin
   assert.ok(pendingIndex > environmentIndex);
   assert.ok(pendingIndex > archivedCheckIndex);
   assert.match(fixture.calls[pendingIndex]!.sql, /session\.archived = FALSE/);
+  assert.match(
+    fixture.calls[pendingIndex]!.sql,
+    /reasoning_effort = COALESCE\(\$3, reasoning_effort\)/,
+  );
+  assert.deepEqual(fixture.calls[pendingIndex]!.values, [
+    "session-one",
+    null,
+    "high",
+    "request-one",
+    "message-one",
+    "input-one",
+  ]);
   assert.equal(
     fixture.calls.some(
       (call) =>

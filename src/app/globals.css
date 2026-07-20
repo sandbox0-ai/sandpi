@@ -2849,7 +2849,8 @@ code.codex-compact-activity-subject {
   flex: 0 0 auto;
 }
 
-.composer-model-picker {
+.composer-model-picker,
+.composer-reasoning-picker {
   position: relative;
   display: inline-flex;
   min-width: 0;
@@ -2859,7 +2860,8 @@ code.codex-compact-activity-subject {
   border-left: 1px solid var(--line);
 }
 
-.composer-model-picker select {
+.composer-model-picker select,
+.composer-reasoning-picker select {
   width: 120px;
   height: 22px;
   appearance: none;
@@ -2877,27 +2879,35 @@ code.codex-compact-activity-subject {
   cursor: pointer;
 }
 
-.composer-model-picker select:hover {
+.composer-model-picker select:hover,
+.composer-reasoning-picker select:hover {
   background: var(--hover);
   color: var(--ink);
 }
 
-.composer-model-picker select:focus-visible {
+.composer-model-picker select:focus-visible,
+.composer-reasoning-picker select:focus-visible {
   background: var(--hover);
   color: var(--ink);
   box-shadow: inset 0 0 0 1px var(--ink-faint);
 }
 
-.composer-model-picker option {
+.composer-model-picker option,
+.composer-reasoning-picker option {
   background: var(--panel-strong);
   color: var(--ink);
 }
 
-.composer-model-picker > svg {
+.composer-model-picker > svg,
+.composer-reasoning-picker > svg {
   position: absolute;
   right: 4px;
   color: var(--ink-faint);
   pointer-events: none;
+}
+
+.composer-reasoning-picker select {
+  width: 74px;
 }
 
 .composer-agent-bound .codex-glyph {
@@ -2908,6 +2918,10 @@ code.codex-compact-activity-subject {
 
 .app-shell.inspector-is-open .composer-model-picker select {
   width: 100px;
+}
+
+.app-shell.inspector-is-open .composer-reasoning-picker select {
+  width: 68px;
 }
 
 .app-shell.inspector-is-open .connection-copy {
@@ -7110,6 +7124,10 @@ code.codex-compact-activity-subject {
 
   .composer-model-picker select {
     width: 100px;
+  }
+
+  .composer-reasoning-picker select {
+    width: 68px;
   }
 
   .connection-copy,

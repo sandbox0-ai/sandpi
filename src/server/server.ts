@@ -63,6 +63,7 @@ const SESSION_COOKIE = "sandpi_session";
 const CODEX_IMAGE_BODY_LIMIT_BYTES = 36 * 1024 * 1024;
 const WORKSPACE_FILE_BODY_LIMIT_BYTES = 7 * 1024 * 1024;
 const MAX_ENVIRONMENT_AUDIT_CURSOR_LENGTH = 4_096;
+const codexReasoningEffortSchema = z.string().trim().min(1).max(100);
 const codexMcpServerInputSchema = z
   .object({
     transport: z.enum(["stdio", "streamable-http"]),
@@ -519,10 +520,11 @@ function registerApiRoutes(
   app.get<{ Params: { environmentId: string } }>(
     "/api/v1/environments/:environmentId/harnesses/codex/models",
     async (request) => ({
-      data: await services.codexAuth.modelsForEnvironment(
+      data: await services.codex.listEnvironmentModels(
         request.principal.userId,
         request.params.environmentId,
       ),
+      meta: { availability: "available", source: "codex" },
     }),
   );
   app.get<{ Params: { environmentId: string } }>(
@@ -711,6 +713,7 @@ function registerApiRoutes(
         prompt: z.string().trim().max(100_000).default(""),
         title: z.string().trim().max(200).optional(),
         modelId: z.string().max(200).optional(),
+        reasoningEffort: codexReasoningEffortSchema.optional(),
         images: codexInputImagesSchema,
       })
       .refine((value) => value.prompt.length > 0 || value.images.length > 0, {
@@ -735,6 +738,7 @@ function registerApiRoutes(
       prompt: body.prompt,
       images: body.images,
       modelId: body.modelId,
+      reasoningEffort: body.reasoningEffort,
     });
     return reply.status(201).send({
       data: await services.store.getSession(request.principal.userId, sessionId),
@@ -785,6 +789,7 @@ function registerApiRoutes(
           text: z.string().trim().max(100_000).default(""),
           images: codexInputImagesSchema,
           modelId: z.string().trim().min(1).max(200).optional(),
+          reasoningEffort: codexReasoningEffortSchema.optional(),
         })
         .refine((value) => value.text.length > 0 || value.images.length > 0, {
           message: "A Turn requires text or at least one image.",
@@ -796,6 +801,7 @@ function registerApiRoutes(
         text: body.text,
         images: body.images,
         modelId: body.modelId,
+        reasoningEffort: body.reasoningEffort,
       });
       return reply.status(202).send({ data: result });
     },

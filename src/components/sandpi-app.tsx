@@ -829,10 +829,6 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
           onWorkspaceNavigationHandled={handleWorkspaceNavigationHandled}
           onSessionChange={handleSessionChange}
           onDerivedSessionCreated={handleSessionCreated}
-          onForkSession={handleForkSession}
-          onRenameSession={handleRenameSession}
-          onArchiveSession={handleArchiveSession}
-          onTogglePinSession={handleTogglePinSession}
         />
       ) : (
         <NewSessionWorkspace

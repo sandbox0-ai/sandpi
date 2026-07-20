@@ -438,7 +438,7 @@ function buildCodexSessionActivityActions(
   projection: CodexConversationProjection,
   rolloutActivity?: CodexRolloutActivityFeed,
 ): CodexSessionActivityActionTurn[] {
-  return selectCodexSessionActivity(projection, "all", rolloutActivity)
+  const turns = selectCodexSessionActivity(projection, "all", rolloutActivity)
     .map((turn) => {
       const items = groupCodexSessionActivityEntries(turn.entries);
       return {
@@ -454,6 +454,9 @@ function buildCodexSessionActivityActions(
       };
     })
     .filter((turn) => turn.items.length > 0);
+  // Activity is an inspection feed, so expose the latest Turn first while
+  // preserving native chronological order inside each Turn.
+  return turns.reverse();
 }
 
 export function filterCodexSessionActivityActions(

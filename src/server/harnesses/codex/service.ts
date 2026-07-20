@@ -333,6 +333,7 @@ export class CodexService {
     prompt: string;
     images: EncodedCodexInputImage[];
     modelId?: string;
+    reasoningEffort?: string;
   }) {
     const environmentRuntime = await this.ensureEnvironmentRuntimeForUser(
       input.userId,
@@ -346,7 +347,7 @@ export class CodexService {
         {
           method: "thread/start",
           id: rpcId("thread-start", sessionId),
-          params: threadConfiguration(input.modelId),
+          params: threadConfiguration(input.modelId, input.reasoningEffort),
         },
         sessionId,
       );
@@ -377,6 +378,7 @@ export class CodexService {
         text: input.prompt,
         images: input.images,
         modelId: input.modelId,
+        reasoningEffort: input.reasoningEffort,
       });
       this.ensureEnvironmentWorker(input.environment.id);
       return sessionId;
@@ -464,6 +466,7 @@ export class CodexService {
       environment,
       source,
       modelId: sourceRuntime.modelId,
+      reasoningEffort: sourceRuntime.reasoningEffort,
       title: input.title,
       kind: input.kind,
       sourceNativeItemId: input.selectedNativeTurnId,
@@ -480,7 +483,10 @@ export class CodexService {
             ...(input.selectedNativeTurnId
               ? { lastTurnId: input.selectedNativeTurnId }
               : {}),
-            ...threadConfiguration(sourceRuntime.modelId),
+            ...threadConfiguration(
+              sourceRuntime.modelId,
+              sourceRuntime.reasoningEffort,
+            ),
           },
         },
         childSessionId,
@@ -1127,6 +1133,7 @@ export class CodexService {
     text: string;
     images: EncodedCodexInputImage[];
     modelId?: string;
+    reasoningEffort?: string;
   }) {
     const sessionRuntime = await this.requireNativeSessionRuntime(
       input.userId,
@@ -1147,7 +1154,14 @@ export class CodexService {
         input.sessionId,
         input.modelId,
         submission,
+        input.reasoningEffort,
       );
+      const turnRuntime = {
+        ...sessionRuntime,
+        modelId: input.modelId ?? sessionRuntime.modelId,
+        reasoningEffort:
+          input.reasoningEffort ?? sessionRuntime.reasoningEffort,
+      };
       let turnDeliveryAttempted = false;
       let environmentRuntime: StoredEnvironmentRuntime | undefined;
       try {
@@ -1157,7 +1171,7 @@ export class CodexService {
         );
         await this.ensureNativeSessionAttached(
           environmentRuntime,
-          sessionRuntime,
+          turnRuntime,
         );
         await this.store.markTurnSubmitted(
           input.sessionId,
@@ -1175,6 +1189,9 @@ export class CodexService {
               clientUserMessageId: submission.clientMessageId,
               input: nativeCodexTurnInput(input.text, input.images),
               ...(input.modelId ? { model: input.modelId } : {}),
+              ...(input.reasoningEffort
+                ? { effort: input.reasoningEffort }
+                : {}),
             },
           },
           input.sessionId,
@@ -1241,18 +1258,48 @@ export class CodexService {
       userId,
       sessionId,
     );
+    return this.listModelsFromRuntime(
+      sessionRuntime.environmentId,
+      environmentRuntime,
+      sessionId,
+      sessionId,
+    );
+  }
+
+  async listEnvironmentModels(userId: string, environmentId: string) {
+    // Model configuration is a live harness capability. Wake and query the
+    // Environment-native app-server instead of serving auth metadata or a
+    // Sandpi-maintained catalog. Future harness adapters must do the same with
+    // their own native capability API.
+    const environmentRuntime = await this.environmentRuntimeForEnvironment(
+      userId,
+      environmentId,
+    );
+    return this.listModelsFromRuntime(
+      environmentId,
+      environmentRuntime,
+      environmentId,
+    );
+  }
+
+  private async listModelsFromRuntime(
+    environmentId: string,
+    environmentRuntime: StoredEnvironmentRuntime,
+    requestScopeId: string,
+    ownerSessionId?: string,
+  ) {
     const data: unknown[] = [];
     let cursor: string | undefined;
     do {
       const response = await this.requestCodex(
-        sessionRuntime.environmentId,
+        environmentId,
         environmentRuntime,
         {
           method: "model/list",
-          id: rpcId("model-list", sessionId),
+          id: rpcId("model-list", requestScopeId),
           params: cursor ? { cursor } : {},
         },
-        sessionId,
+        ownerSessionId,
       );
       if (response.error) {
         throw new HttpError(
@@ -1368,6 +1415,7 @@ export class CodexService {
         nativeSessionId: latest.nativeSessionId ?? sessionRuntime.nativeSessionId,
         historyRevision: latest.historyRevision,
         modelId: latest.modelId ?? "",
+        reasoningEffort: latest.reasoningEffort ?? "",
         sessionStatus:
           latest.sessionStatus === "provisioning"
             ? "waiting"
@@ -2737,7 +2785,7 @@ export class CodexService {
         id: rpcId("thread-resume", session.sessionId),
         params: {
           threadId: session.nativeSessionId,
-          ...threadConfiguration(session.modelId),
+          ...threadConfiguration(session.modelId, session.reasoningEffort),
         },
       },
     );
@@ -3373,9 +3421,12 @@ function notificationThreadId(message: Record<string, unknown>) {
     objectString(objectRecord(params?.thread), "id");
 }
 
-function threadConfiguration(modelId?: string) {
+function threadConfiguration(modelId?: string, reasoningEffort?: string) {
   return {
     ...(modelId ? { model: modelId } : {}),
+    ...(reasoningEffort
+      ? { config: { model_reasoning_effort: reasoningEffort } }
+      : {}),
     cwd: "/workspace",
     approvalPolicy: "never",
     sandbox: "danger-full-access",

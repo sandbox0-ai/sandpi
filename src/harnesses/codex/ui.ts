@@ -173,6 +173,8 @@ const copy = {
       messageAgent: (agent: string) => `Message ${agent}`,
       askPlaceholder: (agent: string) => `Ask ${agent} to work in this session…`,
       selectModel: (agent: string) => `Select ${agent} model`,
+      selectReasoningEffort: (model: string) =>
+        `Select reasoning effort for ${model}`,
       modelListUnavailable: "The Codex model list is unavailable while this runtime is offline.",
       nativeRolloutUnavailableTitle: "Codex history unavailable",
       nativeRolloutUnavailableBody:
@@ -324,6 +326,13 @@ const copy = {
       startFailed: "Could not start the Session. Try again.",
       placeholder: (agent: string) => `Ask ${agent} to work on something…`,
       selectModel: (agent: string) => `Select ${agent} model`,
+      selectReasoningEffort: (model: string) =>
+        `Select reasoning effort for ${model}`,
+      startingAgent: (agent: string) => `Starting ${agent}…`,
+      modelListEmpty: "Codex returned no available models.",
+      modelListFailed: "Could not load Codex models.",
+      modelsUnavailable: "Models unavailable",
+      waitForModels: "Wait for Codex to finish loading its model list.",
       attachFile: "Attach file",
       mentionFile: "Mention file",
       environment: "Environment",
@@ -504,6 +513,7 @@ const copy = {
       messageAgent: (agent: string) => `向 ${agent} 发送消息`,
       askPlaceholder: (agent: string) => `让 ${agent} 在此会话中执行任务…`,
       selectModel: (agent: string) => `选择 ${agent} 模型`,
+      selectReasoningEffort: (model: string) => `选择 ${model} 的推理深度`,
       modelListUnavailable: "当前运行时离线，无法获取 Codex 模型列表。",
       nativeRolloutUnavailableTitle: "Codex 历史不可用",
       nativeRolloutUnavailableBody:
@@ -655,6 +665,12 @@ const copy = {
       startFailed: "无法启动会话，请重试。",
       placeholder: (agent: string) => `让 ${agent} 执行任务…`,
       selectModel: (agent: string) => `选择 ${agent} 模型`,
+      selectReasoningEffort: (model: string) => `选择 ${model} 的推理深度`,
+      startingAgent: (agent: string) => `正在启动 ${agent}…`,
+      modelListEmpty: "Codex 未返回可用模型。",
+      modelListFailed: "无法加载 Codex 模型。",
+      modelsUnavailable: "模型不可用",
+      waitForModels: "请等待 Codex 完成启动并加载模型列表。",
       attachFile: "附加文件",
       mentionFile: "引用文件",
       environment: "环境",

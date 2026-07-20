@@ -245,6 +245,7 @@ function fixture(input: {
     activeNativeTurnId?: string;
     pendingTurnPhase?: StoredSessionRuntime["pendingTurnPhase"];
     pendingTurnStartedAt?: Date;
+    reasoningEffort?: string;
   }>;
   streamErrors?: Error[];
   rpcTimeoutMs?: number;
@@ -286,6 +287,7 @@ function fixture(input: {
       activeNativeTurnId,
       pendingTurnPhase,
       pendingTurnStartedAt,
+      reasoningEffort,
       status,
     }) => {
       const runtime = sessionRuntime(id, nativeSessionId);
@@ -305,6 +307,7 @@ function fixture(input: {
             : undefined,
           pendingTurnPhase,
           pendingTurnStartedAt,
+          reasoningEffort,
           sessionStatus: status ?? runtime.sessionStatus,
         },
       ] as [string, StoredSessionRuntime];
@@ -655,6 +658,7 @@ function fixture(input: {
     async createSessionMetadata(options: {
       title: string;
       modelId?: string;
+      reasoningEffort?: string;
     }) {
       const id = `session-new-${++newSessionSequence}`;
       sessions.set(id, session(id, "", "paused"));
@@ -665,12 +669,15 @@ function fixture(input: {
       sessionRuntimes.set(id, {
         ...sessionRuntime(id, undefined),
         modelId: options.modelId,
+        reasoningEffort: options.reasoningEffort,
       });
       return id;
     },
     async createForkSessionMetadata(options: {
       source: CodingSession;
       title?: string;
+      modelId?: string;
+      reasoningEffort?: string;
     }) {
       const id = `session-child-${++childSequence}`;
       sessions.set(
@@ -682,7 +689,11 @@ function fixture(input: {
         title: options.title ?? `${options.source.title} fork`,
         status: "paused",
       });
-      sessionRuntimes.set(id, sessionRuntime(id, undefined));
+      sessionRuntimes.set(id, {
+        ...sessionRuntime(id, undefined),
+        modelId: options.modelId,
+        reasoningEffort: options.reasoningEffort,
+      });
       return id;
     },
     async markSessionNativeReady(sessionId: string, nativeSessionId: string) {
@@ -798,6 +809,7 @@ function fixture(input: {
         clientMessageId: string;
         stableInputId: string;
       },
+      reasoningEffort?: string,
     ) {
       const current = sessionRuntimes.get(sessionId)!;
       const currentSession = sessions.get(sessionId)!;
@@ -821,6 +833,7 @@ function fixture(input: {
       sessionRuntimes.set(sessionId, {
         ...current,
         modelId: modelId ?? current.modelId,
+        reasoningEffort: reasoningEffort ?? current.reasoningEffort,
         pendingTurnRequestId: submission.requestId,
         pendingTurnClientMessageId: submission.clientMessageId,
         pendingTurnStableInputId: submission.stableInputId,
@@ -1222,6 +1235,28 @@ test("uses one Environment app-server for multiple native Sessions", async () =>
   }
 });
 
+test("starts the Environment app-server before listing New Session models", async () => {
+  const context = fixture();
+  try {
+    assert.deepEqual(
+      await context.service.listEnvironmentModels("user", environment.id),
+      {
+        data: [{ id: "gpt-test" }],
+      },
+    );
+    assert.deepEqual(
+      context.writes
+        .filter(({ message }) =>
+          ["initialize", "model/list"].includes(String(message.method)),
+        )
+        .map(({ message }) => message.method),
+      ["initialize", "model/list"],
+    );
+  } finally {
+    await context.close();
+  }
+});
+
 test("reads bounded native Codex account rate limits", async () => {
   const context = fixture({
     onRequest(message) {
@@ -1363,6 +1398,7 @@ test("starts the first Turn on a newly created loaded Thread without resume", as
       prompt: "Start here",
       images: [],
       modelId: "gpt-test",
+      reasoningEffort: "high",
     });
 
     assert.equal(context.sessions.get(sessionId)?.title, "New native Session");
@@ -1375,6 +1411,20 @@ test("starts the first Turn on a newly created loaded Thread without resume", as
         )
         .map(({ message }) => message.method),
       ["thread/start", "turn/start"],
+    );
+    const threadStart = context.writes.find(
+      ({ message }) => message.method === "thread/start",
+    )?.message.params as Record<string, unknown> | undefined;
+    const turnStart = context.writes.find(
+      ({ message }) => message.method === "turn/start",
+    )?.message.params as Record<string, unknown> | undefined;
+    assert.deepEqual(threadStart?.config, {
+      model_reasoning_effort: "high",
+    });
+    assert.equal(turnStart?.effort, "high");
+    assert.equal(
+      context.sessionRuntimes.get(sessionId)?.reasoningEffort,
+      "high",
     );
   } finally {
     await context.close();
@@ -1638,7 +1688,11 @@ test("rejects a native snapshot returned for a different Thread", async () => {
 test("recovers only the Environment protocol and leaves native Sessions detached", async () => {
   const context = fixture({
     sessions: [
-      { id: "session-one", nativeSessionId: "thread-one" },
+      {
+        id: "session-one",
+        nativeSessionId: "thread-one",
+        reasoningEffort: "medium",
+      },
       { id: "session-two", nativeSessionId: "thread-two" },
       {
         id: "session-archived",
@@ -3015,6 +3069,8 @@ test("lazily attaches only the native Session that starts a Turn", async () => {
       sessionId: "session-one",
       text: "Continue",
       images: [],
+      modelId: "gpt-next",
+      reasoningEffort: "high",
     });
 
     assert.match(started.nativeTurnId ?? "", /^turn-new-/);
@@ -3029,8 +3085,21 @@ test("lazily attaches only the native Session that starts a Turn", async () => {
       | Record<string, unknown>
       | undefined;
     assert.equal(resumeParams?.threadId, "thread-one");
-    assert.equal(resumeParams?.model, "gpt-test");
+    assert.equal(resumeParams?.model, "gpt-next");
+    assert.deepEqual(resumeParams?.config, {
+      model_reasoning_effort: "high",
+    });
     assert.equal("excludeTurns" in (resumeParams ?? {}), false);
+    const turnParams = nativeMethods[1]?.message.params as
+      | Record<string, unknown>
+      | undefined;
+    assert.equal(turnParams?.model, "gpt-next");
+    assert.equal(turnParams?.effort, "high");
+    assert.equal(context.sessionRuntimes.get("session-one")?.modelId, "gpt-next");
+    assert.equal(
+      context.sessionRuntimes.get("session-one")?.reasoningEffort,
+      "high",
+    );
     assert.equal(
       context.writes.some(
         ({ message }) =>

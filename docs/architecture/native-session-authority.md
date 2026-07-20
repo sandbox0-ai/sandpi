@@ -225,6 +225,20 @@ still supplies live updates. A native `turn/completed` notification starts
 another non-blocking rollout read so calls omitted from historical
 `ThreadItem`s appear without a browser refresh; Thread id, history revision and
 read generation prevent a late result from replacing a newer Session snapshot.
+The UI presents the newest Turn group first and keeps Codex's native action
+order inside each Turn.
+
+New Session model discovery is also Environment-native. Its request wakes and
+initializes that Environment's Codex app-server, waits for `model/list`, and
+selects the native default model. Each model's `supportedReasoningEfforts` and
+`defaultReasoningEffort` drive the second picker directly. The selected effort
+is passed as `model_reasoning_effort` when creating or resuming a Thread and as
+`effort` on `turn/start`; the PostgreSQL Session runtime stores only this scalar
+control projection for recovery, never a separate model catalog.
+Every future coding-agent adapter follows the same capability-discovery rule:
+models and model-specific options come from the running native agent, unknown
+option values remain forward-compatible strings, and shared Sandpi code must
+not introduce a fallback catalog or capability enum.
 
 The native `threadId` is the exact product-Session attribution key. The shared
 Sandbox0 Supervisor Session and journal identify transport provenance only;

@@ -58,6 +58,7 @@ test("migration history contains every durable Sandpi boundary", async () => {
       "0031_environment_mcp_mutation_sagas",
       "0032_environment_mcp_oauth_event_journal",
       "0033_drop_environment_functions",
+      "0034_session_reasoning_effort",
     ],
   );
 
@@ -109,6 +110,10 @@ test("migration history contains every durable Sandpi boundary", async () => {
     supervisorEpochSql,
     /UNIQUE \(\s*session_id,\s*supervisor_session_id,\s*supervisor_sequence,\s*record_index\s*\)/,
   );
+
+  const reasoningEffortSql = migrations[33]?.sql ?? "";
+  assert.match(reasoningEffortSql, /ADD COLUMN reasoning_effort TEXT/);
+  assert.match(reasoningEffortSql, /reasoning_effort_nonempty/);
 
   const nativeAuthoritySql = migrations[13]?.sql ?? "";
   assert.match(

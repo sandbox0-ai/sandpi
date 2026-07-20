@@ -32,9 +32,11 @@ import {
 import { Inspector, type InspectorTab } from "@/components/inspector";
 import { MarkdownContent } from "@/components/markdown-content";
 import type { WorkspaceFileNavigationRequest } from "@/components/workspace-ide";
-import { SessionActionsMenu } from "@/components/session-actions-menu";
 import {
+  codexDefaultModel,
   codexModelOptionsFromNativeResult,
+  codexReasoningEffortForModel,
+  codexReasoningEffortLabel,
   type CodexModelOption,
 } from "@/harnesses/codex/models";
 import { codexTurnCapabilitySets } from "@/harnesses/codex/capabilities";
@@ -109,10 +111,6 @@ interface ConversationProps {
   ) => void;
   onSessionChange: (session: CodexSession) => void;
   onDerivedSessionCreated: (session: CodexSession) => void;
-  onForkSession: (sessionId: string) => void;
-  onRenameSession: (sessionId: string, title: string) => void;
-  onArchiveSession: (sessionId: string) => void;
-  onTogglePinSession: (sessionId: string) => void;
 }
 
 function syncComposerHeight(textarea: HTMLTextAreaElement) {
@@ -148,23 +146,47 @@ export function CodexConversation({
   onWorkspaceNavigationHandled,
   onSessionChange,
   onDerivedSessionCreated,
-  onForkSession,
-  onRenameSession,
-  onArchiveSession,
-  onTogglePinSession,
 }: ConversationProps) {
   const ui = getCodexUiCopy(language).conversation;
   const [modelOptions, setModelOptions] = useState<CodexModelOption[]>([]);
   const [selectedModelId, setSelectedModelId] = useState(
     session.harnessState.modelId,
   );
+  const [reasoningEfforts, setReasoningEfforts] = useState<
+    Record<string, string>
+  >(() =>
+    session.harnessState.modelId && session.harnessState.reasoningEffort
+      ? {
+          [session.harnessState.modelId]:
+            session.harnessState.reasoningEffort,
+        }
+      : {},
+  );
+  const fallbackReasoningEffort = session.harnessState.reasoningEffort ?? "";
   const selectedModel = modelOptions.find(
     (model) => model.id === selectedModelId,
   ) ?? {
     id: selectedModelId || session.harnessState.modelId || "default",
     displayName: selectedModelId || session.harnessState.modelId || "Default",
     isDefault: false,
+    defaultReasoningEffort: fallbackReasoningEffort,
+    supportedReasoningEfforts: fallbackReasoningEffort
+      ? [
+          {
+            id: fallbackReasoningEffort,
+            description: fallbackReasoningEffort,
+          },
+        ]
+      : [],
   };
+  const selectedReasoningEffort = codexReasoningEffortForModel(
+    selectedModel,
+    reasoningEfforts[selectedModel.id] ?? fallbackReasoningEffort,
+  );
+  const selectedReasoningDescription =
+    selectedModel.supportedReasoningEfforts.find(
+      (option) => option.id === selectedReasoningEffort,
+    )?.description;
   const [draft, setDraft] = useState("");
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [pastedImages, setPastedImages] = useState<CodexComposerImage[]>([]);
@@ -275,7 +297,19 @@ export function CodexConversation({
 
   useEffect(() => {
     setSelectedModelId(session.harnessState.modelId);
-  }, [session.id, session.harnessState.modelId]);
+    setReasoningEfforts(
+      session.harnessState.modelId && session.harnessState.reasoningEffort
+        ? {
+            [session.harnessState.modelId]:
+              session.harnessState.reasoningEffort,
+          }
+        : {},
+    );
+  }, [
+    session.id,
+    session.harnessState.modelId,
+    session.harnessState.reasoningEffort,
+  ]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -294,13 +328,23 @@ export function CodexConversation({
               : ui.modelListUnavailable
             : "",
         );
-        setSelectedModelId((current) =>
-          models.some((model) => model.id === current)
-            ? current
-            : (models.find((model) => model.isDefault)?.id ??
-              models[0]?.id ??
-              current),
-        );
+        const nextModel =
+          models.find(
+            (model) => model.id === session.harnessState.modelId,
+          ) ?? codexDefaultModel(models);
+        if (nextModel) {
+          setSelectedModelId(nextModel.id);
+          setReasoningEfforts((efforts) => ({
+            ...efforts,
+            [nextModel.id]: codexReasoningEffortForModel(
+              nextModel,
+              efforts[nextModel.id] ??
+                (nextModel.id === session.harnessState.modelId
+                  ? session.harnessState.reasoningEffort
+                  : undefined),
+            ),
+          }));
+        }
       })
       .catch((error) => {
         if (!controller.signal.aborted) {
@@ -311,7 +355,12 @@ export function CodexConversation({
         }
       });
     return () => controller.abort();
-  }, [session.id, ui.modelListUnavailable]);
+  }, [
+    session.harnessState.modelId,
+    session.harnessState.reasoningEffort,
+    session.id,
+    ui.modelListUnavailable,
+  ]);
 
   useEffect(() => {
     const source = new EventSource(
@@ -329,6 +378,8 @@ export function CodexConversation({
           !Array.isArray(snapshot.thread.turns) ||
           !Number.isSafeInteger(snapshot.historyRevision) ||
           snapshot.historyRevision < 0 ||
+          (snapshot.reasoningEffort !== undefined &&
+            typeof snapshot.reasoningEffort !== "string") ||
           !CODEX_SESSION_STATUSES.has(snapshot.sessionStatus) ||
           !Array.isArray(snapshot.forkableTurnIds) ||
           snapshot.forkableTurnIds.some((turnId) => typeof turnId !== "string")
@@ -348,6 +399,12 @@ export function CodexConversation({
         setNativeStreamReady(true);
         setNativeHistoryError("");
         setSelectedModelId(snapshot.modelId);
+        if (snapshot.modelId && snapshot.reasoningEffort) {
+          setReasoningEfforts((current) => ({
+            ...current,
+            [snapshot.modelId]: snapshot.reasoningEffort!,
+          }));
+        }
         const current = sessionRef.current;
         const next: CodexSession = {
           ...current,
@@ -357,6 +414,7 @@ export function CodexConversation({
             ...current.harnessState,
             threadId: snapshot.thread.id,
             modelId: snapshot.modelId,
+            reasoningEffort: snapshot.reasoningEffort,
             historyRevision: snapshot.historyRevision,
           },
         };
@@ -575,6 +633,9 @@ export function CodexConversation({
             ...(selectedModel.id !== "default"
               ? { modelId: selectedModel.id }
               : {}),
+            ...(selectedReasoningEffort
+              ? { reasoningEffort: selectedReasoningEffort }
+              : {}),
           }),
         },
       );
@@ -585,6 +646,7 @@ export function CodexConversation({
         harnessState: {
           ...sessionRef.current.harnessState,
           modelId: selectedModel.id,
+          reasoningEffort: selectedReasoningEffort,
         },
       };
       pendingTurnStartedAtRef.current = Date.now() / 1_000;
@@ -903,6 +965,9 @@ export function CodexConversation({
                 <span aria-hidden="true">·</span>
                 <span className="conversation-context-summary">
                   {session.harnessLabel} · {selectedModel.displayName} ·{" "}
+                  {selectedReasoningEffort
+                    ? `${codexReasoningEffortLabel(selectedReasoningEffort)} · `
+                    : ""}
                   {ui.environmentRevision(session.environmentRevision)}
                 </span>
               </span>
@@ -929,18 +994,6 @@ export function CodexConversation({
             >
               <PanelRight size={18} />
             </button>
-            <SessionActionsMenu
-              key={session.id}
-              language={language}
-              session={session}
-              triggerClassName="icon-button"
-              triggerIconSize={19}
-              sessionForkEnabled={session.status === "waiting"}
-              onForkSession={onForkSession}
-              onRenameSession={onRenameSession}
-              onArchiveSession={onArchiveSession}
-              onTogglePinSession={onTogglePinSession}
-            />
           </div>
         </header>
 
@@ -1163,7 +1216,20 @@ export function CodexConversation({
                       )}
                       value={selectedModel.id}
                       disabled={modelOptions.length === 0 || sending}
-                      onChange={(event) => setSelectedModelId(event.target.value)}
+                      onChange={(event) => {
+                        const model = modelOptions.find(
+                          (candidate) => candidate.id === event.target.value,
+                        );
+                        if (!model) return;
+                        setSelectedModelId(model.id);
+                        setReasoningEfforts((current) => ({
+                          ...current,
+                          [model.id]: codexReasoningEffortForModel(
+                            model,
+                            current[model.id],
+                          ),
+                        }));
+                      }}
                     >
                       {(modelOptions.length > 0
                         ? modelOptions
@@ -1176,6 +1242,39 @@ export function CodexConversation({
                     </select>
                     <ChevronDown size={12} aria-hidden="true" />
                   </label>
+                  {selectedModel.supportedReasoningEfforts.length ? (
+                    <label
+                      className="composer-reasoning-picker"
+                      title={selectedReasoningDescription}
+                    >
+                      <span className="sr-only">
+                        {ui.selectReasoningEffort(selectedModel.displayName)}
+                      </span>
+                      <select
+                        name="coding-agent-reasoning-effort"
+                        aria-label={ui.selectReasoningEffort(
+                          selectedModel.displayName,
+                        )}
+                        value={selectedReasoningEffort}
+                        disabled={sending}
+                        onChange={(event) =>
+                          setReasoningEfforts((current) => ({
+                            ...current,
+                            [selectedModel.id]: event.target.value,
+                          }))
+                        }
+                      >
+                        {selectedModel.supportedReasoningEfforts.map(
+                          (effort) => (
+                            <option value={effort.id} key={effort.id}>
+                              {codexReasoningEffortLabel(effort.id)}
+                            </option>
+                          ),
+                        )}
+                      </select>
+                      <ChevronDown size={12} aria-hidden="true" />
+                    </label>
+                  ) : null}
                 </span>
               </div>
               <div className="composer-send-area">

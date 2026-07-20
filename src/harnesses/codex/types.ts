@@ -309,6 +309,7 @@ export interface CodexHarnessState {
   /** Opaque native reference only. Conversation history remains in CODEX_HOME. */
   threadId: string;
   modelId: string;
+  reasoningEffort?: string;
   harnessVersion: string;
   protocolVersion: "v2";
   /** Changes whenever the product Session switches to another native branch. */
@@ -324,6 +325,7 @@ export interface CodexNativeSnapshot {
   nativeSessionId: string;
   historyRevision: number;
   modelId: string;
+  reasoningEffort?: string;
   /**
    * Product control state derived from the same native event stream. Sandpi
    * persists this scalar for refresh recovery, never the transcript payload.

@@ -283,6 +283,45 @@ test("keeps native Turn ordinals stable when earlier Turns do not match a filter
   assert.equal(external?.turnId, nativeActivityTurn.id);
 });
 
+test("presents the latest Turn first while preserving native Turn ordinals", () => {
+  const earlierTurn: CodexTurn = {
+    ...nativeActivityTurn,
+    id: "turn-earlier-activity",
+    startedAt: startedAt - 60,
+    completedAt: startedAt - 48,
+    items: nativeActivityTurn.items.map((item) => ({
+      ...item,
+      id: `earlier-${item.id}`,
+    })),
+  };
+  const laterTurn: CodexTurn = {
+    ...nativeActivityTurn,
+    id: "turn-later-activity",
+    startedAt: startedAt + 60,
+    completedAt: startedAt + 72,
+    items: nativeActivityTurn.items.map((item) => ({
+      ...item,
+      id: `later-${item.id}`,
+    })),
+  };
+  const actionTurns = selectCodexSessionActivityActions(
+    projectCodexTimeline(
+      createMockCodexThread("thread-reverse-activity", [
+        earlierTurn,
+        laterTurn,
+      ]),
+    ),
+  );
+
+  assert.deepEqual(
+    actionTurns.map((turn) => [turn.turnId, turn.ordinal]),
+    [
+      ["turn-later-activity", 2],
+      ["turn-earlier-activity", 1],
+    ],
+  );
+});
+
 test("merges durable rollout calls without normalizing them into conversation items", () => {
   const activity = rolloutFeed([
     rolloutTool(1, {

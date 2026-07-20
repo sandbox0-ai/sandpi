@@ -29,10 +29,6 @@ interface ConversationProps {
   ) => void;
   onSessionChange: (session: CodingSession) => void;
   onDerivedSessionCreated: (session: CodingSession) => void;
-  onForkSession: (sessionId: string) => void;
-  onRenameSession: (sessionId: string, title: string) => void;
-  onArchiveSession: (sessionId: string) => void;
-  onTogglePinSession: (sessionId: string) => void;
 }
 
 /**

@@ -83,9 +83,14 @@ Web today; iOS / Android / HarmonyOS later
   Session Activity, message/tool rendering, approvals, slash commands and model
   list; Sandpi does not normalize different coding agents into a
   lowest-common-denominator activity or chat protocol. The Codex adapter reads
-  `model/list` from the authenticated native app-server and passes the selected
-  model back through `turn/start`; Sandpi does not publish or maintain a
-  separate Codex model catalog.
+  `model/list` from the authenticated Environment-native app-server. Opening
+  New Session wakes that runtime and waits for the native catalog instead of
+  showing a Sandpi-owned default. The picker preserves each model's native
+  reasoning-effort options and sends the selected model and effort through
+  `thread/start`/`turn/start`; Sandpi does not publish or maintain a separate
+  Codex model or reasoning catalog. Future harness adapters must follow the
+  same live capability-discovery rule and preserve unknown native option values
+  instead of adding shared Sandpi enums.
 - **Runtime authority:** Sandbox0 is authoritative for the live Sandbox,
   Supervisor attempt and runtime generation. PostgreSQL records only the last
   credential-hydrated Codex epoch for recovery/CAS and keeps independent
@@ -137,6 +142,8 @@ Web today; iOS / Android / HarmonyOS later
   model. Codex attributes native tool activity by Thread id and reconstructs
   durable calls and every recorded output from that Thread's bounded rollout
   JSONL (or its compressed sibling); it does not use diagnostic logs SQLite.
+  The Activity feed places the newest Turn first while retaining native
+  chronological action order within each Turn.
   The shared Supervisor Session identifies only transport provenance. Native
   external-tool semantics and Environment network audit remain separate views
   because the audit feed has no Thread correlation key, so Sandpi neither
