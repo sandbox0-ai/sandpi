@@ -4507,7 +4507,7 @@ code.codex-compact-activity-subject {
   flex-direction: column;
   gap: 6px;
   color: var(--ink-soft);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 590;
 }
 
@@ -4533,7 +4533,7 @@ code.codex-compact-activity-subject {
 .add-domain-row input {
   height: 36px;
   padding: 0 10px;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .full-field input:focus-visible,
@@ -4647,16 +4647,15 @@ code.codex-compact-activity-subject {
 }
 
 .settings-section {
-  width: min(100%, 650px);
-  margin: 0 auto;
-  padding: 38px 42px 60px;
+  width: 100%;
+  padding: 36px clamp(24px, 3.25vw, 32px) 60px;
 }
 
 .settings-section > header > span {
   display: block;
   margin-bottom: 5px;
   color: var(--ink-faint);
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 680;
   letter-spacing: 0.07em;
   text-transform: uppercase;
@@ -4674,7 +4673,7 @@ code.codex-compact-activity-subject {
   max-width: 560px;
   margin: 8px 0 0;
   color: var(--ink-soft);
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.6;
 }
 
@@ -4689,13 +4688,13 @@ code.codex-compact-activity-subject {
   min-height: 88px;
   resize: vertical;
   padding: 10px;
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.5;
 }
 
 .full-field small {
   color: var(--ink-faint);
-  font-size: 8.5px;
+  font-size: 9.5px;
   font-weight: 450;
 }
 
@@ -4724,7 +4723,7 @@ code.codex-compact-activity-subject {
   align-items: center;
   padding: 0 12px;
   border-bottom: 1px solid var(--line-soft);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .definition-card > div:last-child {
@@ -4739,7 +4738,7 @@ code.codex-compact-activity-subject {
 .definition-card code {
   min-width: 0;
   overflow: hidden;
-  font-size: 9.5px;
+  font-size: 10.5px;
   text-align: right;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4776,13 +4775,13 @@ code.codex-compact-activity-subject {
 }
 
 .environment-danger-heading strong {
-  font-size: 10.5px;
+  font-size: 11.5px;
 }
 
 .environment-danger-heading p {
   margin: 4px 0 0;
   color: var(--ink-soft);
-  font-size: 9px;
+  font-size: 10px;
   line-height: 1.5;
 }
 
@@ -4797,7 +4796,7 @@ code.codex-compact-activity-subject {
   border-radius: 7px;
   background: transparent;
   color: var(--red);
-  font-size: 9.5px;
+  font-size: 10.5px;
   font-weight: 620;
   cursor: pointer;
 }
@@ -4820,7 +4819,7 @@ code.codex-compact-activity-subject {
   flex-direction: column;
   gap: 6px;
   color: var(--ink-soft);
-  font-size: 9.5px;
+  font-size: 10.5px;
 }
 
 .environment-delete-confirmation label > span {
@@ -4840,7 +4839,7 @@ code.codex-compact-activity-subject {
   outline: 0;
   background: var(--panel-strong);
   color: var(--ink);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .environment-delete-confirmation input:focus-visible {
@@ -4851,7 +4850,7 @@ code.codex-compact-activity-subject {
 .environment-delete-confirmation > p {
   margin: 0;
   color: var(--red);
-  font-size: 9px;
+  font-size: 10px;
   line-height: 1.45;
 }
 
@@ -4872,7 +4871,7 @@ code.codex-compact-activity-subject {
   border-radius: 7px;
   background: var(--red);
   color: #fff;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 620;
   cursor: pointer;
 }
@@ -4900,7 +4899,7 @@ code.codex-compact-activity-subject {
 }
 
 .setting-row strong {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 620;
 }
 
@@ -4910,7 +4909,7 @@ code.codex-compact-activity-subject {
 .settings-card p {
   margin: 4px 0 0;
   color: var(--ink-faint);
-  font-size: 9.5px;
+  font-size: 10.5px;
   line-height: 1.45;
 }
 
@@ -4953,7 +4952,7 @@ code.codex-compact-activity-subject {
   border-radius: 5px;
   background: var(--sidebar);
   color: var(--ink-soft);
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .secondary-action-button,
@@ -4971,7 +4970,7 @@ code.codex-compact-activity-subject {
   border: 1px solid var(--line);
   border-radius: 7px;
   background: var(--panel-strong);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 610;
 }
 
@@ -4989,7 +4988,7 @@ code.codex-compact-activity-subject {
   border: 0;
   background: transparent;
   color: var(--ink-soft);
-  font-size: 9.5px;
+  font-size: 10.5px;
 }
 
 .text-action-button:hover {
@@ -5030,13 +5029,13 @@ code.codex-compact-activity-subject {
 }
 
 .immutable-agent-callout strong {
-  font-size: 10.5px;
+  font-size: 11.5px;
 }
 
 .immutable-agent-callout p {
   margin: 4px 0 0;
   color: var(--ink-soft);
-  font-size: 9px;
+  font-size: 10px;
   line-height: 1.45;
 }
 
@@ -5047,7 +5046,7 @@ code.codex-compact-activity-subject {
   border: 1px solid var(--amber);
   background: var(--panel-strong);
   color: var(--amber);
-  font-size: 8px;
+  font-size: 9px;
   font-weight: 670;
   text-transform: uppercase;
 }
@@ -5058,7 +5057,7 @@ code.codex-compact-activity-subject {
 }
 
 .credential-callout strong {
-  font-size: 10.5px;
+  font-size: 11.5px;
 }
 
 .credential-callout p {
@@ -5090,7 +5089,7 @@ code.codex-compact-activity-subject {
   max-width: 430px;
   margin: 0;
   color: var(--ink-soft);
-  font-size: 9.5px;
+  font-size: 10.5px;
   line-height: 1.5;
 }
 
@@ -5104,7 +5103,7 @@ code.codex-compact-activity-subject {
 .codex-extension-toolbar .secondary-action-button {
   height: 31px;
   padding: 0 9px;
-  font-size: 9.5px;
+  font-size: 10.5px;
 }
 
 .codex-extension-toolbar .icon-button {
@@ -5146,14 +5145,14 @@ code.codex-compact-activity-subject {
 
 .codex-mcp-catalog > header strong {
   color: var(--ink);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .codex-mcp-catalog > header p,
 .codex-mcp-catalog-heading p {
   margin: 3px 0 0;
   color: var(--ink-faint);
-  font-size: 8.5px;
+  font-size: 9.5px;
   line-height: 1.45;
 }
 
@@ -5165,7 +5164,7 @@ code.codex-compact-activity-subject {
   border-radius: 5px;
   background: var(--panel);
   color: var(--ink-faint);
-  font-size: 7.5px;
+  font-size: 8.5px;
   font-weight: 620;
   line-height: 1;
 }
@@ -5183,7 +5182,7 @@ code.codex-compact-activity-subject {
 
 .codex-mcp-catalog-heading strong {
   color: var(--ink-soft);
-  font-size: 9.5px;
+  font-size: 10.5px;
   font-weight: 660;
 }
 
@@ -5230,7 +5229,7 @@ code.codex-compact-activity-subject {
 .codex-mcp-preset-card > header strong {
   overflow: hidden;
   color: var(--ink);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -5238,14 +5237,14 @@ code.codex-compact-activity-subject {
 
 .codex-mcp-preset-card > header > div > span {
   color: var(--ink-faint);
-  font-size: 7.5px;
+  font-size: 8.5px;
 }
 
 .codex-mcp-preset-card > p {
   min-height: 25px;
   margin: 0;
   color: var(--ink-soft);
-  font-size: 8.5px;
+  font-size: 9.5px;
   line-height: 1.45;
 }
 
@@ -5257,7 +5256,7 @@ code.codex-compact-activity-subject {
   border-radius: 5px;
   background: var(--sidebar);
   color: var(--ink-faint);
-  font-size: 7px;
+  font-size: 8px;
   line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -5275,7 +5274,7 @@ code.codex-compact-activity-subject {
   border: 1px solid var(--line);
   border-radius: 5px;
   color: var(--ink-faint);
-  font-size: 7px;
+  font-size: 8px;
   font-weight: 620;
   line-height: 1;
   text-overflow: ellipsis;
@@ -5306,7 +5305,7 @@ code.codex-compact-activity-subject {
 .codex-mcp-preset-card > footer button {
   min-width: 59px;
   padding: 0 7px;
-  font-size: 8px;
+  font-size: 9px;
   font-weight: 630;
   cursor: pointer;
 }
@@ -5403,7 +5402,7 @@ code.codex-compact-activity-subject {
 .codex-extension-title strong {
   overflow: hidden;
   color: var(--ink);
-  font-size: 10.5px;
+  font-size: 11.5px;
   font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -5420,7 +5419,7 @@ code.codex-compact-activity-subject {
   border-radius: 5px;
   background: var(--panel);
   color: var(--ink-faint);
-  font-size: 7.5px;
+  font-size: 8.5px;
   font-weight: 620;
   line-height: 1;
 }
@@ -5429,7 +5428,7 @@ code.codex-compact-activity-subject {
   overflow: hidden;
   margin: 4px 0 0;
   color: var(--ink-soft);
-  font-size: 9px;
+  font-size: 10px;
   line-height: 1.4;
   text-overflow: ellipsis;
 }
@@ -5439,7 +5438,7 @@ code.codex-compact-activity-subject {
   overflow: hidden;
   margin-top: 5px;
   color: var(--ink-faint);
-  font-size: 7.5px;
+  font-size: 8.5px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -5533,7 +5532,7 @@ code.codex-compact-activity-subject {
   padding: 0 6px;
   border: 1px solid var(--line);
   background: var(--panel);
-  font-size: 8px;
+  font-size: 9px;
   font-weight: 640;
 }
 
@@ -5550,7 +5549,7 @@ code.codex-compact-activity-subject {
   width: auto;
   padding: 0 5px;
   color: var(--red);
-  font-size: 8px;
+  font-size: 9px;
   font-weight: 650;
 }
 
@@ -5564,7 +5563,7 @@ code.codex-compact-activity-subject {
   border-radius: 8px;
   background: var(--red-soft);
   color: var(--red);
-  font-size: 9px;
+  font-size: 10px;
   line-height: 1.45;
 }
 
@@ -5591,7 +5590,7 @@ code.codex-compact-activity-subject {
 
 .codex-extension-warning code {
   color: var(--ink-faint);
-  font-size: 7.5px;
+  font-size: 8.5px;
 }
 
 .codex-extension-empty {
@@ -5620,13 +5619,13 @@ code.codex-compact-activity-subject {
 
 .codex-extension-empty strong {
   color: var(--ink-soft);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .codex-extension-empty p {
   max-width: 390px;
   margin: 6px 0 0;
-  font-size: 9.5px;
+  font-size: 10.5px;
   line-height: 1.5;
 }
 
@@ -5707,14 +5706,14 @@ code.codex-compact-activity-subject {
 
 .codex-mcp-editor > header span {
   color: var(--ink-faint);
-  font-size: 8px;
+  font-size: 9px;
   font-weight: 650;
   letter-spacing: 0.05em;
   text-transform: uppercase;
 }
 
 .codex-mcp-editor > header strong {
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .codex-mcp-editor > footer {
@@ -5736,7 +5735,7 @@ code.codex-compact-activity-subject {
 .codex-mcp-preset-note p {
   margin: 0;
   color: var(--ink-soft);
-  font-size: 8.5px;
+  font-size: 9.5px;
   line-height: 1.5;
 }
 
@@ -5746,7 +5745,7 @@ code.codex-compact-activity-subject {
   align-items: center;
   gap: 4px;
   color: var(--amber);
-  font-size: 8px;
+  font-size: 9px;
   font-weight: 640;
   white-space: nowrap;
 }
@@ -5773,13 +5772,13 @@ code.codex-compact-activity-subject {
 
 .codex-mcp-auth-editor > header strong {
   color: var(--ink);
-  font-size: 9.5px;
+  font-size: 10.5px;
 }
 
 .codex-mcp-auth-editor > header p {
   margin: 3px 0 0;
   color: var(--ink-faint);
-  font-size: 8px;
+  font-size: 9px;
   line-height: 1.45;
 }
 
@@ -5789,14 +5788,14 @@ code.codex-compact-activity-subject {
   border: 1px solid var(--line);
   border-radius: 5px;
   color: var(--ink-faint);
-  font-size: 7.5px;
+  font-size: 8.5px;
   font-weight: 640;
 }
 
 .codex-mcp-auth-note {
   margin: 0;
   color: var(--ink-soft);
-  font-size: 8.5px;
+  font-size: 9.5px;
   line-height: 1.5;
 }
 
@@ -5846,18 +5845,18 @@ code.codex-compact-activity-subject {
 
 .codex-mcp-network-consent strong {
   color: var(--ink-soft);
-  font-size: 8.5px;
+  font-size: 9.5px;
 }
 
 .codex-mcp-network-consent small {
   color: var(--ink-faint);
-  font-size: 8px;
+  font-size: 9px;
   line-height: 1.45;
 }
 
 .codex-mcp-network-consent code {
   color: var(--ink-soft);
-  font-size: 7.5px;
+  font-size: 8.5px;
 }
 
 .codex-mcp-oauth-notice {
@@ -5894,13 +5893,13 @@ code.codex-compact-activity-subject {
 }
 
 .codex-mcp-oauth-notice strong {
-  font-size: 9.5px;
+  font-size: 10.5px;
 }
 
 .codex-mcp-oauth-notice p {
   margin: 3px 0 0;
   color: var(--ink-soft);
-  font-size: 8.5px;
+  font-size: 9.5px;
   line-height: 1.45;
 }
 
@@ -5910,7 +5909,7 @@ code.codex-compact-activity-subject {
   gap: 4px;
   margin-top: 6px;
   color: currentColor;
-  font-size: 8px;
+  font-size: 9px;
   font-weight: 650;
 }
 
@@ -5958,12 +5957,12 @@ code.codex-compact-activity-subject {
 }
 
 .codex-mcp-switches strong {
-  font-size: 9.5px;
+  font-size: 10.5px;
 }
 
 .codex-mcp-switches small {
   color: var(--ink-faint);
-  font-size: 8px;
+  font-size: 9px;
 }
 
 .codex-mcp-advanced {
@@ -5974,7 +5973,7 @@ code.codex-compact-activity-subject {
 
 .codex-mcp-advanced summary {
   color: var(--ink-soft);
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 630;
   cursor: pointer;
 }
@@ -6039,7 +6038,7 @@ code.codex-compact-activity-subject {
 
 .archived-session-title {
   overflow: hidden;
-  font-size: 10.5px;
+  font-size: 11.5px;
   font-weight: 630;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -6051,7 +6050,7 @@ code.codex-compact-activity-subject {
   flex-wrap: wrap;
   gap: 4px;
   color: var(--ink-faint);
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .archived-session-restore {
@@ -6065,7 +6064,7 @@ code.codex-compact-activity-subject {
   border-radius: 6px;
   background: var(--panel);
   color: var(--ink-soft);
-  font-size: 9.5px;
+  font-size: 10.5px;
   font-weight: 610;
   cursor: pointer;
 }
@@ -6101,13 +6100,13 @@ code.codex-compact-activity-subject {
 
 .archived-sessions-empty strong {
   color: var(--ink-soft);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .archived-sessions-empty p {
   max-width: 360px;
   margin: 6px 0 0;
-  font-size: 9.5px;
+  font-size: 10.5px;
   line-height: 1.5;
 }
 
@@ -6130,7 +6129,7 @@ code.codex-compact-activity-subject {
 }
 
 .credential-row strong {
-  font-size: 10.5px;
+  font-size: 11.5px;
 }
 
 .codex-account-surface {
@@ -6160,7 +6159,7 @@ code.codex-compact-activity-subject {
 
 .codex-account-identity dt {
   color: var(--ink-faint);
-  font-size: 8px;
+  font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.065em;
   text-transform: uppercase;
@@ -6170,7 +6169,7 @@ code.codex-compact-activity-subject {
   overflow: hidden;
   margin: 5px 0 0;
   color: var(--ink);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 620;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -6202,7 +6201,7 @@ code.codex-compact-activity-subject {
 
 .codex-usage-card > header span {
   color: var(--ink-faint);
-  font-size: 8px;
+  font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.065em;
   text-transform: uppercase;
@@ -6210,7 +6209,7 @@ code.codex-compact-activity-subject {
 
 .codex-usage-card > header strong {
   color: var(--ink);
-  font-size: 10.5px;
+  font-size: 11.5px;
 }
 
 .codex-usage-card > header .icon-button {
@@ -6237,7 +6236,7 @@ code.codex-compact-activity-subject {
 
 .codex-rate-limit-heading > strong {
   color: var(--ink);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .codex-rate-limit-heading > span {
@@ -6245,7 +6244,7 @@ code.codex-compact-activity-subject {
   border-radius: 4px;
   background: var(--red-soft);
   color: var(--red);
-  font-size: 7.5px;
+  font-size: 8.5px;
   font-weight: 700;
   letter-spacing: 0;
   text-transform: none;
@@ -6260,14 +6259,14 @@ code.codex-compact-activity-subject {
 .codex-credit-balance span,
 .codex-spend-limit > span {
   color: var(--ink-soft);
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .codex-rate-window > div strong,
 .codex-credit-balance strong,
 .codex-spend-limit > strong {
   color: var(--ink);
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .codex-rate-track {
@@ -6288,7 +6287,7 @@ code.codex-compact-activity-subject {
 .codex-rate-window small,
 .codex-spend-limit small {
   color: var(--ink-faint);
-  font-size: 8px;
+  font-size: 9px;
   line-height: 1.4;
 }
 
@@ -6313,7 +6312,7 @@ code.codex-compact-activity-subject {
   margin: 0;
   padding: 13px 12px;
   color: var(--ink-soft);
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .codex-usage-error {
@@ -6328,7 +6327,7 @@ code.codex-compact-activity-subject {
 
 .codex-usage-error > span {
   color: var(--red);
-  font-size: 8.5px;
+  font-size: 9.5px;
   font-weight: 500;
   letter-spacing: 0;
   line-height: 1.4;
@@ -6338,7 +6337,7 @@ code.codex-compact-activity-subject {
 .codex-usage-card > footer {
   padding: 8px 12px;
   color: var(--ink-faint);
-  font-size: 8px;
+  font-size: 9px;
   line-height: 1.4;
 }
 
@@ -6369,7 +6368,7 @@ code.codex-compact-activity-subject {
   gap: 4px;
   padding: 4px 6px;
   border-radius: 5px;
-  font-size: 8px;
+  font-size: 9px;
   font-weight: 650;
 }
 
@@ -6402,7 +6401,7 @@ code.codex-compact-activity-subject {
 .device-auth-card span {
   display: block;
   color: var(--ink-soft);
-  font-size: 8px;
+  font-size: 9px;
   font-weight: 650;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -6421,7 +6420,7 @@ code.codex-compact-activity-subject {
   max-width: 420px;
   margin: 7px 0 0;
   color: var(--ink-soft);
-  font-size: 9px;
+  font-size: 10px;
   line-height: 1.5;
 }
 
@@ -6439,7 +6438,7 @@ code.codex-compact-activity-subject {
   border-radius: 7px;
   background: var(--red-soft);
   color: var(--red);
-  font-size: 9px;
+  font-size: 10px;
   line-height: 1.45;
 }
 
@@ -6452,7 +6451,7 @@ code.codex-compact-activity-subject {
 .settings-footnote {
   margin: -3px 0 0;
   color: var(--ink-faint);
-  font-size: 8.5px;
+  font-size: 9.5px;
   line-height: 1.5;
 }
 
@@ -6466,14 +6465,14 @@ code.codex-compact-activity-subject {
 .network-mode-fieldset > legend {
   padding: 0;
   color: var(--ink);
-  font-size: 10.5px;
+  font-size: 11.5px;
   font-weight: 650;
 }
 
 .network-mode-fieldset > p {
   margin: 5px 0 11px;
   color: var(--ink-faint);
-  font-size: 9.5px;
+  font-size: 10.5px;
   line-height: 1.45;
 }
 
@@ -6540,13 +6539,13 @@ code.codex-compact-activity-subject {
 .network-mode-option strong {
   display: block;
   margin-top: 11px;
-  font-size: 10.5px;
+  font-size: 11.5px;
 }
 
 .network-mode-option p {
   margin: 5px 0 0;
   color: var(--ink-faint);
-  font-size: 9px;
+  font-size: 10px;
   line-height: 1.4;
 }
 
@@ -6554,7 +6553,7 @@ code.codex-compact-activity-subject {
   display: inline-block;
   margin-top: 10px;
   color: var(--ink-faint);
-  font-size: 8px;
+  font-size: 9px;
 }
 
 .radio-mark {
@@ -6605,13 +6604,13 @@ code.codex-compact-activity-subject {
 
 .network-mode-confirmation strong {
   color: var(--ink);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .network-mode-confirmation p {
   margin: 4px 0 0;
   color: var(--ink-soft);
-  font-size: 9px;
+  font-size: 10px;
   line-height: 1.45;
 }
 
@@ -6629,7 +6628,7 @@ code.codex-compact-activity-subject {
   border-radius: 6px;
   background: var(--panel-strong);
   color: var(--ink-soft);
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 620;
   cursor: pointer;
 }
@@ -6663,7 +6662,7 @@ code.codex-compact-activity-subject {
 
 .domain-card header strong {
   color: var(--ink);
-  font-size: 10.5px;
+  font-size: 11.5px;
 }
 
 .domain-action-badge {
@@ -6675,7 +6674,7 @@ code.codex-compact-activity-subject {
   padding: 0 8px;
   border: 1px solid var(--line);
   border-radius: 999px;
-  font-size: 8px;
+  font-size: 9px;
   font-weight: 650;
   white-space: nowrap;
 }
@@ -6710,7 +6709,7 @@ code.codex-compact-activity-subject {
   border-radius: 6px;
   background: var(--sidebar);
   font-family: "SFMono-Regular", Consolas, monospace;
-  font-size: 8.5px;
+  font-size: 9.5px;
 }
 
 .domain-list > span code {
@@ -6776,7 +6775,7 @@ code.codex-compact-activity-subject {
   border-radius: 7px;
   background: var(--sidebar);
   color: var(--ink-soft);
-  font-size: 9.5px;
+  font-size: 10.5px;
   cursor: pointer;
 }
 
@@ -6788,7 +6787,7 @@ code.codex-compact-activity-subject {
 .domain-input-error {
   margin: 7px 0 0 !important;
   color: var(--red) !important;
-  font-size: 8.5px !important;
+  font-size: 9.5px !important;
 }
 
 .network-audit-note {
@@ -6797,7 +6796,7 @@ code.codex-compact-activity-subject {
   gap: 7px;
   margin: 0;
   color: var(--ink-faint);
-  font-size: 8.5px;
+  font-size: 9.5px;
   line-height: 1.5;
 }
 

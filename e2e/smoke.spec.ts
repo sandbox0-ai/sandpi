@@ -85,6 +85,27 @@ test("loads the live workspace and Environment credential surface", async ({
 
   await page.getByRole("button", { name: "Development settings" }).last().click();
   await page.getByRole("button", { name: /Coding agent/ }).click();
+  const settingsLayout = await page
+    .locator(".settings-content")
+    .evaluate((content) => {
+      const section = content.querySelector<HTMLElement>(".settings-section");
+      const body = content.querySelector<HTMLElement>(".settings-section-body");
+      if (!section || !body) throw new Error("Environment settings layout missing");
+      const sectionStyle = window.getComputedStyle(section);
+      return {
+        contentWidth: content.getBoundingClientRect().width,
+        bodyWidth: body.getBoundingClientRect().width,
+        paddingInline:
+          Number.parseFloat(sectionStyle.paddingLeft) +
+          Number.parseFloat(sectionStyle.paddingRight),
+        bodyOverflow: body.scrollWidth - body.clientWidth,
+      };
+    });
+  expect(settingsLayout.paddingInline).toBeLessThanOrEqual(64);
+  expect(settingsLayout.bodyWidth / settingsLayout.contentWidth).toBeGreaterThan(
+    0.88,
+  );
+  expect(settingsLayout.bodyOverflow).toBe(0);
   await expect(
     page.locator(".credential-row").getByText(/Connected|Not connected/),
   ).toBeVisible();
