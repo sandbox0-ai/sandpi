@@ -4,24 +4,20 @@ import {
   Archive,
   Cable,
   Check,
-  Clock3,
   Copy,
   ExternalLink,
   Globe2,
   KeyRound,
   LockKeyhole,
   Network,
-  Play,
   Plus,
   RefreshCw,
   RotateCcw,
   Settings2,
-  Share2,
   ShieldCheck,
   Sparkles,
   Trash2,
   TriangleAlert,
-  Webhook,
   X,
 } from "lucide-react";
 import {
@@ -37,6 +33,12 @@ import {
   CodexMcpSettings,
   CodexSkillsSettings,
 } from "@/harnesses/codex/environment-settings";
+import type {
+  CodexAccountPlanType,
+  CodexAccountRateLimits,
+  CodexAccountSummary,
+  CodexRateLimitWindow,
+} from "@/harnesses/codex/environment-tools";
 import { EnvironmentAuditPanel } from "@/components/environment-audit-panel";
 import { mergeEnvironmentAuditEventPages } from "@/lib/environment-audit";
 import {
@@ -63,9 +65,7 @@ export type EnvironmentSettingsTab =
   | "credentials"
   | "skills"
   | "mcp"
-  | "network"
-  | "functions"
-  | "sharing";
+  | "network";
 
 interface EnvironmentSettingsProps {
   environment: Environment;
@@ -115,32 +115,7 @@ const tabs: Array<{
   { id: "skills", label: "Skills", icon: Sparkles },
   { id: "mcp", label: "MCP servers", icon: Cable },
   { id: "network", label: "Network", icon: Network },
-  { id: "functions", label: "Functions", icon: Webhook },
-  { id: "sharing", label: "Sharing", icon: Share2 },
 ];
-
-function Toggle({
-  checked,
-  onChange,
-  label,
-}: {
-  checked: boolean;
-  onChange: (checked: boolean) => void;
-  label: string;
-}) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      aria-label={label}
-      className={`toggle ${checked ? "is-on" : ""}`}
-      onClick={() => onChange(!checked)}
-    >
-      <span />
-    </button>
-  );
-}
 
 function formatArchivedSessionTime(
   timestamp: UnixTimestamp,
@@ -151,6 +126,61 @@ function formatArchivedSessionTime(
     dateStyle: "medium",
     timeStyle: "short",
   });
+}
+
+function formatCodexPlan(planType: CodexAccountPlanType | undefined) {
+  switch (planType) {
+    case "free":
+      return "Free";
+    case "go":
+      return "Go";
+    case "plus":
+      return "Plus";
+    case "pro":
+      return "Pro";
+    case "prolite":
+      return "Pro Lite";
+    case "team":
+      return "Team";
+    case "self_serve_business_usage_based":
+      return "Business usage-based";
+    case "business":
+      return "Business";
+    case "enterprise_cbp_usage_based":
+      return "Enterprise usage-based";
+    case "enterprise":
+      return "Enterprise";
+    case "edu":
+      return "Edu";
+    case "unknown":
+      return "Unknown plan";
+    default:
+      return "Plan unavailable";
+  }
+}
+
+function formatCodexRateLimitWindow(
+  window: CodexRateLimitWindow,
+  fallback: "Primary" | "Secondary",
+) {
+  const minutes = window.windowDurationMins;
+  if (!minutes) return `${fallback} window`;
+  if (minutes === 10_080) return "Weekly window";
+  if (minutes === 1_440) return "Daily window";
+  if (minutes % 1_440 === 0) return `${minutes / 1_440}-day window`;
+  if (minutes % 60 === 0) return `${minutes / 60}-hour window`;
+  return `${minutes}-minute window`;
+}
+
+function mergeCredentialProjection(
+  draft: Environment,
+  refreshed: Environment,
+): Environment {
+  return {
+    ...draft,
+    credentialRevision: refreshed.credentialRevision,
+    codingAgent: refreshed.codingAgent,
+  };
 }
 
 function hasUnsavedEnvironmentChanges(
@@ -200,6 +230,15 @@ export function EnvironmentSettings({
   const [codexAuthBusy, setCodexAuthBusy] = useState(false);
   const [codexAuthError, setCodexAuthError] = useState("");
   const [copiedDeviceCode, setCopiedDeviceCode] = useState(false);
+  const [codexAccount, setCodexAccount] =
+    useState<CodexAccountSummary | null>(null);
+  const [codexRateLimits, setCodexRateLimits] =
+    useState<CodexAccountRateLimits | null>(null);
+  const [codexUsageLoading, setCodexUsageLoading] = useState(false);
+  const [codexUsageError, setCodexUsageError] = useState("");
+  const [codexEnvironmentRefreshError, setCodexEnvironmentRefreshError] =
+    useState("");
+  const [codexAccountReload, setCodexAccountReload] = useState(0);
   const [environmentAudit, setEnvironmentAudit] =
     useState<EnvironmentAuditFeed | null>(null);
   const [environmentAuditLoading, setEnvironmentAuditLoading] = useState(false);
@@ -213,6 +252,8 @@ export function EnvironmentSettings({
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const dangerZoneRef = useRef<HTMLDivElement>(null);
   const hasUnsavedChanges = hasUnsavedEnvironmentChanges(draft, environment);
+  const codexAuthFlowId = codexAuthFlow?.id;
+  const codexAuthFlowStatus = codexAuthFlow?.status;
   const blocksByDefault = draft.networkPolicy.mode === "block-all";
   const domainAction = blocksByDefault ? "allow" : "block";
   const domainActionPast = blocksByDefault ? "allowed" : "blocked";
@@ -331,6 +372,80 @@ export function EnvironmentSettings({
   }, [deleteConfirming]);
 
   useEffect(() => {
+    if (activeTab !== "credentials") return;
+    const controller = new AbortController();
+    setCodexEnvironmentRefreshError("");
+    void apiFetch<ApiEnvelope<Environment[]>>("/api/v1/environments", {
+      signal: controller.signal,
+    })
+      .then((response) => {
+        if (controller.signal.aborted) return;
+        const refreshed = response.data.find(
+          (candidate) => candidate.id === environment.id,
+        );
+        if (!refreshed) return;
+        setDraft((current) => mergeCredentialProjection(current, refreshed));
+        onChange(refreshed);
+      })
+      .catch((error) => {
+        if (!controller.signal.aborted) {
+          setCodexEnvironmentRefreshError(
+            error instanceof Error
+              ? error.message
+              : "The Codex account status could not be refreshed.",
+          );
+        }
+      });
+    return () => controller.abort();
+  }, [activeTab, environment.id, onChange]);
+
+  useEffect(() => {
+    if (activeTab !== "credentials") return;
+    const controller = new AbortController();
+    setCodexUsageLoading(true);
+    setCodexUsageError("");
+    setCodexRateLimits(null);
+    void (async () => {
+      try {
+        const accountResponse = await apiFetch<
+          ApiEnvelope<CodexAccountSummary | null>
+        >(
+          `/api/v1/environments/${encodeURIComponent(environment.id)}/harnesses/codex/account`,
+          { signal: controller.signal },
+        );
+        if (controller.signal.aborted) return;
+        setCodexAccount(accountResponse.data);
+        if (!accountResponse.data) {
+          setCodexRateLimits(null);
+          return;
+        }
+        const rateLimitsResponse = await apiFetch<
+          ApiEnvelope<CodexAccountRateLimits>
+        >(
+          `/api/v1/environments/${encodeURIComponent(environment.id)}/harnesses/codex/rate-limits`,
+          { signal: controller.signal },
+        );
+        if (!controller.signal.aborted) {
+          setCodexRateLimits(rateLimitsResponse.data);
+        }
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          setCodexUsageError(
+            error instanceof Error
+              ? error.message
+              : "Live Codex account usage could not be loaded.",
+          );
+        }
+      } finally {
+        if (!controller.signal.aborted) {
+          setCodexUsageLoading(false);
+        }
+      }
+    })();
+    return () => controller.abort();
+  }, [activeTab, codexAccountReload, environment.id]);
+
+  useEffect(() => {
     const controller = new AbortController();
     void apiFetch<ApiEnvelope<CodexDeviceAuthFlow | null>>(
       `/api/v1/environments/${encodeURIComponent(environment.id)}/harnesses/codex/device-login`,
@@ -354,8 +469,11 @@ export function EnvironmentSettings({
   }, [environment.id]);
 
   useEffect(() => {
-    const flow = codexAuthFlow;
-    if (!flow || !ACTIVE_CODEX_AUTH_STATUSES.has(flow.status)) {
+    if (
+      !codexAuthFlowId ||
+      !codexAuthFlowStatus ||
+      !ACTIVE_CODEX_AUTH_STATUSES.has(codexAuthFlowStatus)
+    ) {
       return;
     }
 
@@ -364,32 +482,47 @@ export function EnvironmentSettings({
     const poll = async () => {
       try {
         const response = await apiFetch<ApiEnvelope<CodexDeviceAuthFlow>>(
-          `/api/v1/environments/${encodeURIComponent(environment.id)}/harnesses/codex/device-login/${encodeURIComponent(flow.id)}`,
+          `/api/v1/environments/${encodeURIComponent(environment.id)}/harnesses/codex/device-login/${encodeURIComponent(codexAuthFlowId)}`,
         );
         if (cancelled) return;
-        setCodexAuthFlow(response.data);
         if (response.data.status === "completed") {
-          const environments = await apiFetch<ApiEnvelope<Environment[]>>(
-            "/api/v1/environments",
-          );
-          if (cancelled) return;
-          const refreshed = environments.data.find(
-            (candidate) => candidate.id === environment.id,
-          );
-          if (refreshed) {
-            setDraft(refreshed);
-            onChange(refreshed);
+          try {
+            const environments = await apiFetch<ApiEnvelope<Environment[]>>(
+              "/api/v1/environments",
+            );
+            if (cancelled) return;
+            const refreshed = environments.data.find(
+              (candidate) => candidate.id === environment.id,
+            );
+            if (refreshed) {
+              setDraft((current) =>
+                mergeCredentialProjection(current, refreshed),
+              );
+              onChange(refreshed);
+            }
+          } catch (error) {
+            if (cancelled) return;
+            setCodexEnvironmentRefreshError(
+              error instanceof Error
+                ? error.message
+                : "The completed Codex account could not be refreshed.",
+            );
           }
+          if (cancelled) return;
+          setCodexAuthFlow(response.data);
           setCodexAuthBusy(false);
+          setCodexAccountReload((current) => current + 1);
           return;
         }
         if (!ACTIVE_CODEX_AUTH_STATUSES.has(response.data.status)) {
+          setCodexAuthFlow(response.data);
           setCodexAuthBusy(false);
           setCodexAuthError(
             response.data.error ?? "Codex authentication did not complete.",
           );
           return;
         }
+        setCodexAuthFlow(response.data);
         timer = window.setTimeout(poll, 1_500);
       } catch (error) {
         if (cancelled) return;
@@ -407,7 +540,12 @@ export function EnvironmentSettings({
       cancelled = true;
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [codexAuthFlow, environment.id, onChange]);
+  }, [
+    codexAuthFlowId,
+    codexAuthFlowStatus,
+    environment.id,
+    onChange,
+  ]);
 
   async function startCodexDeviceLogin() {
     if (codexAuthBusy) return;
@@ -584,6 +722,14 @@ export function EnvironmentSettings({
     setPendingNetworkMode(null);
   }
 
+  const displayedCodexAccount =
+    codexAccount?.email ?? draft.codingAgent.account ?? "ChatGPT account";
+  const displayedCodexPlan =
+    codexAccount?.planType ??
+    codexRateLimits?.limits.find((limit) => limit.planType)?.planType;
+  const displayedCodexLastVerified =
+    codexAccount?.lastVerified ?? draft.codingAgent.lastVerified;
+
   return (
     <div
       className="modal-layer settings-layer"
@@ -651,9 +797,7 @@ export function EnvironmentSettings({
                 >
                   <Icon size={16} />
                   {tab.label}
-                  {tab.id === "functions" ? (
-                    <span className="nav-count">{draft.functions.length}</span>
-                  ) : tab.id === "archived-sessions" ? (
+                  {tab.id === "archived-sessions" ? (
                     <span className="nav-count">{archivedSessions.length}</span>
                   ) : null}
                 </button>
@@ -1004,7 +1148,7 @@ export function EnvironmentSettings({
                       <strong>{draft.codingAgent.label}</strong>
                       <p>
                         {draft.codingAgent.status === "connected"
-                          ? `${draft.codingAgent.account ?? "ChatGPT"} · verified ${
+                          ? `${displayedCodexAccount} · verified ${
                               draft.codingAgent.lastVerified
                                 ? formatArchivedSessionTime(
                                     draft.codingAgent.lastVerified,
@@ -1033,6 +1177,194 @@ export function EnvironmentSettings({
                     </span>
                   </div>
                 </div>
+
+                {draft.codingAgent.status === "connected" || codexAccount ? (
+                  <div className="codex-account-surface">
+                    <dl className="codex-account-identity">
+                      <div>
+                        <dt>Account</dt>
+                        <dd>{displayedCodexAccount}</dd>
+                      </div>
+                      <div>
+                        <dt>ChatGPT plan</dt>
+                        <dd>{formatCodexPlan(displayedCodexPlan)}</dd>
+                      </div>
+                      <div>
+                        <dt>Last verified</dt>
+                        <dd>
+                          {displayedCodexLastVerified
+                            ? formatArchivedSessionTime(
+                                displayedCodexLastVerified,
+                                language,
+                                timeZone,
+                              )
+                            : "Recently"}
+                        </dd>
+                      </div>
+                    </dl>
+
+                    <section
+                      className="codex-usage-card"
+                      aria-labelledby="codex-usage-title"
+                    >
+                      <header>
+                        <div>
+                          <span>Live from ChatGPT</span>
+                          <strong id="codex-usage-title">
+                            Codex usage limits
+                          </strong>
+                        </div>
+                        <button
+                          type="button"
+                          className="icon-button"
+                          aria-label="Refresh Codex usage"
+                          title="Refresh Codex usage"
+                          disabled={codexUsageLoading}
+                          onClick={() =>
+                            setCodexAccountReload((current) => current + 1)
+                          }
+                        >
+                          <RefreshCw
+                            className={codexUsageLoading ? "is-spinning" : ""}
+                            size={14}
+                            aria-hidden="true"
+                          />
+                        </button>
+                      </header>
+
+                      {codexUsageLoading && !codexRateLimits ? (
+                        <p className="codex-usage-state" role="status">
+                          Reading the latest account limits…
+                        </p>
+                      ) : null}
+
+                      {codexUsageError ? (
+                        <div className="codex-usage-error" role="alert">
+                          <span>{codexUsageError}</span>
+                          <button
+                            type="button"
+                            className="text-action-button"
+                            onClick={() =>
+                              setCodexAccountReload((current) => current + 1)
+                            }
+                          >
+                            Retry
+                          </button>
+                        </div>
+                      ) : null}
+
+                      {codexRateLimits?.limits.map((limit, limitIndex) => (
+                        <div
+                          className="codex-rate-limit"
+                          key={limit.id ?? `codex-limit-${limitIndex}`}
+                        >
+                          <div className="codex-rate-limit-heading">
+                            <strong>
+                              {limit.name ?? limit.id ?? "Codex"}
+                            </strong>
+                            {limit.reached ? <span>Limit reached</span> : null}
+                          </div>
+                          {(
+                            [
+                              ["Primary", limit.primary],
+                              ["Secondary", limit.secondary],
+                            ] as const
+                          ).map(([fallback, window]) => {
+                            if (!window) return null;
+                            const remaining = 100 - window.usedPercent;
+                            const label = formatCodexRateLimitWindow(
+                              window,
+                              fallback,
+                            );
+                            return (
+                              <div
+                                className="codex-rate-window"
+                                key={fallback}
+                              >
+                                <div>
+                                  <span>{label}</span>
+                                  <strong>{remaining}% remaining</strong>
+                                </div>
+                                <span
+                                  className="codex-rate-track"
+                                  role="progressbar"
+                                  aria-label={`${limit.name ?? limit.id ?? "Codex"} ${label}`}
+                                  aria-valuemin={0}
+                                  aria-valuemax={100}
+                                  aria-valuenow={window.usedPercent}
+                                  aria-valuetext={`${window.usedPercent}% used, ${remaining}% remaining`}
+                                >
+                                  <i
+                                    style={{
+                                      width: `${window.usedPercent}%`,
+                                    }}
+                                  />
+                                </span>
+                                <small>
+                                  {window.resetsAt
+                                    ? `Resets ${formatArchivedSessionTime(
+                                        window.resetsAt,
+                                        language,
+                                        timeZone,
+                                      )}`
+                                    : `${window.usedPercent}% used`}
+                                </small>
+                              </div>
+                            );
+                          })}
+                          {limit.individualLimit ? (
+                            <div className="codex-spend-limit">
+                              <span>Workspace usage</span>
+                              <strong>
+                                {limit.individualLimit.used} /{" "}
+                                {limit.individualLimit.limit}
+                              </strong>
+                              <small>
+                                {limit.individualLimit.remainingPercent}%
+                                remaining · resets{" "}
+                                {formatArchivedSessionTime(
+                                  limit.individualLimit.resetsAt,
+                                  language,
+                                  timeZone,
+                                )}
+                              </small>
+                            </div>
+                          ) : null}
+                          {limit.credits ? (
+                            <div className="codex-credit-balance">
+                              <span>Credits</span>
+                              <strong>
+                                {limit.credits.unlimited
+                                  ? "Unlimited"
+                                  : limit.credits.balance ?? "Available"}
+                              </strong>
+                            </div>
+                          ) : null}
+                        </div>
+                      ))}
+
+                      {codexRateLimits &&
+                      codexRateLimits.limits.length === 0 &&
+                      !codexUsageError ? (
+                        <p className="codex-usage-state">
+                          Codex did not report a metered window for this account.
+                        </p>
+                      ) : null}
+
+                      {codexRateLimits ? (
+                        <footer>
+                          Updated{" "}
+                          {formatArchivedSessionTime(
+                            codexRateLimits.fetchedAt,
+                            language,
+                            timeZone,
+                          )}
+                          . Separate from the Sandpi Team plan.
+                        </footer>
+                      ) : null}
+                    </section>
+                  </div>
+                ) : null}
 
                 {codexAuthFlow?.verificationUrl &&
                 ACTIVE_CODEX_AUTH_STATUSES.has(codexAuthFlow.status) ? (
@@ -1091,6 +1423,11 @@ export function EnvironmentSettings({
                 {codexAuthError ? (
                   <p className="settings-inline-error" role="alert">
                     {codexAuthError}
+                  </p>
+                ) : null}
+                {codexEnvironmentRefreshError ? (
+                  <p className="settings-inline-error" role="alert">
+                    {codexEnvironmentRefreshError}
                   </p>
                 ) : null}
                 <div className="credential-actions">
@@ -1355,130 +1692,6 @@ export function EnvironmentSettings({
               </SettingsSection>
             ) : null}
 
-            {activeTab === "functions" ? (
-              <SettingsSection
-                eyebrow="Environment automation"
-                title="Functions"
-                description="Built-in sandbox jobs run Environment automation without consuming a user Session."
-              >
-                <div className="function-list">
-                  {draft.functions.map((fn) => (
-                    <div className="function-row" key={fn.id}>
-                      <span className="function-icon">
-                        {fn.kind === "webhook" ? (
-                          <Webhook size={17} />
-                        ) : fn.kind === "cron" ? (
-                          <Clock3 size={17} />
-                        ) : (
-                          <Play size={17} />
-                        )}
-                      </span>
-                      <div>
-                        <strong>{fn.name}</strong>
-                        <p>{fn.description}</p>
-                        {fn.lastRun ? (
-                          <small>
-                            Last run{" "}
-                            {formatArchivedSessionTime(
-                              fn.lastRun,
-                              language,
-                              timeZone,
-                            )}
-                          </small>
-                        ) : null}
-                      </div>
-                      {fn.status === "coming-soon" ? (
-                        <span className="coming-soon-badge">Coming soon</span>
-                      ) : (
-                        <Toggle
-                          label={`${fn.name} enabled`}
-                          checked={fn.status === "active"}
-                          onChange={(checked) =>
-                            setDraft((current) => ({
-                              ...current,
-                              functions: current.functions.map((item) =>
-                                item.id === fn.id
-                                  ? {
-                                      ...item,
-                                      status: checked ? "active" : "disabled",
-                                    }
-                                  : item,
-                              ),
-                            }))
-                          }
-                        />
-                      )}
-                    </div>
-                  ))}
-                </div>
-                <div className="settings-card webhook-card">
-                  <span className="settings-card-label">
-                    Git webhook endpoint
-                  </span>
-                  <div className="copy-value-row">
-                    <code>https://api.sandpi.dev/v1/hooks/env-default/git</code>
-                    <button type="button" aria-label="Copy webhook endpoint">
-                      <Copy size={14} />
-                    </button>
-                  </div>
-                  <p>
-                    On push: validate event → start sandbox function → warm
-                    caches → record result.
-                  </p>
-                </div>
-              </SettingsSection>
-            ) : null}
-
-            {activeTab === "sharing" ? (
-              <SettingsSection
-                eyebrow="Volume access grants"
-                title="Sharing"
-                description="File links are scoped grants enforced by Sandpi’s control plane, not public Sandbox endpoints."
-              >
-                <div className="setting-row">
-                  <div>
-                    <strong>Allow file sharing</strong>
-                    <p>
-                      Members can create expiring links from the /workspace file
-                      browser.
-                    </p>
-                  </div>
-                  <Toggle
-                    label="Allow file sharing"
-                    checked
-                    onChange={() => undefined}
-                  />
-                </div>
-                <div className="field-grid two-columns">
-                  <label>
-                    Default permission
-                    <select
-                      name="default-share-permission"
-                      defaultValue="viewer"
-                    >
-                      <option value="viewer">Can view</option>
-                      <option value="download">Can view & download</option>
-                    </select>
-                  </label>
-                  <label>
-                    Default expiration
-                    <select name="default-share-expiry" defaultValue="7-days">
-                      <option value="24-hours">24 hours</option>
-                      <option value="7-days">7 days</option>
-                      <option value="30-days">30 days</option>
-                    </select>
-                  </label>
-                </div>
-                <div className="empty-grants-card">
-                  <Share2 size={22} />
-                  <strong>No active Environment links</strong>
-                  <p>
-                    Environment file links will appear here with their path,
-                    permission and expiry.
-                  </p>
-                </div>
-              </SettingsSection>
-            ) : null}
           </div>
         </div>
 

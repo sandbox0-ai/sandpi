@@ -3,6 +3,64 @@
  * own settings contracts instead of translating into these Codex concepts.
  */
 
+import type { UnixTimestamp } from "@/lib/time";
+
+export type CodexAccountPlanType =
+  | "free"
+  | "go"
+  | "plus"
+  | "pro"
+  | "prolite"
+  | "team"
+  | "self_serve_business_usage_based"
+  | "business"
+  | "enterprise_cbp_usage_based"
+  | "enterprise"
+  | "edu"
+  | "unknown";
+
+export interface CodexAccountSummary {
+  type: "chatgpt" | "unknown";
+  email?: string;
+  planType?: CodexAccountPlanType;
+  lastVerified?: UnixTimestamp;
+}
+
+export interface CodexRateLimitWindow {
+  usedPercent: number;
+  windowDurationMins?: number;
+  resetsAt?: UnixTimestamp;
+}
+
+export interface CodexCreditsSnapshot {
+  hasCredits: boolean;
+  unlimited: boolean;
+  balance?: string;
+}
+
+export interface CodexSpendControlSnapshot {
+  limit: string;
+  used: string;
+  remainingPercent: number;
+  resetsAt: UnixTimestamp;
+}
+
+export interface CodexRateLimitSnapshot {
+  id?: string;
+  name?: string;
+  planType?: CodexAccountPlanType;
+  primary?: CodexRateLimitWindow;
+  secondary?: CodexRateLimitWindow;
+  credits?: CodexCreditsSnapshot;
+  individualLimit?: CodexSpendControlSnapshot;
+  reached: boolean;
+}
+
+export interface CodexAccountRateLimits {
+  limits: CodexRateLimitSnapshot[];
+  fetchedAt: UnixTimestamp;
+}
+
 export type CodexSkillScope = "user" | "repo" | "system" | "admin";
 
 export interface CodexSkillDependency {

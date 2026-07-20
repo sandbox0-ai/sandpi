@@ -1,5 +1,9 @@
 import { setTimeout as delay } from "node:timers/promises";
 
+import type {
+  CodexAccountPlanType,
+  CodexAccountSummary,
+} from "@/harnesses/codex/environment-tools";
 import { HttpError } from "@/server/http-error";
 import type { RuntimeAdapter } from "@/server/runtime/types";
 import { SecretBox, type EncryptedValue } from "@/server/secrets";
@@ -26,6 +30,20 @@ const CREDENTIAL_ASSOCIATED_DATA_PREFIX = "sandpi:codex:environment-credential:"
 const MCP_OAUTH_ASSOCIATED_DATA_PREFIX =
   "sandpi:codex:environment-mcp-oauth-credential:";
 const MAX_MCP_OAUTH_CREDENTIAL_BYTES = 4 * 1024 * 1024;
+const CODEX_ACCOUNT_PLAN_TYPES = new Set<CodexAccountPlanType>([
+  "free",
+  "go",
+  "plus",
+  "pro",
+  "prolite",
+  "team",
+  "self_serve_business_usage_based",
+  "business",
+  "enterprise_cbp_usage_based",
+  "enterprise",
+  "edu",
+  "unknown",
+]);
 
 interface AuthLogger {
   warn(fields: object, message: string): void;
@@ -280,6 +298,26 @@ export class CodexEnvironmentAuthService {
   async modelsForEnvironment(userId: string, environmentId: string) {
     const stored = await this.authStore.getCredential(userId, environmentId);
     return stored?.metadata.models ?? { data: [] };
+  }
+
+  async accountForEnvironment(
+    userId: string,
+    environmentId: string,
+  ): Promise<CodexAccountSummary | null> {
+    const environment = await this.store.getEnvironment(userId, environmentId);
+    if (environment.codingAgent.harness !== "codex") {
+      throw new HttpError(
+        409,
+        "environment_harness_mismatch",
+        "This Environment is not bound to the Codex harness.",
+      );
+    }
+    const stored = await this.authStore.getCredential(userId, environmentId);
+    if (!stored) return null;
+    return publicAccountMetadata(
+      stored.metadata,
+      environment.codingAgent.lastVerified,
+    );
   }
 
   requireMcpOAuthPersistence() {
@@ -654,6 +692,32 @@ function accountMetadata(value: unknown, models?: unknown): Record<string, unkno
     ...(typeof account.planType === "string" ? { planType: account.planType } : {}),
     ...(models === undefined ? {} : { models }),
   };
+}
+
+function publicAccountMetadata(
+  metadata: Record<string, unknown>,
+  lastVerified: CodexAccountSummary["lastVerified"],
+): CodexAccountSummary {
+  const email = boundedMetadataString(metadata.email, 320);
+  const planType =
+    typeof metadata.planType === "string" &&
+    CODEX_ACCOUNT_PLAN_TYPES.has(metadata.planType as CodexAccountPlanType)
+      ? (metadata.planType as CodexAccountPlanType)
+      : undefined;
+  return {
+    type: metadata.type === "chatgpt" ? "chatgpt" : "unknown",
+    ...(email ? { email } : {}),
+    ...(planType ? { planType } : {}),
+    ...(lastVerified === undefined ? {} : { lastVerified }),
+  };
+}
+
+function boundedMetadataString(value: unknown, maximumLength: number) {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim();
+  return normalized && normalized.length <= maximumLength
+    ? normalized
+    : undefined;
 }
 
 export function validateCodexCredentialJson(authJson: string) {

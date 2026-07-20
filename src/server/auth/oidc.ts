@@ -300,14 +300,12 @@ async function createPersonalTeam(
     `
       INSERT INTO environments (
         id, team_id, created_by_user_id, name, description, color, status,
-        revision, template_id, harness, harness_metadata, network_policy,
-        functions
+        revision, template_id, harness, harness_metadata, network_policy
       ) VALUES (
         $1, $2, $3, 'Development', '', '#315c4b', 'updating', 1,
         'coding-agent', 'codex',
         '{"label":"Codex","status":"not-connected"}'::JSONB,
-        '{"mode":"allow-all","domainExceptions":[]}'::JSONB,
-        '[]'::JSONB
+        '{"mode":"allow-all","domainExceptions":[]}'::JSONB
       )
     `,
     [`env_${randomUUID()}`, teamId, userId],

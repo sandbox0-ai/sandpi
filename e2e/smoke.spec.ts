@@ -8,6 +8,7 @@ import {
 
 import type { ApiEnvelope } from "../src/lib/api-client";
 import type {
+  Environment,
   SandpiBootstrap,
   WorkspaceDirectoryListing,
   WorkspaceIdeFile,
@@ -93,6 +94,203 @@ test("loads the live workspace and Environment credential surface", async ({
   expect(browserErrors).toEqual([]);
 });
 
+test("refreshes the Codex account and live limits after device login", async ({
+  page,
+  request,
+}) => {
+  const environment = await readyEnvironment(request);
+  test.skip(!environment, "A ready Environment is required for this check.");
+  if (!environment) return;
+
+  const disconnectedEnvironment = {
+    ...environment,
+    credentialRevision: 0,
+    codingAgent: {
+      ...environment.codingAgent,
+      status: "not-connected" as const,
+      account: undefined,
+      lastVerified: undefined,
+    },
+  };
+  const connectedEnvironment = {
+    ...environment,
+    credentialRevision: 1,
+    codingAgent: {
+      ...environment.codingAgent,
+      status: "connected" as const,
+      account: "codex-user@example.com",
+      lastVerified: 1_800_000_000,
+    },
+  };
+  let loginStarted = false;
+  let loginCompleted = false;
+  let completedEnvironmentRefreshes = 0;
+
+  await page.route("**/api/v1/bootstrap**", async (route) => {
+    const response = await route.fetch();
+    const body = (await response.json()) as ApiEnvelope<SandpiBootstrap>;
+    body.data.environments = body.data.environments.map((candidate) =>
+      candidate.id === environment.id ? disconnectedEnvironment : candidate,
+    );
+    await route.fulfill({ response, json: body });
+  });
+  await page.route(/\/api\/v1\/environments(?:\?.*)?$/, async (route) => {
+    const response = await route.fetch();
+    const body = (await response.json()) as ApiEnvelope<Environment[]>;
+    body.data = body.data.map((candidate) =>
+      candidate.id === environment.id
+        ? loginCompleted
+          ? connectedEnvironment
+          : disconnectedEnvironment
+        : candidate,
+    );
+    if (loginCompleted) completedEnvironmentRefreshes += 1;
+    await route.fulfill({ response, json: body });
+  });
+  await page.route(
+    `**/api/v1/environments/${encodeURIComponent(environment.id)}/harnesses/codex/device-login**`,
+    async (route) => {
+      const requestUrl = new URL(route.request().url());
+      const basePath =
+        `/api/v1/environments/${encodeURIComponent(environment.id)}` +
+        "/harnesses/codex/device-login";
+      if (requestUrl.pathname === basePath && route.request().method() === "GET") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ data: loginStarted ? {
+            id: "codex-auth-test",
+            environmentId: environment.id,
+            status: "awaiting_user",
+            verificationUrl: "https://auth.openai.com/device",
+            userCode: "TEST-CODE",
+            expiresAt: 1_900_000_000,
+          } : null }),
+        });
+        return;
+      }
+      if (requestUrl.pathname === basePath && route.request().method() === "POST") {
+        loginStarted = true;
+        await route.fulfill({
+          status: 201,
+          contentType: "application/json",
+          body: JSON.stringify({
+            data: {
+              id: "codex-auth-test",
+              environmentId: environment.id,
+              status: "awaiting_user",
+              verificationUrl: "https://auth.openai.com/device",
+              userCode: "TEST-CODE",
+              expiresAt: 1_900_000_000,
+            },
+          }),
+        });
+        return;
+      }
+      loginCompleted = true;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          data: {
+            id: "codex-auth-test",
+            environmentId: environment.id,
+            status: "completed",
+            expiresAt: 1_900_000_000,
+          },
+        }),
+      });
+    },
+  );
+  await page.route(
+    `**/api/v1/environments/${encodeURIComponent(environment.id)}/harnesses/codex/account`,
+    async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          data: loginCompleted
+            ? {
+                type: "chatgpt",
+                email: "codex-user@example.com",
+                planType: "pro",
+                lastVerified: 1_800_000_000,
+              }
+            : null,
+        }),
+      });
+    },
+  );
+  await page.route(
+    `**/api/v1/environments/${encodeURIComponent(environment.id)}/harnesses/codex/rate-limits`,
+    async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          data: {
+            fetchedAt: 1_800_000_100,
+            limits: [
+              {
+                id: "codex",
+                name: "Codex",
+                planType: "pro",
+                primary: {
+                  usedPercent: 42,
+                  windowDurationMins: 300,
+                  resetsAt: 1_800_010_000,
+                },
+                secondary: {
+                  usedPercent: 5,
+                  windowDurationMins: 10_080,
+                  resetsAt: 1_800_500_000,
+                },
+                reached: false,
+              },
+            ],
+          },
+        }),
+      });
+    },
+  );
+
+  await page.goto(
+    `/?team=${encodeURIComponent(environment.teamId)}&environment=${encodeURIComponent(environment.id)}&new=1`,
+  );
+  await page
+    .getByRole("button", { name: `${environment.name} settings` })
+    .last()
+    .click();
+  const settingsDialog = page.getByRole("dialog", {
+    name: `${environment.name} settings`,
+  });
+  await settingsDialog.getByRole("button", { name: "Coding agent" }).click();
+  await settingsDialog.getByRole("button", { name: "Connect Codex" }).click();
+
+  await expect(
+    settingsDialog.locator(".codex-account-identity").getByText(
+      "codex-user@example.com",
+      { exact: true },
+    ),
+  ).toBeVisible();
+  await expect(
+    settingsDialog.locator(".codex-account-identity").getByText("Pro", {
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(
+    settingsDialog.getByRole("progressbar", {
+      name: "Codex 5-hour window",
+    }),
+  ).toHaveAttribute("aria-valuenow", "42");
+  await expect(settingsDialog.getByText("58% remaining")).toBeVisible();
+  await expect(settingsDialog.getByText("95% remaining")).toBeVisible();
+  await expect(
+    settingsDialog.getByRole("button", { name: "Re-authenticate Codex" }),
+  ).toBeVisible();
+  expect(completedEnvironmentRefreshes).toBeGreaterThan(0);
+});
+
 test("prefills native MCP definitions from the three shortcut groups", async ({
   page,
   request,
@@ -145,6 +343,12 @@ test("prefills native MCP definitions from the three shortcut groups", async ({
   const settingsDialog = page.getByRole("dialog", {
     name: `${environment.name} settings`,
   });
+  await expect(
+    settingsDialog.getByRole("button", { name: "Functions", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    settingsDialog.getByRole("button", { name: "Sharing", exact: true }),
+  ).toHaveCount(0);
   await settingsDialog.getByRole("button", { name: "MCP servers" }).click();
 
   await expect(
@@ -166,7 +370,9 @@ test("prefills native MCP definitions from the three shortcut groups", async ({
   await expect(settingsDialog.getByLabel("Transport")).toHaveValue(
     "streamable-http",
   );
-  await expect(settingsDialog.getByLabel("Server URL")).toHaveValue(
+  await expect(
+    settingsDialog.getByLabel("Server URL", { exact: true }),
+  ).toHaveValue(
     "https://connector.oomol.com/v1/mcp",
   );
   await settingsDialog.getByRole("button", { name: "Cancel" }).click();
@@ -178,13 +384,13 @@ test("prefills native MCP definitions from the three shortcut groups", async ({
     settingsDialog.getByText("Playwright", { exact: true }),
   ).toBeInViewport();
   await expect(
-    settingsDialog.getByText(/Runs inside the Environment sandbox/),
+    settingsDialog.getByText(/Trusted code: runs beside Codex/),
   ).toBeInViewport();
   await expect(settingsDialog.getByLabel("Name")).toHaveValue("playwright");
   await expect(settingsDialog.getByLabel("Transport")).toHaveValue("stdio");
   await expect(settingsDialog.getByLabel("Command")).toHaveValue("npx");
   await expect(settingsDialog.getByLabel(/Arguments/)).toHaveValue(
-    "-y\n@playwright/mcp@latest\n--headless\n--no-sandbox",
+    "-y\n@playwright/mcp@0.0.78\n--headless\n--no-sandbox",
   );
 
   await settingsDialog.getByRole("button", { name: "Cancel" }).click();
@@ -195,7 +401,9 @@ test("prefills native MCP definitions from the three shortcut groups", async ({
   await expect(settingsDialog.getByLabel("Transport")).toHaveValue(
     "streamable-http",
   );
-  await expect(settingsDialog.getByLabel("Server URL")).toHaveValue(
+  await expect(
+    settingsDialog.getByLabel("Server URL", { exact: true }),
+  ).toHaveValue(
     "https://mcp.context7.com/mcp",
   );
 });

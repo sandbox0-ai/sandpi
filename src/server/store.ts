@@ -139,7 +139,6 @@ interface EnvironmentRow extends QueryResultRow {
   harness: Environment["codingAgent"]["harness"];
   harness_metadata: Record<string, unknown>;
   network_policy: NetworkPolicy;
-  functions: Environment["functions"];
   provisioning_error: string | null;
   sandbox_id: string | null;
   sandbox_state: EnvironmentSandboxState | null;
@@ -443,12 +442,11 @@ export class SandpiStore {
         `INSERT INTO environments (
            id, team_id, created_by_user_id, name, description, color, status,
            revision, template_id, credential_revision, harness,
-           harness_metadata, network_policy, functions
+           harness_metadata, network_policy
          ) VALUES (
            $1, $2, $3, $4, '', '#151515', 'updating', 1, 'coding-agent', 0,
            'codex', '{"label":"Codex","status":"not-connected"}'::JSONB,
-           '{"mode":"allow-all","domainExceptions":[]}'::JSONB,
-           '[]'::JSONB
+           '{"mode":"allow-all","domainExceptions":[]}'::JSONB
          )`,
         [id, input.teamId, input.userId, input.name],
       );
@@ -2211,7 +2209,6 @@ function environmentFromRow(row: EnvironmentRow): EnvironmentRecord {
       lastVerified: parseUnixTimestamp(metadata.lastVerified),
     },
     networkPolicy: row.network_policy,
-    functions: row.functions,
     provisioningError: row.provisioning_error ?? undefined,
   };
 }

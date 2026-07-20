@@ -34,7 +34,6 @@ const environment: Environment = {
     mode: "block-all",
     domainExceptions: ["github.com"],
   },
-  functions: [],
 };
 
 function runtimeWithClient(client: unknown) {

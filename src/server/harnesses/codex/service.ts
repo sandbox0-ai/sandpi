@@ -12,15 +12,21 @@ import {
   type CodexThread,
 } from "@/harnesses/codex/types";
 import type {
+  CodexAccountPlanType,
+  CodexAccountRateLimits,
+  CodexCreditsSnapshot,
   CodexEnvironmentSkill,
   CodexMcpAuthStatus,
   CodexMcpInventory,
   CodexMcpServer,
   CodexMcpServerInput,
   CodexMcpTransport,
+  CodexRateLimitSnapshot,
+  CodexRateLimitWindow,
   CodexSkillDependency,
   CodexSkillError,
   CodexSkillsInventory,
+  CodexSpendControlSnapshot,
 } from "@/harnesses/codex/environment-tools";
 import type { Environment } from "@/lib/types";
 import { toUnixTimestamp } from "@/lib/time";
@@ -71,6 +77,21 @@ const CODEX_ROLLOUT_ROOTS = [
 ] as const;
 const CODEX_ROLLOUT_READ_TIMEOUT_MS = 30_000;
 const CODEX_MCP_SERVER_NAME = /^[A-Za-z0-9_-]{1,64}$/;
+const MAX_CODEX_RATE_LIMIT_BUCKETS = 16;
+const CODEX_ACCOUNT_PLAN_TYPES = new Set<CodexAccountPlanType>([
+  "free",
+  "go",
+  "plus",
+  "pro",
+  "prolite",
+  "team",
+  "self_serve_business_usage_based",
+  "business",
+  "enterprise_cbp_usage_based",
+  "enterprise",
+  "edu",
+  "unknown",
+]);
 const TRANSCRIPT_NOTIFICATION_METHODS = new Set<string>(
   CODEX_TRANSCRIPT_NOTIFICATION_METHODS,
 );
@@ -516,6 +537,27 @@ export class CodexService {
       "Codex could not list Environment skills.",
     );
     return codexSkillsInventory(result);
+  }
+
+  async accountRateLimitsForEnvironment(
+    userId: string,
+    environmentId: string,
+  ): Promise<CodexAccountRateLimits> {
+    const runtime = await this.environmentRuntimeForEnvironment(
+      userId,
+      environmentId,
+    );
+    const response = await this.requestCodex(environmentId, runtime, {
+      method: "account/rateLimits/read",
+      id: rpcId("account-rate-limits", environmentId),
+      params: {},
+    });
+    const result = requireSafeRpcResult(
+      response,
+      "codex_account_rate_limits_read_failed",
+      "Codex could not read account usage.",
+    );
+    return codexAccountRateLimits(result);
   }
 
   async setEnvironmentSkillEnabled(input: {
@@ -3375,11 +3417,7 @@ function requireRpcResult(
   return result;
 }
 
-/**
- * MCP RPC errors can contain provider-controlled URLs or credential material.
- * Keep those native details out of API responses and server error logs.
- */
-function requireMcpRpcResult(
+function requireSafeRpcResult(
   response: Record<string, unknown>,
   code: string,
   message: string,
@@ -3390,8 +3428,185 @@ function requireMcpRpcResult(
   return result;
 }
 
+/**
+ * MCP RPC errors can contain provider-controlled URLs or credential material.
+ * Keep those native details out of API responses and server error logs.
+ */
+function requireMcpRpcResult(
+  response: Record<string, unknown>,
+  code: string,
+  message: string,
+) {
+  return requireSafeRpcResult(response, code, message);
+}
+
 function invalidCodexResponse(code: string, message: string) {
   return new HttpError(502, code, message);
+}
+
+function codexAccountRateLimits(
+  result: Record<string, unknown>,
+): CodexAccountRateLimits {
+  const limits: CodexRateLimitSnapshot[] = [];
+  const byLimitId = objectRecord(result.rateLimitsByLimitId);
+  if (byLimitId) {
+    for (const [limitId, value] of Object.entries(byLimitId).slice(
+      0,
+      MAX_CODEX_RATE_LIMIT_BUCKETS,
+    )) {
+      const snapshot = codexRateLimitSnapshot(value, limitId);
+      if (snapshot) limits.push(snapshot);
+    }
+  }
+
+  const main = codexRateLimitSnapshot(result.rateLimits);
+  if (
+    main &&
+    (limits.length === 0 ||
+      (main.id !== undefined &&
+        !limits.some((limit) => limit.id === main.id)))
+  ) {
+    limits.unshift(main);
+  }
+
+  return {
+    limits: limits.slice(0, MAX_CODEX_RATE_LIMIT_BUCKETS),
+    fetchedAt: toUnixTimestamp(new Date()),
+  };
+}
+
+function codexRateLimitSnapshot(
+  value: unknown,
+  fallbackId?: string,
+): CodexRateLimitSnapshot | undefined {
+  const snapshot = objectRecord(value);
+  if (!snapshot) return undefined;
+  const id =
+    boundedProviderString(snapshot.limitId, 128) ??
+    boundedProviderString(fallbackId, 128);
+  const name = boundedProviderString(snapshot.limitName, 128);
+  const planType = codexAccountPlanType(snapshot.planType);
+  const primary = codexRateLimitWindow(snapshot.primary);
+  const secondary = codexRateLimitWindow(snapshot.secondary);
+  const credits = codexCreditsSnapshot(snapshot.credits);
+  const individualLimit = codexSpendControlSnapshot(snapshot.individualLimit);
+  const reached =
+    objectBoolean(snapshot, "spendControlReached") === true ||
+    boundedProviderString(snapshot.rateLimitReachedType, 128) !== undefined;
+  if (
+    !id &&
+    !name &&
+    !planType &&
+    !primary &&
+    !secondary &&
+    !credits &&
+    !individualLimit &&
+    !reached
+  ) {
+    return undefined;
+  }
+  return {
+    ...(id ? { id } : {}),
+    ...(name ? { name } : {}),
+    ...(planType ? { planType } : {}),
+    ...(primary ? { primary } : {}),
+    ...(secondary ? { secondary } : {}),
+    ...(credits ? { credits } : {}),
+    ...(individualLimit ? { individualLimit } : {}),
+    reached,
+  };
+}
+
+function codexRateLimitWindow(value: unknown): CodexRateLimitWindow | undefined {
+  const window = objectRecord(value);
+  const usedPercent = normalizedPercent(window?.usedPercent);
+  if (!window || usedPercent === undefined) return undefined;
+  const windowDurationMins = normalizedPositiveInteger(
+    window.windowDurationMins,
+    5_256_000,
+  );
+  const resetsAt = normalizedUnixTimestamp(window.resetsAt);
+  return {
+    usedPercent,
+    ...(windowDurationMins === undefined ? {} : { windowDurationMins }),
+    ...(resetsAt === undefined ? {} : { resetsAt }),
+  };
+}
+
+function codexCreditsSnapshot(value: unknown): CodexCreditsSnapshot | undefined {
+  const credits = objectRecord(value);
+  const hasCredits = objectBoolean(credits, "hasCredits");
+  const unlimited = objectBoolean(credits, "unlimited");
+  if (!credits || hasCredits === undefined || unlimited === undefined) {
+    return undefined;
+  }
+  const balance = boundedProviderString(credits.balance, 128);
+  return {
+    hasCredits,
+    unlimited,
+    ...(balance ? { balance } : {}),
+  };
+}
+
+function codexSpendControlSnapshot(
+  value: unknown,
+): CodexSpendControlSnapshot | undefined {
+  const limit = objectRecord(value);
+  if (!limit) return undefined;
+  const maximum = boundedProviderString(limit.limit, 128);
+  const used = boundedProviderString(limit.used, 128);
+  const remainingPercent = normalizedPercent(limit.remainingPercent);
+  const resetsAt = normalizedUnixTimestamp(limit.resetsAt);
+  if (
+    !maximum ||
+    !used ||
+    remainingPercent === undefined ||
+    resetsAt === undefined
+  ) {
+    return undefined;
+  }
+  return { limit: maximum, used, remainingPercent, resetsAt };
+}
+
+function codexAccountPlanType(
+  value: unknown,
+): CodexAccountPlanType | undefined {
+  return typeof value === "string" &&
+    CODEX_ACCOUNT_PLAN_TYPES.has(value as CodexAccountPlanType)
+    ? (value as CodexAccountPlanType)
+    : undefined;
+}
+
+function boundedProviderString(value: unknown, maximumLength: number) {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim();
+  return normalized && normalized.length <= maximumLength
+    ? normalized
+    : undefined;
+}
+
+function normalizedPercent(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.min(100, Math.max(0, Math.round(value)))
+    : undefined;
+}
+
+function normalizedPositiveInteger(value: unknown, maximum: number) {
+  return typeof value === "number" &&
+    Number.isFinite(value) &&
+    value > 0 &&
+    value <= maximum
+    ? Math.round(value)
+    : undefined;
+}
+
+function normalizedUnixTimestamp(value: unknown) {
+  return typeof value === "number" &&
+    Number.isFinite(value) &&
+    value >= 0 &&
+    value <= 253_402_300_799
+    ? Math.round(value)
+    : undefined;
 }
 
 function codexSkillsInventory(result: Record<string, unknown>): CodexSkillsInventory {

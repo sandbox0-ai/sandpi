@@ -64,7 +64,6 @@ const environment: Environment = {
     mode: "allow-all",
     domainExceptions: [],
   },
-  functions: [],
 };
 
 function session(
@@ -1218,6 +1217,100 @@ test("uses one Environment app-server for multiple native Sessions", async () =>
         .length,
       0,
     );
+  } finally {
+    await context.close();
+  }
+});
+
+test("reads bounded native Codex account rate limits", async () => {
+  const context = fixture({
+    onRequest(message) {
+      if (message.method !== "account/rateLimits/read") return undefined;
+      return {
+        id: message.id,
+        result: {
+          rateLimits: {
+            limitId: "codex",
+            primary: {
+              usedPercent: 42,
+              windowDurationMins: 300,
+              resetsAt: 1_800_000_000,
+            },
+          },
+          rateLimitsByLimitId: {
+            codex: {
+              limitId: "codex",
+              planType: "pro",
+              primary: {
+                usedPercent: 42,
+                windowDurationMins: 300,
+                resetsAt: 1_800_000_000,
+              },
+              secondary: {
+                usedPercent: 5,
+                windowDurationMins: 10_080,
+                resetsAt: 1_800_500_000,
+              },
+              credits: {
+                hasCredits: true,
+                unlimited: false,
+                balance: "25",
+              },
+            },
+            other: {
+              limitId: "other",
+              limitName: "x".repeat(200),
+              primary: {
+                usedPercent: 140,
+                windowDurationMins: -1,
+                resetsAt: -1,
+              },
+              spendControlReached: true,
+            },
+          },
+        },
+      };
+    },
+  });
+
+  try {
+    const usage = await context.service.accountRateLimitsForEnvironment(
+      "user",
+      environment.id,
+    );
+
+    assert.equal(typeof usage.fetchedAt, "number");
+    assert.deepEqual(usage.limits, [
+      {
+        id: "codex",
+        planType: "pro",
+        primary: {
+          usedPercent: 42,
+          windowDurationMins: 300,
+          resetsAt: 1_800_000_000,
+        },
+        secondary: {
+          usedPercent: 5,
+          windowDurationMins: 10_080,
+          resetsAt: 1_800_500_000,
+        },
+        credits: {
+          hasCredits: true,
+          unlimited: false,
+          balance: "25",
+        },
+        reached: false,
+      },
+      {
+        id: "other",
+        primary: { usedPercent: 100 },
+        reached: true,
+      },
+    ]);
+    const request = context.writes.find(
+      ({ message }) => message.method === "account/rateLimits/read",
+    )?.message;
+    assert.deepEqual(request?.params, {});
   } finally {
     await context.close();
   }

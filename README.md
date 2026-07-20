@@ -271,6 +271,14 @@ Sandpi starts the official Codex device-login protocol in a short-lived
 `coding-agent` Sandbox and displays the native verification URL and user code.
 The resulting `auth.json` becomes an encrypted Environment-scoped Credential
 Source; the Environment records one Sandbox-scoped materialization binding.
+The page keeps polling the native login flow and refreshes the Environment as
+soon as Codex reports completion.
+
+Once connected, the same page shows the stored non-secret ChatGPT account
+metadata and reads current usage windows through Codex
+`account/rateLimits/read`. Rate-limit percentages and reset times are live
+provider state: Sandpi bounds them before returning them to the browser and
+does not persist or mix them with the Sandpi Team plan.
 
 For local development only, an existing native Codex login can be imported
 without copying it through the browser:

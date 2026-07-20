@@ -685,23 +685,6 @@ export const mockEnvironments: Environment[] = [
         "chatgpt.com",
       ],
     },
-    functions: [
-      {
-        id: "git-prewarm",
-        name: "Git prewarm",
-        description: "Warm repository objects and dependency caches after a Git push.",
-        kind: "webhook",
-        status: "active",
-        lastRun: timestamp("2026-07-12T09:07:00+08:00"),
-      },
-      {
-        id: "scheduled-refresh",
-        name: "Scheduled maintenance",
-        description: "Run an Environment maintenance function on a recurring schedule.",
-        kind: "cron",
-        status: "coming-soon",
-      },
-    ],
   },
   {
     id: "env-release",
@@ -730,15 +713,6 @@ export const mockEnvironments: Environment[] = [
       mode: "block-all",
       domainExceptions: ["github.com", "registry.npmjs.org", "chatgpt.com"],
     },
-    functions: [
-      {
-        id: "git-prewarm-release",
-        name: "Git prewarm",
-        description: "Refresh the release workspace from GitHub pushes.",
-        kind: "webhook",
-        status: "disabled",
-      },
-    ],
   },
   {
     id: "env-side-projects",
@@ -767,7 +741,6 @@ export const mockEnvironments: Environment[] = [
       mode: "block-all",
       domainExceptions: ["github.com", "api.github.com", "chatgpt.com"],
     },
-    functions: [],
   },
 ];
 
@@ -1059,6 +1032,5 @@ export function createMockEnvironment(input: {
       account: "dev@sandbox0.ai",
       lastVerified: toUnixTimestamp(new Date()),
     },
-    functions: [],
   };
 }

@@ -57,6 +57,7 @@ test("migration history contains every durable Sandpi boundary", async () => {
       "0030_environment_mcp_credential_projection",
       "0031_environment_mcp_mutation_sagas",
       "0032_environment_mcp_oauth_event_journal",
+      "0033_drop_environment_functions",
     ],
   );
 
@@ -446,5 +447,11 @@ test("migration history contains every durable Sandpi boundary", async () => {
   assert.doesNotMatch(
     environmentMcpOAuthEventJournalSql,
     /\b(?:plaintext|ciphertext|api_key|access_token|refresh_token|authorization_code)\s+(?:TEXT|BYTEA|JSONB)\b/i,
+  );
+
+  const dropEnvironmentFunctionsSql = migrations[32]?.sql ?? "";
+  assert.match(
+    dropEnvironmentFunctionsSql,
+    /ALTER TABLE environments[\s\S]+DROP COLUMN IF EXISTS functions/,
   );
 });

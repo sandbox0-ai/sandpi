@@ -200,10 +200,10 @@ export async function seedCommunityDefaults(
           id, team_id, created_by_user_id, name, description, color, status,
           revision, template_id, rootfs_snapshot_id, workspace_volume_id,
           credential_revision, harness, harness_metadata, network_policy,
-          functions, metadata
+          metadata
         ) VALUES (
           $1, $2, $3, $4, $5, $6, 'updating', 1, 'coding-agent', NULL, NULL, 0, $7,
-          $8::JSONB, $9::JSONB, '[]'::JSONB, $10::JSONB
+          $8::JSONB, $9::JSONB, $10::JSONB
         )
         ON CONFLICT (id) DO NOTHING
       `,

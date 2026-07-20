@@ -54,6 +54,49 @@ test("environment credential provider decrypts the native auth.json only for its
   );
 });
 
+test("account summary exposes only bounded non-secret Codex metadata", async () => {
+  const store = {
+    async getEnvironment() {
+      return {
+        codingAgent: {
+          harness: "codex",
+          lastVerified: 1_753_000_000,
+        },
+      };
+    },
+  } as unknown as SandpiStore;
+  const authStore = {
+    async getCredential() {
+      return {
+        metadata: {
+          type: "chatgpt",
+          email: " codex-user@example.com ",
+          planType: "pro",
+          models: { data: [{ id: "must-not-leak" }] },
+          accessToken: "must-not-leak",
+        },
+      };
+    },
+  } as unknown as CodexAuthStore;
+  const service = new CodexEnvironmentAuthService(
+    store,
+    authStore,
+    {} as RuntimeAdapter,
+    undefined,
+    silentLogger,
+  );
+
+  assert.deepEqual(
+    await service.accountForEnvironment("user-test", "env-test"),
+    {
+      type: "chatgpt",
+      email: "codex-user@example.com",
+      planType: "pro",
+      lastVerified: 1_753_000_000,
+    },
+  );
+});
+
 test("Codex login is unavailable until deployment encryption is configured", async () => {
   const service = new CodexEnvironmentAuthService(
     {} as SandpiStore,

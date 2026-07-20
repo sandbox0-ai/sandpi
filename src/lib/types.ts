@@ -160,15 +160,6 @@ export interface NetworkPolicy {
   domainExceptions: string[];
 }
 
-export interface EnvironmentFunction {
-  id: string;
-  name: string;
-  description: string;
-  kind: "webhook" | "manual" | "cron";
-  status: "active" | "disabled" | "coming-soon";
-  lastRun?: UnixTimestamp;
-}
-
 export type EnvironmentSandboxState =
   | "pending"
   | "provisioning"
@@ -208,7 +199,6 @@ export interface Environment {
   credentialRevision: number;
   codingAgent: HarnessAccount;
   networkPolicy: NetworkPolicy;
-  functions: EnvironmentFunction[];
 }
 
 export interface SandpiPreferences {

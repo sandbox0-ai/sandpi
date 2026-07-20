@@ -499,6 +499,24 @@ function registerApiRoutes(
     }),
   );
   app.get<{ Params: { environmentId: string } }>(
+    "/api/v1/environments/:environmentId/harnesses/codex/account",
+    async (request) => ({
+      data: await services.codexAuth.accountForEnvironment(
+        request.principal.userId,
+        request.params.environmentId,
+      ),
+    }),
+  );
+  app.get<{ Params: { environmentId: string } }>(
+    "/api/v1/environments/:environmentId/harnesses/codex/rate-limits",
+    async (request) => ({
+      data: await services.codex.accountRateLimitsForEnvironment(
+        request.principal.userId,
+        request.params.environmentId,
+      ),
+    }),
+  );
+  app.get<{ Params: { environmentId: string } }>(
     "/api/v1/environments/:environmentId/harnesses/codex/models",
     async (request) => ({
       data: await services.codexAuth.modelsForEnvironment(
