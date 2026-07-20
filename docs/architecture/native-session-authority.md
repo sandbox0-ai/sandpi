@@ -425,6 +425,16 @@ and retries the same supported runtime access. No Sandpi worker calls an
 explicit resume API. Runtime recovery and pause share the Environment advisory
 lock, so their database projections cannot commit out of order.
 
+`environment_runtime.paused_at` remains the current Sandpi lifecycle
+projection. Its transitions automatically append and close
+`environment_pause_intervals` rows, preserving the history after auto-resume
+clears the current field. Only the lifecycle worker's completed idle pause sets
+this projection; temporary Sandbox0 pauses used for Workspace or Supervisor
+repair are not mislabeled. The Metrics endpoint queries intervals overlapping
+the exact Sandbox0 metrics window, and the Inspector shades them across every
+runtime chart so intentional checkpoint gaps remain distinguishable from
+collector failures.
+
 The lifecycle policy migration stores one absolute hard-expiry target before
 updating an older Sandbox. A retry sends only the seconds remaining to that
 target, so a crash between the Sandbox0 update and the database commit cannot

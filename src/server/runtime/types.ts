@@ -2,13 +2,12 @@ import type {
   Environment,
   NetworkPolicy,
   EnvironmentAuditFeed,
-  EnvironmentMetrics,
+  RuntimeMetrics,
   WorkspaceDirectoryListing,
   WorkspaceFileSearchResult,
   WorkspaceGitState,
   WorkspaceIdeFile,
 } from "@/lib/types";
-import type { EnvironmentMetricRangeSeconds } from "@/lib/environment-metrics";
 import type { UnixTimestamp } from "@/lib/time";
 import type {
   CodexDecoderState,
@@ -98,6 +97,11 @@ export interface EnvironmentAuditPageOptions {
    * continues from the previous page toward newer signed records.
    */
   cursor?: string;
+}
+
+export interface RuntimeMetricWindow {
+  startedAt: Date;
+  endedAt: Date;
 }
 
 export interface CodexAuthRuntime {
@@ -260,8 +264,8 @@ export interface RuntimeAdapter {
   ): Promise<EnvironmentAuditFeed>;
   getMetrics(
     runtime: EnvironmentRuntimeRecord,
-    rangeSeconds: EnvironmentMetricRangeSeconds,
-  ): Promise<EnvironmentMetrics>;
+    window: RuntimeMetricWindow,
+  ): Promise<RuntimeMetrics>;
   openTerminal(
     runtime: EnvironmentRuntimeRecord,
     after?: number,

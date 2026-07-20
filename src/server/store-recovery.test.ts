@@ -501,6 +501,62 @@ test("native thread lookup is namespaced by Environment", async () => {
   );
 });
 
+test("projects Sandpi idle pauses that overlap a metrics window", async () => {
+  const fixture = transactionalStore((sql) => {
+    if (!sql.includes("FROM environment_pause_intervals")) {
+      return { rows: [], rowCount: 0 };
+    }
+    return {
+      rows: [
+        {
+          paused_at: new Date("2026-07-16T00:02:00.000Z"),
+          resumed_at: new Date("2026-07-16T00:04:00.000Z"),
+          reason: "idle",
+        },
+        {
+          paused_at: new Date("2026-07-16T00:08:00.000Z"),
+          resumed_at: null,
+          reason: "idle",
+        },
+      ],
+      rowCount: 2,
+    };
+  });
+  const startedAt = new Date("2026-07-16T00:00:00.000Z");
+  const endedAt = new Date("2026-07-16T00:10:00.000Z");
+
+  assert.deepEqual(
+    await fixture.store.environmentPauseIntervals(
+      "environment-one",
+      startedAt,
+      endedAt,
+    ),
+    [
+      {
+        startedAt: startedAt.getTime() / 1_000 + 120,
+        endedAt: startedAt.getTime() / 1_000 + 240,
+        reason: "idle",
+      },
+      {
+        startedAt: startedAt.getTime() / 1_000 + 480,
+        reason: "idle",
+      },
+    ],
+  );
+
+  const query = fixture.calls.find((call) =>
+    call.sql.includes("FROM environment_pause_intervals"),
+  );
+  assert.ok(query);
+  assert.match(query.sql, /paused_at < \$3/);
+  assert.match(query.sql, /resumed_at IS NULL OR resumed_at > \$2/);
+  assert.deepEqual(query.values, [
+    "environment-one",
+    startedAt,
+    endedAt,
+  ]);
+});
+
 test("native snapshot reconciliation uses a runtime-version compare-and-swap", async () => {
   const fixture = transactionalStore((sql) => {
     if (sql.includes("SELECT environment_id")) {

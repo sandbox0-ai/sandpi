@@ -1046,6 +1046,13 @@ test("shows a Sandbox0 credential failure instead of loading forever", async ({
     activityView.getByRole("alert").getByText(message),
   ).toBeVisible();
   await expect(activityView.getByText("Loading Codex activity…")).toBeHidden();
+  const activityFilter = activityView.getByRole("combobox", {
+    name: "Filter Codex Session Activity",
+  });
+  await expect(activityFilter).toBeEnabled();
+  await activityFilter.click();
+  await activityFilter.selectOption("system");
+  await expect(activityFilter).toHaveValue("system");
 });
 
 test("shows a fallback when the Codex EventSource handshake fails", async ({
@@ -2622,6 +2629,11 @@ test("shows a matching skeleton while each Inspector tab loads", async ({
   await expect(page.locator(".inspector-skeleton-metrics")).toBeVisible();
   await expect(page.locator(".inspector-skeleton-metrics")).toBeHidden();
   await expect(page.getByText("Last 6 hours", { exact: true })).toBeVisible();
+  await expect(page.locator(".metric-chart-pause-band")).toHaveCount(3);
+  await expect(page.locator(".metric-chart-pause-legend")).toHaveCount(3);
+  await expect(
+    page.locator(".metric-chart-pause-legend").first(),
+  ).toContainText("Sandpi idle pause");
 
   const modelPicker = page.getByRole("combobox", {
     name: `Select ${environment.codingAgent.label} model`,

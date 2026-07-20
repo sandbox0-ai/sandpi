@@ -4561,6 +4561,18 @@ code.codex-compact-activity-subject {
   fill: var(--amber-soft);
 }
 
+.metric-chart-pause-band {
+  fill: color-mix(in srgb, var(--ink-faint) 24%, transparent);
+  stroke: color-mix(in srgb, var(--ink-faint) 58%, transparent);
+  stroke-dasharray: 2 2;
+  stroke-width: 0.8;
+  pointer-events: none;
+}
+
+.metric-chart-pause-band.is-active {
+  fill: color-mix(in srgb, var(--ink-faint) 32%, transparent);
+}
+
 .metric-chart-line.tone-green {
   stroke: var(--green);
 }
@@ -4688,6 +4700,26 @@ code.codex-compact-activity-subject {
 
 .metric-chart-legend button.is-hidden i {
   background: var(--ink-faint);
+}
+
+.metric-chart-pause-legend {
+  display: flex;
+  width: fit-content;
+  min-height: 22px;
+  align-items: center;
+  gap: 5px;
+  margin: 0 12px 3px;
+  color: var(--ink-faint);
+  font-size: 8.5px;
+}
+
+.metric-chart-pause-legend i {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border: 1px dashed var(--ink-faint);
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--ink-faint) 18%, transparent);
 }
 
 .metric-card footer {

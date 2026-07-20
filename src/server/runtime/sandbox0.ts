@@ -19,7 +19,7 @@ import type {
   Environment,
   RuntimeMetricSeries,
   EnvironmentAuditFeed,
-  EnvironmentMetrics,
+  RuntimeMetrics,
   WorkspaceDirectoryListing,
   WorkspaceFile,
   WorkspaceFileSearchResult,
@@ -27,7 +27,6 @@ import type {
   WorkspaceIdeFile,
   WorkspaceLineChange,
 } from "@/lib/types";
-import type { EnvironmentMetricRangeSeconds } from "@/lib/environment-metrics";
 import { toUnixTimestamp } from "@/lib/time";
 import {
   repositoryForWorkspacePath,
@@ -1662,15 +1661,13 @@ export class Sandbox0Runtime implements RuntimeAdapter {
 
   async getMetrics(
     runtime: EnvironmentRuntimeRecord,
-    rangeSeconds: EnvironmentMetricRangeSeconds,
-  ): Promise<EnvironmentMetrics> {
+    window: { startedAt: Date; endedAt: Date },
+  ): Promise<RuntimeMetrics> {
     try {
       const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
-      const endTime = new Date();
-      const startTime = new Date(endTime.getTime() - rangeSeconds * 1_000);
       const gauges = await sandbox.getMetrics({
-        startTime,
-        endTime,
+        startTime: window.startedAt,
+        endTime: window.endedAt,
         metrics: [
           SandboxRuntimeMetricName.SandboxCpuUtilization,
           SandboxRuntimeMetricName.SandboxMemoryWorkingSet,
@@ -1680,8 +1677,8 @@ export class Sandbox0Runtime implements RuntimeAdapter {
         maxPoints: 120,
       });
       const network = await sandbox.getMetrics({
-        startTime,
-        endTime,
+        startTime: window.startedAt,
+        endTime: window.endedAt,
         metrics: [SandboxRuntimeMetricName.SandboxNetworkIo],
         statistic: SandboxRuntimeMetricStatistic.Rate,
         maxPoints: 120,

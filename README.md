@@ -178,7 +178,10 @@ Web today; iOS / Android / HarmonyOS later
   active or pending. Browser disconnection is irrelevant. Sandbox0 auto-resume
   handles the next supported runtime access; Sandpi observes and retries the
   native `waking up` transition but owns no parallel resume state machine. It
-  explicitly disables Sandbox0 soft TTL.
+  explicitly disables Sandbox0 soft TTL. PostgreSQL derives historical idle
+  pause intervals from the current runtime projection, and the Metrics API
+  returns overlapping intervals so charts shade intentional pause gaps instead
+  of presenting them as missing telemetry.
 - **Explicit deletion:** Environment settings require the persisted Environment
   name before permanent deletion. Sandpi serializes deletion with Turn admission,
   stops retained harness and login workers, deletes the Sandbox, Workspace Volume

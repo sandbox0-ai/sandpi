@@ -1216,8 +1216,27 @@ function registerApiRoutes(
         request.principal.userId,
         request.params.environmentId,
       );
+      const endedAt = new Date();
+      const startedAt = new Date(
+        endedAt.getTime() - requestedRange * 1_000,
+      );
+      const [metrics, pauseIntervals] = await Promise.all([
+        services.runtime.getMetrics(runtime, { startedAt, endedAt }),
+        services.store.environmentPauseIntervals(
+          runtime.id,
+          startedAt,
+          endedAt,
+        ),
+      ]);
       return {
-        data: await services.runtime.getMetrics(runtime, requestedRange),
+        data: {
+          ...metrics,
+          window: {
+            startedAt: toUnixTimestamp(startedAt),
+            endedAt: toUnixTimestamp(endedAt),
+          },
+          pauseIntervals,
+        },
       };
     },
   );

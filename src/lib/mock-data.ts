@@ -761,6 +761,17 @@ export const mockPreferences: SandpiPreferences = {
 };
 
 export const mockEnvironmentMetrics: EnvironmentMetrics = {
+  window: {
+    startedAt: timestamp("2026-07-12T08:30:00+08:00"),
+    endedAt: timestamp("2026-07-12T09:30:00+08:00"),
+  },
+  pauseIntervals: [
+    {
+      startedAt: timestamp("2026-07-12T09:01:00+08:00"),
+      endedAt: timestamp("2026-07-12T09:04:00+08:00"),
+      reason: "idle",
+    },
+  ],
   cpuUtilization: metricSeries(
     [0.04, 0.08, 0.07, 0.12, 0.19, 0.38, 0.27, 0.21, 0.32, 0.18, 0.16, 0.14],
     {

@@ -8,7 +8,12 @@ import {
   type PointerEvent,
 } from "react";
 
-import type { MetricPoint, MetricSegment } from "@/lib/types";
+import type {
+  EnvironmentMetricWindow,
+  EnvironmentPauseInterval,
+  MetricPoint,
+  MetricSegment,
+} from "@/lib/types";
 
 export type MetricChartTone = "green" | "blue" | "amber";
 
@@ -25,6 +30,9 @@ interface InteractiveMetricChartProps {
   title: string;
   instructions: string;
   legendLabel: string;
+  pauseLabel: string;
+  window: EnvironmentMetricWindow;
+  pauseIntervals: EnvironmentPauseInterval[];
   toggleSeriesLabel: (label: string, visible: boolean) => string;
   formatTime: (at: number) => string;
   formatValue: (value: number) => string;
@@ -67,12 +75,58 @@ function seriesPointAt(series: MetricChartSeries, at: number) {
     .find((point) => pointTime(point) === at);
 }
 
+export interface MetricChartPauseBand {
+  startedAt: number;
+  endedAt: number;
+  active: boolean;
+  leftPercent: number;
+  widthPercent: number;
+}
+
+/** Clips durable pause intervals to the exact metrics query window. */
+export function metricChartPauseBands(
+  pauseIntervals: EnvironmentPauseInterval[],
+  window: EnvironmentMetricWindow,
+): MetricChartPauseBand[] {
+  const duration = window.endedAt - window.startedAt;
+  if (
+    !Number.isFinite(window.startedAt) ||
+    !Number.isFinite(window.endedAt) ||
+    duration <= 0
+  ) {
+    return [];
+  }
+  return pauseIntervals.flatMap((interval) => {
+    const startedAt = Math.max(interval.startedAt, window.startedAt);
+    const endedAt = Math.min(interval.endedAt ?? window.endedAt, window.endedAt);
+    if (
+      !Number.isFinite(startedAt) ||
+      !Number.isFinite(endedAt) ||
+      endedAt <= startedAt
+    ) {
+      return [];
+    }
+    return [
+      {
+        startedAt,
+        endedAt,
+        active: interval.endedAt === undefined,
+        leftPercent: ((startedAt - window.startedAt) / duration) * 100,
+        widthPercent: ((endedAt - startedAt) / duration) * 100,
+      },
+    ];
+  });
+}
+
 export function InteractiveMetricChart({
   series,
   max,
   title,
   instructions,
   legendLabel,
+  pauseLabel,
+  window,
+  pauseIntervals,
   toggleSeriesLabel,
   formatTime,
   formatValue,
@@ -98,9 +152,13 @@ export function InteractiveMetricChart({
       ).sort((left, right) => left - right),
     [series],
   );
-  const start = timeline[0] ?? 0;
-  const end = timeline.at(-1) ?? start;
+  const start = window.startedAt;
+  const end = window.endedAt;
   const duration = Math.max(end - start, 1);
+  const pauseBands = useMemo(
+    () => metricChartPauseBands(pauseIntervals, window),
+    [pauseIntervals, window],
+  );
   const largestValue = Math.max(
     ...visibleSeries.flatMap((item) =>
       item.segments.flatMap((segment) =>
@@ -253,6 +311,27 @@ export function InteractiveMetricChart({
               />
             )),
           )}
+          {pauseBands.map((band) => {
+            const x = (band.leftPercent / 100) * WIDTH;
+            const width = Math.min(
+              WIDTH - x,
+              Math.max((band.widthPercent / 100) * WIDTH, 1.5),
+            );
+            return (
+              <rect
+                className={`metric-chart-pause-band ${
+                  band.active ? "is-active" : ""
+                }`}
+                x={x}
+                y={PLOT_TOP}
+                width={width}
+                height={HEIGHT - PLOT_TOP - PLOT_BOTTOM}
+                key={`${band.startedAt}-${band.endedAt}`}
+              >
+                <title>{pauseLabel}</title>
+              </rect>
+            );
+          })}
           {visibleSeries.flatMap((item) =>
             item.segments.map((segment, index) => (
               <path
@@ -306,6 +385,17 @@ export function InteractiveMetricChart({
         <span className="sr-only" aria-live="polite">
           {showActivePoint ? activeDescription : ""}
         </span>
+        {pauseBands.length > 0 ? (
+          <span className="sr-only">
+            {pauseLabel}:{" "}
+            {pauseBands
+              .map(
+                (band) =>
+                  `${formatTime(band.startedAt)}–${formatTime(band.endedAt)}`,
+              )
+              .join("; ")}
+          </span>
+        ) : null}
       </div>
       {series.length > 1 ? (
         <div className="metric-chart-legend" aria-label={legendLabel}>
@@ -325,6 +415,12 @@ export function InteractiveMetricChart({
               </button>
             );
           })}
+        </div>
+      ) : null}
+      {pauseBands.length > 0 ? (
+        <div className="metric-chart-pause-legend">
+          <i aria-hidden="true" />
+          <span>{pauseLabel}</span>
         </div>
       ) : null}
     </div>

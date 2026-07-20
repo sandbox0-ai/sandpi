@@ -389,13 +389,31 @@ export interface RuntimeMetricSeries {
   segments: MetricSegment[];
 }
 
-export interface EnvironmentMetrics {
+/** Runtime-native metric payload before Sandpi adds lifecycle context. */
+export interface RuntimeMetrics {
   cpuUtilization: RuntimeMetricSeries;
   memoryWorkingSet: RuntimeMetricSeries;
   memoryLimitBytes: number;
   /** `sandbox.network.io` queried as a rate and split by its `direction` dimension. */
   networkReceive: RuntimeMetricSeries;
   networkTransmit: RuntimeMetricSeries;
+}
+
+export interface EnvironmentMetricWindow {
+  startedAt: UnixTimestamp;
+  endedAt: UnixTimestamp;
+}
+
+/** Historical Sandpi-owned idle pause; an absent end means it is still active. */
+export interface EnvironmentPauseInterval {
+  startedAt: UnixTimestamp;
+  endedAt?: UnixTimestamp;
+  reason: "idle";
+}
+
+export interface EnvironmentMetrics extends RuntimeMetrics {
+  window: EnvironmentMetricWindow;
+  pauseIntervals: EnvironmentPauseInterval[];
 }
 
 export interface SessionOrigin {

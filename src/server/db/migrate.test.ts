@@ -59,6 +59,7 @@ test("migration history contains every durable Sandpi boundary", async () => {
       "0032_environment_mcp_oauth_event_journal",
       "0033_drop_environment_functions",
       "0034_session_reasoning_effort",
+      "0035_environment_pause_intervals",
     ],
   );
 
@@ -114,6 +115,20 @@ test("migration history contains every durable Sandpi boundary", async () => {
   const reasoningEffortSql = migrations[33]?.sql ?? "";
   assert.match(reasoningEffortSql, /ADD COLUMN reasoning_effort TEXT/);
   assert.match(reasoningEffortSql, /reasoning_effort_nonempty/);
+
+  const environmentPauseIntervalsSql = migrations[34]?.sql ?? "";
+  assert.match(
+    environmentPauseIntervalsSql,
+    /CREATE TABLE environment_pause_intervals\b/,
+  );
+  assert.match(
+    environmentPauseIntervalsSql,
+    /AFTER UPDATE OF paused_at ON environment_runtime/,
+  );
+  assert.match(
+    environmentPauseIntervalsSql,
+    /OLD\.paused_at IS DISTINCT FROM NEW\.paused_at/,
+  );
 
   const nativeAuthoritySql = migrations[13]?.sql ?? "";
   assert.match(

@@ -5,6 +5,7 @@ import type { CodexHarnessState } from "@/harnesses/codex/types";
 import type {
   CodingSession,
   Environment,
+  EnvironmentPauseInterval,
   EnvironmentSandboxState,
   MembershipPlanAssignment,
   NetworkPolicy,
@@ -191,6 +192,12 @@ interface EnvironmentRuntimeRow extends QueryResultRow {
   lifecycle_error: string | null;
   paused_at: Date | null;
   version: string | number;
+}
+
+interface EnvironmentPauseIntervalRow extends QueryResultRow {
+  paused_at: Date;
+  resumed_at: Date | null;
+  reason: EnvironmentPauseInterval["reason"];
 }
 
 interface SessionRuntimeRow extends QueryResultRow {
@@ -732,6 +739,33 @@ export class SandpiStore {
   async getEnvironmentRuntime(userId: string, environmentId: string) {
     await this.getEnvironment(userId, environmentId);
     return this.environmentRuntime(environmentId);
+  }
+
+  /**
+   * Returns the historical projection of Sandpi-owned idle pauses that overlap
+   * a metrics window. The caller must authorize the Environment first.
+   */
+  async environmentPauseIntervals(
+    environmentId: string,
+    startedAt: Date,
+    endedAt: Date,
+  ): Promise<EnvironmentPauseInterval[]> {
+    const result = await this.pool.query<EnvironmentPauseIntervalRow>(
+      `SELECT paused_at, resumed_at, reason
+       FROM environment_pause_intervals
+       WHERE environment_id = $1
+         AND paused_at < $3
+         AND (resumed_at IS NULL OR resumed_at > $2)
+       ORDER BY paused_at`,
+      [environmentId, startedAt, endedAt],
+    );
+    return result.rows.map((row) => ({
+      startedAt: toUnixTimestamp(row.paused_at),
+      ...(row.resumed_at
+        ? { endedAt: toUnixTimestamp(row.resumed_at) }
+        : {}),
+      reason: row.reason,
+    }));
   }
 
   async environmentRuntime(environmentId: string): Promise<StoredEnvironmentRuntime> {

@@ -72,7 +72,13 @@ function emptyMetricSeries(
 }
 
 function emptyEnvironmentMetrics(): EnvironmentMetrics {
+  const endedAt = Date.now() / 1_000;
   return {
+    window: {
+      startedAt: endedAt - 60 * 60,
+      endedAt,
+    },
+    pauseIntervals: [],
     cpuUtilization: emptyMetricSeries(
       "sandbox.cpu.utilization",
       "ratio",
@@ -351,6 +357,9 @@ export function Inspector({
   const chartCopy = {
     instructions: ui.metricChartInstructions,
     legendLabel: ui.metricSeries,
+    pauseLabel: ui.idlePause,
+    window: metrics.window,
+    pauseIntervals: metrics.pauseIntervals,
     toggleSeriesLabel: (label: string, visible: boolean) =>
       visible ? ui.hideMetricSeries(label) : ui.showMetricSeries(label),
     formatTime: (at: number) => formatMetricTime(at, language, timeZone),

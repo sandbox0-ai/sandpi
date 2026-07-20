@@ -119,6 +119,9 @@ test("models network throughput with the sdk-js metric contract", () => {
   assert.equal(metrics.networkTransmit.dimensions?.direction, "transmit");
   assert.ok(metrics.networkReceive.segments.length > 1);
   assert.ok(metrics.networkReceive.segments.every((segment) => segment.points.length > 0));
+  assert.deepEqual(metrics.pauseIntervals.map((interval) => interval.reason), [
+    "idle",
+  ]);
 });
 
 test("models Environment Audit as the JSON-safe sdk-js signed event feed", () => {

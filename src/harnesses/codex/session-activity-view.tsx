@@ -175,7 +175,6 @@ export function CodexSessionActivityView({
             <select
               aria-label={ui.sessionActivityFilter}
               value={filter}
-              disabled={summary.total === 0}
               onChange={(event) => {
                 const next = event.target.value as CodexSessionActivityFilter;
                 updateLocalUiPreferences((current) => ({
