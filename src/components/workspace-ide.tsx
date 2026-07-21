@@ -18,7 +18,6 @@ import {
   Radio,
   RefreshCw,
   Save,
-  Share2,
   X,
 } from "lucide-react";
 import dynamic from "next/dynamic";
@@ -122,8 +121,6 @@ const copy = {
     offline: "Disconnected",
     refresh: "Refresh Workspace",
     openFull: "Open full Web IDE",
-    share: (name: string) => `Share ${name}`,
-    shareFuture: "File sharing requires the future scoped-grant API.",
     back: "Back to Session",
     backEnvironment: "Back to Environment",
     binary: "Binary files cannot be rendered as text.",
@@ -161,8 +158,6 @@ const copy = {
     offline: "已断开",
     refresh: "刷新 Workspace",
     openFull: "在完整 Web IDE 中打开",
-    share: (name: string) => `分享 ${name}`,
-    shareFuture: "文件分享需要后续的 scoped-grant API。",
     back: "返回 Session",
     backEnvironment: "返回 Environment",
     binary: "二进制文件无法按文本显示。",
@@ -1528,14 +1523,6 @@ export function WorkspaceIde({
                     onClick={() => void saveDocument(selectedPath)}
                   >
                     <Save size={13} />
-                  </button>
-                  <button
-                    type="button"
-                    aria-label={ui.share(selectedFile?.name ?? selectedPath)}
-                    title={ui.shareFuture}
-                    disabled
-                  >
-                    <Share2 size={13} />
                   </button>
                 </span>
               </header>

@@ -119,14 +119,6 @@ const codexMcpServerInputSchema = z
       .enum(["auto", "prompt", "writes", "approve"])
       .optional(),
     scopes: z.array(z.string().trim().min(1).max(200)).max(128).default([]),
-    enabledTools: z
-      .array(z.string().trim().min(1).max(200))
-      .max(256)
-      .default([]),
-    disabledTools: z
-      .array(z.string().trim().min(1).max(200))
-      .max(256)
-      .default([]),
   })
   .superRefine((value, context) => {
     if (value.transport === "stdio" && !value.command) {
@@ -141,6 +133,30 @@ const codexMcpServerInputSchema = z
         code: "custom",
         path: ["url"],
         message: "A Streamable HTTP MCP server requires a URL.",
+      });
+    }
+  });
+const codexMcpToolPolicySchema = z
+  .object({
+    mode: z.enum(["all", "selected"]),
+    allowedTools: z
+      .array(z.string().trim().min(1).max(256))
+      .max(1024)
+      .default([]),
+  })
+  .superRefine((value, context) => {
+    if (value.mode === "all" && value.allowedTools.length > 0) {
+      context.addIssue({
+        code: "custom",
+        path: ["allowedTools"],
+        message: "All-tools mode cannot contain an allowlist.",
+      });
+    }
+    if (value.mode === "selected" && value.allowedTools.length === 0) {
+      context.addIssue({
+        code: "custom",
+        path: ["allowedTools"],
+        message: "Selected-tools mode requires at least one tool.",
       });
     }
   });
@@ -721,6 +737,17 @@ function registerApiRoutes(
         }),
       };
     },
+  );
+  app.put<{ Params: { environmentId: string; name: string } }>(
+    "/api/v1/environments/:environmentId/harnesses/codex/mcp-servers/:name/tool-policy",
+    async (request) => ({
+      data: await services.codexMcp.putEnvironmentMcpToolPolicy({
+        userId: request.principal.userId,
+        environmentId: request.params.environmentId,
+        name: request.params.name,
+        policy: codexMcpToolPolicySchema.parse(request.body),
+      }),
+    }),
   );
   app.delete<{ Params: { environmentId: string; name: string } }>(
     "/api/v1/environments/:environmentId/harnesses/codex/mcp-servers/:name",

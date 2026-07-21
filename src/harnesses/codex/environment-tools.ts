@@ -125,6 +125,28 @@ export type CodexMcpReadiness =
 export type CodexMcpRemoteAuthMethod = "none" | "oauth" | "bearer" | "header";
 export type CodexMcpCredentialMutation = "keep" | "replace" | "remove";
 
+export interface CodexMcpTool {
+  /** Raw MCP tool name used by tools/call. */
+  name: string;
+  title?: string;
+  description?: string;
+}
+
+export type CodexMcpToolPolicyEnforcement =
+  | "sandbox0"
+  | "platform"
+  | "unavailable";
+export type CodexMcpToolPolicyMode = "all" | "selected";
+export type CodexMcpToolPolicyStatus = "active" | "updating" | "error";
+
+export interface CodexMcpToolPolicy {
+  enforcement: CodexMcpToolPolicyEnforcement;
+  mode?: CodexMcpToolPolicyMode;
+  allowedTools: string[];
+  status?: CodexMcpToolPolicyStatus;
+  error?: string;
+}
+
 export interface CodexMcpServer {
   name: string;
   transport: CodexMcpTransport;
@@ -136,8 +158,6 @@ export interface CodexMcpServer {
   startupTimeoutSec?: number;
   toolTimeoutSec?: number;
   defaultToolsApprovalMode?: CodexMcpApprovalMode;
-  enabledTools: string[];
-  disabledTools: string[];
   /** True when the definition is owned by the Environment's Codex user config. */
   managed: boolean;
   authStatus: CodexMcpAuthStatus;
@@ -153,6 +173,8 @@ export interface CodexMcpServer {
   scopes?: string[];
   serverTitle?: string;
   serverVersion?: string;
+  tools: CodexMcpTool[];
+  toolPolicy: CodexMcpToolPolicy;
   toolCount: number;
   resourceCount: number;
 }
@@ -174,8 +196,11 @@ export interface CodexMcpServerInput {
   toolTimeoutSec?: number;
   defaultToolsApprovalMode?: CodexMcpApprovalMode;
   scopes?: string[];
-  enabledTools: string[];
-  disabledTools: string[];
+}
+
+export interface CodexMcpToolPolicyInput {
+  mode: CodexMcpToolPolicyMode;
+  allowedTools: string[];
 }
 
 export interface CodexMcpCredentialInput {

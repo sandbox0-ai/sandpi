@@ -66,6 +66,7 @@ test("migration history contains every durable Sandpi boundary", async () => {
       "0039_initialize_configurable_idle_pause_deadlines",
       "0040_environment_sandbox_memory",
       "0041_remove_environment_hard_ttl",
+      "0042_environment_mcp_tool_policies",
     ],
   );
 
@@ -280,6 +281,24 @@ test("migration history contains every durable Sandpi boundary", async () => {
   assert.match(
     removedEnvironmentHardTtlSql,
     /zero disables automatic pause; maximum 30 days/,
+  );
+
+  const environmentMcpToolPoliciesSql = migrations[41]?.sql ?? "";
+  assert.match(
+    environmentMcpToolPoliciesSql,
+    /ADD COLUMN tool_policy_mode TEXT NOT NULL DEFAULT 'all'/,
+  );
+  assert.match(
+    environmentMcpToolPoliciesSql,
+    /ADD COLUMN allowed_tools TEXT\[\] NOT NULL DEFAULT '\{\}'/,
+  );
+  assert.match(
+    environmentMcpToolPoliciesSql,
+    /tool_policy_status IN \('active', 'updating', 'error'\)/,
+  );
+  assert.match(
+    environmentMcpToolPoliciesSql,
+    /tool_policy_mode = 'selected'[\s\S]+cardinality\(allowed_tools\) > 0/,
   );
 
   const runtimeAuthoritySql = migrations[24]?.sql ?? "";

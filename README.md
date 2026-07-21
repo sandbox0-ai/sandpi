@@ -172,9 +172,10 @@ Web today; iOS / Android / HarmonyOS later
   and hard TTLs. Each Environment configures its own idle auto-pause timeout,
   defaulting to thirty minutes; zero leaves no time-based expiration.
   Environment settings also persist the shared Sandbox memory limit in MiB,
-  defaulting to 2 GiB and capped at 8 GiB; Sandpi applies it both when claiming
-  and when updating the existing Sandbox. Runtime access and native
-  `turn/completed` events calculate the PostgreSQL deadline from that setting.
+  defaulting to 2 GiB and offering 512 MiB, 1 GiB, 2 GiB, 4 GiB and 8 GiB
+  presets. Sandpi applies it both when claiming and when updating the existing
+  Sandbox. Runtime access and native `turn/completed` events calculate the
+  PostgreSQL deadline from that setting.
   Any Sandpi replica may scan it, but a per-Environment advisory lock elects
   exactly one replica to pause after it rechecks that no Turn is active or
   pending. Browser disconnection is irrelevant. Sandbox0 auto-resume
@@ -361,6 +362,25 @@ Credential authorization does not grant general network access. In a
 `block-all` Environment, explicitly add the remote MCP domain to **Environment
 Settings → Network**. The credential rule remains fail-closed and cannot
 override a user traffic deny.
+
+For a Sandpi-managed remote server, the settings page reads the raw MCP tool
+inventory returned through Codex `mcpServerStatus/list`. **Only selected tools**
+stores an explicit allowlist and composes a Sandbox0 MCP protocol rule for the
+server's exact HTTPS domain and path. Codex still sees the complete
+`tools/list`; a disallowed `tools/call` is rejected at the sandbox egress
+boundary. Tool names added later remain denied until selected. Sandpi clears
+legacy Codex `enabled_tools` and `disabled_tools` settings so Sandbox0 is the
+only enforcement truth. To allow no tools, disable the server rather than
+saving an empty allowlist. A selected policy also blocks endpoint changes until
+the user explicitly switches back to **All tools**, so a failed definition
+update cannot silently remove an existing restriction.
+
+Aggregator shortcuts are deliberately excluded: their connected-app and tool
+permissions remain the aggregation platform's responsibility. Local STDIO
+servers also cannot use this control because their MCP traffic does not cross
+Sandbox0's network protocol boundary. Sandbox0 matches remote policy by
+endpoint, so two definitions sharing one HTTPS endpoint must request the same
+policy; conflicting policies fail instead of being merged ambiguously.
 
 Local STDIO entries are different: Codex launches their command inside the
 Environment Sandbox. They receive no remote credential injection, run with the

@@ -7,6 +7,8 @@ import { conflict, notFound } from "@/server/http-error";
 import type { ManagedMcpCredentialBinding } from "@/server/runtime/network-policy";
 
 export type McpIntegrationAuthMode = "none" | "oauth" | "bearer" | "header";
+export type McpToolPolicyMode = "all" | "selected";
+export type McpToolPolicyStatus = "active" | "updating" | "error";
 
 export type McpIntegrationLifecycleStatus =
   | "provisioning"
@@ -44,6 +46,10 @@ export interface EnvironmentMcpIntegration {
   endpointFingerprint: string;
   destinationDomain: string;
   destinationPath: string;
+  toolPolicyMode: McpToolPolicyMode;
+  allowedTools: string[];
+  toolPolicyStatus: McpToolPolicyStatus;
+  toolPolicyError?: string;
   lifecycleStatus: McpIntegrationLifecycleStatus;
   credentialStatus: McpIntegrationCredentialStatus;
   lastError?: string;
@@ -131,6 +137,10 @@ interface IntegrationRow extends QueryResultRow {
   endpoint_fingerprint: string;
   destination_domain: string;
   destination_path: string;
+  tool_policy_mode: McpToolPolicyMode;
+  allowed_tools: string[];
+  tool_policy_status: McpToolPolicyStatus;
+  tool_policy_error: string | null;
   lifecycle_status: McpIntegrationLifecycleStatus;
   credential_status: McpIntegrationCredentialStatus;
   last_error: string | null;
@@ -234,6 +244,17 @@ export class EnvironmentMcpIntegrationStore {
     return result.rows.map(integrationFromRow);
   }
 
+  async listToolPolicyIntegrationsForRuntime(environmentId: string) {
+    const result = await this.pool.query<IntegrationRow>(
+      `SELECT *
+       FROM environment_mcp_integrations
+       WHERE environment_id = $1
+       ORDER BY server_name`,
+      [environmentId],
+    );
+    return result.rows.map(integrationFromRow);
+  }
+
   async listReconciliationCandidatesForRuntime() {
     const result = await this.pool.query<IntegrationRow>(
       `SELECT integration.*
@@ -244,6 +265,7 @@ export class EnvironmentMcpIntegrationStore {
          AND (
            integration.lifecycle_status <> 'active'
            OR integration.credential_status = 'error'
+           OR integration.tool_policy_status <> 'active'
            OR integration.pending_credential_source_ref IS NOT NULL
            OR integration.retiring_credential_source_ref IS NOT NULL
          )
@@ -354,6 +376,104 @@ export class EnvironmentMcpIntegrationStore {
       throw integrationChanged();
     }
     return integrationFromRow(row);
+  }
+
+  async setToolPolicy(
+    userId: string,
+    environmentId: string,
+    serverName: string,
+    input: {
+      expectedVersion: number;
+      expectedEndpointFingerprint: string;
+      mode: McpToolPolicyMode;
+      allowedTools: readonly string[];
+    },
+  ) {
+    assertVersion(input.expectedVersion);
+    assertSha256Fingerprint(input.expectedEndpointFingerprint, "MCP endpoint");
+    const allowedTools = normalizeAllowedTools(input.mode, input.allowedTools);
+    await this.assertEnvironmentAccess(userId, environmentId);
+    const result = await this.pool.query<IntegrationRow>(
+      `UPDATE environment_mcp_integrations integration
+       SET tool_policy_mode = $6,
+           allowed_tools = $7::TEXT[],
+           tool_policy_status = 'updating',
+           tool_policy_error = NULL,
+           version = integration.version + 1
+       FROM environments environment
+       JOIN team_memberships membership
+         ON membership.team_id = environment.team_id
+        AND membership.user_id = $1
+        AND membership.status = 'active'
+       WHERE integration.environment_id = environment.id
+         AND environment.id = $2
+         AND (
+           environment.created_by_user_id = $1
+           OR (environment.visibility = 'team' AND membership.role IN ('owner', 'admin'))
+         )
+         AND environment.status <> 'archived'
+         AND integration.server_name = $3
+         AND integration.lifecycle_status <> 'deleting'
+         AND integration.version = $4
+         AND integration.endpoint_fingerprint = $5
+       RETURNING integration.*`,
+      [
+        userId,
+        environmentId,
+        serverName,
+        input.expectedVersion,
+        input.expectedEndpointFingerprint.toLowerCase(),
+        input.mode,
+        allowedTools,
+      ],
+    );
+    const row = result.rows[0];
+    if (!row) throw integrationChanged();
+    return integrationFromRow(row);
+  }
+
+  async markToolPolicyErrorForRuntime(
+    environmentId: string,
+    serverName: string,
+    input: {
+      expectedEndpointFingerprint: string;
+      error: string;
+    },
+  ) {
+    assertSha256Fingerprint(input.expectedEndpointFingerprint, "MCP endpoint");
+    const error = requiredNonEmpty(input.error, "MCP tool policy error");
+    const result = await this.pool.query<IntegrationRow>(
+      `UPDATE environment_mcp_integrations
+       SET tool_policy_status = 'error',
+           tool_policy_error = $4,
+           version = version + 1
+       WHERE environment_id = $1
+         AND server_name = $2
+         AND endpoint_fingerprint = $3
+         AND lifecycle_status <> 'deleting'
+       RETURNING *`,
+      [
+        environmentId,
+        serverName,
+        input.expectedEndpointFingerprint.toLowerCase(),
+        error,
+      ],
+    );
+    return result.rows[0] ? integrationFromRow(result.rows[0]) : undefined;
+  }
+
+  async markToolPoliciesActiveForRuntime(environmentId: string) {
+    const result = await this.pool.query<IntegrationRow>(
+      `UPDATE environment_mcp_integrations
+       SET tool_policy_status = 'active',
+           tool_policy_error = NULL,
+           version = version + 1
+       WHERE environment_id = $1
+         AND tool_policy_status <> 'active'
+       RETURNING *`,
+      [environmentId],
+    );
+    return result.rows.map(integrationFromRow);
   }
 
   async markIntegration(
@@ -2645,12 +2765,48 @@ function integrationFromRow(row: IntegrationRow): EnvironmentMcpIntegration {
     endpointFingerprint: row.endpoint_fingerprint,
     destinationDomain: row.destination_domain,
     destinationPath: row.destination_path,
+    toolPolicyMode: row.tool_policy_mode ?? "all",
+    allowedTools: [...(row.allowed_tools ?? [])],
+    toolPolicyStatus: row.tool_policy_status ?? "active",
+    toolPolicyError: row.tool_policy_error ?? undefined,
     lifecycleStatus: row.lifecycle_status,
     credentialStatus: row.credential_status,
     lastError: row.last_error ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+function normalizeAllowedTools(
+  mode: McpToolPolicyMode,
+  values: readonly string[],
+) {
+  const allowedTools = [
+    ...new Set(
+      values.map((value) => {
+        const name = value.trim();
+        if (!name || name.length > 256 || name.includes("\0")) {
+          throw new Error("MCP tool names must be 1 to 256 safe characters.");
+        }
+        return name;
+      }),
+    ),
+  ].sort();
+  if (allowedTools.length > 1024) {
+    throw new Error("An MCP tool policy may contain at most 1024 tools.");
+  }
+  if (mode === "all") {
+    if (allowedTools.length > 0) {
+      throw new Error("An all-tools MCP policy cannot contain an allowlist.");
+    }
+    return allowedTools;
+  }
+  if (allowedTools.length === 0) {
+    throw new Error(
+      "Select at least one MCP tool, or disable the MCP server instead.",
+    );
+  }
+  return allowedTools;
 }
 
 function oauthFlowFromRow(row: OAuthFlowRow): EnvironmentMcpOAuthFlow {

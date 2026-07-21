@@ -125,18 +125,14 @@ test("builds isolated Codex server inputs from presets", () => {
   const first = codexMcpInputFromPreset(preset);
   const second = codexMcpInputFromPreset(preset);
   assert.notStrictEqual(first.args, second.args);
-  assert.notStrictEqual(first.enabledTools, second.enabledTools);
-  assert.notStrictEqual(first.disabledTools, second.disabledTools);
 
   first.args.push("--isolated");
-  first.enabledTools.push("browser_navigate");
   assert.deepEqual(second.args, [
     "-y",
     "@playwright/mcp@0.0.78",
     "--headless",
     "--no-sandbox",
   ]);
-  assert.deepEqual(second.enabledTools, []);
   assert.deepEqual(preset.args, [
     "-y",
     "@playwright/mcp@0.0.78",
@@ -168,8 +164,6 @@ test("keeps the local MCP shortcut commands sandbox-ready", () => {
     toolTimeoutSec: 120,
     defaultToolsApprovalMode: "prompt",
     scopes: undefined,
-    enabledTools: [],
-    disabledTools: [],
   });
   assert.deepEqual(input("filesystem").args, [
     "-y",

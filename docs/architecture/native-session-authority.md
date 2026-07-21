@@ -300,12 +300,41 @@ itself is the only maintained preset list. Documentation describes category and
 security boundaries rather than copying entries that can drift.
 
 Codex `config.toml` remains authoritative for server URL or command, enablement,
-timeouts, scopes and tool policy. Sandpi persists only the non-secret
+timeouts, scopes and approval behavior. Sandpi persists only the non-secret
 orchestration metadata needed to reconcile that definition with external
 resources: preset and auth mode, endpoint fingerprint, credential source and
-binding references, destination match and lifecycle status. It is not a second
-MCP definition. Changing the endpoint invalidates the prior consent and prevents
-an existing credential from being rebound to a different host without review.
+binding references, destination match, lifecycle status and the desired remote
+tool policy. It is not a second MCP definition. Changing the endpoint
+invalidates the prior consent and prevents an existing credential from being
+rebound to a different host without review. When a selected tool policy exists,
+the endpoint or permission authority cannot change until the user explicitly
+switches to unrestricted mode. Deletion removes the Codex definition before it
+withdraws the Sandbox0 allowlist, so failures retain the narrower policy.
+
+Codex supplies discovery, not authorization. Sandpi reads the paginated raw MCP
+tool map from Codex `mcpServerStatus/list` and exposes its names and display
+metadata to the settings UI. It removes legacy Codex `enabled_tools` and
+`disabled_tools` values so that discovery remains complete and no second filter
+can drift. Tool descriptions and annotations are untrusted display hints; they
+never grant access automatically.
+
+For a managed HTTPS server, `selected` policy stores a non-empty explicit set of
+raw `tools/call.params.name` values. The effective Environment network policy
+emits a Sandbox0 `protocolRules` MCP allowlist with exact domain, port 443 and
+path matching plus terminate-and-reoriginate TLS inspection. Sandbox0 is the
+policy enforcement point: `tools/list` stays complete, while a denied
+`tools/call` fails outside the coding-agent process. A newly advertised name is
+therefore denied until a user selects it. `all` emits no MCP restriction. An
+empty selected set is invalid; disabling the server is the supported way to
+load no tools.
+
+Protocol Control identifies the network endpoint, not Codex's local server
+alias. Definitions sharing one endpoint must have identical policy or
+composition fails closed. Aggregator presets emit no tool rule because their
+permissions are owned by the aggregation platform. STDIO servers are outside
+network Protocol Control and are reported as unavailable rather than silently
+falling back to Codex filtering. Desired policy and convergence status are
+durable; failed Sandbox0 replacement is retried by normal MCP reconciliation.
 
 Static remote credentials are write-only. A browser submits a replacement
 value to Sandpi once; Sandpi creates a new immutable Sandbox0 `static_headers`

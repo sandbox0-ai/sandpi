@@ -4253,7 +4253,13 @@ test("creates remote and local Environment MCP servers and reloads every native 
                         title: "Docs",
                         version: "1.0.0",
                       },
-                      tools: { search: { name: "search" } },
+                      tools: {
+                        search: {
+                          name: "search",
+                          title: "Search docs",
+                          description: "Search the documentation index.",
+                        },
+                      },
                       resources: [],
                       resourceTemplates: [],
                       authStatus: "unsupported",
@@ -4295,13 +4301,18 @@ test("creates remote and local Environment MCP servers and reloads every native 
         enabled: true,
         required: false,
         defaultToolsApprovalMode: "prompt",
-        enabledTools: [],
-        disabledTools: [],
       },
     });
     assert.equal(inventory.servers[0]?.runtimeStatus, "connected");
     assert.equal(inventory.servers[0]?.managed, true);
     assert.equal(inventory.servers[0]?.toolCount, 1);
+    assert.deepEqual(inventory.servers[0]?.tools, [
+      {
+        name: "search",
+        title: "Search docs",
+        description: "Search the documentation index.",
+      },
+    ]);
 
     const batch = context.writes.find(
       ({ message }) => message.method === "config/batchWrite",
@@ -4314,6 +4325,20 @@ test("creates remote and local Environment MCP servers and reloads every native 
         (edit) =>
           edit.keyPath === "mcp_servers.docs.url" &&
           edit.value === definition.url,
+      ),
+    );
+    assert.ok(
+      edits.some(
+        (edit) =>
+          edit.keyPath === "mcp_servers.docs.enabled_tools" &&
+          edit.value === null,
+      ),
+    );
+    assert.ok(
+      edits.some(
+        (edit) =>
+          edit.keyPath === "mcp_servers.docs.disabled_tools" &&
+          edit.value === null,
       ),
     );
     assert.ok(
@@ -4341,8 +4366,6 @@ test("creates remote and local Environment MCP servers and reloads every native 
         required: false,
         startupTimeoutSec: 120,
         defaultToolsApprovalMode: "prompt",
-        enabledTools: [],
-        disabledTools: [],
       },
     });
     const local = localInventory.servers.find(
@@ -4391,6 +4414,97 @@ test("creates remote and local Environment MCP servers and reloads every native 
         ({ message }) => message.method === "config/mcpServer/reload",
       ).length,
       2,
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("removes legacy Codex MCP tool filters before exposing the full inventory", async () => {
+  let cleaned = false;
+  const context = fixture({
+    onRequest(message) {
+      if (message.method === "config/read") {
+        const definition = {
+          url: "https://docs.example.test/mcp",
+          enabled: true,
+          ...(!cleaned
+            ? { enabled_tools: ["search"], disabled_tools: ["publish"] }
+            : {}),
+        };
+        return {
+          id: message.id,
+          result: {
+            config: { mcp_servers: { docs: definition } },
+            origins: {},
+            layers: [
+              {
+                name: { type: "user", profile: null },
+                config: { mcp_servers: { docs: definition } },
+              },
+            ],
+          },
+        };
+      }
+      if (message.method === "config/batchWrite") {
+        cleaned = true;
+        return { id: message.id, result: { status: "ok" } };
+      }
+      if (message.method === "config/mcpServer/reload") {
+        return { id: message.id, result: {} };
+      }
+      if (message.method === "mcpServerStatus/list") {
+        return {
+          id: message.id,
+          result: {
+            data: [
+              {
+                name: "docs",
+                serverInfo: { name: "docs", version: "1" },
+                tools: {
+                  search: { name: "search" },
+                  publish: { name: "publish" },
+                },
+                authStatus: "unsupported",
+              },
+            ],
+            nextCursor: null,
+          },
+        };
+      }
+      return undefined;
+    },
+  });
+  try {
+    const inventory = await context.service.listEnvironmentMcpServers(
+      "user",
+      environment.id,
+    );
+    assert.deepEqual(
+      inventory.servers[0]?.tools.map((tool) => tool.name),
+      ["publish", "search"],
+    );
+    const cleanup = context.writes.find(
+      ({ message }) => message.method === "config/batchWrite",
+    );
+    assert.deepEqual(
+      (
+        cleanup?.message.params as {
+          edits: Array<{ keyPath: string; value: unknown }>;
+        }
+      ).edits,
+      [
+        {
+          keyPath: "mcp_servers.docs.enabled_tools",
+          value: null,
+          mergeStrategy: "replace",
+        },
+        {
+          keyPath: "mcp_servers.docs.disabled_tools",
+          value: null,
+          mergeStrategy: "replace",
+        },
+      ],
     );
   } finally {
     await context.close();

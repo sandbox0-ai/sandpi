@@ -36,6 +36,10 @@ function integrationRow(
     endpoint_fingerprint: SHA256,
     destination_domain: "api.githubcopilot.com",
     destination_path: "/mcp/",
+    tool_policy_mode: "all",
+    allowed_tools: [],
+    tool_policy_status: "active",
+    tool_policy_error: null,
     lifecycle_status: "active",
     credential_status: "configured",
     last_error: null,
@@ -215,6 +219,109 @@ test("runtime composition retains a static binding while it is updating", async 
 
   assert.equal(integrations.length, 1);
   assert.equal(integrations[0]?.lifecycleStatus, "updating");
+});
+
+test("runtime composition retains a selected tool policy during credential deletion", async () => {
+  const pool = {
+    async query(sql: string) {
+      assert.doesNotMatch(sql, /lifecycle_status <> 'deleting'/);
+      return {
+        rowCount: 1,
+        rows: [
+          integrationRow({
+            lifecycle_status: "deleting",
+            tool_policy_mode: "selected",
+            allowed_tools: ["search_code"],
+          }),
+        ],
+      };
+    },
+  } as unknown as Pool;
+
+  const integrations =
+    await new EnvironmentMcpIntegrationStore(
+      pool,
+    ).listToolPolicyIntegrationsForRuntime("environment_1");
+
+  assert.equal(integrations.length, 1);
+  assert.equal(integrations[0]?.lifecycleStatus, "deleting");
+  assert.equal(integrations[0]?.toolPolicyMode, "selected");
+  assert.deepEqual(integrations[0]?.allowedTools, ["search_code"]);
+});
+
+test("tool policy update uses endpoint and version CAS with normalized names", async () => {
+  const queries: Array<{ sql: string; values?: readonly unknown[] }> = [];
+  const pool = {
+    async query(sql: string, values?: readonly unknown[]) {
+      queries.push({ sql, values });
+      if (sql.includes("SELECT environment.id")) {
+        return { rowCount: 1, rows: [{ id: "environment_1" }] };
+      }
+      assert.match(sql, /tool_policy_status = 'updating'/);
+      assert.match(sql, /integration\.version = \$4/);
+      assert.match(sql, /integration\.endpoint_fingerprint = \$5/);
+      return {
+        rowCount: 1,
+        rows: [
+          integrationRow({
+            tool_policy_mode: values?.[5],
+            allowed_tools: values?.[6],
+            tool_policy_status: "updating",
+            version: 2,
+          }),
+        ],
+      };
+    },
+  } as unknown as Pool;
+  const store = new EnvironmentMcpIntegrationStore(pool);
+
+  const updated = await store.setToolPolicy(
+    "user_1",
+    "environment_1",
+    "github",
+    {
+      expectedVersion: 1,
+      expectedEndpointFingerprint: SHA256.toUpperCase(),
+      mode: "selected",
+      allowedTools: ["search_code", "get_issue", "search_code"],
+    },
+  );
+
+  assert.equal(queries.length, 2);
+  assert.deepEqual(queries[1]?.values, [
+    "user_1",
+    "environment_1",
+    "github",
+    1,
+    SHA256,
+    "selected",
+    ["get_issue", "search_code"],
+  ]);
+  assert.equal(updated.toolPolicyMode, "selected");
+  assert.deepEqual(updated.allowedTools, ["get_issue", "search_code"]);
+  assert.equal(updated.toolPolicyStatus, "updating");
+});
+
+test("empty selected tool policies are rejected before persistence", async () => {
+  let queried = false;
+  const pool = {
+    async query() {
+      queried = true;
+      return { rowCount: 0, rows: [] };
+    },
+  } as unknown as Pool;
+  const store = new EnvironmentMcpIntegrationStore(pool);
+
+  await assert.rejects(
+    store.setToolPolicy("user_1", "environment_1", "github", {
+      expectedVersion: 1,
+      expectedEndpointFingerprint: SHA256,
+      mode: "selected",
+      allowedTools: [],
+    }),
+    /Select at least one MCP tool/,
+  );
+  assert.equal(queried, false);
 });
 
 test("credential value template builder accepts only a bounded scheme prefix", () => {

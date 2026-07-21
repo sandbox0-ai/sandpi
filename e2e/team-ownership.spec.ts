@@ -253,14 +253,16 @@ test("switches Team-visible and private Environments and shows Session owners", 
     page.getByText("Set 0 to keep it running with no time limit."),
   ).toBeVisible();
   await idleTimeout.fill("45");
-  const sandboxMemory = page.getByLabel(
-    "Environment Sandbox memory in GiB",
-  );
-  await expect(sandboxMemory).toHaveValue("2");
-  await expect(sandboxMemory).toHaveAttribute("max", "8");
-  await sandboxMemory.fill("9");
-  await expect(sandboxMemory).toHaveValue("8");
-  await sandboxMemory.fill("4");
+  const sandboxMemory = page.getByLabel("Environment Sandbox memory");
+  await expect(sandboxMemory).toHaveValue("2048");
+  await expect(sandboxMemory.locator("option")).toHaveText([
+    "512 MiB",
+    "1 GiB",
+    "2 GiB",
+    "4 GiB",
+    "8 GiB",
+  ]);
+  await sandboxMemory.selectOption("4096");
   await page.getByRole("button", { name: "Save changes" }).click();
   await expect(
     page.getByRole("dialog", { name: /Personal scratchpad settings/ }),

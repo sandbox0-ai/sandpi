@@ -29,10 +29,7 @@ import {
 import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
 import { copyTextToClipboard } from "@/lib/clipboard";
 import { MAX_ENVIRONMENT_IDLE_PAUSE_TIMEOUT_SECONDS } from "@/lib/environment-lifecycle";
-import {
-  ENVIRONMENT_SANDBOX_MEMORY_MAX_MIB,
-  ENVIRONMENT_SANDBOX_MEMORY_MIN_MIB,
-} from "@/lib/environment-resources";
+import { ENVIRONMENT_SANDBOX_MEMORY_OPTIONS_MIB } from "@/lib/environment-resources";
 import {
   CodexMcpSettings,
   CodexSkillsSettings,
@@ -822,33 +819,37 @@ export function EnvironmentSettings({
                   </small>
                 </label>
                 <label className="full-field">
-                  Sandbox memory (GiB)
-                  <input
-                    type="number"
+                  Sandbox memory
+                  <select
                     name="environment-sandbox-memory"
-                    aria-label="Environment Sandbox memory in GiB"
-                    min={ENVIRONMENT_SANDBOX_MEMORY_MIN_MIB / 1024}
-                    max={ENVIRONMENT_SANDBOX_MEMORY_MAX_MIB / 1024}
-                    step={ENVIRONMENT_SANDBOX_MEMORY_MIN_MIB / 1024}
-                    value={draft.sandboxMemoryMiB / 1024}
+                    aria-label="Environment Sandbox memory"
+                    value={draft.sandboxMemoryMiB}
                     onChange={(event) => {
-                      const gibibytes = event.currentTarget.valueAsNumber;
-                      if (!Number.isFinite(gibibytes)) return;
+                      const memoryMiB = Number(event.currentTarget.value);
+                      if (
+                        !ENVIRONMENT_SANDBOX_MEMORY_OPTIONS_MIB.some(
+                          (optionMiB) => optionMiB === memoryMiB,
+                        )
+                      ) {
+                        return;
+                      }
                       setDraft((current) => ({
                         ...current,
-                        sandboxMemoryMiB: Math.min(
-                          ENVIRONMENT_SANDBOX_MEMORY_MAX_MIB,
-                          Math.max(
-                            ENVIRONMENT_SANDBOX_MEMORY_MIN_MIB,
-                            Math.round(gibibytes * 1024),
-                          ),
-                        ),
+                        sandboxMemoryMiB: memoryMiB,
                       }));
                     }}
-                  />
+                  >
+                    {ENVIRONMENT_SANDBOX_MEMORY_OPTIONS_MIB.map((memoryMiB) => (
+                      <option key={memoryMiB} value={memoryMiB}>
+                        {memoryMiB < 1024
+                          ? `${memoryMiB} MiB`
+                          : `${memoryMiB / 1024} GiB`}
+                      </option>
+                    ))}
+                  </select>
                   <small>
                     Applies immediately to the shared Sandbox. Sandbox0 derives
-                    CPU capacity from the configured memory ratio. Maximum 8 GiB.
+                    CPU capacity from the configured memory ratio.
                   </small>
                 </label>
                 <div className="settings-card definition-card">

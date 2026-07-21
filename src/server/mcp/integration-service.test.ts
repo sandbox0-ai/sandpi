@@ -61,6 +61,7 @@ interface HarnessOptions {
   callbackPublicUrl?: string;
   authorizationUrl?: string;
   policyErrors?: Error[];
+  codexDeleteErrors?: Error[];
   oauthPersistenceError?: Error;
   oauthCorrelationError?: Error;
   persistErrors?: Error[];
@@ -70,6 +71,7 @@ interface HarnessOptions {
 
 function createHarness(options: HarnessOptions) {
   const policyErrors = [...(options.policyErrors ?? [])];
+  const codexDeleteErrors = [...(options.codexDeleteErrors ?? [])];
   const persistErrors = [...(options.persistErrors ?? [])];
   const discardErrors = [...(options.discardErrors ?? [])];
   const state = {
@@ -79,6 +81,9 @@ function createHarness(options: HarnessOptions) {
       bindingEnabled:
         value.bindingEnabled ?? Boolean(value.credentialSourceRef),
       version: value.version ?? 1,
+      toolPolicyMode: value.toolPolicyMode ?? "all",
+      allowedTools: value.allowedTools ?? [],
+      toolPolicyStatus: value.toolPolicyStatus ?? "active",
     })),
     flows: structuredClone(options.flows ?? []),
     sequence: [] as string[],
@@ -190,6 +195,10 @@ function createHarness(options: HarnessOptions) {
         endpointFingerprint: input.endpointFingerprint,
         destinationDomain: input.destinationDomain,
         destinationPath: input.destinationPath,
+        toolPolicyMode: existing?.toolPolicyMode ?? "all",
+        allowedTools: existing?.allowedTools ?? [],
+        toolPolicyStatus: existing?.toolPolicyStatus ?? "active",
+        toolPolicyError: existing?.toolPolicyError,
         lifecycleStatus: input.lifecycleStatus ?? "provisioning",
         credentialStatus:
           input.credentialStatus ??
@@ -521,12 +530,65 @@ function createHarness(options: HarnessOptions) {
         ),
       );
     },
+    async listToolPolicyIntegrationsForRuntime() {
+      return structuredClone(state.integrations);
+    },
+    async setToolPolicy(
+      _userId: string,
+      _environmentId: string,
+      serverName: string,
+      input: Parameters<EnvironmentMcpIntegrationStore["setToolPolicy"]>[3],
+    ) {
+      const current = requireIntegration(state.integrations, serverName);
+      assertIntegrationVersion(current, input.expectedVersion);
+      assert.equal(
+        current.endpointFingerprint,
+        input.expectedEndpointFingerprint,
+      );
+      return updateIntegration(state.integrations, serverName, {
+        toolPolicyMode: input.mode,
+        allowedTools: [...input.allowedTools].sort(),
+        toolPolicyStatus: "updating",
+        toolPolicyError: undefined,
+      });
+    },
+    async markToolPolicyErrorForRuntime(
+      _environmentId: string,
+      serverName: string,
+      input: Parameters<
+        EnvironmentMcpIntegrationStore["markToolPolicyErrorForRuntime"]
+      >[2],
+    ) {
+      const current = requireIntegration(state.integrations, serverName);
+      if (current.endpointFingerprint !== input.expectedEndpointFingerprint) {
+        return undefined;
+      }
+      return updateIntegration(state.integrations, serverName, {
+        toolPolicyStatus: "error",
+        toolPolicyError: input.error,
+      });
+    },
+    async markToolPoliciesActiveForRuntime() {
+      const updated = state.integrations
+        .filter(
+          (integration) =>
+            integration.toolPolicyStatus !== "active",
+        )
+        .map((integration) =>
+          updateIntegration(state.integrations, integration.serverName, {
+            toolPolicyStatus: "active",
+            toolPolicyError: undefined,
+          }),
+        );
+      return structuredClone(updated);
+    },
     async listReconciliationCandidatesForRuntime() {
       return structuredClone(
         state.integrations.filter(
           (integration) =>
             integration.lifecycleStatus !== "active" ||
             integration.credentialStatus === "error" ||
+            integration.toolPolicyStatus !== "active" ||
             integration.pendingCredentialSourceRef ||
             integration.retiringCredentialSourceRef,
         ),
@@ -1110,7 +1172,10 @@ function createHarness(options: HarnessOptions) {
       return structuredClone(state.inventory);
     },
     async deleteEnvironmentMcpServer(input: { name: string }) {
+      state.sequence.push("codex-delete");
       state.codexDeleteInputs.push(input.name);
+      const error = codexDeleteErrors.shift();
+      if (error) throw error;
       state.inventory.servers = state.inventory.servers.filter(
         (server) => server.name !== input.name,
       );
@@ -1127,6 +1192,361 @@ function createHarness(options: HarnessOptions) {
   );
   return { service, state };
 }
+
+test("Sandbox0 enforces a selected remote MCP tool allowlist", async () => {
+  const server = remoteServer({
+    name: "github",
+    url: "https://api.githubcopilot.com/mcp/",
+    tools: [
+      { name: "get_issue", description: "Read an issue" },
+      { name: "update_issue", description: "Update an issue" },
+    ],
+    toolCount: 2,
+  });
+  const association = integration({
+    serverName: server.name,
+    url: server.url!,
+    authMode: "none",
+    credentialStatus: "not-required",
+  });
+  const { service, state } = createHarness({
+    inventory: { servers: [server] },
+    integrations: [association],
+    userPolicy: { mode: "allow-all", domainExceptions: [] },
+  });
+
+  const selected = await service.putEnvironmentMcpToolPolicy({
+    userId: USER_ID,
+    environmentId: ENVIRONMENT_ID,
+    name: server.name,
+    policy: { mode: "selected", allowedTools: ["get_issue"] },
+  });
+
+  assert.deepEqual(selected.servers[0]?.toolPolicy, {
+    enforcement: "sandbox0",
+    mode: "selected",
+    allowedTools: ["get_issue"],
+    status: "active",
+  });
+  assert.deepEqual(
+    state.appliedPolicies[0]?.egress?.protocolRules?.[0]?.mcp?.tools?.allowed,
+    ["get_issue"],
+  );
+  assert.equal(state.integrations[0]?.toolPolicyStatus, "active");
+
+  const unrestricted = await service.putEnvironmentMcpToolPolicy({
+    userId: USER_ID,
+    environmentId: ENVIRONMENT_ID,
+    name: server.name,
+    policy: { mode: "all", allowedTools: [] },
+  });
+  assert.equal(unrestricted.servers[0]?.toolPolicy.mode, "all");
+  assert.equal(state.appliedPolicies[1]?.egress?.protocolRules, undefined);
+});
+
+test("remote MCP tool policy accepts only the current raw tool inventory", async () => {
+  const server = remoteServer({
+    name: "docs",
+    url: "https://mcp.example/mcp",
+    tools: [{ name: "search" }],
+    toolCount: 1,
+  });
+  const { service, state } = createHarness({
+    inventory: { servers: [server] },
+    integrations: [
+      integration({
+        serverName: server.name,
+        url: server.url!,
+        authMode: "none",
+        credentialStatus: "not-required",
+      }),
+    ],
+  });
+
+  await assert.rejects(
+    () =>
+      service.putEnvironmentMcpToolPolicy({
+        userId: USER_ID,
+        environmentId: ENVIRONMENT_ID,
+        name: server.name,
+        policy: { mode: "selected", allowedTools: ["mcp__docs__search"] },
+      }),
+    (error: unknown) =>
+      error instanceof HttpError && error.code === "mcp_tool_inventory_changed",
+  );
+  assert.equal(state.policyAttempts, 0);
+});
+
+test("remote MCP tool policy rejects an endpoint changed outside Sandpi", async () => {
+  const server = remoteServer({
+    name: "docs",
+    url: "https://changed.example/mcp",
+    tools: [{ name: "search" }],
+    toolCount: 1,
+  });
+  const { service, state } = createHarness({
+    inventory: { servers: [server] },
+    integrations: [
+      integration({
+        serverName: server.name,
+        url: "https://original.example/mcp",
+        authMode: "none",
+        credentialStatus: "not-required",
+      }),
+    ],
+  });
+
+  await assert.rejects(
+    () =>
+      service.putEnvironmentMcpToolPolicy({
+        userId: USER_ID,
+        environmentId: ENVIRONMENT_ID,
+        name: server.name,
+        policy: { mode: "selected", allowedTools: ["search"] },
+      }),
+    (error: unknown) =>
+      error instanceof HttpError &&
+      error.code === "mcp_tool_policy_endpoint_stale",
+  );
+  assert.equal(state.policyAttempts, 0);
+});
+
+test("selected MCP tools block an endpoint change until access is explicitly unrestricted", async () => {
+  const server = remoteServer({
+    name: "docs",
+    url: "https://original.example/mcp",
+    tools: [{ name: "search" }],
+    toolCount: 1,
+  });
+  const { service, state } = createHarness({
+    inventory: { servers: [server] },
+    integrations: [
+      integration({
+        serverName: server.name,
+        url: server.url!,
+        authMode: "none",
+        credentialStatus: "not-required",
+        toolPolicyMode: "selected",
+        allowedTools: ["search"],
+      }),
+    ],
+  });
+
+  await assert.rejects(
+    () =>
+      service.updateEnvironmentMcpServer({
+        userId: USER_ID,
+        environmentId: ENVIRONMENT_ID,
+        name: server.name,
+        server: serverDefinition(server, {
+          url: "https://replacement.example/mcp",
+        }),
+        metadata: { authMode: "none", networkApproved: true },
+      }),
+    (error: unknown) =>
+      error instanceof HttpError &&
+      error.code === "mcp_tool_policy_definition_change_blocked",
+  );
+
+  assert.deepEqual(state.codexUpdateInputs, []);
+  assert.equal(state.policyAttempts, 0);
+  assert.equal(state.integrations[0]?.toolPolicyMode, "selected");
+  assert.deepEqual(state.integrations[0]?.allowedTools, ["search"]);
+});
+
+test("aggregator MCP permissions remain the platform's responsibility", async () => {
+  const server = remoteServer({
+    name: "composio",
+    url: "https://connect.composio.dev/mcp",
+    tools: [{ name: "GMAIL_SEND_EMAIL" }],
+    toolCount: 1,
+  });
+  const { service, state } = createHarness({
+    inventory: { servers: [server] },
+    integrations: [
+      integration({
+        serverName: server.name,
+        url: server.url!,
+        presetId: "composio-connect",
+        authMode: "oauth",
+        credentialStatus: "authorized",
+      }),
+    ],
+  });
+
+  const inventory = await service.listEnvironmentMcpServers(
+    USER_ID,
+    ENVIRONMENT_ID,
+  );
+  assert.deepEqual(inventory.servers[0]?.toolPolicy, {
+    enforcement: "platform",
+    allowedTools: [],
+  });
+  await assert.rejects(
+    () =>
+      service.putEnvironmentMcpToolPolicy({
+        userId: USER_ID,
+        environmentId: ENVIRONMENT_ID,
+        name: server.name,
+        policy: { mode: "selected", allowedTools: ["GMAIL_SEND_EMAIL"] },
+      }),
+    (error: unknown) =>
+      error instanceof HttpError &&
+      error.code === "mcp_tool_policy_platform_managed",
+  );
+  assert.equal(state.policyAttempts, 0);
+});
+
+test("failed Sandbox0 tool-policy convergence remains durable and retryable", async () => {
+  const server = remoteServer({
+    name: "linear",
+    url: "https://mcp.linear.app/mcp",
+    tools: [{ name: "get_issue" }],
+    toolCount: 1,
+  });
+  const { service, state } = createHarness({
+    inventory: { servers: [server] },
+    integrations: [
+      integration({
+        serverName: server.name,
+        url: server.url!,
+        authMode: "oauth",
+        credentialStatus: "authorized",
+      }),
+    ],
+    policyErrors: [new Error("network update failed")],
+  });
+
+  await assert.rejects(() =>
+    service.putEnvironmentMcpToolPolicy({
+      userId: USER_ID,
+      environmentId: ENVIRONMENT_ID,
+      name: server.name,
+      policy: { mode: "selected", allowedTools: ["get_issue"] },
+    }),
+  );
+  assert.equal(state.integrations[0]?.toolPolicyMode, "selected");
+  assert.equal(state.integrations[0]?.toolPolicyStatus, "error");
+  assert.equal(
+    state.integrations[0]?.toolPolicyError,
+    "Sandbox0 MCP tool policy could not be applied.",
+  );
+
+  const recovered = await service.listEnvironmentMcpServers(
+    USER_ID,
+    ENVIRONMENT_ID,
+  );
+  assert.equal(recovered.servers[0]?.toolPolicy.status, "active");
+  assert.equal(state.policyAttempts, 2);
+});
+
+test("a failed Codex deletion keeps the selected Sandbox0 policy fail-closed", async () => {
+  const server = remoteServer({
+    name: "docs",
+    url: "https://mcp.example/mcp",
+    tools: [{ name: "search" }],
+    toolCount: 1,
+  });
+  const { service, state } = createHarness({
+    inventory: { servers: [server] },
+    integrations: [
+      integration({
+        serverName: server.name,
+        url: server.url!,
+        authMode: "none",
+        credentialStatus: "not-required",
+        toolPolicyMode: "selected",
+        allowedTools: ["search"],
+      }),
+    ],
+    codexDeleteErrors: [new Error("Codex delete failed")],
+  });
+
+  await assert.rejects(() =>
+    service.deleteEnvironmentMcpServer({
+      userId: USER_ID,
+      environmentId: ENVIRONMENT_ID,
+      name: server.name,
+    }),
+  );
+
+  assert.equal(state.policyAttempts, 0);
+  assert.equal(state.integrations[0]?.toolPolicyMode, "selected");
+  assert.deepEqual(state.integrations[0]?.allowedTools, ["search"]);
+  assert.equal(state.inventory.servers[0]?.name, server.name);
+
+  const inventory = await service.deleteEnvironmentMcpServer({
+    userId: USER_ID,
+    environmentId: ENVIRONMENT_ID,
+    name: server.name,
+  });
+
+  assert.deepEqual(inventory.servers, []);
+  assert.deepEqual(state.integrations, []);
+  assert.equal(state.policyAttempts, 1);
+  assert.equal(state.appliedPolicies[0]?.egress?.protocolRules, undefined);
+  assert.ok(
+    state.sequence.lastIndexOf("codex-delete") <
+      state.sequence.lastIndexOf("apply-policy"),
+  );
+});
+
+test("deletion can resolve a failed shared-endpoint policy conflict", async () => {
+  const restricted = remoteServer({
+    name: "restricted",
+    url: "https://shared.example/mcp",
+    tools: [{ name: "search" }],
+    toolCount: 1,
+  });
+  const unrestricted = remoteServer({
+    name: "unrestricted",
+    url: restricted.url!,
+    tools: [{ name: "search" }],
+    toolCount: 1,
+  });
+  const { service, state } = createHarness({
+    inventory: { servers: [restricted, unrestricted] },
+    integrations: [
+      integration({
+        serverName: restricted.name,
+        url: restricted.url!,
+        authMode: "none",
+        credentialStatus: "not-required",
+        toolPolicyMode: "selected",
+        allowedTools: ["search"],
+        toolPolicyStatus: "error",
+        toolPolicyError: "Conflicting endpoint policy.",
+      }),
+      integration({
+        serverName: unrestricted.name,
+        url: unrestricted.url!,
+        authMode: "none",
+        credentialStatus: "not-required",
+      }),
+    ],
+  });
+
+  const inventory = await service.deleteEnvironmentMcpServer({
+    userId: USER_ID,
+    environmentId: ENVIRONMENT_ID,
+    name: restricted.name,
+  });
+
+  assert.deepEqual(
+    inventory.servers.map((server) => server.name),
+    [unrestricted.name],
+  );
+  assert.deepEqual(
+    state.integrations.map((integration) => integration.serverName),
+    [unrestricted.name],
+  );
+  assert.equal(state.policyAttempts, 1);
+  assert.equal(state.appliedPolicies[0]?.egress?.protocolRules, undefined);
+  assert.ok(
+    state.sequence.lastIndexOf("codex-delete") <
+      state.sequence.lastIndexOf("apply-policy"),
+  );
+});
 
 test("first static key creation exposes the secret only to Runtime and composes all bindings", async () => {
   const secret = "test-secret-never-persist";
@@ -2412,12 +2832,17 @@ function remoteServer(
     url,
     enabled: true,
     required: false,
-    enabledTools: [],
-    disabledTools: [],
     managed: true,
     authStatus: "notLoggedIn",
     runtimeStatus: "unavailable",
     readiness: "failed",
+    tools: [],
+    toolPolicy: {
+      enforcement: "sandbox0",
+      mode: "all",
+      allowedTools: [],
+      status: "active",
+    },
     toolCount: 0,
     resourceCount: 0,
     ...rest,
@@ -2439,8 +2864,6 @@ function serverDefinition(
     toolTimeoutSec: server.toolTimeoutSec,
     defaultToolsApprovalMode: server.defaultToolsApprovalMode,
     scopes: server.scopes ? [...server.scopes] : undefined,
-    enabledTools: [...server.enabledTools],
-    disabledTools: [...server.disabledTools],
     ...overrides,
   };
 }
@@ -2462,6 +2885,11 @@ function integration(input: {
   pendingCredentialValueTemplate?: string;
   retiringCredentialSourceRef?: string;
   oauthConfigFingerprint?: string;
+  presetId?: string;
+  toolPolicyMode?: EnvironmentMcpIntegration["toolPolicyMode"];
+  allowedTools?: string[];
+  toolPolicyStatus?: EnvironmentMcpIntegration["toolPolicyStatus"];
+  toolPolicyError?: string;
   version?: number;
 }): EnvironmentMcpIntegration {
   const url = new URL(input.url);
@@ -2470,6 +2898,7 @@ function integration(input: {
   return {
     environmentId: ENVIRONMENT_ID,
     serverName: input.serverName,
+    presetId: input.presetId,
     authMode: input.authMode,
     credentialSourceRef: input.credentialSourceRef,
     credentialBindingRef: input.credentialBindingRef,
@@ -2490,6 +2919,10 @@ function integration(input: {
       .digest("hex"),
     destinationDomain: url.hostname,
     destinationPath: url.pathname || "/",
+    toolPolicyMode: input.toolPolicyMode ?? "all",
+    allowedTools: input.allowedTools ?? [],
+    toolPolicyStatus: input.toolPolicyStatus ?? "active",
+    toolPolicyError: input.toolPolicyError,
     lifecycleStatus: input.lifecycleStatus ?? "active",
     credentialStatus: input.credentialStatus,
     createdAt: NOW,

@@ -645,11 +645,14 @@ test("prefills native MCP definitions from the three shortcut groups", async ({
                 url: "https://api.githubcopilot.com/mcp/",
                 enabled: true,
                 required: false,
-                enabledTools: [],
-                disabledTools: [],
                 managed: false,
                 authStatus: "notLoggedIn",
                 runtimeStatus: "authentication-required",
+                tools: [],
+                toolPolicy: {
+                  enforcement: "unavailable",
+                  allowedTools: [],
+                },
                 toolCount: 0,
                 resourceCount: 0,
               },
@@ -729,6 +732,150 @@ test("prefills native MCP definitions from the three shortcut groups", async ({
   await expect(
     settingsDialog.getByLabel("Server URL", { exact: true }),
   ).toHaveValue("https://mcp.context7.com/mcp");
+});
+
+test("configures remote MCP tools through Sandbox0 while delegating aggregators", async ({
+  page,
+  request,
+}) => {
+  const response = await request.get("/api/v1/bootstrap");
+  expect(response.ok()).toBeTruthy();
+  const bootstrap = (await response.json()) as ApiEnvelope<SandpiBootstrap>;
+  const environment = bootstrap.data.environments[0];
+  test.skip(!environment, "An Environment is required for this check.");
+  if (!environment) return;
+
+  const browserErrors: string[] = [];
+  let submittedPolicy: unknown;
+  let selected = false;
+  page.on("console", (message) => {
+    if (message.type() === "error") browserErrors.push(message.text());
+  });
+  page.on("pageerror", (error) => browserErrors.push(error.message));
+
+  await page.route(
+    `**/api/v1/environments/${encodeURIComponent(environment.id)}/harnesses/codex/mcp-servers**`,
+    async (route) => {
+      if (
+        route.request().method() === "PUT" &&
+        route.request().url().endsWith("/github/tool-policy")
+      ) {
+        submittedPolicy = route.request().postDataJSON();
+        selected = true;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          data: {
+            servers: [
+              {
+                name: "github",
+                transport: "streamable-http",
+                args: [],
+                url: "https://api.githubcopilot.com/mcp/",
+                enabled: true,
+                required: false,
+                managed: true,
+                authStatus: "bearerToken",
+                runtimeStatus: "connected",
+                credentialState: "key-configured",
+                readiness: "ready",
+                hasServerInfo: true,
+                presetId: "github",
+                authMode: "bearer",
+                tools: [
+                  {
+                    name: "get_issue",
+                    title: "Get issue",
+                    description: "Read an issue.",
+                  },
+                  {
+                    name: "update_issue",
+                    title: "Update issue",
+                    description: "Modify an issue.",
+                  },
+                ],
+                toolPolicy: selected
+                  ? {
+                      enforcement: "sandbox0",
+                      mode: "selected",
+                      allowedTools: ["get_issue"],
+                      status: "active",
+                    }
+                  : {
+                      enforcement: "sandbox0",
+                      mode: "all",
+                      allowedTools: [],
+                      status: "active",
+                    },
+                toolCount: 2,
+                resourceCount: 0,
+              },
+              {
+                name: "composio",
+                transport: "streamable-http",
+                args: [],
+                url: "https://connect.composio.dev/mcp",
+                enabled: true,
+                required: false,
+                managed: true,
+                authStatus: "oAuth",
+                runtimeStatus: "connected",
+                credentialState: "oauth-authorized",
+                readiness: "ready",
+                hasServerInfo: true,
+                presetId: "composio-connect",
+                authMode: "oauth",
+                tools: [{ name: "GMAIL_SEND_EMAIL" }],
+                toolPolicy: {
+                  enforcement: "platform",
+                  allowedTools: [],
+                },
+                toolCount: 1,
+                resourceCount: 0,
+              },
+            ],
+          },
+        }),
+      });
+    },
+  );
+
+  await page.goto(
+    `/?team=${encodeURIComponent(environment.teamId)}&environment=${encodeURIComponent(environment.id)}&new=1`,
+  );
+  await page
+    .getByRole("button", { name: `${environment.name} settings` })
+    .last()
+    .click();
+  const settingsDialog = page.getByRole("dialog", {
+    name: `${environment.name} settings`,
+  });
+  await settingsDialog.getByRole("button", { name: "MCP servers" }).click();
+
+  await expect(
+    settingsDialog.getByText("Tool permissions are managed by the aggregator"),
+  ).toBeVisible();
+  await settingsDialog.getByText("Sandbox0 tool access").click();
+  await settingsDialog
+    .getByRole("radio", { name: /Only selected tools/ })
+    .check();
+  await settingsDialog
+    .getByRole("checkbox", { name: /Update issue/ })
+    .uncheck();
+  await settingsDialog
+    .getByRole("button", { name: "Apply tool policy" })
+    .click();
+
+  await expect.poll(() => submittedPolicy).toEqual({
+    mode: "selected",
+    allowedTools: ["get_issue"],
+  });
+  await expect(settingsDialog.getByText("1 tool allowed")).toBeVisible();
+  await expect(settingsDialog.getByLabel("Enabled tools")).toHaveCount(0);
+  await expect(settingsDialog.getByLabel("Disabled tools")).toHaveCount(0);
+  expect(browserErrors).toEqual([]);
 });
 
 test("configures Sandbox0 network modes through safe domain exceptions", async ({
@@ -2820,6 +2967,9 @@ test("renders the dedicated live Web IDE with Git state and changed lines", asyn
     page.getByText("src · feature/live-ide", { exact: true }),
   ).toBeVisible();
   await expect(page.getByText(/1 uncommitted file.*↑1/)).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: /^Share / }),
+  ).toHaveCount(0);
   const editor = page.locator(".monaco-editor").first();
   await editor.click();
   await page.keyboard.press("Control+A");

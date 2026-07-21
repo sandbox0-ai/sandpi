@@ -4897,6 +4897,145 @@ code.codex-compact-activity-subject {
   border-bottom: 0;
 }
 
+.codex-mcp-tool-policy {
+  grid-column: 2 / -1;
+  min-width: 0;
+  padding-top: 9px;
+  border-top: 1px solid var(--line-soft);
+  color: var(--ink-soft);
+  font-size: 9.5px;
+}
+
+.codex-mcp-tool-policy > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--ink-soft);
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.codex-mcp-tool-policy > summary small {
+  color: var(--ink-faint);
+  font-size: 8.5px;
+  font-weight: 600;
+}
+
+.codex-mcp-tool-policy.is-delegated,
+.codex-mcp-tool-policy.is-unavailable {
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel);
+}
+
+.codex-mcp-tool-policy.is-delegated strong {
+  color: var(--ink);
+  font-size: 9.5px;
+}
+
+.codex-mcp-tool-policy.is-delegated p {
+  margin: 3px 0 0;
+  line-height: 1.45;
+}
+
+.codex-mcp-tool-policy-body {
+  display: grid;
+  gap: 10px;
+  padding: 11px 0 2px;
+}
+
+.codex-mcp-tool-policy-body > p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.codex-mcp-tool-policy-modes {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.codex-mcp-tool-policy-modes > label,
+.codex-mcp-tool-list > label {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel);
+  cursor: pointer;
+}
+
+.codex-mcp-tool-policy-modes input,
+.codex-mcp-tool-list input {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+.codex-mcp-tool-policy-modes span,
+.codex-mcp-tool-list span {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.codex-mcp-tool-policy-modes strong,
+.codex-mcp-tool-list strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 9.5px;
+  text-overflow: ellipsis;
+}
+
+.codex-mcp-tool-policy-modes small,
+.codex-mcp-tool-list small {
+  color: var(--ink-faint);
+  font-size: 8.5px;
+  font-weight: 450;
+  line-height: 1.4;
+}
+
+.codex-mcp-tool-list {
+  display: grid;
+  max-height: 270px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  overflow-y: auto;
+}
+
+.codex-mcp-tool-list code {
+  overflow: hidden;
+  color: var(--ink-faint);
+  font-size: 8px;
+  text-overflow: ellipsis;
+}
+
+.codex-mcp-tool-policy-note {
+  padding: 7px 8px;
+  border: 1px solid var(--amber);
+  border-radius: 6px;
+  background: var(--amber-soft);
+}
+
+.codex-mcp-tool-policy-body > footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.codex-mcp-tool-policy-body > footer > span {
+  color: var(--ink-faint);
+  line-height: 1.4;
+}
+
+.codex-mcp-tool-policy-body > footer > button {
+  flex: 0 0 auto;
+}
+
 .codex-extension-icon {
   display: inline-flex;
   width: 32px;
@@ -6700,7 +6839,9 @@ code.codex-compact-activity-subject {
 
   .field-grid.two-columns,
   .network-mode-grid,
-  .codex-mcp-preset-grid {
+  .codex-mcp-preset-grid,
+  .codex-mcp-tool-policy-modes,
+  .codex-mcp-tool-list {
     grid-template-columns: 1fr;
   }
 

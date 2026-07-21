@@ -27,6 +27,7 @@ import type {
   CodexMcpRemoteAuthMethod,
   CodexMcpServer,
   CodexMcpServerInput,
+  CodexMcpToolPolicyInput,
   CodexMcpTransport,
   CodexSkillsInventory,
 } from "@/harnesses/codex/environment-tools";
@@ -218,8 +219,6 @@ interface McpDraft extends CodexMcpServerInput {
   name: string;
   presetId?: string;
   argsText: string;
-  enabledToolsText: string;
-  disabledToolsText: string;
   authMethod: CodexMcpRemoteAuthMethod;
   initialAuthMethod: CodexMcpRemoteAuthMethod;
   credentialMutation: CodexMcpCredentialMutation;
@@ -241,10 +240,6 @@ const emptyMcpDraft = (): McpDraft => ({
   enabled: true,
   required: false,
   defaultToolsApprovalMode: "prompt",
-  enabledTools: [],
-  disabledTools: [],
-  enabledToolsText: "",
-  disabledToolsText: "",
   authMethod: "none",
   initialAuthMethod: "none",
   credentialMutation: "keep",
@@ -276,10 +271,6 @@ function mcpDraft(
     startupTimeoutSec: server.startupTimeoutSec,
     toolTimeoutSec: server.toolTimeoutSec,
     defaultToolsApprovalMode: server.defaultToolsApprovalMode,
-    enabledTools: server.enabledTools,
-    disabledTools: server.disabledTools,
-    enabledToolsText: server.enabledTools.join(", "),
-    disabledToolsText: server.disabledTools.join(", "),
     presetId: server.presetId ?? preset?.id,
     authMethod,
     initialAuthMethod: authMethod,
@@ -305,8 +296,6 @@ function mcpPresetDraft(preset: CodexMcpPreset): McpDraft {
     name: preset.name,
     presetId: preset.id,
     argsText: input.args.join("\n"),
-    enabledToolsText: input.enabledTools.join(", "),
-    disabledToolsText: input.disabledTools.join(", "),
     authMethod,
     initialAuthMethod: authMethod,
     credentialMutation:
@@ -525,8 +514,6 @@ export function CodexMcpSettings({
         toolTimeoutSec: optionalPositiveInteger(draft.toolTimeoutSec),
         defaultToolsApprovalMode: draft.defaultToolsApprovalMode,
         scopes: commaSeparatedValues(draft.scopesText),
-        enabledTools: commaSeparatedValues(draft.enabledToolsText),
-        disabledTools: commaSeparatedValues(draft.disabledToolsText),
       };
       const create = !editingName;
       const response = await apiFetch<ApiEnvelope<CodexMcpInventory>>(
@@ -635,6 +622,31 @@ export function CodexMcpSettings({
       setInventory(response.data);
     } catch (updateError) {
       setError(errorMessage(updateError, "Could not update the MCP server."));
+    } finally {
+      setBusyName("");
+    }
+  }
+
+  async function saveToolPolicy(
+    server: CodexMcpServer,
+    policy: CodexMcpToolPolicyInput,
+  ) {
+    if (busyName || !server.managed) return;
+    setBusyName(server.name);
+    setError("");
+    try {
+      const response = await apiFetch<ApiEnvelope<CodexMcpInventory>>(
+        `/api/v1/environments/${encodeURIComponent(environmentId)}/harnesses/codex/mcp-servers/${encodeURIComponent(server.name)}/tool-policy`,
+        { method: "PUT", body: JSON.stringify(policy) },
+      );
+      setInventory(response.data);
+    } catch (updateError) {
+      setError(
+        errorMessage(
+          updateError,
+          "Could not apply the Sandbox0 MCP tool policy.",
+        ),
+      );
     } finally {
       setBusyName("");
     }
@@ -918,6 +930,15 @@ export function CodexMcpSettings({
                     {server.defaultToolsApprovalMode ? (
                       <span>{server.defaultToolsApprovalMode} approval</span>
                     ) : null}
+                    {server.toolPolicy.enforcement === "sandbox0" ? (
+                      <span>
+                        {server.toolPolicy.mode === "selected"
+                          ? `${server.toolPolicy.allowedTools.length} tool${server.toolPolicy.allowedTools.length === 1 ? "" : "s"} allowed`
+                          : "all tools allowed"}
+                      </span>
+                    ) : server.toolPolicy.enforcement === "platform" ? (
+                      <span>platform permissions</span>
+                    ) : null}
                   </div>
                   {server.transport === "streamable-http" &&
                   connection.error ? (
@@ -1046,6 +1067,13 @@ export function CodexMcpSettings({
                     <span className="codex-readonly-badge">Read only</span>
                   )}
                 </div>
+                {server.transport === "streamable-http" ? (
+                  <McpToolPolicyPanel
+                    server={server}
+                    disabled={Boolean(busyName) || Boolean(draft)}
+                    onSave={(policy) => saveToolPolicy(server, policy)}
+                  />
+                ) : null}
               </article>
             );
           })}
@@ -1060,9 +1088,193 @@ export function CodexMcpSettings({
       <p className="settings-footnote">
         Server definitions remain in Codex&apos;s native config. Remote API keys
         are write-only and injected at the sandbox egress boundary; OAuth uses
-        Codex&apos;s native authorization and token refresh flow.
+        Codex&apos;s native authorization and token refresh flow. Remote tool
+        allowlists are enforced by Sandbox0 Protocol Control, not Codex tool
+        filtering. STDIO servers run locally and are outside network protocol
+        control.
       </p>
     </div>
+  );
+}
+
+function McpToolPolicyPanel({
+  server,
+  disabled,
+  onSave,
+}: {
+  server: CodexMcpServer;
+  disabled: boolean;
+  onSave: (policy: CodexMcpToolPolicyInput) => Promise<void>;
+}) {
+  const policy = server.toolPolicy;
+  const storedMode = policy.mode ?? "all";
+  const storedAllowedKey = [...policy.allowedTools].sort().join("\0");
+  const [mode, setMode] = useState(storedMode);
+  const [allowedTools, setAllowedTools] = useState<string[]>(
+    policy.allowedTools,
+  );
+
+  useEffect(() => {
+    setMode(storedMode);
+    setAllowedTools(storedAllowedKey ? storedAllowedKey.split("\0") : []);
+  }, [server.name, storedMode, storedAllowedKey]);
+
+  if (policy.enforcement === "platform") {
+    return (
+      <div className="codex-mcp-tool-policy is-delegated">
+        <strong>Tool permissions are managed by the aggregator</strong>
+        <p>
+          Sandpi leaves this endpoint&apos;s tool policy to the aggregation
+          platform and does not add a Sandbox0 MCP tool rule.
+        </p>
+      </div>
+    );
+  }
+  if (policy.enforcement !== "sandbox0") {
+    return server.managed ? (
+      <div className="codex-mcp-tool-policy is-unavailable">
+        Sandbox0 tool control is available only after Sandpi owns this remote
+        MCP integration.
+      </div>
+    ) : null;
+  }
+
+  const advertisedNames = server.tools.map((tool) => tool.name);
+  const advertised = new Set(advertisedNames);
+  const allowed = new Set(allowedTools);
+  const staleAllowed = allowedTools.filter((name) => !advertised.has(name));
+  const draftAllowedKey = [...allowedTools].sort().join("\0");
+  const dirty =
+    mode !== storedMode ||
+    (mode === "selected" && draftAllowedKey !== storedAllowedKey);
+  const updating = policy.status === "updating";
+  const blocked = disabled || updating;
+
+  return (
+    <details className="codex-mcp-tool-policy">
+      <summary>
+        <span>Sandbox0 tool access</span>
+        <small>
+          {storedMode === "selected"
+            ? `${policy.allowedTools.length} allowed`
+            : "Unrestricted"}
+        </small>
+      </summary>
+      <div className="codex-mcp-tool-policy-body">
+        <p>
+          Sandpi keeps Codex&apos;s full <code>tools/list</code> inventory. Sandbox0
+          blocks disallowed <code>tools/call</code> requests at the network
+          boundary.
+        </p>
+        <div className="codex-mcp-tool-policy-modes">
+          <label>
+            <input
+              type="radio"
+              name={`mcp-tool-policy-${server.name}`}
+              checked={mode === "all"}
+              disabled={blocked}
+              onChange={() => {
+                setMode("all");
+                setAllowedTools([]);
+              }}
+            />
+            <span>
+              <strong>Allow all tools</strong>
+              <small>Future tools are allowed automatically.</small>
+            </span>
+          </label>
+          <label>
+            <input
+              type="radio"
+              name={`mcp-tool-policy-${server.name}`}
+              checked={mode === "selected"}
+              disabled={blocked || advertisedNames.length === 0}
+              onChange={() => {
+                setMode("selected");
+                setAllowedTools(
+                  allowedTools.length > 0
+                    ? allowedTools
+                    : [...advertisedNames].sort(),
+                );
+              }}
+            />
+            <span>
+              <strong>Only selected tools</strong>
+              <small>New tool names are denied until explicitly selected.</small>
+            </span>
+          </label>
+        </div>
+        {mode === "selected" ? (
+          server.tools.length > 0 ? (
+            <div
+              className="codex-mcp-tool-list"
+              aria-label={`${server.name} allowed MCP tools`}
+            >
+              {server.tools.map((tool) => (
+                <label key={tool.name}>
+                  <input
+                    type="checkbox"
+                    checked={allowed.has(tool.name)}
+                    disabled={blocked}
+                    onChange={(event) => {
+                      setAllowedTools((current) =>
+                        event.target.checked
+                          ? [...new Set([...current, tool.name])].sort()
+                          : current.filter((name) => name !== tool.name),
+                      );
+                    }}
+                  />
+                  <span>
+                    <strong>{tool.title ?? tool.name}</strong>
+                    {tool.title ? <code>{tool.name}</code> : null}
+                    {tool.description ? <small>{tool.description}</small> : null}
+                  </span>
+                </label>
+              ))}
+            </div>
+          ) : (
+            <p className="codex-mcp-tool-policy-note">
+              The server has not advertised a tool inventory. Test the
+              connection before changing its allowlist.
+            </p>
+          )
+        ) : null}
+        {staleAllowed.length > 0 ? (
+          <p className="codex-mcp-tool-policy-note">
+            {staleAllowed.length} saved tool name
+            {staleAllowed.length === 1 ? " is" : "s are"} no longer advertised;
+            saving removes {staleAllowed.length === 1 ? "it" : "them"}.
+          </p>
+        ) : null}
+        {policy.error ? (
+          <p className="codex-mcp-inline-error">{policy.error}</p>
+        ) : null}
+        <footer>
+          <span>
+            {mode === "selected" && allowedTools.length === 0
+              ? "Select at least one tool, or disable the server."
+              : "Exact tool names are enforced for this HTTPS MCP endpoint."}
+          </span>
+          <button
+            type="button"
+            className="button-primary"
+            disabled={
+              blocked ||
+              !dirty ||
+              (mode === "selected" && allowedTools.length === 0)
+            }
+            onClick={() =>
+              void onSave({
+                mode,
+                allowedTools: mode === "selected" ? allowedTools : [],
+              })
+            }
+          >
+            {updating ? "Applying…" : "Apply tool policy"}
+          </button>
+        </footer>
+      </div>
+    </details>
   );
 }
 
@@ -1303,7 +1515,7 @@ function McpEditor({
         </div>
       </div>
       <details className="codex-mcp-advanced">
-        <summary>Tool policy and timeouts</summary>
+        <summary>Approval and timeouts</summary>
         <div className="field-grid two-columns">
           <label>
             Default approval
@@ -1355,27 +1567,7 @@ function McpEditor({
               }
             />
           </label>
-          <label>
-            Enabled tools
-            <input
-              autoComplete="off"
-              spellCheck={false}
-              value={draft.enabledToolsText}
-              placeholder="read, search"
-              onChange={(event) => update("enabledToolsText", event.target.value)}
-            />
-          </label>
         </div>
-        <label className="full-field">
-          Disabled tools
-          <input
-            autoComplete="off"
-            spellCheck={false}
-            value={draft.disabledToolsText}
-            placeholder="delete, publish"
-            onChange={(event) => update("disabledToolsText", event.target.value)}
-          />
-        </label>
       </details>
       <footer>
         <button type="button" className="button-secondary" disabled={busy} onClick={onCancel}>

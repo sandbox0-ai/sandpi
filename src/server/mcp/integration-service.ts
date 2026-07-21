@@ -12,9 +12,11 @@ import type {
   CodexMcpRemoteAuthMethod,
   CodexMcpServer,
   CodexMcpServerInput,
+  CodexMcpToolPolicyInput,
 } from "@/harnesses/codex/environment-tools";
 import {
   CODEX_MCP_PRESETS,
+  isAggregatorMcpPreset,
   type CodexMcpPreset,
 } from "@/harnesses/codex/mcp-catalog";
 import type { NetworkPolicy } from "@/lib/types";
@@ -32,7 +34,10 @@ import {
 import type { CodexNativeEventIdentity } from "@/server/harnesses/codex/jsonl";
 import type { StoredEnvironmentRuntime } from "@/server/store";
 import { SandpiStore } from "@/server/store";
-import { toSandbox0NetworkPolicy } from "@/server/runtime/network-policy";
+import {
+  toSandbox0NetworkPolicy,
+  type ManagedMcpToolPolicy,
+} from "@/server/runtime/network-policy";
 import {
   buildMcpCredentialValueTemplate,
   EnvironmentMcpIntegrationStore,
@@ -197,6 +202,18 @@ export class CodexMcpIntegrationService
         (!prepared ||
           existing.authMode !== prepared.authMode ||
           existing.endpointFingerprint !== prepared.endpoint.fingerprint);
+
+      if (
+        existing?.toolPolicyMode === "selected" &&
+        (!prepared ||
+          existing.endpointFingerprint !== prepared.endpoint.fingerprint ||
+          isAggregatorMcpPreset(prepared.preset?.id))
+      ) {
+        throw conflict(
+          "mcp_tool_policy_definition_change_blocked",
+          "Allow all MCP tools before changing this server's endpoint or permission authority.",
+        );
+      }
 
       if (
         existing &&
@@ -437,6 +454,76 @@ export class CodexMcpIntegrationService
     });
   }
 
+  async putEnvironmentMcpToolPolicy(input: {
+    userId: string;
+    environmentId: string;
+    name: string;
+    policy: CodexMcpToolPolicyInput;
+  }) {
+    return this.withMutation(input.environmentId, async () => {
+      const inventory = await this.codex.listEnvironmentMcpServers(
+        input.userId,
+        input.environmentId,
+      );
+      const server = inventory.servers.find(
+        (candidate) => candidate.name === input.name,
+      );
+      if (!server) {
+        throw new HttpError(
+          404,
+          "codex_mcp_server_not_found",
+          "The MCP server is no longer configured.",
+        );
+      }
+      if (!server.managed || server.transport !== "streamable-http") {
+        throw conflict(
+          "mcp_tool_policy_unsupported",
+          "Sandbox0 tool policy requires a remote MCP server owned by this Environment.",
+        );
+      }
+      const integration = await this.integrations.getIntegration(
+        input.userId,
+        input.environmentId,
+        input.name,
+      );
+      if (!remoteServerMatchesEndpoint(server, integration.endpointFingerprint)) {
+        throw conflict(
+          "mcp_tool_policy_endpoint_stale",
+          "Save the MCP definition again before changing its tool policy.",
+        );
+      }
+      if (isAggregatorMcpPreset(integration.presetId)) {
+        throw conflict(
+          "mcp_tool_policy_platform_managed",
+          "This aggregator owns its tool permissions. Configure them in the aggregator platform.",
+        );
+      }
+      const policy = validateMcpToolPolicy(server, input.policy);
+      if (
+        integration.toolPolicyMode === policy.mode &&
+        sameStringSet(integration.allowedTools, policy.allowedTools) &&
+        integration.toolPolicyStatus === "active"
+      ) {
+        return this.decorateCurrent(
+          input.userId,
+          input.environmentId,
+          inventory,
+        );
+      }
+      await this.updateToolPolicyDesired({
+        userId: input.userId,
+        environmentId: input.environmentId,
+        integration,
+        policy,
+      });
+      return this.decorateCurrent(
+        input.userId,
+        input.environmentId,
+        inventory,
+      );
+    });
+  }
+
   async deleteEnvironmentMcpServer(input: {
     userId: string;
     environmentId: string;
@@ -455,11 +542,13 @@ export class CodexMcpIntegrationService
         input.userId,
         input.environmentId,
       );
-      const integration = associations.find(
+      let integration = associations.find(
         (association) => association.serverName === input.name,
       );
       if (integration?.authMode === "oauth") {
         await this.requireOAuthDefinitionMutationReady(input);
+      }
+      if (integration?.authMode === "oauth") {
         try {
           await this.codex.logoutEnvironmentMcpServer(input);
         } catch (error) {
@@ -477,6 +566,11 @@ export class CodexMcpIntegrationService
           ...input,
           preserveAssociation: true,
         });
+        integration = await this.integrations.getIntegration(
+          input.userId,
+          input.environmentId,
+          input.name,
+        );
       }
       let inventory: CodexMcpInventory;
       try {
@@ -486,6 +580,21 @@ export class CodexMcpIntegrationService
         inventory = await this.codex.listEnvironmentMcpServers(
           input.userId,
           input.environmentId,
+        );
+      }
+      if (integration?.toolPolicyMode === "selected") {
+        integration = await this.updateToolPolicyDesired({
+          userId: input.userId,
+          environmentId: input.environmentId,
+          integration,
+          policy: { mode: "all", allowedTools: [] },
+        });
+      } else if (integration?.toolPolicyStatus !== "active") {
+        await this.applyEffectiveNetworkPolicy(input.environmentId);
+        integration = await this.integrations.getIntegration(
+          input.userId,
+          input.environmentId,
+          input.name,
         );
       }
       if (integration) {
@@ -1211,6 +1320,17 @@ export class CodexMcpIntegrationService
               },
             );
           }
+          if (
+            (
+              await this.integrations.listToolPolicyIntegrationsForRuntime(
+                environmentId,
+              )
+            ).some(
+              (integration) => integration.toolPolicyStatus !== "active",
+            )
+          ) {
+            await this.applyEffectiveNetworkPolicy(environmentId);
+          }
         });
       } catch (error) {
         this.logger.warn(
@@ -1607,6 +1727,17 @@ export class CodexMcpIntegrationService
         environmentId,
       );
     }
+    if (
+      associations.some(
+        (integration) => integration.toolPolicyStatus !== "active",
+      )
+    ) {
+      await this.applyEffectiveNetworkPolicy(environmentId);
+      associations = await this.integrations.listIntegrations(
+        userId,
+        environmentId,
+      );
+    }
     const activeOAuthFlow = await this.integrations.findBlockingOAuthFlow(
       userId,
       environmentId,
@@ -1627,6 +1758,47 @@ export class CodexMcpIntegrationService
     return decorateInventory(
       inventory,
       await this.integrations.listIntegrations(userId, environmentId),
+    );
+  }
+
+  private async updateToolPolicyDesired(input: {
+    userId: string;
+    environmentId: string;
+    integration: EnvironmentMcpIntegration;
+    policy: CodexMcpToolPolicyInput;
+  }) {
+    const pending = await this.integrations.setToolPolicy(
+      input.userId,
+      input.environmentId,
+      input.integration.serverName,
+      {
+        expectedVersion: integrationVersion(input.integration),
+        expectedEndpointFingerprint: input.integration.endpointFingerprint,
+        mode: input.policy.mode,
+        allowedTools: input.policy.allowedTools,
+      },
+    );
+    try {
+      await this.applyEffectiveNetworkPolicy(input.environmentId);
+    } catch (error) {
+      await this.integrations
+        .markToolPolicyErrorForRuntime(
+          input.environmentId,
+          input.integration.serverName,
+          {
+            expectedEndpointFingerprint: input.integration.endpointFingerprint,
+            error: "Sandbox0 MCP tool policy could not be applied.",
+          },
+        )
+        .catch(() => undefined);
+      throw error;
+    }
+    return (
+      (await this.integrations.getIntegration(
+        input.userId,
+        input.environmentId,
+        input.integration.serverName,
+      )) ?? pending
     );
   }
 
@@ -1658,19 +1830,22 @@ export class CodexMcpIntegrationService
     userPolicy?: NetworkPolicy,
     scopedStore: SandpiStore = this.store,
   ) {
-    const [environment, managed] = await Promise.all([
+    const [environment, managed, toolPolicies] = await Promise.all([
       userPolicy
         ? Promise.resolve(undefined)
         : scopedStore.getEnvironmentById(environmentId),
       this.integrations.listActiveStaticIntegrationsForRuntime(environmentId),
+      this.integrations.listToolPolicyIntegrationsForRuntime(environmentId),
     ]);
     await this.runtime.applyEnvironmentSandboxNetworkPolicy(
       runtime,
       toSandbox0NetworkPolicy(
         userPolicy ?? environment!.networkPolicy,
         managed.map(toManagedMcpCredentialBinding),
+        toolPolicies.map(toManagedMcpToolPolicy),
       ),
     );
+    await this.integrations.markToolPoliciesActiveForRuntime(environmentId);
   }
 
   private async removeStaticCredential(input: {
@@ -2465,16 +2640,100 @@ function decorateInventory(
         server,
         drifted,
       );
+      const toolPolicy = isAggregatorMcpPreset(integration.presetId)
+        ? {
+            enforcement: "platform" as const,
+            allowedTools: [],
+          }
+        : {
+            enforcement: "sandbox0" as const,
+            mode: integration.toolPolicyMode,
+            allowedTools: [...integration.allowedTools],
+            status: drifted ? ("error" as const) : integration.toolPolicyStatus,
+            ...((drifted
+              ? "The MCP endpoint changed outside Sandpi; save it again before relying on its tool policy."
+              : integration.toolPolicyError)
+              ? {
+                  error: drifted
+                    ? "The MCP endpoint changed outside Sandpi; save it again before relying on its tool policy."
+                    : integration.toolPolicyError,
+                }
+              : {}),
+          };
       return {
         ...server,
         presetId: integration.presetId,
         authMode: integration.authMode,
         credentialState,
         readiness,
+        toolPolicy,
         startupError: integration.lastError ?? server.startupError,
       };
     }),
   };
+}
+
+function toManagedMcpToolPolicy(
+  integration: EnvironmentMcpIntegration,
+): ManagedMcpToolPolicy {
+  const delegated = isAggregatorMcpPreset(integration.presetId);
+  return {
+    serverName: integration.serverName,
+    destinationDomain: integration.destinationDomain,
+    destinationPath: integration.destinationPath,
+    mode: delegated ? "delegated" : integration.toolPolicyMode,
+    allowedTools:
+      !delegated && integration.toolPolicyMode === "selected"
+        ? integration.allowedTools
+        : [],
+  };
+}
+
+function validateMcpToolPolicy(
+  server: CodexMcpServer,
+  input: CodexMcpToolPolicyInput,
+): CodexMcpToolPolicyInput {
+  const allowedTools = [
+    ...new Set(
+      input.allowedTools.map((value) => {
+        const name = value.trim();
+        if (!name || name.length > 256 || name.includes("\0")) {
+          throw new HttpError(
+            400,
+            "mcp_tool_policy_invalid",
+            "MCP tool names must be 1 to 256 safe characters.",
+          );
+        }
+        return name;
+      }),
+    ),
+  ].sort();
+  if (input.mode === "all") {
+    if (allowedTools.length > 0) {
+      throw new HttpError(
+        400,
+        "mcp_tool_policy_invalid",
+        "All-tools mode cannot contain an allowlist.",
+      );
+    }
+    return { mode: "all", allowedTools: [] };
+  }
+  if (allowedTools.length === 0) {
+    throw new HttpError(
+      400,
+      "mcp_tool_policy_empty",
+      "Select at least one MCP tool, or disable the MCP server instead.",
+    );
+  }
+  const advertised = new Set(server.tools.map((tool) => tool.name));
+  const unknown = allowedTools.filter((name) => !advertised.has(name));
+  if (unknown.length > 0) {
+    throw conflict(
+      "mcp_tool_inventory_changed",
+      "The MCP tool inventory changed. Refresh it before saving the policy.",
+    );
+  }
+  return { mode: "selected", allowedTools };
 }
 
 function integrationCredentialState(

@@ -302,7 +302,11 @@ export function codexMcpInputFromPreset(
     toolTimeoutSec: preset.toolTimeoutSec,
     defaultToolsApprovalMode: preset.defaultToolsApprovalMode ?? "prompt",
     scopes: preset.auth.scopes ? [...preset.auth.scopes] : undefined,
-    enabledTools: [],
-    disabledTools: [],
   };
+}
+
+export function isAggregatorMcpPreset(presetId: string | undefined) {
+  return CODEX_MCP_PRESETS.some(
+    (preset) => preset.id === presetId && preset.category === "aggregators",
+  );
 }

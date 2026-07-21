@@ -16,6 +16,14 @@ export interface ManagedMcpCredentialBinding {
   credentialValueTemplate: string;
 }
 
+export interface ManagedMcpToolPolicy {
+  serverName: string;
+  destinationDomain: string;
+  destinationPath: string;
+  mode: "all" | "selected" | "delegated";
+  allowedTools: readonly string[];
+}
+
 /**
  * Composes the user-owned traffic policy with Sandpi-managed MCP credential
  * bindings. Credential injection is orthogonal to traffic authorization, so
@@ -24,6 +32,7 @@ export interface ManagedMcpCredentialBinding {
 export function toSandbox0NetworkPolicy(
   policy: Sandbox0NetworkPolicyInput,
   managed: readonly ManagedMcpCredentialBinding[] = [],
+  toolPolicies: readonly ManagedMcpToolPolicy[] = [],
 ): Sandbox0NetworkPolicy {
   const domains = [
     ...new Set(
@@ -37,7 +46,12 @@ export function toSandbox0NetworkPolicy(
     ),
   ].sort();
   const managedBindings = normalizeManagedBindings(managed);
-  if (domains.length === 0 && managedBindings.length === 0) {
+  const managedToolRules = normalizeManagedToolPolicies(toolPolicies);
+  if (
+    domains.length === 0 &&
+    managedBindings.length === 0 &&
+    managedToolRules.length === 0
+  ) {
     return { mode: policy.mode, credentialBindings: [] };
   }
 
@@ -76,6 +90,22 @@ export function toSandbox0NetworkPolicy(
             })),
           }
         : {}),
+      ...(managedToolRules.length > 0
+        ? {
+            protocolRules: managedToolRules.map((rule) => ({
+              name: managedMcpToolRuleName(
+                rule.destinationDomain,
+                rule.destinationPath,
+              ),
+              protocol: "mcp" as const,
+              domains: [rule.destinationDomain],
+              ports: [{ port: 443, protocol: "tcp" as const }],
+              tlsMode: "terminate-reoriginate" as const,
+              httpMatch: { paths: [rule.destinationPath] },
+              mcp: { tools: { allowed: rule.allowedTools } },
+            })),
+          }
+        : {}),
     },
     credentialBindings: managedBindings.map((binding) => ({
       ref: binding.bindingRef,
@@ -93,6 +123,90 @@ export function toSandbox0NetworkPolicy(
       },
     })),
   };
+}
+
+function normalizeManagedToolPolicies(
+  policies: readonly ManagedMcpToolPolicy[],
+) {
+  const byDestination = new Map<
+    string,
+    {
+      destinationDomain: string;
+      destinationPath: string;
+      mode: ManagedMcpToolPolicy["mode"];
+      allowedTools: string[];
+      serverNames: string[];
+    }
+  >();
+  for (const policy of policies) {
+    const serverName = requiredTrimmed(policy.serverName, "server name");
+    const destinationDomain = normalizeNetworkDomain(policy.destinationDomain);
+    if (!destinationDomain || destinationDomain.startsWith("*.")) {
+      throw new Error(
+        `Invalid exact MCP tool-policy destination domain: ${policy.destinationDomain}`,
+      );
+    }
+    const destinationPath = normalizeDestinationPath(policy.destinationPath);
+    const allowedTools = [
+      ...new Set(
+        policy.allowedTools.map((value) => {
+          const name = value.trim();
+          if (!name || name.length > 256 || name.includes("\0")) {
+            throw new Error(
+              `Invalid MCP tool name for ${serverName}: ${value || "(empty)"}`,
+            );
+          }
+          return name;
+        }),
+      ),
+    ].sort();
+    if (policy.mode === "selected" && allowedTools.length === 0) {
+      throw new Error(
+        `MCP tool policy for ${serverName} must allow at least one tool. Disable the server to allow none.`,
+      );
+    }
+    if (policy.mode !== "selected" && allowedTools.length > 0) {
+      throw new Error(
+        `MCP tool policy for ${serverName} cannot attach tools to ${policy.mode} mode.`,
+      );
+    }
+    const key = `${destinationDomain}\n${destinationPath}`;
+    const existing = byDestination.get(key);
+    if (!existing) {
+      byDestination.set(key, {
+        destinationDomain,
+        destinationPath,
+        mode: policy.mode,
+        allowedTools,
+        serverNames: [serverName],
+      });
+      continue;
+    }
+    const existingRestricted = existing.mode === "selected";
+    const requestedRestricted = policy.mode === "selected";
+    if (
+      existingRestricted !== requestedRestricted ||
+      (existingRestricted &&
+        JSON.stringify(existing.allowedTools) !== JSON.stringify(allowedTools))
+    ) {
+      throw new Error(
+        `MCP servers ${[...existing.serverNames, serverName].join(", ")} share ${destinationDomain}${destinationPath} but request different tool policies. Sandbox0 enforces this endpoint as one security boundary.`,
+      );
+    }
+    existing.serverNames.push(serverName);
+  }
+  return [...byDestination.values()]
+    .filter((policy) => policy.mode === "selected")
+    .map((policy) => ({
+      destinationDomain: policy.destinationDomain,
+      destinationPath: policy.destinationPath,
+      allowedTools: policy.allowedTools,
+    }))
+    .sort(
+      (left, right) =>
+        left.destinationDomain.localeCompare(right.destinationDomain) ||
+        left.destinationPath.localeCompare(right.destinationPath),
+    );
 }
 
 function normalizeManagedBindings(
@@ -192,4 +306,12 @@ function managedCredentialRuleName(bindingRef: string) {
     .digest("hex")
     .slice(0, 12);
   return `sandpi-mcp-credential-${suffix}`;
+}
+
+function managedMcpToolRuleName(domain: string, path: string) {
+  const suffix = createHash("sha256")
+    .update(`${domain}\n${path}`)
+    .digest("hex")
+    .slice(0, 12);
+  return `sandpi-mcp-tools-${suffix}`;
 }

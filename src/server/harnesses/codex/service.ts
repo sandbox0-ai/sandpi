@@ -20,6 +20,7 @@ import type {
   CodexMcpInventory,
   CodexMcpServer,
   CodexMcpServerInput,
+  CodexMcpTool,
   CodexMcpTransport,
   CodexRateLimitSnapshot,
   CodexRateLimitWindow,
@@ -971,10 +972,19 @@ export class CodexService {
     environmentId: string,
     runtime: StoredEnvironmentRuntime,
   ): Promise<CodexMcpInventory> {
-    const config = await this.readEnvironmentCodexConfig(
+    let config = await this.readEnvironmentCodexConfig(
       environmentId,
       runtime,
     );
+    if (
+      await this.clearLegacyEnvironmentMcpToolFilters(
+        environmentId,
+        runtime,
+        config.userServers,
+      )
+    ) {
+      config = await this.readEnvironmentCodexConfig(environmentId, runtime);
+    }
     const statuses = new Map<string, Record<string, unknown>>();
     let cursor: string | undefined;
     do {
@@ -1034,6 +1044,43 @@ export class CodexService {
         })
         .sort((left, right) => left.name.localeCompare(right.name)),
     };
+  }
+
+  private async clearLegacyEnvironmentMcpToolFilters(
+    environmentId: string,
+    runtime: StoredEnvironmentRuntime,
+    userServers: Record<string, unknown>,
+  ) {
+    const serverNames = Object.entries(userServers).flatMap(([name, value]) => {
+      const definition = objectRecord(value);
+      return definition &&
+        (objectStringArray(definition.enabled_tools).length > 0 ||
+          objectStringArray(definition.disabled_tools).length > 0)
+        ? [name]
+        : [];
+    });
+    if (serverNames.length === 0) return false;
+    const response = await this.requestCodex(environmentId, runtime, {
+      method: "config/batchWrite",
+      id: rpcId("mcp-tool-filter-cleanup", environmentId),
+      params: {
+        edits: serverNames.flatMap((name) =>
+          ["enabled_tools", "disabled_tools"].map((key) => ({
+            keyPath: `mcp_servers.${name}.${key}`,
+            value: null,
+            mergeStrategy: "replace",
+          })),
+        ),
+        reloadUserConfig: true,
+      },
+    });
+    requireMcpRpcResult(
+      response,
+      "codex_mcp_update_failed",
+      "Codex could not remove legacy MCP tool filters.",
+    );
+    await this.reloadEnvironmentMcpServers(environmentId, runtime);
+    return true;
   }
 
   private async readEnvironmentCodexConfig(
@@ -3817,9 +3864,10 @@ function codexMcpConfigValues(server: CodexMcpServerInput) {
     tool_timeout_sec: server.toolTimeoutSec ?? null,
     default_tools_approval_mode: server.defaultToolsApprovalMode ?? null,
     scopes: server.scopes?.length ? server.scopes : null,
-    enabled_tools: server.enabledTools.length > 0 ? server.enabledTools : null,
-    disabled_tools:
-      server.disabledTools.length > 0 ? server.disabledTools : null,
+    // Sandbox0 Protocol Control is the enforcement point. Clearing legacy
+    // Codex filters keeps tools/list complete and avoids two policy truths.
+    enabled_tools: null,
+    disabled_tools: null,
   };
 }
 
@@ -3833,7 +3881,7 @@ function codexMcpServer(
   const enabled = objectBoolean(definition, "enabled") ?? true;
   const authStatus = codexMcpAuthStatus(objectString(status, "authStatus"));
   const serverInfo = objectRecord(status?.serverInfo);
-  const tools = objectRecord(status?.tools);
+  const tools = codexMcpTools(status?.tools);
   const resources = Array.isArray(status?.resources) ? status.resources : [];
   const resourceTemplates = Array.isArray(status?.resourceTemplates)
     ? status.resourceTemplates
@@ -3869,8 +3917,6 @@ function codexMcpServer(
       objectString(definition, "default_tools_approval_mode"),
     ),
     scopes: objectStringArray(definition.scopes),
-    enabledTools: objectStringArray(definition.enabled_tools),
-    disabledTools: objectStringArray(definition.disabled_tools),
     managed,
     authStatus,
     runtimeStatus,
@@ -3880,9 +3926,32 @@ function codexMcpServer(
     serverTitle:
       objectString(serverInfo, "title") ?? objectString(serverInfo, "name"),
     serverVersion: objectString(serverInfo, "version"),
-    toolCount: tools ? Object.keys(tools).length : 0,
+    tools,
+    toolPolicy: { enforcement: "unavailable", allowedTools: [] },
+    toolCount: tools.length,
     resourceCount: resources.length + resourceTemplates.length,
   };
+}
+
+function codexMcpTools(value: unknown): CodexMcpTool[] {
+  const tools = objectRecord(value);
+  if (!tools) return [];
+  return Object.entries(tools)
+    .flatMap(([mapName, value]): CodexMcpTool[] => {
+      const tool = objectRecord(value);
+      const name = objectString(tool, "name") ?? mapName.trim();
+      if (!tool || !name || name.length > 256 || name.includes("\0")) return [];
+      const title = objectString(tool, "title");
+      const description = objectString(tool, "description");
+      return [
+        {
+          name,
+          ...(title ? { title } : {}),
+          ...(description ? { description } : {}),
+        },
+      ];
+    })
+    .sort((left, right) => left.name.localeCompare(right.name));
 }
 
 function codexMcpAuthStatus(value: string | undefined): CodexMcpAuthStatus {

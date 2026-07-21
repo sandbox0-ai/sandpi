@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   toSandbox0NetworkPolicy,
   type ManagedMcpCredentialBinding,
+  type ManagedMcpToolPolicy,
 } from "./network-policy";
 
 const githubCredential: ManagedMcpCredentialBinding = {
@@ -13,6 +14,14 @@ const githubCredential: ManagedMcpCredentialBinding = {
   destinationPath: "/mcp/",
   credentialHeaderName: "Authorization",
   credentialValueTemplate: "Bearer {{ .token }}",
+};
+
+const githubTools: ManagedMcpToolPolicy = {
+  serverName: "github",
+  destinationDomain: "api.githubcopilot.com",
+  destinationPath: "/mcp/",
+  mode: "selected",
+  allowedTools: ["get_issue", "search_code"],
 };
 
 test("block-all policy maps domain exceptions to one native allow rule", () => {
@@ -211,5 +220,111 @@ test("managed MCP credential destinations reject wildcard domains and URLs", () 
         [{ ...githubCredential, destinationPath: "/mcp?tenant=other" }],
       ),
     /destination path/,
+  );
+});
+
+test("selected MCP tools become an exact Sandbox0 protocol allowlist", () => {
+  assert.deepEqual(
+    toSandbox0NetworkPolicy(
+      { mode: "allow-all", domainExceptions: [] },
+      [],
+      [githubTools],
+    ),
+    {
+      mode: "allow-all",
+      egress: {
+        protocolRules: [
+          {
+            name: "sandpi-mcp-tools-666453d5d025",
+            protocol: "mcp",
+            domains: ["api.githubcopilot.com"],
+            ports: [{ port: 443, protocol: "tcp" }],
+            tlsMode: "terminate-reoriginate",
+            httpMatch: { paths: ["/mcp/"] },
+            mcp: {
+              tools: { allowed: ["get_issue", "search_code"] },
+            },
+          },
+        ],
+      },
+      credentialBindings: [],
+    },
+  );
+});
+
+test("all-tools and delegated MCP policies do not create protocol rules", () => {
+  for (const mode of ["all", "delegated"] as const) {
+    assert.deepEqual(
+      toSandbox0NetworkPolicy(
+        { mode: "allow-all", domainExceptions: [] },
+        [],
+        [{ ...githubTools, mode, allowedTools: [] }],
+      ),
+      { mode: "allow-all", credentialBindings: [] },
+    );
+  }
+  assert.deepEqual(
+    toSandbox0NetworkPolicy(
+      { mode: "allow-all", domainExceptions: [] },
+      [],
+      [
+        { ...githubTools, mode: "all", allowedTools: [] },
+        {
+          ...githubTools,
+          serverName: "aggregator",
+          mode: "delegated",
+          allowedTools: [],
+        },
+      ],
+    ),
+    { mode: "allow-all", credentialBindings: [] },
+  );
+});
+
+test("one endpoint cannot silently receive conflicting MCP tool policies", () => {
+  assert.throws(
+    () =>
+      toSandbox0NetworkPolicy(
+        { mode: "allow-all", domainExceptions: [] },
+        [],
+        [
+          githubTools,
+          {
+            ...githubTools,
+            serverName: "github-secondary",
+            allowedTools: ["get_issue"],
+          },
+        ],
+      ),
+    /share .* but request different tool policies/,
+  );
+  assert.throws(
+    () =>
+      toSandbox0NetworkPolicy(
+        { mode: "allow-all", domainExceptions: [] },
+        [],
+        [
+          githubTools,
+          {
+            ...githubTools,
+            serverName: "aggregator",
+            mode: "delegated",
+            allowedTools: [],
+          },
+        ],
+      ),
+    /one security boundary/,
+  );
+});
+
+test("an empty selected MCP tool policy fails closed at composition", () => {
+  assert.throws(
+    () =>
+      toSandbox0NetworkPolicy(
+        { mode: "allow-all", domainExceptions: [] },
+        [],
+        [{ ...githubTools, allowedTools: [] }],
+      ),
+    /must allow at least one tool/,
   );
 });
