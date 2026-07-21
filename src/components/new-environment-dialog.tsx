@@ -5,6 +5,7 @@ import {
   Check,
   LoaderCircle,
   LockKeyhole,
+  UsersRound,
   X,
 } from "lucide-react";
 import {
@@ -50,6 +51,8 @@ export function NewEnvironmentDialog({
   const dialogRef = useRef<HTMLElement>(null);
 
   const [name, setName] = useState("");
+  const [visibility, setVisibility] =
+    useState<Environment["visibility"]>("team");
   const [nameError, setNameError] = useState("");
   const [submitError, setSubmitError] = useState("");
   const [creating, setCreating] = useState(false);
@@ -151,6 +154,7 @@ export function NewEnvironmentDialog({
           body: JSON.stringify({
             teamId,
             name: name.trim(),
+            visibility,
           }),
         },
       );
@@ -249,6 +253,46 @@ export function NewEnvironmentDialog({
                 ) : null}
               </label>
 
+            </fieldset>
+
+            <fieldset className={styles.fieldset} disabled={creating}>
+              <legend>Visibility</legend>
+              <div className={styles.visibilityOptions}>
+                <label className={styles.visibilityOption}>
+                  <input
+                    type="radio"
+                    name="visibility"
+                    value="team"
+                    checked={visibility === "team"}
+                    onChange={() => setVisibility("team")}
+                  />
+                  <UsersRound size={17} aria-hidden="true" />
+                  <span>
+                    <strong>Team</strong>
+                    <small>
+                      Every active member of {teamName} can open and use it.
+                    </small>
+                  </span>
+                </label>
+                <label className={styles.visibilityOption}>
+                  <input
+                    type="radio"
+                    name="visibility"
+                    value="private"
+                    checked={visibility === "private"}
+                    onChange={() => setVisibility("private")}
+                  />
+                  <LockKeyhole size={17} aria-hidden="true" />
+                  <span>
+                    <strong>Private</strong>
+                    <small>Only you can see and use this Environment.</small>
+                  </span>
+                </label>
+              </div>
+              <p className={styles.visibilityHelp}>
+                New Environments are Team-visible by default. Private Environments
+                carry a lock icon in the sidebar.
+              </p>
             </fieldset>
 
             <fieldset className={styles.fieldset} disabled={creating}>

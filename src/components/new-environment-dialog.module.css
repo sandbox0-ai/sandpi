@@ -215,6 +215,65 @@
   line-height: 1.4;
 }
 
+.visibilityOptions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.visibilityOption {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  align-items: flex-start;
+  gap: 9px;
+  padding: 11px;
+  border: 1px solid var(--line, #deddd7);
+  border-radius: 9px;
+  background: var(--panel, #fbfaf7);
+  color: var(--ink-soft, #62615c);
+  cursor: pointer;
+}
+
+.visibilityOption:has(input:checked) {
+  border-color: var(--ink-soft, #62615c);
+  background: var(--selected, #e7e5de);
+}
+
+.visibilityOption input {
+  width: 14px;
+  height: 14px;
+  margin: 2px 0 0;
+  accent-color: var(--ink, #171716);
+}
+
+.visibilityOption > svg {
+  margin-top: 1px;
+}
+
+.visibilityOption span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.visibilityOption strong {
+  color: var(--ink, #171716);
+  font-size: 11px;
+}
+
+.visibilityOption small,
+.visibilityHelp {
+  color: var(--ink-faint, #8a8982);
+  font-size: 10px;
+  font-weight: 480;
+  line-height: 1.4;
+}
+
+.visibilityHelp {
+  margin: 7px 0 0;
+}
+
 .agentOption {
   display: grid;
   grid-template-columns: auto auto minmax(0, 1fr) auto;
@@ -471,6 +530,10 @@
   .content {
     gap: 15px;
     padding: 17px;
+  }
+
+  .visibilityOptions {
+    grid-template-columns: 1fr;
   }
 
   .agentOption {

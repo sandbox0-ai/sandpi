@@ -121,8 +121,9 @@ test("commits one shared decoder cursor and routes scalar turn state by native t
   assert.deepEqual(idleDeadline.values, [
     "environment-one",
     new Date("2026-07-16T00:01:00.000Z"),
-    1_800_000,
   ]);
+  assert.match(idleDeadline.sql, /environment\.idle_pause_timeout_seconds/);
+  assert.match(idleDeadline.sql, /idle_pause_timeout_seconds = 0 THEN NULL/);
 });
 
 test("does not apply Session transitions after the Environment epoch CAS loses", async () => {
@@ -234,6 +235,25 @@ test("projects Sandbox and Supervisor coordinates from Environment runtime", asy
   });
 });
 
+test("schedules a newly ready Sandbox from its Environment idle timeout", async () => {
+  const fixture = transactionalStore(() => ({ rows: [], rowCount: 1 }));
+
+  await fixture.store.markEnvironmentReady("environment-one", {
+    sandboxId: "sandbox-one",
+    workspaceVolumeId: "volume-one",
+    hardExpiresAt: new Date("2026-08-15T00:00:00.000Z"),
+  });
+
+  const runtimeInsert = fixture.calls.find((call) =>
+    call.sql.includes("INSERT INTO environment_runtime"),
+  );
+  assert.ok(runtimeInsert);
+  assert.match(runtimeInsert.sql, /environment\.idle_pause_timeout_seconds/);
+  assert.match(runtimeInsert.sql, /idle_pause_timeout_seconds = 0 THEN NULL/);
+  assert.match(runtimeInsert.sql, /INTERVAL '1 second'/);
+  assert.match(runtimeInsert.sql, /idle_pause_due_at = EXCLUDED\.idle_pause_due_at/);
+});
+
 test("records successful runtime access without promoting the Codex epoch", async () => {
   const fixture = transactionalStore((sql) => {
     if (!sql.includes("FROM environment_runtime runtime")) {
@@ -268,14 +288,16 @@ test("records successful runtime access without promoting the Codex epoch", asyn
   await fixture.store.recordEnvironmentRuntimeAccess("environment-one");
 
   const update = fixture.calls.find((call) =>
-    call.sql.includes("NOW() + ($2::BIGINT"),
+    call.sql.includes("NOW() + ("),
   );
   assert.ok(update);
   assert.match(update.sql, /desired_state = 'running'/);
   assert.match(update.sql, /observed_state = 'running'/);
   assert.match(update.sql, /desired_state <> 'terminated'/);
+  assert.match(update.sql, /environment\.idle_pause_timeout_seconds/);
+  assert.match(update.sql, /idle_pause_timeout_seconds = 0 THEN NULL/);
   assert.doesNotMatch(update.sql, /attempt_id|runtime_generation/);
-  assert.deepEqual(update.values, ["environment-one", 1_800_000]);
+  assert.deepEqual(update.values, ["environment-one"]);
 });
 
 test("a live connection heartbeat extends only an already-running Environment", async () => {
@@ -287,7 +309,7 @@ test("a live connection heartbeat extends only an already-running Environment", 
   );
 
   const update = fixture.calls.find((call) =>
-    call.sql.includes("RETURNING environment_id"),
+    call.sql.includes("RETURNING runtime.environment_id"),
   );
   assert.ok(update);
   assert.match(update.sql, /desired_state = 'running'/);
@@ -297,7 +319,8 @@ test("a live connection heartbeat extends only an already-running Environment", 
     setClause,
     /desired_state|observed_state|attempt_id|runtime_generation/,
   );
-  assert.deepEqual(update.values, ["environment-one", 1_800_000]);
+  assert.match(update.sql, /environment\.idle_pause_timeout_seconds/);
+  assert.deepEqual(update.values, ["environment-one"]);
 });
 
 test("MCP mutations use a distinct Environment advisory-lock namespace", async () => {
@@ -474,13 +497,13 @@ test("grants a fresh idle window after Sandbox0 auto-resumes an Environment", as
   assert.ok(update);
   assert.match(update.sql, /runtime\.observed_state <> 'running' OR \$5::BOOLEAN/);
   assert.match(update.sql, /GREATEST\(/);
+  assert.match(update.sql, /idle_pause_timeout_seconds = 0 THEN NULL/);
   assert.deepEqual(update.values, [
     "environment-one",
     "supervisor-one",
     "attempt-two",
     2,
     true,
-    1_800_000,
   ]);
 });
 
@@ -920,6 +943,7 @@ test("idle pause is guarded only by visible pending or active Turn projections",
     call.sql.includes("SET desired_state = 'paused'"),
   );
   assert.ok(update);
+  assert.match(update.sql, /environment\.idle_pause_timeout_seconds > 0/);
   assert.match(update.sql, /idle_pause_due_at <= NOW\(\)/);
   assert.match(update.sql, /session\.archived = FALSE/);
   assert.match(update.sql, /session\.status IN \('provisioning', 'running'\)/);
@@ -1025,7 +1049,6 @@ test("archives an idle Session only after locking its control projection", async
   assert.ok(archive);
   assert.deepEqual(archive.values, [
     "session-one",
-    null,
     null,
     false,
   ]);
@@ -1170,7 +1193,7 @@ test("abandoning an obsolete Turn request does not overwrite Session status", as
 
 test("Environment deletion marks the runtime terminated and retains cleanup coordinates", async () => {
   const fixture = transactionalStore(() => ({ rows: [], rowCount: 1 }));
-  Object.defineProperty(fixture.store, "getEnvironment", {
+  Object.defineProperty(fixture.store, "getManageableEnvironment", {
     value: async () => ({
       id: "environment-one",
       status: "ready",

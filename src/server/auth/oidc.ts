@@ -252,12 +252,27 @@ async function createPersonalTeam(
   const monthEnd = new Date(now);
   monthEnd.setUTCMonth(monthEnd.getUTCMonth() + 1);
   const weekEnd = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1_000);
+  const planQuotas = {
+    weeklyExecution: {
+      used: 0,
+      limit: 600,
+      unit: "minute",
+      window: "weekly",
+      resetsAt: weekEnd.toISOString(),
+    },
+    concurrentSessions: { used: 0, limit: 1, unit: "session" },
+    snapshotStorage: { used: 0, limit: 5, unit: "gibibyte" },
+  };
   await client.query(
     `
       INSERT INTO teams (
         id, name, slug, color, billing_account_id, billing_status,
-        billing_email, billing_period_starts_at, billing_period_ends_at
-      ) VALUES ($1, $2, $3, '#315c4b', $4, 'deployment-managed', $5, $6, $7)
+        billing_email, billing_period_starts_at, billing_period_ends_at,
+        plan_id, plan_status, plan_quotas
+      ) VALUES (
+        $1, $2, $3, '#315c4b', $4, 'deployment-managed', $5, $6, $7,
+        'free', 'active', $8::JSONB
+      )
     `,
     [
       teamId,
@@ -267,33 +282,19 @@ async function createPersonalTeam(
       email,
       now,
       monthEnd,
+      JSON.stringify(planQuotas),
     ],
   );
   await client.query(
     `
       INSERT INTO team_memberships (
-        id, team_id, user_id, role, status, plan_assignment_id, plan_id,
-        plan_status, plan_period_starts_at, plan_period_ends_at, plan_quotas
-      ) VALUES ($1, $2, $3, 'owner', 'active', $4, 'free', 'active', $5, $6, $7::JSONB)
+        id, team_id, user_id, role, status
+      ) VALUES ($1, $2, $3, 'owner', 'active')
     `,
     [
       `membership_${randomUUID()}`,
       teamId,
       userId,
-      `plan_${randomUUID()}`,
-      now,
-      monthEnd,
-      JSON.stringify({
-        weeklyExecution: {
-          used: 0,
-          limit: 600,
-          unit: "minute",
-          window: "weekly",
-          resetsAt: weekEnd.toISOString(),
-        },
-        concurrentSessions: { used: 0, limit: 1, unit: "session" },
-        snapshotStorage: { used: 0, limit: 5, unit: "gibibyte" },
-      }),
     ],
   );
   await client.query(

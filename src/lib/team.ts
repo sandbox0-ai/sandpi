@@ -1,11 +1,10 @@
 import type {
   CodingSession,
   Environment,
-  MembershipPlanAssignment,
   SandpiPlan,
-  SandpiPlanId,
   Team,
   TeamMembership,
+  TeamPlanState,
 } from "@/lib/types";
 
 export function environmentsForTeam(
@@ -51,11 +50,11 @@ export function membershipForUserInTeam(
   );
 }
 
-export function planForAssignment(
+export function planForTeam(
   plans: SandpiPlan[],
-  assignment: MembershipPlanAssignment,
+  team: Team,
 ): SandpiPlan | undefined {
-  return plans.find((plan) => plan.id === assignment.planId);
+  return plans.find((plan) => plan.id === team.plan.planId);
 }
 
 export function quotaPercent(used: number, limit: number): number {
@@ -66,22 +65,16 @@ export function quotaPercent(used: number, limit: number): number {
 }
 
 /**
- * Sandpi admits execution against the acting Membership's entitlement and the sponsoring
- * Team's billing state. Production usage records both identifiers per Turn; attribution must
- * stay outside the native coding-agent event payload.
+ * Sandpi admits execution against the Team-wide Plan and billing state.
  */
-export function canStartMembershipExecution(
-  membership: TeamMembership,
-  team: Team,
-): boolean {
+export function canStartTeamExecution(team: Team): boolean {
   const billingAvailable = [
     "public-beta",
     "active",
     "deployment-managed",
   ].includes(team.billingAccount.status);
-  const assignment = membership.planAssignment;
+  const assignment = team.plan;
   return (
-    membership.status === "active" &&
     assignment.status === "active" &&
     billingAvailable &&
     assignment.quotas.weeklyExecution.used <
@@ -91,10 +84,10 @@ export function canStartMembershipExecution(
   );
 }
 
-export function assignMembershipPlan(
-  assignment: MembershipPlanAssignment,
+export function assignTeamPlan(
+  assignment: TeamPlanState,
   plan: SandpiPlan,
-): MembershipPlanAssignment {
+): TeamPlanState {
   return {
     ...assignment,
     planId: plan.id,
@@ -113,18 +106,4 @@ export function assignMembershipPlan(
       },
     },
   };
-}
-
-export function membershipPlanCounts(
-  memberships: TeamMembership[],
-): Record<SandpiPlanId, number> {
-  return memberships.reduce<Record<SandpiPlanId, number>>(
-    (counts, membership) => {
-      if (membership.status === "active") {
-        counts[membership.planAssignment.planId] += 1;
-      }
-      return counts;
-    },
-    { free: 0, pro: 0, max: 0 },
-  );
 }

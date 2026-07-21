@@ -61,6 +61,9 @@ test("migration history contains every durable Sandpi boundary", async () => {
       "0034_session_reasoning_effort",
       "0035_environment_pause_intervals",
       "0036_drop_notification_preferences",
+      "0037_team_centric_ownership",
+      "0038_personal_session_pins_and_idle_pause",
+      "0039_initialize_configurable_idle_pause_deadlines",
     ],
   );
 
@@ -230,6 +233,30 @@ test("migration history contains every durable Sandpi boundary", async () => {
   assert.match(idlePausePolicySql, /INTERVAL '27 minutes'/);
   assert.match(idlePausePolicySql, /desired_state IN \('running', 'paused'\)/);
   assert.match(idlePausePolicySql, /observed_state = 'running'/);
+
+  const personalPinsSql = migrations[37]?.sql ?? "";
+  assert.match(personalPinsSql, /CREATE TABLE session_pins\b/);
+  assert.match(
+    personalPinsSql,
+    /PRIMARY KEY \(session_id, user_id\)/,
+  );
+  assert.match(personalPinsSql, /DROP COLUMN pinned/);
+  assert.match(
+    personalPinsSql,
+    /idle_pause_timeout_seconds INTEGER NOT NULL DEFAULT 1800/,
+  );
+  assert.match(
+    personalPinsSql,
+    /idle_pause_timeout_seconds >= 0/,
+  );
+
+  const initializedIdleDeadlinesSql = migrations[38]?.sql ?? "";
+  assert.match(
+    initializedIdleDeadlinesSql,
+    /environment\.idle_pause_timeout_seconds::BIGINT \* INTERVAL '1 second'/,
+  );
+  assert.match(initializedIdleDeadlinesSql, /runtime\.observed_state = 'running'/);
+  assert.match(initializedIdleDeadlinesSql, /runtime\.idle_pause_due_at IS NULL/);
 
   const runtimeAuthoritySql = migrations[24]?.sql ?? "";
   assert.match(runtimeAuthoritySql, /decoder_attempt_id TEXT/);
@@ -474,5 +501,25 @@ test("migration history contains every durable Sandpi boundary", async () => {
   assert.match(
     dropEnvironmentFunctionsSql,
     /ALTER TABLE environments[\s\S]+DROP COLUMN IF EXISTS functions/,
+  );
+
+  const teamOwnershipSql = migrations[36]?.sql ?? "";
+  assert.match(
+    teamOwnershipSql,
+    /ADD COLUMN visibility TEXT NOT NULL DEFAULT 'private'/,
+  );
+  assert.match(
+    teamOwnershipSql,
+    /ALTER COLUMN visibility SET DEFAULT 'team'/,
+  );
+  assert.match(
+    teamOwnershipSql,
+    /FOREIGN KEY \(environment_id, team_id\)[\s\S]+REFERENCES environments \(id, team_id\)/,
+  );
+  assert.match(teamOwnershipSql, /ADD COLUMN plan_id TEXT/);
+  assert.match(teamOwnershipSql, /ADD COLUMN plan_quotas JSONB/);
+  assert.match(
+    teamOwnershipSql,
+    /ALTER TABLE team_memberships[\s\S]+DROP COLUMN plan_assignment_id[\s\S]+DROP COLUMN plan_quotas/,
   );
 });

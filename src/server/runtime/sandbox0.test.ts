@@ -16,6 +16,9 @@ import {
 const environment: Environment = {
   id: "environment-test",
   teamId: "team-test",
+  ownerId: "user-test",
+  visibility: "team",
+  idlePauseTimeoutSeconds: 30 * 60,
   name: "Development",
   description: "",
   color: "#151515",

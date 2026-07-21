@@ -26,7 +26,6 @@ export interface CommunitySeed {
   };
   membership: {
     id: string;
-    planAssignmentId: string;
   };
   environment: {
     id: string;
@@ -59,7 +58,6 @@ export const COMMUNITY_DEFAULT_SEED = {
   },
   membership: {
     id: "membership-admin-default",
-    planAssignmentId: "plan-admin-default",
   },
   environment: {
     id: "env-default",
@@ -149,8 +147,12 @@ export async function seedCommunityDefaults(
       `
         INSERT INTO teams (
           id, name, slug, color, billing_account_id, billing_status,
-          billing_email, billing_period_starts_at, billing_period_ends_at
-        ) VALUES ($1, $2, $3, $4, $5, 'deployment-managed', $6, $7, $8)
+          billing_email, billing_period_starts_at, billing_period_ends_at,
+          plan_id, plan_status, plan_quotas
+        ) VALUES (
+          $1, $2, $3, $4, $5, 'deployment-managed', $6, $7, $8,
+          'free', 'active', $9::JSONB
+        )
         ON CONFLICT (id) DO NOTHING
       `,
       [
@@ -162,17 +164,15 @@ export async function seedCommunityDefaults(
         seed.team.billingEmail,
         seed.periodStartsAt,
         seed.periodEndsAt,
+        JSON.stringify(planQuotas),
       ],
     );
     await client.query(
       `
         INSERT INTO team_memberships (
-          id, team_id, user_id, role, status, plan_assignment_id, plan_id,
-          plan_status, plan_period_starts_at, plan_period_ends_at,
-          plan_quotas, joined_at
+          id, team_id, user_id, role, status, joined_at
         ) VALUES (
-          $1, $2, $3, 'owner', 'active', $4, 'free', 'active',
-          $5, $6, $7::JSONB, $5
+          $1, $2, $3, 'owner', 'active', $4
         )
         ON CONFLICT (id) DO NOTHING
       `,
@@ -180,10 +180,7 @@ export async function seedCommunityDefaults(
         seed.membership.id,
         seed.team.id,
         seed.admin.id,
-        seed.membership.planAssignmentId,
         seed.periodStartsAt,
-        seed.periodEndsAt,
-        JSON.stringify(planQuotas),
       ],
     );
     await client.query(

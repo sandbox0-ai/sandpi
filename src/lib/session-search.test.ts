@@ -23,16 +23,33 @@ function session(input: Partial<CodingSession> & Pick<CodingSession, "id" | "tit
   } as CodingSession;
 }
 
-test("searches Session title, Environment and harness with title-first relevance", () => {
+test("searches Session title, Environment, owner and harness with title-first relevance", () => {
   const sessions = [
     session({ id: "environment-match", title: "Prepare package", environmentId: "env-release" }),
     session({ id: "title-match", title: "Release the SDK" }),
+    session({
+      id: "owner-match",
+      title: "Prepare package",
+      owner: {
+        id: "user-release",
+        name: "Release Owner",
+        email: "owner@example.com",
+        avatarInitials: "RO",
+      },
+    }),
     session({ id: "harness-match", title: "Update changelog", harnessLabel: "Release agent" }),
   ];
 
   assert.deepEqual(
     searchSessions(sessions, environments, "release").map(({ session: item }) => item.id),
-    ["title-match", "environment-match", "harness-match"],
+    ["title-match", "environment-match", "owner-match", "harness-match"],
+  );
+
+  assert.deepEqual(
+    searchSessions(sessions, environments, "owner@example.com").map(
+      ({ session: item }) => item.id,
+    ),
+    ["owner-match"],
   );
 });
 

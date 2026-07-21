@@ -29,6 +29,7 @@ import { createDatabasePool } from "@/server/db/pool";
 import { seedCommunityDefaults } from "@/server/db/seed";
 import { EnvironmentService } from "@/server/environments/service";
 import { EnvironmentLifecycleService } from "@/server/environments/lifecycle-service";
+import { ENVIRONMENT_SANDBOX_HARD_TTL_SECONDS } from "@/server/environments/lifecycle-policy";
 import { EnvironmentRuntimeAccessService } from "@/server/environments/runtime-access-service";
 import { CodexEnvironmentAuthService } from "@/server/harnesses/codex/auth-service";
 import { CodexAuthStore } from "@/server/harnesses/codex/auth-store";
@@ -467,6 +468,7 @@ function registerApiRoutes(
       .object({
         teamId: z.string().min(1),
         name: z.string().trim().min(1).max(80),
+        visibility: z.enum(["team", "private"]).default("team"),
       })
       .parse(request.body);
     const environment = await services.environments.create({
@@ -483,6 +485,12 @@ function registerApiRoutes(
           name: z.string().trim().min(1).max(80),
           description: z.string().max(500),
           color: z.string().regex(/^#[0-9a-f]{6}$/i),
+          visibility: z.enum(["team", "private"]),
+          idlePauseTimeoutSeconds: z
+            .number()
+            .int()
+            .min(0)
+            .max(ENVIRONMENT_SANDBOX_HARD_TTL_SECONDS),
           networkPolicy: networkPolicySchema,
         })
         .parse(request.body);
@@ -1398,21 +1406,21 @@ function registerApiRoutes(
       preferencesSchema.parse(request.body),
     ),
   }));
-  app.put<{
-    Params: { teamId: string; membershipId: string };
-  }>("/api/v1/teams/:teamId/members/:membershipId/plan", async (request) => {
-    const body = z
-      .object({ planId: z.enum(["free", "pro", "max"]) })
-      .parse(request.body);
-    return {
-      data: await services.store.updateMembershipPlan(
-        request.principal.userId,
-        request.params.teamId,
-        request.params.membershipId,
-        body.planId,
-      ),
-    };
-  });
+  app.put<{ Params: { teamId: string } }>(
+    "/api/v1/teams/:teamId/plan",
+    async (request) => {
+      const body = z
+        .object({ planId: z.enum(["free", "pro", "max"]) })
+        .parse(request.body);
+      return {
+        data: await services.store.updateTeamPlan(
+          request.principal.userId,
+          request.params.teamId,
+          body.planId,
+        ),
+      };
+    },
+  );
 }
 
 async function streamHarnessEvents(

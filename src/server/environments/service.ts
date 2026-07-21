@@ -70,7 +70,12 @@ export class EnvironmentService {
     }
   }
 
-  async create(input: { userId: string; teamId: string; name: string }) {
+  async create(input: {
+    userId: string;
+    teamId: string;
+    name: string;
+    visibility: Environment["visibility"];
+  }) {
     const environment = await this.store.createEnvironmentMetadata(input);
     // The logical Environment exists before its Workspace Volume is ready.
     // Return immediately so native harness login can run in an Auth Runner
@@ -80,7 +85,7 @@ export class EnvironmentService {
   }
 
   async retry(userId: string, environmentId: string) {
-    const current = await this.store.getEnvironment(userId, environmentId);
+    const current = await this.store.getManageableEnvironment(userId, environmentId);
     if (current.status === "ready") return current;
     const environment = await this.store.markEnvironmentProvisioning(
       userId,
@@ -97,24 +102,40 @@ export class EnvironmentService {
       name: string;
       description: string;
       color: string;
+      visibility: Environment["visibility"];
+      idlePauseTimeoutSeconds: number;
       networkPolicy: NetworkPolicy;
     },
   ): Promise<Environment> {
-    const current = await this.store.getEnvironment(userId, environmentId);
-    if (
-      JSON.stringify(current.networkPolicy) === JSON.stringify(input.networkPolicy)
-    ) {
+    const current = await this.store.getManageableEnvironment(userId, environmentId);
+    if (current.visibility !== input.visibility && current.ownerId !== userId) {
+      throw conflict(
+        "environment_visibility_forbidden",
+        "Only the Environment creator can change its visibility.",
+      );
+    }
+    const networkChanged =
+      JSON.stringify(current.networkPolicy) !== JSON.stringify(input.networkPolicy);
+    const idlePauseChanged =
+      current.idlePauseTimeoutSeconds !== input.idlePauseTimeoutSeconds;
+    if (!networkChanged && !idlePauseChanged) {
       return this.store.updateEnvironment(userId, environmentId, input);
     }
 
-    // Network policy is a whole-resource Sandbox0 replacement. Serialize its
-    // read, external apply and PostgreSQL update with credential-binding
-    // mutations and Environment deletion across every Sandpi replica.
-    return this.waitForMcpMutationLock(environmentId, (mcpStore) =>
-      this.waitForLifecycleLock(
+    const updateWhileLifecycleLocked = async (scopedStore: SandpiStore) => {
+      const locked = await scopedStore.getManageableEnvironment(
+        userId,
         environmentId,
-        async (scopedStore) => {
-          const locked = await scopedStore.getEnvironment(userId, environmentId);
+      );
+      if (locked.visibility !== input.visibility && locked.ownerId !== userId) {
+        throw conflict(
+          "environment_visibility_forbidden",
+          "Only the Environment creator can change its visibility.",
+        );
+      }
+      const lockedNetworkChanged =
+        JSON.stringify(locked.networkPolicy) !== JSON.stringify(input.networkPolicy);
+      if (lockedNetworkChanged) {
           const runtime = await scopedStore.getEnvironmentRuntime(
             userId,
             environmentId,
@@ -126,11 +147,7 @@ export class EnvironmentService {
               "The Environment is being deleted.",
             );
           }
-          if (
-            locked.status === "ready" &&
-            JSON.stringify(locked.networkPolicy) !==
-              JSON.stringify(input.networkPolicy)
-          ) {
+          if (locked.status === "ready") {
             // The Sandbox is owned by the Environment, so policy edits apply to
             // the running runtime instead of being deferred to a future Session
             // claim.
@@ -148,10 +165,26 @@ export class EnvironmentService {
               );
             }
           }
-          return scopedStore.updateEnvironment(userId, environmentId, input);
-        },
-        mcpStore,
-      ),
+      }
+      return scopedStore.updateEnvironment(userId, environmentId, input);
+    };
+
+    // Network policy is a whole-resource Sandbox0 replacement. Serialize its
+    // read, external apply and PostgreSQL update with credential-binding
+    // mutations and Environment deletion across every Sandpi replica. Idle
+    // timeout changes need only the lifecycle lock so they cannot race a pause.
+    if (networkChanged) {
+      return this.waitForMcpMutationLock(environmentId, (mcpStore) =>
+        this.waitForLifecycleLock(
+          environmentId,
+          updateWhileLifecycleLocked,
+          mcpStore,
+        ),
+      );
+    }
+    return this.waitForLifecycleLock(
+      environmentId,
+      updateWhileLifecycleLocked,
     );
   }
 
@@ -161,10 +194,16 @@ export class EnvironmentService {
    * be retried without losing the Sandbox0 coordinates needed for cleanup.
    */
   async delete(userId: string, environmentId: string) {
-    let environment = await this.store.getEnvironment(userId, environmentId);
+    let environment = await this.store.getManageableEnvironment(
+      userId,
+      environmentId,
+    );
     if (environment.status === "updating" && this.reconciliation) {
       await this.reconciliation;
-      environment = await this.store.getEnvironment(userId, environmentId);
+      environment = await this.store.getManageableEnvironment(
+        userId,
+        environmentId,
+      );
     }
     if (environment.status === "updating") {
       throw conflict(

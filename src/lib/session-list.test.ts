@@ -13,7 +13,7 @@ function session(
   return { id, environmentId, pinned, archived } as CodingSession;
 }
 
-test("pins Sessions only within their Environment and hides archived Sessions", () => {
+test("orders the viewer's personal pins within each Environment", () => {
   const sessions = [
     session("a-1", "env-a"),
     session("b-pinned", "env-b", true),

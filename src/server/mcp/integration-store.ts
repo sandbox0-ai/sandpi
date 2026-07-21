@@ -291,7 +291,10 @@ export class EnvironmentMcpIntegrationStore {
         AND membership.user_id = $1
         AND membership.status = 'active'
        WHERE environment.id = $2
-         AND environment.created_by_user_id = $1
+         AND (
+           environment.created_by_user_id = $1
+           OR (environment.visibility = 'team' AND membership.role IN ('owner', 'admin'))
+         )
          AND environment.status <> 'archived'
        ON CONFLICT (environment_id, server_name) DO UPDATE
        SET preset_id = EXCLUDED.preset_id,
@@ -376,7 +379,10 @@ export class EnvironmentMcpIntegrationStore {
         AND membership.status = 'active'
        WHERE integration.environment_id = environment.id
          AND environment.id = $2
-         AND environment.created_by_user_id = $1
+         AND (
+           environment.created_by_user_id = $1
+           OR (environment.visibility = 'team' AND membership.role IN ('owner', 'admin'))
+         )
          AND environment.status <> 'archived'
          AND integration.server_name = $3
        RETURNING integration.*`,
@@ -659,7 +665,10 @@ export class EnvironmentMcpIntegrationStore {
          ON runtime.environment_id = environment.id
        WHERE integration.environment_id = environment.id
          AND environment.id = $2
-         AND environment.created_by_user_id = $1
+         AND (
+           environment.created_by_user_id = $1
+           OR (environment.visibility = 'team' AND membership.role IN ('owner', 'admin'))
+         )
          AND environment.status <> 'archived'
          AND runtime.desired_state <> 'terminated'
          AND integration.server_name = $3
@@ -731,7 +740,10 @@ export class EnvironmentMcpIntegrationStore {
          ON runtime.environment_id = environment.id
        WHERE integration.environment_id = environment.id
          AND environment.id = $2
-         AND environment.created_by_user_id = $1
+         AND (
+           environment.created_by_user_id = $1
+           OR (environment.visibility = 'team' AND membership.role IN ('owner', 'admin'))
+         )
          AND environment.status <> 'archived'
          AND runtime.desired_state <> 'terminated'
          AND integration.server_name = $3
@@ -791,7 +803,10 @@ export class EnvironmentMcpIntegrationStore {
         AND membership.status = 'active'
        WHERE integration.environment_id = environment.id
          AND environment.id = $2
-         AND environment.created_by_user_id = $1
+         AND (
+           environment.created_by_user_id = $1
+           OR (environment.visibility = 'team' AND membership.role IN ('owner', 'admin'))
+         )
          AND environment.status <> 'archived'
          AND integration.server_name = $3
          AND integration.auth_mode IN ('bearer', 'header')
@@ -875,7 +890,10 @@ export class EnvironmentMcpIntegrationStore {
         AND membership.status = 'active'
        WHERE integration.environment_id = environment.id
          AND environment.id = $2
-         AND environment.created_by_user_id = $1
+         AND (
+           environment.created_by_user_id = $1
+           OR (environment.visibility = 'team' AND membership.role IN ('owner', 'admin'))
+         )
          AND environment.status <> 'archived'
          AND integration.server_name = $3
          AND integration.auth_mode IN ('bearer', 'header')
@@ -1005,7 +1023,10 @@ export class EnvironmentMcpIntegrationStore {
          ON runtime.environment_id = environment.id
        WHERE integration.environment_id = environment.id
          AND environment.id = $2
-         AND environment.created_by_user_id = $1
+         AND (
+           environment.created_by_user_id = $1
+           OR (environment.visibility = 'team' AND membership.role IN ('owner', 'admin'))
+         )
          AND environment.status <> 'archived'
          AND integration.server_name = $3
          AND integration.auth_mode IN ('bearer', 'header')
@@ -1050,7 +1071,10 @@ export class EnvironmentMcpIntegrationStore {
          AND membership.team_id = environment.team_id
          AND membership.user_id = $1
          AND membership.status = 'active'
-         AND environment.created_by_user_id = $1
+         AND (
+           environment.created_by_user_id = $1
+           OR (environment.visibility = 'team' AND membership.role IN ('owner', 'admin'))
+         )
          AND environment.status <> 'archived'
          AND integration.environment_id = $2
          AND integration.server_name = $3
@@ -1225,7 +1249,10 @@ export class EnvironmentMcpIntegrationStore {
              ON runtime.environment_id = environment.id
            WHERE integration.environment_id = environment.id
              AND environment.id = $2
-             AND environment.created_by_user_id = $1
+             AND (
+               environment.created_by_user_id = $1
+               OR (environment.visibility = 'team' AND membership.role IN ('owner', 'admin'))
+             )
              AND environment.status <> 'archived'
              AND runtime.desired_state <> 'terminated'
              AND integration.server_name = $4
@@ -1976,7 +2003,10 @@ export class EnvironmentMcpIntegrationStore {
        WHERE flow.id = $3
          AND flow.environment_id = environment.id
          AND environment.id = $2
-         AND environment.created_by_user_id = $1
+         AND (
+           environment.created_by_user_id = $1
+           OR (environment.visibility = 'team' AND membership.role IN ('owner', 'admin'))
+         )
          AND environment.status <> 'archived'
          AND runtime.desired_state <> 'terminated'
          AND flow.status = 'starting'
@@ -2055,7 +2085,10 @@ export class EnvironmentMcpIntegrationStore {
          ON integration.environment_id = environment.id
        WHERE flow.environment_id = environment.id
          AND environment.id = $2
-         AND environment.created_by_user_id = $1
+         AND (
+           environment.created_by_user_id = $1
+           OR (environment.visibility = 'team' AND membership.role IN ('owner', 'admin'))
+         )
          AND environment.status <> 'archived'
          AND flow.id = $3
          AND flow.status = ANY($8::TEXT[])
@@ -2099,7 +2132,10 @@ export class EnvironmentMcpIntegrationStore {
          AND membership.team_id = environment.team_id
          AND membership.user_id = $1
          AND membership.status = 'active'
-         AND environment.created_by_user_id = $1
+         AND (
+           environment.created_by_user_id = $1
+           OR (environment.visibility = 'team' AND membership.role IN ('owner', 'admin'))
+         )
          AND environment.status <> 'archived'
          AND flow.environment_id = $2
          AND flow.id = $3
@@ -2279,7 +2315,10 @@ export class EnvironmentMcpIntegrationStore {
         AND membership.user_id = $1
         AND membership.status = 'active'
        WHERE environment.id = $2
-         AND environment.created_by_user_id = $1
+         AND (
+           environment.created_by_user_id = $1
+           OR (environment.visibility = 'team' AND membership.role IN ('owner', 'admin'))
+         )
          AND environment.status <> 'archived'`,
       [userId, environmentId],
     );

@@ -11,6 +11,9 @@ import {
 
 const environment = {
   id: "env-test",
+  ownerId: "user-test",
+  visibility: "team",
+  idlePauseTimeoutSeconds: 30 * 60,
   status: "ready",
   networkPolicy: {
     mode: "allow-all",
@@ -75,7 +78,7 @@ test("applies a changed network policy to the shared Environment Sandbox", async
     domainExceptions: ["github.com"],
   };
   const store = {
-    async getEnvironment() {
+    async getManageableEnvironment() {
       return environment;
     },
     async withEnvironmentMcpMutationLock(
@@ -130,11 +133,102 @@ test("applies a changed network policy to the shared Environment Sandbox", async
     name: "Development",
     description: "",
     color: "#151515",
+    visibility: "team",
+    idlePauseTimeoutSeconds: 30 * 60,
     networkPolicy: nextPolicy,
   });
 
   assert.deepEqual(applied, [nextPolicy]);
   assert.deepEqual(updated.networkPolicy, nextPolicy);
+});
+
+test("lets only the creator change a Team Environment's visibility", async () => {
+  let updates = 0;
+  const store = {
+    async getManageableEnvironment() {
+      return { ...environment, ownerId: "user-creator" };
+    },
+    async updateEnvironment() {
+      updates += 1;
+      return environment;
+    },
+  } as unknown as SandpiStore;
+  const service = new EnvironmentService(
+    store,
+    {} as RuntimeAdapter,
+    { info() {}, error() {} },
+  );
+
+  await assert.rejects(
+    service.update("user-admin", environment.id, {
+      name: "Development",
+      description: "",
+      color: "#151515",
+      visibility: "private",
+      idlePauseTimeoutSeconds: 30 * 60,
+      networkPolicy: environment.networkPolicy,
+    }),
+    (error: unknown) =>
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "environment_visibility_forbidden",
+  );
+  assert.equal(updates, 0);
+});
+
+test("serializes an idle timeout change with Environment lifecycle transitions", async () => {
+  const steps: string[] = [];
+  const store = {
+    async getManageableEnvironment() {
+      steps.push("read");
+      return environment;
+    },
+    async withEnvironmentLifecycleLock(
+      _environmentId: string,
+      operation: (lockedStore: SandpiStore) => Promise<Environment>,
+    ) {
+      steps.push("lifecycle-lock");
+      return {
+        acquired: true as const,
+        value: await operation(store as unknown as SandpiStore),
+      };
+    },
+    async withEnvironmentMcpMutationLock() {
+      assert.fail("an idle timeout change must not take the MCP mutation lock");
+    },
+    async getEnvironmentRuntime() {
+      assert.fail("an idle timeout change does not need a runtime policy apply");
+    },
+    async updateEnvironment(
+      _userId: string,
+      _environmentId: string,
+      input: Environment,
+    ) {
+      steps.push("write");
+      return { ...environment, ...input };
+    },
+  } as unknown as SandpiStore;
+  const service = new EnvironmentService(
+    store,
+    {
+      async updateEnvironmentNetworkPolicy() {
+        assert.fail("an unchanged network policy must not be reapplied");
+      },
+    } as unknown as RuntimeAdapter,
+    { info() {}, error() {} },
+  );
+
+  const updated = await service.update("user-test", environment.id, {
+    name: "Development",
+    description: "",
+    color: "#151515",
+    visibility: "team",
+    idlePauseTimeoutSeconds: 0,
+    networkPolicy: environment.networkPolicy,
+  });
+
+  assert.equal(updated.idlePauseTimeoutSeconds, 0);
+  assert.deepEqual(steps, ["read", "lifecycle-lock", "read", "write"]);
 });
 
 test("network updates nest lifecycle locking through the MCP-scoped Store", async () => {
@@ -158,7 +252,7 @@ test("network updates nest lifecycle locking through the MCP-scoped Store", asyn
   let mutationLockActive = false;
   let lifecycleLockActive = false;
   const lifecycleStore = {
-    async getEnvironment(userId: string, environmentId: string) {
+    async getManageableEnvironment(userId: string, environmentId: string) {
       assert.equal(userId, "user-test");
       assert.equal(environmentId, environment.id);
       assert.equal(mutationLockActive, true);
@@ -181,6 +275,8 @@ test("network updates nest lifecycle locking through the MCP-scoped Store", asyn
         name: string;
         description: string;
         color: string;
+        visibility: Environment["visibility"];
+        idlePauseTimeoutSeconds: number;
         networkPolicy: Environment["networkPolicy"];
       },
     ) {
@@ -210,7 +306,7 @@ test("network updates nest lifecycle locking through the MCP-scoped Store", asyn
         lifecycleLockActive = false;
       }
     },
-    async getEnvironment() {
+    async getManageableEnvironment() {
       assert.fail("network reads must use the lifecycle-scoped Store");
     },
     async getEnvironmentRuntime() {
@@ -221,7 +317,7 @@ test("network updates nest lifecycle locking through the MCP-scoped Store", asyn
     },
   } as unknown as SandpiStore;
   const rootStore = {
-    async getEnvironment() {
+    async getManageableEnvironment() {
       steps.push("root-read");
       return environment;
     },
@@ -267,6 +363,8 @@ test("network updates nest lifecycle locking through the MCP-scoped Store", asyn
     name: "Development",
     description: "",
     color: "#151515",
+    visibility: "team",
+    idlePauseTimeoutSeconds: 30 * 60,
     networkPolicy: nextPolicy,
   });
 
@@ -300,7 +398,7 @@ test("uses the injected network policy applier instead of the legacy runtime met
     },
   };
   const store = {
-    async getEnvironment() {
+    async getManageableEnvironment() {
       return environment;
     },
     async withEnvironmentMcpMutationLock(
@@ -351,6 +449,8 @@ test("uses the injected network policy applier instead of the legacy runtime met
     name: "Development",
     description: "",
     color: "#151515",
+    visibility: "team",
+    idlePauseTimeoutSeconds: 30 * 60,
     networkPolicy: nextPolicy,
   });
 
@@ -373,7 +473,7 @@ test("rejects network policy changes after the Environment deletion gate", async
   };
   let updates = 0;
   const store = {
-    async getEnvironment() {
+    async getManageableEnvironment() {
       return environment;
     },
     async withEnvironmentMcpMutationLock(
@@ -410,6 +510,8 @@ test("rejects network policy changes after the Environment deletion gate", async
       name: "Development",
       description: "",
       color: "#151515",
+      visibility: "team",
+      idlePauseTimeoutSeconds: 30 * 60,
       networkPolicy: nextPolicy,
     }),
     (error: unknown) =>
@@ -423,7 +525,7 @@ test("rejects network policy changes after the Environment deletion gate", async
 test("deletes Environment-owned resources before removing metadata", async () => {
   const steps: string[] = [];
   const store = {
-    async getEnvironment() {
+    async getManageableEnvironment() {
       return environment;
     },
     async withEnvironmentLifecycleLock(
@@ -490,7 +592,7 @@ test("deletes Environment-owned resources before removing metadata", async () =>
 test("publishes the deletion gate before Environment-owned cleanup", async () => {
   let deletionPrepared = false;
   const store = {
-    async getEnvironment() {
+    async getManageableEnvironment() {
       return environment;
     },
     async withEnvironmentLifecycleLock(
@@ -524,7 +626,7 @@ test("publishes the deletion gate before Environment-owned cleanup", async () =>
 test("keeps the terminal gate when Environment-owned cleanup fails", async () => {
   const steps: string[] = [];
   const store = {
-    async getEnvironment() {
+    async getManageableEnvironment() {
       return environment;
     },
     async withEnvironmentLifecycleLock(
@@ -571,7 +673,7 @@ test("keeps the terminal gate when Environment-owned cleanup fails", async () =>
 test("keeps Environment metadata retryable when resource deletion fails", async () => {
   const steps: string[] = [];
   const store = {
-    async getEnvironment() {
+    async getManageableEnvironment() {
       return environment;
     },
     async withEnvironmentLifecycleLock(

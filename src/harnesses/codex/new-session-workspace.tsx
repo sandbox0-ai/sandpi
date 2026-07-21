@@ -59,6 +59,7 @@ interface NewSessionWorkspaceProps {
   language: OperationLanguage;
   sendShortcut: SendShortcut;
   environment: Environment;
+  canManageEnvironment: boolean;
   onEnvironmentChange: (environment: Environment) => void;
   onCreated: (session: CodexSession) => void;
   onOpenSettings: () => void;
@@ -71,6 +72,7 @@ export function CodexNewSessionWorkspace({
   language,
   sendShortcut,
   environment,
+  canManageEnvironment,
   onEnvironmentChange,
   onCreated,
   onOpenSettings,
@@ -360,14 +362,16 @@ export function CodexNewSessionWorkspace({
           >
             <SquareTerminal size={17} aria-hidden="true" />
           </button>
-          <button
-            type="button"
-            className={styles.settingsButton}
-            aria-label={ui.environmentSettings(environment.name)}
-            onClick={onOpenSettings}
-          >
-            <Settings2 size={17} aria-hidden="true" />
-          </button>
+          {canManageEnvironment ? (
+            <button
+              type="button"
+              className={styles.settingsButton}
+              aria-label={ui.environmentSettings(environment.name)}
+              onClick={onOpenSettings}
+            >
+              <Settings2 size={17} aria-hidden="true" />
+            </button>
+          ) : null}
         </div>
       </header>
 

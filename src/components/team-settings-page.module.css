@@ -58,8 +58,7 @@
 .sectionHeader > div > span,
 .panel small,
 .statCard small,
-.quotaCard small,
-.planCountCard small {
+.quotaCard small {
   color: var(--ink-faint, #8a8982);
   font-size: 9px;
   font-weight: 720;
@@ -172,8 +171,7 @@
 }
 
 .statGrid,
-.quotaGrid,
-.planMixGrid {
+.quotaGrid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
@@ -185,15 +183,13 @@
 
 .statCard,
 .quotaCard,
-.planCountCard,
 .panel {
   border: 1px solid var(--line, #deddd7);
   background: var(--panel-strong, #fff);
 }
 
 .statCard,
-.quotaCard,
-.planCountCard {
+.quotaCard {
   display: flex;
   min-width: 0;
   min-height: 112px;
@@ -341,7 +337,7 @@
 .memberRow {
   display: grid;
   min-height: 62px;
-  grid-template-columns: 31px minmax(0, 1fr) auto 72px 96px;
+  grid-template-columns: 31px minmax(0, 1fr) auto 72px;
   align-items: center;
   gap: 10px;
   padding: 9px 13px;
@@ -413,7 +409,7 @@
   text-align: center;
 }
 
-.memberPlanSelect {
+.teamPlanSelect {
   width: 96px;
   min-height: 30px;
   padding: 0 25px 0 9px;
@@ -426,11 +422,11 @@
   cursor: pointer;
 }
 
-.memberPlanSelect:hover:not(:disabled) {
+.teamPlanSelect:hover:not(:disabled) {
   border-color: var(--ink-faint, #8a8982);
 }
 
-.memberPlanSelect:disabled {
+.teamPlanSelect:disabled {
   color: var(--ink-faint, #8a8982);
   cursor: not-allowed;
   opacity: 0.7;
@@ -514,19 +510,6 @@
   font-size: 9px;
 }
 
-.planCountCard strong {
-  margin-top: 15px;
-  font-size: 24px;
-  font-weight: 710;
-  letter-spacing: -0.04em;
-}
-
-.planCountCard p {
-  margin: 4px 0 0;
-  color: var(--ink-faint, #8a8982);
-  font-size: 9px;
-}
-
 @media (max-width: 760px) {
   .page {
     height: auto;
@@ -584,15 +567,14 @@
   }
 
   .statGrid,
-  .quotaGrid,
-  .planMixGrid {
+  .quotaGrid {
     grid-template-columns: 1fr;
   }
 }
 
 @media (max-width: 520px) {
   .memberRow {
-    grid-template-columns: 31px minmax(0, 1fr) 96px;
+    grid-template-columns: 31px minmax(0, 1fr);
   }
 
   .memberStatus,

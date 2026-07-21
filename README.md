@@ -22,7 +22,7 @@ Sandbox0 runtime wiring, Codex app-server event transport, native model
 discovery, image input, native Session/Turn branching, a live Web IDE,
 Environment terminal and runtime metrics.
 
-Webhooks, cron jobs, mobile clients, explicit Environment sharing and additional
+Webhooks, cron jobs, mobile clients, fine-grained Environment ACLs and additional
 native harness integrations remain future work. Sandpi's `/api/v1` contract is
 versioned, but the project is still pre-1.0 and may evolve it between releases.
 
@@ -169,10 +169,12 @@ Web today; iOS / Android / HarmonyOS later
   within each Turn. An unavailable or partially parseable rollout is reported
   in Activity without blocking the app-server conversation.
 - **Durable lifecycle:** every Environment Sandbox has a 30-day Sandbox0 hard
-  TTL. A native `turn/completed` event writes a PostgreSQL pause deadline thirty
-  minutes later; any Sandpi replica may scan it, but a per-Environment advisory
-  lock elects exactly one replica to pause after it rechecks that no Turn is
-  active or pending. Browser disconnection is irrelevant. Sandbox0 auto-resume
+  TTL. Each Environment configures its own idle auto-pause timeout, defaulting
+  to thirty minutes; zero disables automatic pause. Runtime access and native
+  `turn/completed` events calculate the PostgreSQL deadline from that setting.
+  Any Sandpi replica may scan it, but a per-Environment advisory lock elects
+  exactly one replica to pause after it rechecks that no Turn is active or
+  pending. Browser disconnection is irrelevant. Sandbox0 auto-resume
   handles the next supported runtime access; Sandpi observes and retries the
   native `waking up` transition but owns no parallel resume state machine. It
   explicitly disables Sandbox0 soft TTL. PostgreSQL derives historical idle
@@ -185,11 +187,19 @@ Web today; iOS / Android / HarmonyOS later
   and owned rootfs snapshot, then transactionally removes every active or archived
   Session, credential and Environment row. Failed external cleanup retains its
   resource coordinates so the operation can be retried safely.
-- **Private execution by default:** in the OSS MVP an Environment and its
-  Sessions are accessible only to their creator. Team membership supplies the
-  tenant and billing boundary, not implicit access to another member's Codex
-  credential, workspace or terminal. Explicit Environment sharing requires a
-  future ACL and remains disabled.
+- **Team-visible by default:** every new Environment belongs to one Team and is
+  available to all of that Team's active members by default. A creator may
+  instead create a private Environment, which only that creator can list or
+  use and which the UI marks with a private icon. Existing Environments are
+  migrated as private so an upgrade never silently expands access. Switching
+  Teams shows that Team's visible Environments plus the viewer's private
+  Environments in that Team.
+- **Session attribution and personal pins:** a Session has one immutable
+  creator. Session lists show an Owner avatar only when that creator is someone
+  other than the current viewer. Team-visible Sessions remain collaborative and
+  share their Environment runtime; Owner is attribution, not a separate
+  Workspace or an exclusive runtime lock. Pinning is stored per user, so one
+  Team member's navigation preference never reorders another member's list.
 - **Credential boundary:** provider authentication belongs to an Environment
   and is encrypted in PostgreSQL. The Environment runtime materializes
   plaintext only in `/dev/shm`; its persistent Codex home contains a link, so
@@ -204,10 +214,10 @@ Web today; iOS / Android / HarmonyOS later
 The detailed authority, reconnect and mutation invariants are documented in
 [Native coding-agent Session authority](docs/architecture/native-session-authority.md).
 
-The Sandpi database is authoritative for Team ownership of every Environment,
-native Session reference, Sandbox and Volume. The deployment Sandbox0 key does not identify a
-Sandpi Team, so every SDK operation must be authorized against Sandpi metadata
-first.
+The Sandpi database is authoritative for Team ownership and Environment
+visibility, Session ownership, every native Session reference, Sandbox and
+Volume. The deployment Sandbox0 key does not identify a Sandpi Team, so every
+SDK operation must be authorized against Sandpi metadata first.
 
 ### Environment, Session and Turn boundaries
 
@@ -285,8 +295,9 @@ Open <http://172.16.100.2:3000>. The Next.js development server listens on
 port 3000 and same-origin proxies API, health, SSE and WebSocket traffic to
 Fastify on port 3001. On startup, the API applies pending database migrations
 transactionally. Admin mode idempotently seeds the default deployment owner,
-Team and Environment; OIDC creates those resources for each user after their
-first successful login.
+Team and Team-visible Environment; OIDC creates those resources on a user's
+first successful login. The Team starts on the Free Plan with a Team-wide quota
+pool.
 
 ### Connect Codex
 
@@ -462,11 +473,14 @@ An admin-mode deployment may also boot without `SANDPI_SECRET_KEY`, but it must
 set one before connecting an Environment to Codex. Changing the key makes
 previously stored Environment credentials unreadable.
 
-The Environment creator is the credential owner. Native coding-agent Sessions
-and the Web Terminal execute inside that creator's Environment Sandbox, so the creator must be
-treated as capable of exporting their own provider credential, just as with a
-local native harness. Sandpi does not grant this access to other Team members;
-future sharing must introduce an explicit ACL and credential policy first.
+Coding-agent authentication remains Environment-scoped. A Team-visible
+Environment is a trusted collaboration boundary: every active Team member who
+can use its agent, Workspace or Terminal must be treated as capable of using or
+exporting the materialized provider credential, just as with a shared native
+harness host. Use a private Environment when a provider credential, Workspace
+or Terminal must remain creator-only. Only the creator or a Team owner/admin can
+manage a Team-visible Environment's configuration; only its creator can change
+its visibility or manage a private Environment.
 
 ### Credential materialization and refresh
 
@@ -475,10 +489,10 @@ Codex receives the official native file at
 symlink from `/workspace/.sandpi/harnesses/codex` to that memory-backed file, so
 the Workspace Volume contains no provider tokens. Sandpi materializes the
 current Environment credential when starting or recovering the shared harness
-runtime and reconciles a native refresh during runtime recovery. The
-Environment owner still has terminal and agent execution in that Sandbox and
-must be treated as able to export their own provider credential, just as with a
-local Codex installation.
+runtime and reconciles a native refresh during runtime recovery. Every user
+authorized to execute in a Team-visible Environment has terminal and agent
+execution in that Sandbox and must be treated as able to export its provider
+credential. A private Environment restricts that authority to its creator.
 
 If Workspace or Supervisor repair pauses the Sandbox after an early credential
 write, Sandpi re-materializes the credential in Sandbox0's final runtime
@@ -491,9 +505,13 @@ the Sandbox0 host and key remain independent deployment-level server secrets.
 
 - A Team is the tenant, resource-ownership and billing-attribution boundary.
   Every user belongs to at least one Team.
-- Plans attach to individual Team Memberships and are paid by that Team. A Team
-  can sponsor different Free, Pro or Max plans for different members; the Team
-  itself has no plan.
+- A Plan belongs to the Team, never to a user or Membership. Free, Pro and Max
+  Teams have different weekly execution, concurrent Session and snapshot
+  storage limits. Every active member consumes from the Team's shared quota
+  projection.
+- Memberships grant Team access and roles only. Team owners and admins may
+  change the Team Plan; changing it updates Team limits without moving or
+  resetting recorded Team usage.
 - Sandpi plans account for Sandpi-managed runtime, storage, networking and
   product services only. Sandpi never includes or resells model usage.
 - Provider accounts use the official authentication supported by the native
@@ -522,9 +540,10 @@ Sandbox0 implementation details.
   and one native harness process; all product Sessions in it share them.
 - Every Environment is provisioned from the fixed Sandbox0 `coding-agent`
   template; product Sessions allocate only native harness Sessions.
-- The Environment Sandbox has a 30-day hard TTL and is checkpoint-paused after
-  thirty minutes without a running Turn following the latest completed Turn.
-  Deadlines and retries are PostgreSQL state, not process-local timers.
+- The Environment Sandbox has a 30-day hard TTL. Its configurable idle pause
+  defaults to thirty minutes without a running Turn following the latest
+  activity; setting it to zero disables automatic pause. Deadlines and retries
+  are PostgreSQL state, not process-local timers.
 - Supervisor output is the durable native transport. PostgreSQL stores replay
   identity, cursors and scalar recovery coordinates, never a parallel Codex
   transcript. One cursor-resumable Sandbox0 event stream per Environment
@@ -551,9 +570,10 @@ Sandbox0 implementation details.
 - The OSS server currently expects one active server replica. PostgreSQL and
   Supervisor replay make process restart recoverable, but multi-replica worker
   leadership is not yet part of the supported deployment contract.
-- Team and membership billing fields model Sandpi Cloud attribution. The OSS
+- Team Plan, quota and billing fields model Sandpi Cloud attribution. The OSS
   edition does not charge for or resell model usage and does not enforce a paid
-  subscription.
+  subscription. Provider usage remains a separate live, Environment-scoped
+  projection.
 
 ## Verification
 

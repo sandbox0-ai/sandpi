@@ -46,17 +46,12 @@ export interface SandpiPlan {
 }
 
 /**
- * A Plan belongs to one Team Membership, not to the global User or the Team itself. The Team
- * reached through `membership.teamId` sponsors this assignment and receives its cost on the
- * consolidated Team bill. The effective limits are snapshotted here so existing assignments
- * remain stable when the public Plan catalog is revised.
+ * Effective Team-wide Plan and quota projection. Limits are snapshotted so an
+ * existing Team remains stable when the public Plan catalog changes.
  */
-export interface MembershipPlanAssignment {
-  id: string;
+export interface TeamPlanState {
   planId: SandpiPlanId;
   status: "active" | "pending" | "suspended";
-  currentPeriodStartsAt: UnixTimestamp;
-  currentPeriodEndsAt: UnixTimestamp;
   quotas: {
     weeklyExecution: WeeklyExecutionQuota;
     concurrentSessions: MeteredQuota & { unit: "session" };
@@ -70,14 +65,11 @@ export interface TeamMembership {
   user: SandpiUser;
   role: TeamRole;
   status: "active" | "invited";
-  planAssignment: MembershipPlanAssignment;
   joinedAt: UnixTimestamp;
 }
 
 /**
- * Payment and invoice owner for all Membership Plan assignments sponsored by a Team. A billing
- * account deliberately has no Plan: one Team may fund a different Free, Pro or Max assignment
- * for every member.
+ * Payment and invoice owner for the Team Plan.
  */
 export interface TeamBillingAccount {
   id: string;
@@ -89,8 +81,9 @@ export interface TeamBillingAccount {
 }
 
 /**
- * Team is Sandpi's only tenant and billing-attribution boundary. Every User must retain at
- * least one Team Membership; signup creates a one-member Team with a Free Plan assignment.
+ * Team is Sandpi's tenant, resource-ownership, quota and billing boundary.
+ * Every User must retain at least one Team Membership; signup creates a
+ * one-member Team on the Free Plan.
  */
 export interface Team {
   id: string;
@@ -99,6 +92,7 @@ export interface Team {
   color: string;
   /** Server-derived list summary, never the membership source of truth. */
   memberCount: number;
+  plan: TeamPlanState;
   billingAccount: TeamBillingAccount;
   createdAt: UnixTimestamp;
 }
@@ -163,6 +157,12 @@ export interface Environment {
   id: string;
   /** Immutable Sandpi tenant ownership; never inferred from the Sandbox0 API key. */
   teamId: string;
+  /** Creator retained for management authorization; Team visibility is independent. */
+  ownerId?: string;
+  /** Team is the default. Private Environments are visible only to their creator. */
+  visibility: "team" | "private";
+  /** Environment-wide idle timeout in seconds; zero disables automatic pause. */
+  idlePauseTimeoutSeconds: number;
   name: string;
   description: string;
   color: string;
@@ -404,10 +404,13 @@ export interface CodingSession<
 > {
   id: string;
   environmentId: string;
+  /** Immutable creator used for Team-visible ownership attribution. */
+  owner: SandpiUser | null;
   title: string;
   status: SessionStatus;
   /** User-facing unread activity; independent from runtime status. */
   unread: boolean;
+  /** Whether the current viewer has personally pinned this Session. */
   pinned: boolean;
   archived: boolean;
   harness: THarness;

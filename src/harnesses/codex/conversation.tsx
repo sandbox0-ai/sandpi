@@ -113,6 +113,7 @@ interface ConversationProps {
   inspectorOpen: boolean;
   inspectorTab: InspectorTab;
   terminalOpen: boolean;
+  canManageEnvironment: boolean;
   onToggleSidebar: () => void;
   onToggleInspector: () => void;
   onInspectorTabChange: (tab: InspectorTab) => void;
@@ -160,6 +161,7 @@ export function CodexConversation({
   inspectorOpen,
   inspectorTab,
   terminalOpen,
+  canManageEnvironment,
   onToggleSidebar,
   onToggleInspector,
   onInspectorTabChange,
@@ -1248,9 +1250,13 @@ export function CodexConversation({
             </button>
             <div className="conversation-title-line">
               <div className="conversation-breadcrumb">
-                <button type="button" onClick={() => onOpenSettings()}>
-                  {environment.name}
-                </button>
+                {canManageEnvironment ? (
+                  <button type="button" onClick={() => onOpenSettings()}>
+                    {environment.name}
+                  </button>
+                ) : (
+                  <span>{environment.name}</span>
+                )}
                 <span>/</span>
                 <span>{session.title}</span>
               </div>

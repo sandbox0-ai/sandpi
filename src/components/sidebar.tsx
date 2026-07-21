@@ -6,6 +6,7 @@ import {
   Check,
   CircleHelp,
   CreditCard,
+  LockKeyhole,
   PanelLeftClose,
   Pin,
   Plus,
@@ -23,7 +24,7 @@ import {
 } from "@/components/sidebar-primitives";
 import { AppSidebar } from "@/components/app-frame";
 import { getOperationUiCopy, type OperationLanguage } from "@/lib/operation-ui";
-import { planForAssignment, quotaPercent } from "@/lib/team";
+import { planForTeam, quotaPercent } from "@/lib/team";
 import { sessionStateMarker } from "@/lib/session-state-marker";
 import type {
   CodingSession,
@@ -120,9 +121,7 @@ export function Sidebar({
   const selectedMembership = viewerMemberships.find(
     (membership) => membership.teamId === selectedTeam?.id,
   );
-  const selectedPlan = selectedMembership
-    ? planForAssignment(plans, selectedMembership.planAssignment)
-    : undefined;
+  const selectedPlan = selectedTeam ? planForTeam(plans, selectedTeam) : undefined;
   const unreadLabel = language === "zh-CN" ? "未读" : "Unread";
   const runningLabel = language === "zh-CN" ? "运行中" : "Running";
   const [sessionSearchOpen, setSessionSearchOpen] = useState(false);
@@ -246,12 +245,7 @@ export function Sidebar({
           <div className="account-team-list" role="group" aria-label={ui.teams}>
             {teams.map((team) => {
               const selected = team.id === selectedTeamId;
-              const membership = viewerMemberships.find(
-                (candidate) => candidate.teamId === team.id,
-              );
-              const plan = membership
-                ? planForAssignment(plans, membership.planAssignment)
-                : undefined;
+              const plan = planForTeam(plans, team);
               return (
                 <button
                   type="button"
@@ -287,12 +281,12 @@ export function Sidebar({
               <div>
                 <span>
                   <CreditCard size={13} aria-hidden="true" />
-                  {selectedPlan?.name ?? selectedMembership.planAssignment.planId}
+                  {selectedPlan?.name ?? selectedTeam.plan.planId}
                 </span>
                 <strong>
                   {quotaPercent(
-                    selectedMembership.planAssignment.quotas.weeklyExecution.used,
-                    selectedMembership.planAssignment.quotas.weeklyExecution.limit,
+                    selectedTeam.plan.quotas.weeklyExecution.used,
+                    selectedTeam.plan.quotas.weeklyExecution.limit,
                   )}
                   %
                 </strong>
@@ -301,8 +295,8 @@ export function Sidebar({
                 <i
                   style={{
                     width: `${quotaPercent(
-                      selectedMembership.planAssignment.quotas.weeklyExecution.used,
-                      selectedMembership.planAssignment.quotas.weeklyExecution.limit,
+                      selectedTeam.plan.quotas.weeklyExecution.used,
+                      selectedTeam.plan.quotas.weeklyExecution.limit,
                     )}%`,
                   }}
                 />
@@ -310,11 +304,11 @@ export function Sidebar({
               <small>
                 {ui.weeklyExecution(
                   Math.round(
-                    selectedMembership.planAssignment.quotas.weeklyExecution.used /
+                    selectedTeam.plan.quotas.weeklyExecution.used /
                       60,
                   ),
                   Math.round(
-                    selectedMembership.planAssignment.quotas.weeklyExecution.limit /
+                    selectedTeam.plan.quotas.weeklyExecution.limit /
                       60,
                   ),
                 )}
@@ -419,6 +413,11 @@ export function Sidebar({
                 environment.id,
               );
               const selected = environment.id === selectedEnvironmentId;
+              const canManage =
+                environment.ownerId === viewer.id ||
+                (environment.visibility === "team" &&
+                  (selectedMembership?.role === "owner" ||
+                    selectedMembership?.role === "admin"));
 
               return (
                 <section className="environment-group" key={environment.id}>
@@ -441,6 +440,13 @@ export function Sidebar({
                       <span className="environment-name">
                         {environment.name}
                       </span>
+                      {environment.visibility === "private" ? (
+                        <LockKeyhole
+                          className="environment-private-icon"
+                          size={11}
+                          aria-label="Private Environment"
+                        />
+                      ) : null}
                     </button>
                     <span className="environment-row-actions">
                       <button
@@ -451,14 +457,16 @@ export function Sidebar({
                       >
                         <Plus size={14} aria-hidden="true" />
                       </button>
-                      <button
-                        type="button"
-                        aria-label={ui.environmentSettingsFor(environment.name)}
-                        title={ui.environmentSettings}
-                        onClick={() => onEnvironmentSettings(environment.id)}
-                      >
-                        <Settings2 size={14} aria-hidden="true" />
-                      </button>
+                      {canManage ? (
+                        <button
+                          type="button"
+                          aria-label={ui.environmentSettingsFor(environment.name)}
+                          title={ui.environmentSettings}
+                          onClick={() => onEnvironmentSettings(environment.id)}
+                        >
+                          <Settings2 size={14} aria-hidden="true" />
+                        </button>
+                      ) : null}
                     </span>
                   </div>
 
@@ -487,6 +495,15 @@ export function Sidebar({
                             unreadLabel={unreadLabel}
                             runningLabel={runningLabel}
                           />
+                          {session.owner && session.owner.id !== viewer.id ? (
+                            <span
+                              className="session-owner-avatar"
+                              title={`Owner: ${session.owner.name}`}
+                              aria-label={`Owner: ${session.owner.name}`}
+                            >
+                              {session.owner.avatarInitials}
+                            </span>
+                          ) : null}
                           <span className="session-title">{session.title}</span>
                         </button>
 
@@ -513,6 +530,7 @@ export function Sidebar({
         <SessionSearchDialog
           environments={environments}
           sessions={sessions}
+          viewerId={viewer.id}
           onClose={() => setSessionSearchOpen(false)}
           onSelect={(sessionId) => {
             setSessionSearchOpen(false);

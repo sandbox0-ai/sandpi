@@ -64,7 +64,10 @@ export class CodexEnvironmentAuthService {
 
   async startDeviceLogin(userId: string, environmentId: string) {
     this.requireEncryption();
-    const environment = await this.store.getEnvironment(userId, environmentId);
+    const environment = await this.store.getManageableEnvironment(
+      userId,
+      environmentId,
+    );
 
     const expired = await this.authStore.findExpiredFlow(userId, environmentId);
     if (expired) await this.expireAndCleanup(expired);

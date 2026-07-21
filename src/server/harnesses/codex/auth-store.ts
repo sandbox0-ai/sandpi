@@ -121,8 +121,11 @@ export class CodexAuthStore {
             ON m.team_id = e.team_id
            AND m.user_id = $2
            AND m.status = 'active'
-          WHERE e.created_by_user_id = $2
-            AND e.id = $3 AND e.status <> 'archived'
+          WHERE e.id = $3 AND e.status <> 'archived'
+            AND (
+              e.created_by_user_id = $2
+              OR (e.visibility = 'team' AND m.role IN ('owner', 'admin'))
+            )
           RETURNING *
         `,
         [id, input.userId, input.environmentId, input.expiresAt],
@@ -146,7 +149,11 @@ export class CodexAuthStore {
   async findActiveFlow(userId: string, environmentId: string) {
     const result = await this.pool.query<FlowRow>(
       `${authorizedFlowSelect()}
-       WHERE m.user_id = $1 AND e.created_by_user_id = $1
+       WHERE m.user_id = $1
+         AND (
+           e.created_by_user_id = $1
+           OR (e.visibility = 'team' AND m.role IN ('owner', 'admin'))
+         )
          AND f.environment_id = $2
          AND f.status = ANY($3::TEXT[])
          AND f.expires_at > NOW()
@@ -160,7 +167,11 @@ export class CodexAuthStore {
   async findExpiredFlow(userId: string, environmentId: string) {
     const result = await this.pool.query<FlowRow>(
       `${authorizedFlowSelect()}
-       WHERE m.user_id = $1 AND e.created_by_user_id = $1
+       WHERE m.user_id = $1
+         AND (
+           e.created_by_user_id = $1
+           OR (e.visibility = 'team' AND m.role IN ('owner', 'admin'))
+         )
          AND f.environment_id = $2
          AND f.status = ANY($3::TEXT[]) AND f.expires_at <= NOW()
        ORDER BY f.created_at DESC
@@ -183,7 +194,11 @@ export class CodexAuthStore {
   async getFlow(userId: string, environmentId: string, flowId: string) {
     const result = await this.pool.query<FlowRow>(
       `${authorizedFlowSelect()}
-       WHERE m.user_id = $1 AND e.created_by_user_id = $1
+       WHERE m.user_id = $1
+         AND (
+           e.created_by_user_id = $1
+           OR (e.visibility = 'team' AND m.role IN ('owner', 'admin'))
+         )
          AND f.environment_id = $2 AND f.id = $3`,
       [userId, environmentId, flowId],
     );
@@ -371,8 +386,8 @@ export class CodexAuthStore {
          ON m.team_id = e.team_id
         AND m.user_id = $1
         AND m.status = 'active'
-       WHERE e.created_by_user_id = $1
-         AND c.environment_id = $2 AND c.harness = 'codex'
+       WHERE c.environment_id = $2 AND c.harness = 'codex'
+         AND (e.visibility = 'team' OR e.created_by_user_id = $1)
          AND c.credential_slot = 'account'
          AND c.revoked_at IS NULL
        LIMIT 1`,

@@ -43,6 +43,9 @@ const credentials = {
 const environment: Environment = {
   id: "environment-test",
   teamId: "team-test",
+  ownerId: "user-test",
+  visibility: "team",
+  idlePauseTimeoutSeconds: 30 * 60,
   name: "Development",
   description: "",
   color: "#151515",
@@ -72,6 +75,7 @@ function session(
   return {
     id,
     environmentId: environment.id,
+    owner: null,
     title: id,
     status,
     unread: false,

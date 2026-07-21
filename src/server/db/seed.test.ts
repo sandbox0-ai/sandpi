@@ -9,6 +9,7 @@ test("community seed is deterministic for an injected timestamp", () => {
   assert.equal(seed.team.id, COMMUNITY_DEFAULT_SEED.team.id);
   assert.equal(seed.environment.id, COMMUNITY_DEFAULT_SEED.environment.id);
   assert.equal(seed.environment.harness, "codex");
+  assert.equal("planAssignmentId" in seed.membership, false);
   assert.equal(seed.periodEndsAt.toISOString(), "2026-08-14T00:00:00.000Z");
   assert.equal(seed.weeklyQuotaResetsAt.toISOString(), "2026-07-21T00:00:00.000Z");
 });

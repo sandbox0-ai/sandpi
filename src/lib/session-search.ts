@@ -20,10 +20,13 @@ function relevance(
   if (environment.name.toLocaleLowerCase().includes(query)) {
     return 2;
   }
-  if (session.harnessLabel.toLocaleLowerCase().includes(query)) {
+  if (session.owner?.name.toLocaleLowerCase().includes(query)) {
     return 3;
   }
-  return 4;
+  if (session.harnessLabel.toLocaleLowerCase().includes(query)) {
+    return 4;
+  }
+  return 5;
 }
 
 export function searchSessions(
@@ -50,6 +53,8 @@ export function searchSessions(
       return [
         session.title,
         environment.name,
+        session.owner?.name ?? "",
+        session.owner?.email ?? "",
         session.harnessLabel,
         session.status,
       ].some((value) => value.toLocaleLowerCase().includes(query));

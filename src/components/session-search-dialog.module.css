@@ -214,12 +214,33 @@
 }
 
 .resultMeta {
-  padding: 3px 6px;
-  border-radius: 999px;
-  background: var(--sidebar);
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   color: var(--ink-faint);
   font-size: 8px;
   text-transform: capitalize;
+}
+
+.resultMeta > span:last-child {
+  padding: 3px 6px;
+  border-radius: 999px;
+  background: var(--sidebar);
+}
+
+.ownerAvatar {
+  display: inline-flex;
+  width: 23px;
+  height: 23px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--panel-strong);
+  font-size: 7px;
+  font-style: normal;
+  font-weight: 700;
+  letter-spacing: -0.02em;
 }
 
 .emptyState {

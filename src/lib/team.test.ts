@@ -10,12 +10,12 @@ import {
   mockViewer,
 } from "@/lib/mock-data";
 import {
-  assignMembershipPlan,
-  canStartMembershipExecution,
+  assignTeamPlan,
+  canStartTeamExecution,
   environmentsForTeam,
   membershipForUserInTeam,
-  membershipPlanCounts,
   membershipsForUser,
+  planForTeam,
   quotaPercent,
   sessionsForTeam,
 } from "@/lib/team";
@@ -35,44 +35,33 @@ test("scopes Environments and Sessions to one Sandpi Team", () => {
   );
 });
 
-test("keeps Plans on Memberships while the Team owns consolidated billing", () => {
+test("keeps the Plan and quota pool on the Team, never its Memberships", () => {
   const team = mockTeams[0];
   assert.ok(team);
-  const memberships = mockTeamMemberships.filter(
-    (membership) => membership.teamId === team.id,
-  );
   const viewerMembership = membershipForUserInTeam(
-    memberships,
+    mockTeamMemberships,
     mockViewer.id,
     team.id,
   );
 
   assert.ok(viewerMembership);
   assert.equal(team.billingAccount.billingCadence, "monthly");
-  assert.equal("planId" in team, false);
-  assert.equal("subscription" in team, false);
-  assert.equal(viewerMembership.planAssignment.planId, "max");
-  assert.equal(
-    viewerMembership.planAssignment.quotas.weeklyExecution.window,
-    "weekly",
-  );
-  assert.equal(canStartMembershipExecution(viewerMembership, team), true);
-  assert.deepEqual(membershipPlanCounts(memberships), {
-    free: 1,
-    pro: 2,
-    max: 1,
-  });
-  assert.equal(quotaPercent(3_240, 7_200), 45);
+  assert.equal(team.plan.planId, "max");
+  assert.equal(team.plan.quotas.weeklyExecution.window, "weekly");
+  assert.equal(planForTeam(mockSandpiPlans, team)?.name, "Max");
+  assert.equal("planAssignment" in viewerMembership, false);
+  assert.equal(canStartTeamExecution(team), true);
+  assert.equal(quotaPercent(4_750, 7_200), 66);
 });
 
-test("gives one User an independent Plan assignment in every Team", () => {
+test("gives each Team an independent Plan when one User belongs to both", () => {
   const memberships = membershipsForUser(mockTeamMemberships, mockViewer.id);
+  const teamIds = new Set(memberships.map((membership) => membership.teamId));
 
   assert.deepEqual(
-    memberships.map((membership) => [
-      membership.teamId,
-      membership.planAssignment.planId,
-    ]),
+    mockTeams
+      .filter((team) => teamIds.has(team.id))
+      .map((team) => [team.id, team.plan.planId]),
     [
       ["team-sandpi-labs", "max"],
       ["team-side-projects", "pro"],
@@ -80,33 +69,30 @@ test("gives one User an independent Plan assignment in every Team", () => {
   );
 });
 
-test("reassigns one Membership without moving its recorded usage", () => {
-  const membership = mockTeamMemberships.find(
-    (candidate) => candidate.id === "member-ada-labs",
-  );
+test("reassigns a Team Plan without moving its recorded usage", () => {
+  const team = mockTeams.find((candidate) => candidate.id === "team-side-projects");
   const maxPlan = mockSandpiPlans.find((plan) => plan.id === "max");
-  assert.ok(membership);
+  assert.ok(team);
   assert.ok(maxPlan);
 
-  const assigned = assignMembershipPlan(membership.planAssignment, maxPlan);
+  const assigned = assignTeamPlan(team.plan, maxPlan);
 
   assert.equal(assigned.planId, "max");
-  assert.equal(assigned.quotas.weeklyExecution.used, 160);
+  assert.equal(assigned.quotas.weeklyExecution.used, 410);
   assert.equal(assigned.quotas.weeklyExecution.limit, 7_200);
   assert.equal(assigned.quotas.concurrentSessions.limit, 12);
   assert.equal(assigned.quotas.snapshotStorage.limit, 80);
 });
 
-test("does not activate a pending invite when its sponsored Plan changes", () => {
-  const invited = mockTeamMemberships.find(
-    (candidate) => candidate.id === "member-noah-labs",
+test("blocks Team execution when the Team Plan is suspended", () => {
+  const team = mockTeams[0];
+  assert.ok(team);
+
+  assert.equal(
+    canStartTeamExecution({
+      ...team,
+      plan: { ...team.plan, status: "suspended" },
+    }),
+    false,
   );
-  const proPlan = mockSandpiPlans.find((plan) => plan.id === "pro");
-  assert.ok(invited);
-  assert.ok(proPlan);
-
-  const assigned = assignMembershipPlan(invited.planAssignment, proPlan);
-
-  assert.equal(assigned.planId, "pro");
-  assert.equal(assigned.status, "pending");
 });

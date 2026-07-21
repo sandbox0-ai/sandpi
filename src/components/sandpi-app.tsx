@@ -190,6 +190,23 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
     [initialData.teams, selectedTeamId],
   );
 
+  const selectedTeamMembership = useMemo(
+    () =>
+      initialData.viewerMemberships.find(
+        (membership) => membership.teamId === selectedTeamId,
+      ),
+    [initialData.viewerMemberships, selectedTeamId],
+  );
+
+  const canManageEnvironment = useCallback(
+    (environment: Environment) =>
+      environment.ownerId === initialData.viewer.id ||
+      (environment.visibility === "team" &&
+        (selectedTeamMembership?.role === "owner" ||
+          selectedTeamMembership?.role === "admin")),
+    [initialData.viewer.id, selectedTeamMembership?.role],
+  );
+
   const teamEnvironments = useMemo(
     () => environmentsForTeam(environments, selectedTeamId),
     [environments, selectedTeamId],
@@ -357,9 +374,17 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
     [settingsEnvironmentId, teamEnvironments],
   );
 
-  const openEnvironmentSettings = useCallback((environmentId: string) => {
-    setSettingsEnvironmentId(environmentId);
-  }, []);
+  const openEnvironmentSettings = useCallback(
+    (environmentId: string) => {
+      const environment = environments.find(
+        (candidate) => candidate.id === environmentId,
+      );
+      if (environment && canManageEnvironment(environment)) {
+        setSettingsEnvironmentId(environmentId);
+      }
+    },
+    [canManageEnvironment, environments],
+  );
 
   const handleSelectTeam = useCallback(
     (teamId: string) => {
@@ -853,6 +878,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
           inspectorOpen={showInspector}
           inspectorTab={inspectorTab}
           terminalOpen={showTerminal}
+          canManageEnvironment={canManageEnvironment(selectedEnvironment)}
           onToggleSidebar={handleToggleNavigation}
           onToggleInspector={() => handleInspectorOpenChange(!showInspector)}
           onInspectorTabChange={handleInspectorTabChange}
@@ -873,6 +899,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
           language={preferences.general.language}
           sendShortcut={preferences.general.sendShortcut}
           environment={selectedEnvironment}
+          canManageEnvironment={canManageEnvironment(selectedEnvironment)}
           onEnvironmentChange={handleEnvironmentChange}
           onCreated={handleSessionCreated}
           onOpenSettings={() =>
@@ -911,6 +938,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
           key={settingsEnvironment.id}
           environment={settingsEnvironment}
           teamName={selectedTeam.name}
+          canChangeVisibility={settingsEnvironment.ownerId === initialData.viewer.id}
           language={preferences.general.language}
           timeZone={preferences.general.timeZone}
           archivedSessions={teamSessions

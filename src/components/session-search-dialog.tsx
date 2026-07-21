@@ -11,6 +11,7 @@ import styles from "./session-search-dialog.module.css";
 interface SessionSearchDialogProps {
   environments: Environment[];
   sessions: CodingSession[];
+  viewerId: string;
   onSelect: (sessionId: string) => void;
   onClose: () => void;
 }
@@ -18,6 +19,7 @@ interface SessionSearchDialogProps {
 export function SessionSearchDialog({
   environments,
   sessions,
+  viewerId,
   onSelect,
   onClose,
 }: SessionSearchDialogProps) {
@@ -164,7 +166,18 @@ export function SessionSearchDialog({
                     {environment.name} <span>·</span> {session.harnessLabel}
                   </small>
                 </span>
-                <span className={styles.resultMeta}>{session.status}</span>
+                <span className={styles.resultMeta}>
+                  {session.owner && session.owner.id !== viewerId ? (
+                    <span
+                      className={styles.ownerAvatar}
+                      title={`Owner: ${session.owner.name}`}
+                      aria-label={`Owner: ${session.owner.name}`}
+                    >
+                      {session.owner.avatarInitials}
+                    </span>
+                  ) : null}
+                  <span>{session.status}</span>
+                </span>
               </button>
             ))
           ) : (

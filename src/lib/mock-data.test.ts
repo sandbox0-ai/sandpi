@@ -26,6 +26,9 @@ test("binds the coding agent to an Environment and every derived Session", () =>
 
   assert.equal(environment.codingAgent.harness, "codex");
   assert.equal(environment.teamId, "team-sandpi-labs");
+  assert.equal(environment.ownerId, session.owner?.id);
+  assert.equal(environment.visibility, "team");
+  assert.equal(environment.idlePauseTimeoutSeconds, 30 * 60);
   assert.equal(session.harness, environment.codingAgent.harness);
   assert.equal(session.harnessLabel, environment.codingAgent.label);
   assert.equal(session.environmentRevision, environment.revision);
@@ -77,23 +80,32 @@ test("bootstraps one selected Team without exposing deployment credentials", () 
   assert.equal("apiHost" in bootstrap.deployment.runtime, false);
   assert.equal("apiKey" in bootstrap.deployment.runtime, false);
   assert.equal(mockTeams[0]?.billingAccount.billingCadence, "monthly");
-  assert.equal("subscription" in (mockTeams[0] ?? {}), false);
+  assert.equal(mockTeams[0]?.plan.planId, "max");
+  assert.equal(bootstrap.teams.find((team) => team.id === bootstrap.selectedTeamId)?.plan.planId, "pro");
   assert.deepEqual(
     mockSandpiPlans.map((plan) => plan.id),
     ["free", "pro", "max"],
   );
   assert.equal(bootstrap.viewerMemberships.length, 2);
-  assert.equal(
-    bootstrap.viewerMemberships.find(
-      (membership) => membership.teamId === bootstrap.selectedTeamId,
-    )?.planAssignment.planId,
-    "pro",
-  );
   assert.ok(
     mockTeamMemberships.every(
-      (membership) => membership.planAssignment.quotas.weeklyExecution.window === "weekly",
+      (membership) => !("planAssignment" in membership),
     ),
   );
+});
+
+test("marks private Environments and attributes Sessions to their owners", () => {
+  const privateEnvironment = mockEnvironments.find(
+    (environment) => environment.id === "env-personal",
+  );
+  const teammateSession = mockSessions.find(
+    (session) => session.id === "session-sdk-release",
+  );
+
+  assert.equal(privateEnvironment?.visibility, "private");
+  assert.equal(privateEnvironment?.ownerId, "user-yan");
+  assert.equal(teammateSession?.owner?.name, "Mira Chen");
+  assert.equal(teammateSession?.owner?.avatarInitials, "MC");
 });
 
 test("keeps every mock Session on its Environment revision", () => {

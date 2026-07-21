@@ -3,7 +3,7 @@ import test from "node:test";
 
 import type { RuntimeAdapter } from "@/server/runtime/types";
 import type { SandpiStore, StoredEnvironmentRuntime } from "@/server/store";
-import { ENVIRONMENT_IDLE_PAUSE_DELAY_MS } from "./lifecycle-policy";
+import { DEFAULT_ENVIRONMENT_IDLE_PAUSE_TIMEOUT_SECONDS } from "./lifecycle-policy";
 import { EnvironmentLifecycleService } from "./lifecycle-service";
 
 const hardExpiresAt = new Date("2026-08-15T00:00:00.000Z");
@@ -39,8 +39,8 @@ const logger = {
   warn() {},
 };
 
-test("Environment idle pause waits thirty minutes", () => {
-  assert.equal(ENVIRONMENT_IDLE_PAUSE_DELAY_MS, 30 * 60 * 1_000);
+test("new Environments default to a thirty-minute idle pause", () => {
+  assert.equal(DEFAULT_ENVIRONMENT_IDLE_PAUSE_TIMEOUT_SECONDS, 30 * 60);
 });
 
 test("one elected worker applies policy and pauses a due idle Environment", async () => {

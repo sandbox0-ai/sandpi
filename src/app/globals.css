@@ -405,6 +405,11 @@ pre,
   white-space: nowrap;
 }
 
+.environment-private-icon {
+  flex: 0 0 auto;
+  color: var(--ink-faint);
+}
+
 .environment-row-actions {
   display: inline-flex;
   flex: 0 0 auto;
@@ -492,6 +497,22 @@ pre,
 .session-main-button:focus-visible {
   border-radius: 5px;
   outline-offset: -1px;
+}
+
+.session-owner-avatar {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--panel-strong);
+  color: var(--ink-soft);
+  font-size: 7px;
+  font-weight: 760;
+  letter-spacing: -0.02em;
 }
 
 .session-more-button {
@@ -992,6 +1013,10 @@ pre,
   color: var(--ink);
   text-decoration: underline;
   text-underline-offset: 3px;
+}
+
+.conversation-breadcrumb > span:first-child {
+  color: var(--ink-soft);
 }
 
 .conversation-breadcrumb span:last-child {

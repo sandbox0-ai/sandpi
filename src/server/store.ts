@@ -7,7 +7,6 @@ import type {
   Environment,
   EnvironmentPauseInterval,
   EnvironmentSandboxState,
-  MembershipPlanAssignment,
   NetworkPolicy,
   SandpiBootstrap,
   SandpiDeploymentSummary,
@@ -16,11 +15,11 @@ import type {
   SandpiUser,
   Team,
   TeamMembership,
+  TeamPlanState,
 } from "@/lib/types";
 import { parseUnixTimestamp, toUnixTimestamp } from "@/lib/time";
 import { conflict, HttpError, notFound } from "@/server/http-error";
 import {
-  ENVIRONMENT_IDLE_PAUSE_DELAY_MS,
   ENVIRONMENT_LIFECYCLE_POLICY_VERSION,
   ENVIRONMENT_PAUSE_RETRY_DELAY_MS,
   ENVIRONMENT_SANDBOX_HARD_TTL_SECONDS,
@@ -129,6 +128,9 @@ interface UserRow extends QueryResultRow {
 interface EnvironmentRow extends QueryResultRow {
   id: string;
   team_id: string;
+  created_by_user_id: string | null;
+  visibility: Environment["visibility"];
+  idle_pause_timeout_seconds: number;
   name: string;
   description: string;
   color: string;
@@ -168,6 +170,10 @@ interface SessionRow extends QueryResultRow {
   model_id: string | null;
   reasoning_effort: string | null;
   history_revision: string | number | null;
+  owner_id: string | null;
+  owner_email: string | null;
+  owner_name: string | null;
+  owner_avatar_initials: string | null;
 }
 
 interface EnvironmentRuntimeRow extends QueryResultRow {
@@ -225,6 +231,14 @@ interface TeamRow extends QueryResultRow {
   slug: string;
   color: string;
   member_count: number;
+  plan_id: TeamPlanState["planId"];
+  plan_status: TeamPlanState["status"];
+  plan_quotas: Omit<TeamPlanState["quotas"], "weeklyExecution"> & {
+    weeklyExecution: Omit<
+      TeamPlanState["quotas"]["weeklyExecution"],
+      "resetsAt"
+    > & { resetsAt: string | number };
+  };
   billing_account_id: string;
   billing_status: Team["billingAccount"]["status"];
   billing_cadence: Team["billingAccount"]["billingCadence"];
@@ -243,17 +257,6 @@ interface MembershipRow extends QueryResultRow {
   avatar_initials: string;
   role: TeamMembership["role"];
   status: TeamMembership["status"];
-  plan_assignment_id: string;
-  plan_id: MembershipPlanAssignment["planId"];
-  plan_status: MembershipPlanAssignment["status"];
-  plan_period_starts_at: Date;
-  plan_period_ends_at: Date;
-  plan_quotas: Omit<MembershipPlanAssignment["quotas"], "weeklyExecution"> & {
-    weeklyExecution: Omit<
-      MembershipPlanAssignment["quotas"]["weeklyExecution"],
-      "resetsAt"
-    > & { resetsAt: string | number };
-  };
   joined_at: Date;
 }
 
@@ -398,8 +401,11 @@ export class SandpiStore {
          ON membership.team_id = environment.team_id
         AND membership.user_id = $1
         AND membership.status = 'active'
-       WHERE environment.created_by_user_id = $1
-         AND environment.status <> 'archived'
+       WHERE environment.status <> 'archived'
+         AND (
+           environment.visibility = 'team'
+           OR environment.created_by_user_id = $1
+         )
        ORDER BY environment.created_at, environment.id`,
       [userId],
     );
@@ -413,8 +419,38 @@ export class SandpiStore {
          ON membership.team_id = environment.team_id
         AND membership.user_id = $1
         AND membership.status = 'active'
-       WHERE environment.created_by_user_id = $1
-         AND environment.id = $2 AND environment.status <> 'archived'`,
+       WHERE environment.id = $2 AND environment.status <> 'archived'
+         AND (
+           environment.visibility = 'team'
+           OR environment.created_by_user_id = $1
+         )`,
+      [userId, environmentId],
+    );
+    const row = result.rows[0];
+    if (!row) throw notFound("environment_not_found", "Environment not found.");
+    return environmentFromRow(row);
+  }
+
+  /**
+   * Management is narrower than Team visibility. A private Environment can be
+   * managed only by its creator; a Team Environment can also be managed by a
+   * Team owner or admin.
+   */
+  async getManageableEnvironment(userId: string, environmentId: string) {
+    const result = await this.pool.query<EnvironmentRow>(
+      `${ENVIRONMENT_SELECT}
+       JOIN team_memberships membership
+         ON membership.team_id = environment.team_id
+        AND membership.user_id = $1
+        AND membership.status = 'active'
+       WHERE environment.id = $2 AND environment.status <> 'archived'
+         AND (
+           environment.created_by_user_id = $1
+           OR (
+             environment.visibility = 'team'
+             AND membership.role IN ('owner', 'admin')
+           )
+         )`,
       [userId, environmentId],
     );
     const row = result.rows[0];
@@ -437,6 +473,7 @@ export class SandpiStore {
     userId: string;
     teamId: string;
     name: string;
+    visibility: Environment["visibility"];
   }) {
     const membership = await this.pool.query(
       `SELECT 1 FROM team_memberships
@@ -450,15 +487,15 @@ export class SandpiStore {
       await client.query("BEGIN");
       await client.query(
         `INSERT INTO environments (
-           id, team_id, created_by_user_id, name, description, color, status,
+           id, team_id, created_by_user_id, visibility, name, description, color, status,
            revision, template_id, credential_revision, harness,
            harness_metadata, network_policy
          ) VALUES (
-           $1, $2, $3, $4, '', '#151515', 'updating', 1, 'coding-agent', 0,
+           $1, $2, $3, $4, $5, '', '#151515', 'updating', 1, 'coding-agent', 0,
            'codex', '{"label":"Codex","status":"not-connected"}'::JSONB,
            '{"mode":"allow-all","domainExceptions":[]}'::JSONB
          )`,
-        [id, input.teamId, input.userId, input.name],
+        [id, input.teamId, input.userId, input.visibility, input.name],
       );
       await client.query(
         `INSERT INTO environment_runtime (
@@ -551,13 +588,25 @@ export class SandpiStore {
       await client.query(
         `INSERT INTO environment_runtime (
            environment_id, sandbox_id, desired_state, observed_state,
-           lifecycle_policy_version, sandbox_hard_expires_at
-         ) VALUES ($1, $2, 'running', 'running', $3, $4)
+           lifecycle_policy_version, sandbox_hard_expires_at,
+           idle_pause_due_at
+         )
+         SELECT $1, $2, 'running', 'running', $3, $4,
+                CASE
+                  WHEN environment.idle_pause_timeout_seconds = 0 THEN NULL
+                  ELSE NOW() + (
+                    environment.idle_pause_timeout_seconds::BIGINT
+                    * INTERVAL '1 second'
+                  )
+                END
+         FROM environments environment
+         WHERE environment.id = $1
          ON CONFLICT (environment_id) DO UPDATE
          SET sandbox_id = EXCLUDED.sandbox_id,
              desired_state = 'running', observed_state = 'running',
              lifecycle_policy_version = EXCLUDED.lifecycle_policy_version,
              sandbox_hard_expires_at = EXCLUDED.sandbox_hard_expires_at,
+             idle_pause_due_at = EXCLUDED.idle_pause_due_at,
              lifecycle_error = NULL, paused_at = NULL,
              provisioning_error = NULL`,
         [
@@ -595,7 +644,7 @@ export class SandpiStore {
   }
 
   async markEnvironmentProvisioning(userId: string, environmentId: string) {
-    await this.getEnvironment(userId, environmentId);
+    await this.getManageableEnvironment(userId, environmentId);
     await this.pool.query(
       `UPDATE environments
        SET status = 'updating', provisioning_error = NULL
@@ -611,7 +660,7 @@ export class SandpiStore {
            provisioning_error = NULL`,
       [environmentId],
     );
-    return this.getEnvironment(userId, environmentId);
+    return this.getManageableEnvironment(userId, environmentId);
   }
 
   async environmentsNeedingProvisioning() {
@@ -639,28 +688,69 @@ export class SandpiStore {
       name: string;
       description: string;
       color: string;
+      visibility: Environment["visibility"];
+      idlePauseTimeoutSeconds: number;
       networkPolicy: NetworkPolicy;
     },
   ) {
-    await this.getEnvironment(userId, environmentId);
-    await this.pool.query(
-      `UPDATE environments
-       SET name = $2, description = $3, color = $4,
-           network_policy = $5::JSONB, revision = revision + 1
-       WHERE id = $1`,
-      [
-        environmentId,
-        input.name,
-        input.description,
-        input.color,
-        JSON.stringify(input.networkPolicy),
-      ],
-    );
-    return this.getEnvironment(userId, environmentId);
+    const current = await this.getManageableEnvironment(userId, environmentId);
+    const timeoutChanged =
+      current.idlePauseTimeoutSeconds !== input.idlePauseTimeoutSeconds;
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        `UPDATE environments
+         SET name = $2, description = $3, color = $4,
+             visibility = $5, idle_pause_timeout_seconds = $6,
+             network_policy = $7::JSONB, revision = revision + 1
+         WHERE id = $1`,
+        [
+          environmentId,
+          input.name,
+          input.description,
+          input.color,
+          input.visibility,
+          input.idlePauseTimeoutSeconds,
+          JSON.stringify(input.networkPolicy),
+        ],
+      );
+      if (timeoutChanged) {
+        await client.query(
+          `UPDATE environment_runtime
+           SET desired_state = CASE
+                 WHEN observed_state = 'running'
+                   AND desired_state <> 'terminated' THEN 'running'
+                 ELSE desired_state
+               END,
+               idle_pause_due_at = CASE
+                 WHEN $2::INTEGER = 0 THEN NULL
+                 WHEN observed_state = 'running'
+                   AND desired_state <> 'terminated'
+                 THEN NOW() + ($2::BIGINT * INTERVAL '1 second')
+                 ELSE idle_pause_due_at
+               END,
+               lifecycle_error = CASE
+                 WHEN observed_state = 'running' THEN NULL
+                 ELSE lifecycle_error
+               END,
+               version = version + 1
+           WHERE environment_id = $1`,
+          [environmentId, input.idlePauseTimeoutSeconds],
+        );
+      }
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+    return this.getManageableEnvironment(userId, environmentId);
   }
 
   async prepareEnvironmentDeletion(userId: string, environmentId: string) {
-    const environment = await this.getEnvironment(userId, environmentId);
+    const environment = await this.getManageableEnvironment(userId, environmentId);
     if (environment.status === "updating") {
       throw conflict(
         "environment_provisioning_in_progress",
@@ -703,7 +793,13 @@ export class SandpiStore {
           AND membership.user_id = $1
           AND membership.status = 'active'
          WHERE environment.id = $2
-           AND environment.created_by_user_id = $1
+           AND (
+             environment.created_by_user_id = $1
+             OR (
+               environment.visibility = 'team'
+               AND membership.role IN ('owner', 'admin')
+             )
+           )
            AND environment.status <> 'archived'
          FOR UPDATE`,
         [userId, environmentId],
@@ -790,19 +886,27 @@ export class SandpiStore {
    */
   async recordEnvironmentRuntimeAccess(environmentId: string) {
     await this.pool.query(
-      `UPDATE environment_runtime
+      `UPDATE environment_runtime runtime
        SET desired_state = 'running',
            observed_state = 'running',
-           idle_pause_due_at = GREATEST(
-             COALESCE(idle_pause_due_at, NOW()),
-             NOW() + ($2::BIGINT * INTERVAL '1 millisecond')
-           ),
+           idle_pause_due_at = CASE
+             WHEN environment.idle_pause_timeout_seconds = 0 THEN NULL
+             ELSE GREATEST(
+               COALESCE(runtime.idle_pause_due_at, NOW()),
+               NOW() + (
+                 environment.idle_pause_timeout_seconds::BIGINT
+                 * INTERVAL '1 second'
+               )
+             )
+           END,
            lifecycle_error = NULL,
            paused_at = NULL,
            version = version + 1
-       WHERE environment_id = $1
-         AND desired_state <> 'terminated'`,
-      [environmentId, ENVIRONMENT_IDLE_PAUSE_DELAY_MS],
+       FROM environments environment
+       WHERE runtime.environment_id = $1
+         AND environment.id = runtime.environment_id
+         AND runtime.desired_state <> 'terminated'`,
+      [environmentId],
     );
     return this.environmentRuntime(environmentId);
   }
@@ -814,17 +918,25 @@ export class SandpiStore {
    */
   async touchRunningEnvironmentRuntime(environmentId: string) {
     const result = await this.pool.query(
-      `UPDATE environment_runtime
-       SET idle_pause_due_at = GREATEST(
-             COALESCE(idle_pause_due_at, NOW()),
-             NOW() + ($2::BIGINT * INTERVAL '1 millisecond')
-           ),
+      `UPDATE environment_runtime runtime
+       SET idle_pause_due_at = CASE
+             WHEN environment.idle_pause_timeout_seconds = 0 THEN NULL
+             ELSE GREATEST(
+               COALESCE(runtime.idle_pause_due_at, NOW()),
+               NOW() + (
+                 environment.idle_pause_timeout_seconds::BIGINT
+                 * INTERVAL '1 second'
+               )
+             )
+           END,
            version = version + 1
-       WHERE environment_id = $1
-         AND desired_state = 'running'
-         AND observed_state = 'running'
-       RETURNING environment_id`,
-      [environmentId, ENVIRONMENT_IDLE_PAUSE_DELAY_MS],
+       FROM environments environment
+       WHERE runtime.environment_id = $1
+         AND environment.id = runtime.environment_id
+         AND runtime.desired_state = 'running'
+         AND runtime.observed_state = 'running'
+       RETURNING runtime.environment_id`,
+      [environmentId],
     );
     return Boolean(result.rowCount);
   }
@@ -1039,6 +1151,7 @@ export class SandpiStore {
        FROM environment_runtime runtime
        JOIN environments environment ON environment.id = runtime.environment_id
        WHERE environment.status = 'ready'
+         AND environment.idle_pause_timeout_seconds > 0
          AND runtime.sandbox_id IS NOT NULL
          AND runtime.idle_pause_due_at <= NOW()
          AND runtime.desired_state IN ('running', 'paused')
@@ -1056,7 +1169,10 @@ export class SandpiStore {
       `UPDATE environment_runtime runtime
        SET desired_state = 'paused', lifecycle_error = NULL,
            version = version + 1
+       FROM environments environment
        WHERE runtime.environment_id = $1
+         AND environment.id = runtime.environment_id
+         AND environment.idle_pause_timeout_seconds > 0
          AND runtime.sandbox_id IS NOT NULL
          AND runtime.idle_pause_due_at <= NOW()
          AND runtime.desired_state IN ('running', 'paused')
@@ -1170,11 +1286,18 @@ export class SandpiStore {
            END,
            attempt_id = $3, runtime_generation = $4,
            idle_pause_due_at = CASE
+             WHEN environment.idle_pause_timeout_seconds = 0 THEN NULL
              WHEN last_turn_completed_at IS NOT NULL
                AND (runtime.observed_state <> 'running' OR $5::BOOLEAN)
              THEN GREATEST(
-               last_turn_completed_at + ($6::BIGINT * INTERVAL '1 millisecond'),
-               NOW() + ($6::BIGINT * INTERVAL '1 millisecond')
+               last_turn_completed_at + (
+                 environment.idle_pause_timeout_seconds::BIGINT
+                 * INTERVAL '1 second'
+               ),
+               NOW() + (
+                 environment.idle_pause_timeout_seconds::BIGINT
+                 * INTERVAL '1 second'
+               )
              )
              ELSE idle_pause_due_at
            END,
@@ -1192,7 +1315,6 @@ export class SandpiStore {
         recovered.attemptId,
         recovered.runtimeGeneration,
         recovered.sandboxRestarted,
-        ENVIRONMENT_IDLE_PAUSE_DELAY_MS,
       ],
     );
     const row = result.rows[0];
@@ -1309,26 +1431,30 @@ export class SandpiStore {
       );
       if (latestCompletedAt) {
         await client.query(
-          `UPDATE environment_runtime
+          `UPDATE environment_runtime runtime
            SET last_turn_completed_at = CASE
-                 WHEN last_turn_completed_at IS NULL
-                   OR last_turn_completed_at < $2 THEN $2
-                 ELSE last_turn_completed_at
+                 WHEN runtime.last_turn_completed_at IS NULL
+                   OR runtime.last_turn_completed_at < $2 THEN $2
+                 ELSE runtime.last_turn_completed_at
                END,
-               idle_pause_due_at = (
-                 CASE
-                   WHEN last_turn_completed_at IS NULL
-                     OR last_turn_completed_at < $2 THEN $2
-                   ELSE last_turn_completed_at
-                 END
-               ) + ($3::BIGINT * INTERVAL '1 millisecond'),
+               idle_pause_due_at = CASE
+                 WHEN environment.idle_pause_timeout_seconds = 0 THEN NULL
+                 ELSE (
+                   CASE
+                     WHEN runtime.last_turn_completed_at IS NULL
+                       OR runtime.last_turn_completed_at < $2 THEN $2
+                     ELSE runtime.last_turn_completed_at
+                   END
+                 ) + (
+                   environment.idle_pause_timeout_seconds::BIGINT
+                   * INTERVAL '1 second'
+                 )
+               END,
                version = version + 1
-           WHERE environment_id = $1`,
-          [
-            environmentId,
-            latestCompletedAt,
-            ENVIRONMENT_IDLE_PAUSE_DELAY_MS,
-          ],
+           FROM environments environment
+           WHERE runtime.environment_id = $1
+             AND environment.id = runtime.environment_id`,
+          [environmentId, latestCompletedAt],
         );
       }
       await client.query("COMMIT");
@@ -1365,8 +1491,11 @@ export class SandpiStore {
     const result = await this.pool.query<SessionRow>(
       `${SESSION_SELECT}
        WHERE membership.user_id = $1 AND membership.status = 'active'
-         AND session.created_by_user_id = $1
-       ORDER BY session.pinned DESC, session.updated_at DESC`,
+         AND (
+           environment.visibility = 'team'
+           OR environment.created_by_user_id = $1
+         )
+       ORDER BY (pin.user_id IS NOT NULL) DESC, session.updated_at DESC`,
       [userId],
     );
     return result.rows.map(sessionFromRow);
@@ -1376,7 +1505,11 @@ export class SandpiStore {
     const result = await this.pool.query<SessionRow>(
       `${SESSION_SELECT}
        WHERE membership.user_id = $1 AND membership.status = 'active'
-         AND session.created_by_user_id = $1 AND session.id = $2`,
+         AND session.id = $2
+         AND (
+           environment.visibility = 'team'
+           OR environment.created_by_user_id = $1
+         )`,
       [userId, sessionId],
     );
     const row = result.rows[0];
@@ -1936,27 +2069,41 @@ export class SandpiStore {
   ) {
     await this.getSession(userId, sessionId);
     if (changes.archived === true) {
-      await this.archiveIdleSession(sessionId, changes);
+      await this.archiveIdleSession(userId, sessionId, changes);
       return this.getSession(userId, sessionId);
     }
-    const result = await this.pool.query(
-      `UPDATE sessions
-       SET title = COALESCE($2, title), pinned = COALESCE($3, pinned),
-           archived = COALESCE($4, archived), unread = COALESCE($5, unread)
-       WHERE id = $1 RETURNING id`,
-      [
-        sessionId,
-        changes.title ?? null,
-        changes.pinned ?? null,
-        changes.archived ?? null,
-        changes.unread ?? null,
-      ],
-    );
-    if (!result.rowCount) throw notFound("session_not_found", "Session not found.");
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await client.query(
+        `UPDATE sessions
+         SET title = COALESCE($2, title),
+             archived = COALESCE($3, archived),
+             unread = COALESCE($4, unread)
+         WHERE id = $1 RETURNING id`,
+        [
+          sessionId,
+          changes.title ?? null,
+          changes.archived ?? null,
+          changes.unread ?? null,
+        ],
+      );
+      if (!result.rowCount) {
+        throw notFound("session_not_found", "Session not found.");
+      }
+      await this.setSessionPin(client, userId, sessionId, changes.pinned);
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
     return this.getSession(userId, sessionId);
   }
 
   private async archiveIdleSession(
+    userId: string,
     sessionId: string,
     changes: {
       title?: string;
@@ -2011,16 +2158,16 @@ export class SandpiStore {
       }
       await client.query(
         `UPDATE sessions
-         SET title = COALESCE($2, title), pinned = COALESCE($3, pinned),
-             archived = TRUE, unread = COALESCE($4, unread)
+         SET title = COALESCE($2, title), archived = TRUE,
+             unread = COALESCE($3, unread)
          WHERE id = $1`,
         [
           sessionId,
           changes.title ?? null,
-          changes.pinned ?? null,
           changes.unread ?? null,
         ],
       );
+      await this.setSessionPin(client, userId, sessionId, changes.pinned);
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK");
@@ -2028,6 +2175,28 @@ export class SandpiStore {
     } finally {
       client.release();
     }
+  }
+
+  private async setSessionPin(
+    client: PoolClient,
+    userId: string,
+    sessionId: string,
+    pinned: boolean | undefined,
+  ) {
+    if (pinned === undefined) return;
+    if (pinned) {
+      await client.query(
+        `INSERT INTO session_pins (session_id, user_id)
+         VALUES ($1, $2)
+         ON CONFLICT (session_id, user_id) DO NOTHING`,
+        [sessionId, userId],
+      );
+      return;
+    }
+    await client.query(
+      "DELETE FROM session_pins WHERE session_id = $1 AND user_id = $2",
+      [sessionId, userId],
+    );
   }
 
   async withTerminalAccess<T>(
@@ -2075,10 +2244,9 @@ export class SandpiStore {
     return this.getPreferences(userId);
   }
 
-  async updateMembershipPlan(
+  async updateTeamPlan(
     userId: string,
     teamId: string,
-    membershipId: string,
     planId: "free" | "pro" | "max",
   ) {
     const actor = await this.pool.query<{ role: string }>(
@@ -2091,40 +2259,41 @@ export class SandpiStore {
     }
     const plan = SANDPI_PLANS.find((candidate) => candidate.id === planId);
     if (!plan) throw notFound("plan_not_found", "Plan not found.");
-    const result = await this.pool.query(
-      `UPDATE team_memberships
-       SET plan_id = $3,
+    await this.pool.query(
+      `UPDATE teams
+       SET plan_id = $2,
            plan_quotas = jsonb_set(
              jsonb_set(
-               jsonb_set(plan_quotas, '{weeklyExecution,limit}', to_jsonb($4::INTEGER)),
-               '{concurrentSessions,limit}', to_jsonb($5::INTEGER)
+               jsonb_set(plan_quotas, '{weeklyExecution,limit}', to_jsonb($3::INTEGER)),
+               '{concurrentSessions,limit}', to_jsonb($4::INTEGER)
              ),
-             '{snapshotStorage,limit}', to_jsonb($6::INTEGER)
+             '{snapshotStorage,limit}', to_jsonb($5::INTEGER)
            )
-       WHERE id = $2 AND team_id = $1
-       RETURNING *`,
+       WHERE id = $1`,
       [
         teamId,
-        membershipId,
         planId,
         plan.execution.weeklyLimitMinutes,
         plan.execution.concurrentSessionLimit,
         plan.storage.snapshotLimitGiB,
       ],
     );
-    const row = result.rows[0];
-    if (!row) throw notFound("membership_not_found", "Membership not found.");
-    const user = await this.pool.query<UserRow>(
-      "SELECT id, email, name, avatar_initials FROM users WHERE id = $1",
-      [row.user_id],
+    const result = await this.pool.query<TeamRow>(
+      `SELECT team.*, COUNT(member.id)::INTEGER AS member_count
+       FROM teams team
+       JOIN team_memberships viewer_membership
+         ON viewer_membership.team_id = team.id
+        AND viewer_membership.user_id = $2
+        AND viewer_membership.status = 'active'
+       LEFT JOIN team_memberships member
+         ON member.team_id = team.id AND member.status = 'active'
+       WHERE team.id = $1
+       GROUP BY team.id`,
+      [teamId, userId],
     );
-    return membershipFromRow({
-      ...row,
-      user_id: row.user_id,
-      email: user.rows[0].email,
-      name: user.rows[0].name,
-      avatar_initials: user.rows[0].avatar_initials,
-    });
+    const row = result.rows[0];
+    if (!row) throw notFound("team_not_found", "Team not found.");
+    return teamFromRow(row);
   }
 }
 
@@ -2145,9 +2314,17 @@ const ENVIRONMENT_RUNTIME_SELECT = `
 const SESSION_SELECT = `
   SELECT session.*, runtime.native_session_id, runtime.model_id,
          runtime.reasoning_effort,
-         runtime.history_revision
+         runtime.history_revision,
+         (pin.user_id IS NOT NULL) AS pinned,
+         owner.id AS owner_id, owner.email AS owner_email,
+         owner.name AS owner_name,
+         owner.avatar_initials AS owner_avatar_initials
   FROM sessions session
   JOIN team_memberships membership ON membership.team_id = session.team_id
+  JOIN environments environment ON environment.id = session.environment_id
+  LEFT JOIN session_pins pin
+    ON pin.session_id = session.id AND pin.user_id = membership.user_id
+  LEFT JOIN users owner ON owner.id = session.created_by_user_id
   LEFT JOIN session_runtime runtime ON runtime.session_id = session.id
 `;
 
@@ -2173,6 +2350,18 @@ function teamFromRow(row: TeamRow): Team {
     slug: row.slug,
     color: row.color,
     memberCount: Number(row.member_count),
+    plan: {
+      planId: row.plan_id,
+      status: row.plan_status,
+      quotas: {
+        ...row.plan_quotas,
+        weeklyExecution: {
+          ...row.plan_quotas.weeklyExecution,
+          resetsAt:
+            parseUnixTimestamp(row.plan_quotas.weeklyExecution.resetsAt) ?? 0,
+        },
+      },
+    },
     billingAccount: {
       id: row.billing_account_id,
       status: row.billing_status,
@@ -2197,21 +2386,6 @@ function membershipFromRow(row: MembershipRow): TeamMembership {
     },
     role: row.role,
     status: row.status,
-    planAssignment: {
-      id: row.plan_assignment_id,
-      planId: row.plan_id,
-      status: row.plan_status,
-      currentPeriodStartsAt: toUnixTimestamp(row.plan_period_starts_at),
-      currentPeriodEndsAt: toUnixTimestamp(row.plan_period_ends_at),
-      quotas: {
-        ...row.plan_quotas,
-        weeklyExecution: {
-          ...row.plan_quotas.weeklyExecution,
-          resetsAt:
-            parseUnixTimestamp(row.plan_quotas.weeklyExecution.resetsAt) ?? 0,
-        },
-      },
-    } satisfies MembershipPlanAssignment,
     joinedAt: toUnixTimestamp(row.joined_at),
   };
 }
@@ -2221,6 +2395,9 @@ function environmentFromRow(row: EnvironmentRow): EnvironmentRecord {
   return {
     id: row.id,
     teamId: row.team_id,
+    ownerId: row.created_by_user_id ?? undefined,
+    visibility: row.visibility,
+    idlePauseTimeoutSeconds: row.idle_pause_timeout_seconds,
     name: row.name,
     description: row.description,
     color: row.color,
@@ -2303,6 +2480,15 @@ function sessionFromRow(row: SessionRow): CodingSession {
   return {
     id: row.id,
     environmentId: row.environment_id,
+    owner:
+      row.owner_id && row.owner_email && row.owner_name && row.owner_avatar_initials
+        ? {
+            id: row.owner_id,
+            email: row.owner_email,
+            name: row.owner_name,
+            avatarInitials: row.owner_avatar_initials,
+          }
+        : null,
     title: row.title,
     status: publicSessionStatus(row.status),
     unread: row.unread,

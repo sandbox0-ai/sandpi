@@ -61,6 +61,7 @@ type EnvironmentSettingsTab =
 interface EnvironmentSettingsProps {
   environment: Environment;
   teamName: string;
+  canChangeVisibility: boolean;
   language: OperationLanguage;
   timeZone: string;
   archivedSessions: CodingSession[];
@@ -175,6 +176,7 @@ function mergeCredentialProjection(
 export function EnvironmentSettings({
   environment,
   teamName,
+  canChangeVisibility,
   language,
   timeZone,
   archivedSessions,
@@ -518,6 +520,8 @@ export function EnvironmentSettings({
             name: draft.name.trim(),
             description: draft.description,
             color: draft.color,
+            visibility: draft.visibility,
+            idlePauseTimeoutSeconds: draft.idlePauseTimeoutSeconds,
             networkPolicy: draft.networkPolicy,
           }),
         },
@@ -759,6 +763,54 @@ export function EnvironmentSettings({
                       }))
                     }
                   />
+                </label>
+                <label className="full-field">
+                  Visibility
+                  <select
+                    name="environment-visibility"
+                    aria-label="Environment visibility"
+                    value={draft.visibility}
+                    disabled={!canChangeVisibility}
+                    onChange={(event) =>
+                      setDraft((current) => ({
+                        ...current,
+                        visibility: event.target.value as Environment["visibility"],
+                      }))
+                    }
+                  >
+                    <option value="team">Team · visible to {teamName}</option>
+                    <option value="private">Private · only visible to you</option>
+                  </select>
+                  <small>
+                    {canChangeVisibility
+                      ? "Only the creator can change visibility."
+                      : "Only the Environment creator can change visibility."}
+                  </small>
+                </label>
+                <label className="full-field">
+                  Auto-pause after idle (minutes)
+                  <input
+                    type="number"
+                    name="environment-idle-pause-timeout"
+                    aria-label="Environment auto-pause timeout in minutes"
+                    min={0}
+                    max={43_200}
+                    step={1}
+                    value={draft.idlePauseTimeoutSeconds / 60}
+                    onChange={(event) => {
+                      const minutes = event.currentTarget.valueAsNumber;
+                      if (!Number.isFinite(minutes)) return;
+                      setDraft((current) => ({
+                        ...current,
+                        idlePauseTimeoutSeconds:
+                          Math.min(43_200, Math.max(0, Math.round(minutes))) * 60,
+                      }));
+                    }}
+                  />
+                  <small>
+                    Sandpi pauses the shared Sandbox after this much idle time.
+                    Set 0 to keep it running until its hard TTL.
+                  </small>
                 </label>
                 <div className="settings-card definition-card">
                   <DefinitionRow label="Team" value={teamName} />

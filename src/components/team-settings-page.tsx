@@ -23,8 +23,7 @@ import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
 import type { OperationLanguage } from "@/lib/operation-ui";
 import { formatUnixTimestamp, type UnixTimestamp } from "@/lib/time";
 import {
-  membershipPlanCounts,
-  planForAssignment,
+  planForTeam,
   quotaPercent,
 } from "@/lib/team";
 import type {
@@ -56,7 +55,7 @@ const tabs: Array<{
 }> = [
   { id: "overview", label: "Overview", icon: Boxes },
   { id: "members", label: "Members", icon: UsersRound },
-  { id: "plan", label: "Billing & plans", icon: CreditCard },
+  { id: "plan", label: "Billing & plan", icon: CreditCard },
 ];
 
 function formatHours(minutes: number) {
@@ -113,65 +112,47 @@ export function TeamSettingsPage({
   timeZone,
 }: TeamSettingsPageProps) {
   const [activeTab, setActiveTab] = useState<TeamTab>("overview");
-  const [teamMemberships, setTeamMemberships] = useState(memberships);
+  const [teamState, setTeamState] = useState(team);
+  const teamMemberships = memberships;
   const [planNotice, setPlanNotice] = useState("");
-  const [updatingMembershipId, setUpdatingMembershipId] = useState<
-    string | null
-  >(null);
+  const [updatingPlan, setUpdatingPlan] = useState(false);
   const viewerMembership = requireViewerMembership(
     teamMemberships,
     viewer.id,
   );
-  const viewerPlan = planForAssignment(
-    plans,
-    viewerMembership.planAssignment,
-  );
-  const weeklyQuota = viewerMembership.planAssignment.quotas.weeklyExecution;
+  const viewerPlan = planForTeam(plans, teamState);
+  const weeklyQuota = teamState.plan.quotas.weeklyExecution;
   const weeklyPercent = quotaPercent(weeklyQuota.used, weeklyQuota.limit);
   const activeMembers = useMemo(
     () =>
       teamMemberships.filter((membership) => membership.status === "active"),
     [teamMemberships],
   );
-  const planCounts = useMemo(
-    () => membershipPlanCounts(teamMemberships),
-    [teamMemberships],
-  );
   const canManagePlans =
     viewerMembership.role === "owner" || viewerMembership.role === "admin";
 
-  async function updateMembershipPlan(
-    membership: TeamMembership,
-    planId: SandpiPlanId,
-  ) {
-    setUpdatingMembershipId(membership.id);
+  async function updateTeamPlan(planId: SandpiPlanId) {
+    setUpdatingPlan(true);
     setPlanNotice("");
     try {
-      const response = await apiFetch<ApiEnvelope<TeamMembership>>(
-        `/api/v1/teams/${encodeURIComponent(team.id)}/members/${encodeURIComponent(
-          membership.id,
-        )}/plan`,
+      const response = await apiFetch<ApiEnvelope<Team>>(
+        `/api/v1/teams/${encodeURIComponent(teamState.id)}/plan`,
         {
           method: "PUT",
           body: JSON.stringify({ planId }),
         },
       );
-      const updatedMembership = response.data;
-      setTeamMemberships((current) =>
-        current.map((candidate) =>
-          candidate.id === updatedMembership.id ? updatedMembership : candidate,
-        ),
-      );
+      setTeamState(response.data);
       const plan = plans.find((candidate) => candidate.id === planId);
       setPlanNotice(
-        `${membership.user.name} now uses the ${plan?.name ?? planId} Plan in ${team.name}.`,
+        `${teamState.name} now uses the ${plan?.name ?? planId} Plan.`,
       );
     } catch (cause) {
       setPlanNotice(
         cause instanceof Error ? cause.message : "Unable to assign the Plan.",
       );
     } finally {
-      setUpdatingMembershipId(null);
+      setUpdatingPlan(false);
     }
   }
 
@@ -230,7 +211,7 @@ export function TeamSettingsPage({
           <SettingsSection
             eyebrow="Sandpi tenant"
             title="Overview"
-            description="Every Environment and Session belongs to one Team. Member Plans and quotas belong to Memberships, while this Team remains their resource and billing owner."
+            description="Every shared Environment, Session, Plan and quota belongs to this Team. Private Environments remain visible only to their creator."
           >
             <div className={styles.statGrid}>
               <StatCard
@@ -238,8 +219,16 @@ export function TeamSettingsPage({
                 value={String(activeMembers.length)}
                 detail="Active memberships"
               />
-              <StatCard label="Environments" value={String(environmentCount)} detail="Team owned" />
-              <StatCard label="Your role" value={viewerMembership.role} detail="Team access" />
+              <StatCard
+                label="Environments"
+                value={String(environmentCount)}
+                detail="Visible in this Team"
+              />
+              <StatCard
+                label="Your role"
+                value={viewerMembership.role}
+                detail="Team access"
+              />
             </div>
             <article className={styles.panel}>
               <div className={styles.panelHeader}>
@@ -265,8 +254,9 @@ export function TeamSettingsPage({
               </dl>
             </article>
             <BoundaryNote icon={<Database size={17} aria-hidden="true" />}>
-              Sandpi authorizes the Team before using its deployment-scoped Sandbox0 API key.
-              Sandbox0 credentials never identify a Team and are never sent to a client.
+              Sandpi authorizes the Team before using its deployment-scoped Sandbox0
+              API key. Sandbox0 credentials never identify a Team and are never sent
+              to a client.
             </BoundaryNote>
           </SettingsSection>
         ) : null}
@@ -275,7 +265,7 @@ export function TeamSettingsPage({
           <SettingsSection
             eyebrow="Access"
             title="Members"
-            description="Owners and admins assign a separate Free, Pro or Max Plan to each Membership. Roles control access; Plans independently control Sandpi usage."
+            description="Memberships grant access to Team Environments. The Team has one shared Plan and quota pool for all active members."
             action={
               <button
                 type="button"
@@ -288,12 +278,6 @@ export function TeamSettingsPage({
               </button>
             }
           >
-            {planNotice ? (
-              <div className={styles.inlineNotice} role="status">
-                <Check size={15} aria-hidden="true" />
-                {planNotice}
-              </div>
-            ) : null}
             <div className={styles.memberList}>
               {teamMemberships.map((member) => (
                 <article className={styles.memberRow} key={member.id}>
@@ -310,24 +294,6 @@ export function TeamSettingsPage({
                     {member.status}
                   </span>
                   <span className={styles.roleBadge}>{member.role}</span>
-                  <select
-                    className={styles.memberPlanSelect}
-                    aria-label={`Plan for ${member.user.name}`}
-                    value={member.planAssignment.planId}
-                    disabled={!canManagePlans || updatingMembershipId === member.id}
-                    onChange={(event) =>
-                      void updateMembershipPlan(
-                        member,
-                        event.target.value as SandpiPlanId,
-                      )
-                    }
-                  >
-                    {plans.map((plan) => (
-                      <option value={plan.id} key={plan.id}>
-                        {plan.name}
-                      </option>
-                    ))}
-                  </select>
                 </article>
               ))}
             </div>
@@ -337,19 +303,25 @@ export function TeamSettingsPage({
         {activeTab === "plan" ? (
           <SettingsSection
             eyebrow="Team billing"
-            title="Billing & member plans"
-            description="The billing account will consolidate the Plans sponsored for this Team's members; public beta remains uncharged. The Team itself never has a Free, Pro or Max Plan."
+            title="Billing & plan"
+            description="The Team has one Plan and one shared quota pool. Every active member consumes from the same limits."
           >
+            {planNotice ? (
+              <div className={styles.inlineNotice} role="status">
+                <Check size={15} aria-hidden="true" />
+                {planNotice}
+              </div>
+            ) : null}
             <article className={`${styles.panel} ${styles.planPanel}`}>
               <div className={styles.planHeading}>
                 <div>
                   <small>Team billing account</small>
-                  <h3>Consolidated member billing</h3>
+                  <h3>{teamState.name} billing</h3>
                   <p>
                     Monthly billing · {team.billingAccount.status.replace("-", " ")}
                   </p>
                 </div>
-                <span>{activeMembers.length} active assignments</span>
+                <span>{activeMembers.length} active members</span>
               </div>
               <dl className={styles.definitionList}>
                 <div>
@@ -373,31 +345,39 @@ export function TeamSettingsPage({
                 </div>
                 <div>
                   <dt>Entitlement owner</dt>
-                  <dd>Individual Team Memberships</dd>
+                  <dd>{teamState.name}</dd>
                 </div>
               </dl>
             </article>
 
-            <div className={styles.planMixGrid} aria-label="Active member Plans">
-              {plans.map((plan) => (
-                <PlanCountCard
-                  key={plan.id}
-                  plan={plan}
-                  count={planCounts[plan.id]}
-                />
-              ))}
-            </div>
-
             <article className={`${styles.panel} ${styles.planPanel}`}>
               <div className={styles.planHeading}>
                 <div>
-                  <small>Your Plan in {team.name}</small>
-                  <h3>{viewerPlan?.name ?? viewerMembership.planAssignment.planId}</h3>
+                  <small>Team Plan</small>
+                  <h3>{viewerPlan?.name ?? teamState.plan.planId}</h3>
                   <p>
-                    Sponsored by {team.name} · {viewerMembership.planAssignment.status}
+                    Shared by every member · {teamState.plan.status}
                   </p>
                 </div>
-                <span>{weeklyPercent}% used</span>
+                {canManagePlans ? (
+                  <select
+                    className={styles.teamPlanSelect}
+                    aria-label={`Plan for ${teamState.name}`}
+                    value={teamState.plan.planId}
+                    disabled={updatingPlan}
+                    onChange={(event) =>
+                      void updateTeamPlan(event.target.value as SandpiPlanId)
+                    }
+                  >
+                    {plans.map((plan) => (
+                      <option value={plan.id} key={plan.id}>
+                        {plan.name}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <span>{weeklyPercent}% used</span>
+                )}
               </div>
               <div className={styles.quotaTitle}>
                 <strong>Weekly execution</strong>
@@ -408,7 +388,7 @@ export function TeamSettingsPage({
               <div
                 className={styles.progressTrack}
                 role="progressbar"
-                aria-label="Your weekly execution quota in this Team"
+                aria-label="Team weekly execution quota"
                 aria-valuemin={0}
                 aria-valuemax={weeklyQuota.limit}
                 aria-valuenow={weeklyQuota.used}
@@ -422,22 +402,22 @@ export function TeamSettingsPage({
             </article>
             <div className={`${styles.quotaGrid} ${styles.twoColumnGrid}`}>
               <QuotaCard
-                label="Your concurrent Sessions"
-                used={viewerMembership.planAssignment.quotas.concurrentSessions.used}
-                limit={viewerMembership.planAssignment.quotas.concurrentSessions.limit}
+                label="Team concurrent Sessions"
+                used={teamState.plan.quotas.concurrentSessions.used}
+                limit={teamState.plan.quotas.concurrentSessions.limit}
                 suffix="running"
               />
               <QuotaCard
-                label="Your attributed snapshots"
-                used={viewerMembership.planAssignment.quotas.snapshotStorage.used}
-                limit={viewerMembership.planAssignment.quotas.snapshotStorage.limit}
+                label="Team snapshot storage"
+                used={teamState.plan.quotas.snapshotStorage.used}
+                limit={teamState.plan.quotas.snapshotStorage.limit}
                 suffix="GiB"
               />
             </div>
             <BoundaryNote icon={<KeyRound size={17} aria-hidden="true" />}>
-              Each Membership has an independent Sandpi Plan and weekly quota, while the Team
-              consolidates their cost. Coding-agent authentication remains Environment-scoped;
-              model tokens, requests and provider-plan limits are never included.
+              Sandpi runtime, storage and Session usage is attributed to this Team
+              Plan. Coding-agent authentication remains Environment-scoped; model
+              tokens, requests and provider-plan limits are never included.
             </BoundaryNote>
           </SettingsSection>
         ) : null}
@@ -481,16 +461,6 @@ function StatCard({ label, value, detail }: { label: string; value: string; deta
       <small>{label}</small>
       <strong>{value}</strong>
       <span>{detail}</span>
-    </article>
-  );
-}
-
-function PlanCountCard({ plan, count }: { plan: SandpiPlan; count: number }) {
-  return (
-    <article className={styles.planCountCard}>
-      <small>{plan.name}</small>
-      <strong>{count}</strong>
-      <p>{count === 1 ? "active member" : "active members"}</p>
     </article>
   );
 }
