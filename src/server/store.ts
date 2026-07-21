@@ -7,6 +7,7 @@ import type {
   Environment,
   EnvironmentPauseInterval,
   EnvironmentSandboxState,
+  EnvironmentWorkspaceBackup,
   NetworkPolicy,
   SandpiBootstrap,
   SandpiDeploymentSummary,
@@ -28,6 +29,7 @@ import type {
   EnvironmentRuntimeRecord,
   ProvisionedEnvironment,
   RecoveredCodexEnvironmentRuntime,
+  RuntimeWorkspaceBackupSnapshot,
 } from "@/server/runtime/types";
 
 export const SANDPI_PLANS: SandpiPlan[] = [
@@ -81,6 +83,21 @@ export interface StoredEnvironmentRuntime extends EnvironmentRuntimeRecord {
   pausedAt?: Date;
 }
 
+export interface PreparedEnvironmentWorkspaceBackup {
+  runtime: StoredEnvironmentRuntime;
+  createBackup: boolean;
+  retentionCount: number;
+}
+
+export interface PreparedEnvironmentWorkspaceRestore {
+  runtime: StoredEnvironmentRuntime;
+  backup: EnvironmentWorkspaceBackup;
+  resumeAfterRestore: boolean;
+}
+
+export const WORKSPACE_RESTORE_UNAVAILABLE_SESSION_ERROR =
+  "workspace_restored_session_unavailable";
+
 export interface StoredSessionRuntime {
   sessionId: string;
   environmentId: string;
@@ -130,6 +147,8 @@ interface EnvironmentRow extends QueryResultRow {
   visibility: Environment["visibility"];
   idle_pause_timeout_seconds: number;
   sandbox_memory_mib: number;
+  workspace_backup_interval_seconds: number;
+  workspace_backup_retention_count: number;
   name: string;
   description: string;
   color: string;
@@ -146,6 +165,9 @@ interface EnvironmentRow extends QueryResultRow {
   sandbox_id: string | null;
   sandbox_state: EnvironmentSandboxState | null;
   supervisor_session_id: string | null;
+  workspace_backup_due_at: Date | null;
+  workspace_backup_last_completed_at: Date | null;
+  workspace_backup_error: string | null;
 }
 
 interface SessionRow extends QueryResultRow {
@@ -202,6 +224,16 @@ interface EnvironmentPauseIntervalRow extends QueryResultRow {
   paused_at: Date;
   resumed_at: Date | null;
   reason: EnvironmentPauseInterval["reason"];
+}
+
+interface EnvironmentWorkspaceBackupRow extends QueryResultRow {
+  snapshot_id: string;
+  environment_id: string;
+  workspace_volume_id: string;
+  name: string;
+  size_bytes: string | number;
+  backup_kind: EnvironmentWorkspaceBackup["kind"];
+  created_at: Date;
 }
 
 interface SessionRuntimeRow extends QueryResultRow {
@@ -557,7 +589,10 @@ export class SandpiStore {
            supervisor_cursor = 0, stdout_tail = '', runtime_generation = 0,
            decoder_attempt_id = NULL, decoder_runtime_generation = 0,
            lifecycle_policy_version = 0,
-           idle_pause_due_at = NULL, lifecycle_error = NULL, paused_at = NULL
+           idle_pause_due_at = NULL, lifecycle_error = NULL, paused_at = NULL,
+           workspace_backup_due_at = NULL,
+           workspace_backup_retry_at = NULL,
+           workspace_backup_error = NULL
        WHERE environment_id = $1 AND sandbox_id = $2`,
       [environmentId, sandboxId],
     );
@@ -586,13 +621,22 @@ export class SandpiStore {
       await client.query(
         `INSERT INTO environment_runtime (
            environment_id, sandbox_id, desired_state, observed_state,
-           lifecycle_policy_version, idle_pause_due_at
+           lifecycle_policy_version, idle_pause_due_at,
+           workspace_backup_due_at
          )
          SELECT $1, $2, 'running', 'running', $3,
                 CASE
                   WHEN environment.idle_pause_timeout_seconds = 0 THEN NULL
                   ELSE NOW() + (
                     environment.idle_pause_timeout_seconds::BIGINT
+                    * INTERVAL '1 second'
+                  )
+                END,
+                CASE
+                  WHEN environment.workspace_backup_interval_seconds = 0
+                    THEN NULL
+                  ELSE NOW() + (
+                    environment.workspace_backup_interval_seconds::BIGINT
                     * INTERVAL '1 second'
                   )
                 END
@@ -603,6 +647,9 @@ export class SandpiStore {
              desired_state = 'running', observed_state = 'running',
              lifecycle_policy_version = EXCLUDED.lifecycle_policy_version,
              idle_pause_due_at = EXCLUDED.idle_pause_due_at,
+             workspace_backup_due_at = EXCLUDED.workspace_backup_due_at,
+             workspace_backup_retry_at = NULL,
+             workspace_backup_error = NULL,
              lifecycle_error = NULL, paused_at = NULL,
              provisioning_error = NULL`,
         [
@@ -684,12 +731,23 @@ export class SandpiStore {
       visibility: Environment["visibility"];
       idlePauseTimeoutSeconds: number;
       sandboxMemoryMiB: number;
+      workspaceBackup: Pick<
+        Environment["workspaceBackup"],
+        "intervalSeconds" | "retentionCount"
+      >;
       networkPolicy: NetworkPolicy;
     },
   ) {
     const current = await this.getManageableEnvironment(userId, environmentId);
     const timeoutChanged =
       current.idlePauseTimeoutSeconds !== input.idlePauseTimeoutSeconds;
+    const backupIntervalChanged =
+      current.workspaceBackup.intervalSeconds !==
+      input.workspaceBackup.intervalSeconds;
+    const backupPolicyChanged =
+      backupIntervalChanged ||
+      current.workspaceBackup.retentionCount !==
+        input.workspaceBackup.retentionCount;
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
@@ -697,7 +755,10 @@ export class SandpiStore {
         `UPDATE environments
          SET name = $2, description = $3, color = $4,
              visibility = $5, idle_pause_timeout_seconds = $6,
-             sandbox_memory_mib = $7, network_policy = $8::JSONB,
+             sandbox_memory_mib = $7,
+             workspace_backup_interval_seconds = $8,
+             workspace_backup_retention_count = $9,
+             network_policy = $10::JSONB,
              revision = revision + 1
          WHERE id = $1`,
         [
@@ -708,6 +769,8 @@ export class SandpiStore {
           input.visibility,
           input.idlePauseTimeoutSeconds,
           input.sandboxMemoryMiB,
+          input.workspaceBackup.intervalSeconds,
+          input.workspaceBackup.retentionCount,
           JSON.stringify(input.networkPolicy),
         ],
       );
@@ -735,6 +798,26 @@ export class SandpiStore {
           [environmentId, input.idlePauseTimeoutSeconds],
         );
       }
+      if (backupPolicyChanged) {
+        await client.query(
+          `UPDATE environment_runtime
+           SET workspace_backup_due_at = CASE
+                 WHEN $2::INTEGER = 0 THEN NULL
+                 WHEN $3::BOOLEAN OR workspace_backup_due_at IS NULL
+                 THEN NOW() + ($2::BIGINT * INTERVAL '1 second')
+                 ELSE workspace_backup_due_at
+               END,
+               workspace_backup_retry_at = NULL,
+               workspace_backup_error = NULL,
+               version = version + 1
+           WHERE environment_id = $1`,
+          [
+            environmentId,
+            input.workspaceBackup.intervalSeconds,
+            backupIntervalChanged,
+          ],
+        );
+      }
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK");
@@ -756,7 +839,9 @@ export class SandpiStore {
     await this.pool.query(
       `UPDATE environment_runtime
        SET desired_state = 'terminated', idle_pause_due_at = NULL,
-           lifecycle_error = NULL, version = version + 1
+           lifecycle_error = NULL, workspace_backup_due_at = NULL,
+           workspace_backup_retry_at = NULL,
+           workspace_backup_error = NULL, version = version + 1
        WHERE environment_id = $1`,
       [environmentId],
     );
@@ -1127,6 +1212,440 @@ export class SandpiStore {
        SET lifecycle_error = $3, version = version + 1
        WHERE environment_id = $1 AND sandbox_id = $2`,
       [environmentId, sandboxId, error],
+    );
+  }
+
+  async environmentWorkspaceBackupCandidateIds(limit = 50) {
+    const result = await this.pool.query<{ environment_id: string }>(
+      `SELECT runtime.environment_id
+       FROM environment_runtime runtime
+       JOIN environments environment ON environment.id = runtime.environment_id
+       WHERE environment.status = 'ready'
+         AND environment.workspace_volume_id IS NOT NULL
+         AND runtime.sandbox_id IS NOT NULL
+         AND runtime.desired_state <> 'terminated'
+         AND NOT EXISTS (
+           SELECT 1
+           FROM sessions session
+           JOIN session_runtime session_state
+             ON session_state.session_id = session.id
+           WHERE session.environment_id = runtime.environment_id
+             AND (
+               session.status IN ('provisioning', 'running')
+               OR session_state.active_native_turn_id IS NOT NULL
+               OR session_state.pending_turn_phase IS NOT NULL
+             )
+         )
+         AND (
+           runtime.workspace_backup_retry_at IS NULL
+           OR runtime.workspace_backup_retry_at <= NOW()
+         )
+         AND (
+           (
+             environment.workspace_backup_interval_seconds > 0
+             AND (
+               runtime.workspace_backup_due_at IS NULL
+               OR runtime.workspace_backup_due_at <= NOW()
+             )
+           )
+           OR (
+             SELECT COUNT(*)
+             FROM environment_workspace_backups backup
+             WHERE backup.environment_id = runtime.environment_id
+           ) > environment.workspace_backup_retention_count
+         )
+       ORDER BY COALESCE(
+                  runtime.workspace_backup_retry_at,
+                  runtime.workspace_backup_due_at,
+                  runtime.created_at
+                ),
+                runtime.environment_id
+       LIMIT $1`,
+      [limit],
+    );
+    return result.rows.map((row) => row.environment_id);
+  }
+
+  /** Rechecks backup policy and publishes a short crash-recovery lease. */
+  async prepareEnvironmentWorkspaceBackup(
+    environmentId: string,
+    forceCreate = false,
+  ): Promise<PreparedEnvironmentWorkspaceBackup | undefined> {
+    const result = await this.pool.query<{
+      create_backup: boolean;
+      retention_count: number;
+    }>(
+      `UPDATE environment_runtime runtime
+       SET workspace_backup_retry_at = NOW() + INTERVAL '1 minute',
+           workspace_backup_error = NULL,
+           version = version + 1
+       FROM environments environment
+       WHERE runtime.environment_id = $1
+         AND environment.id = runtime.environment_id
+         AND environment.status = 'ready'
+         AND environment.workspace_volume_id IS NOT NULL
+         AND runtime.sandbox_id IS NOT NULL
+         AND runtime.desired_state <> 'terminated'
+         AND NOT EXISTS (
+           SELECT 1
+           FROM sessions session
+           JOIN session_runtime session_state
+             ON session_state.session_id = session.id
+           WHERE session.environment_id = runtime.environment_id
+             AND (
+               session.status IN ('provisioning', 'running')
+               OR session_state.active_native_turn_id IS NOT NULL
+               OR session_state.pending_turn_phase IS NOT NULL
+             )
+         )
+         AND (
+           $2::BOOLEAN
+           OR (
+             (
+               runtime.workspace_backup_retry_at IS NULL
+               OR runtime.workspace_backup_retry_at <= NOW()
+             )
+             AND (
+               (
+                 environment.workspace_backup_interval_seconds > 0
+                 AND (
+                   runtime.workspace_backup_due_at IS NULL
+                   OR runtime.workspace_backup_due_at <= NOW()
+                 )
+               )
+               OR (
+                 SELECT COUNT(*)
+                 FROM environment_workspace_backups backup
+                 WHERE backup.environment_id = runtime.environment_id
+               ) > environment.workspace_backup_retention_count
+             )
+           )
+         )
+       RETURNING
+         (
+           $2::BOOLEAN
+           OR (
+             environment.workspace_backup_interval_seconds > 0
+             AND (
+               runtime.workspace_backup_due_at IS NULL
+               OR runtime.workspace_backup_due_at <= NOW()
+             )
+           )
+         ) AS create_backup,
+         environment.workspace_backup_retention_count AS retention_count`,
+      [environmentId, forceCreate],
+    );
+    const row = result.rows[0];
+    if (!row) return undefined;
+    return {
+      runtime: await this.environmentRuntime(environmentId),
+      createBackup: row.create_backup,
+      retentionCount: row.retention_count,
+    };
+  }
+
+  async recordEnvironmentWorkspaceBackup(
+    environmentId: string,
+    sandboxId: string,
+    snapshot: RuntimeWorkspaceBackupSnapshot,
+    kind: EnvironmentWorkspaceBackup["kind"],
+  ) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        `INSERT INTO environment_workspace_backups (
+           snapshot_id, environment_id, workspace_volume_id, name,
+           size_bytes, backup_kind, created_at
+         )
+         SELECT $2, $1, environment.workspace_volume_id, $3, $4, $5, $6
+         FROM environments environment
+         WHERE environment.id = $1
+           AND environment.workspace_volume_id IS NOT NULL`,
+        [
+          environmentId,
+          snapshot.id,
+          snapshot.name,
+          snapshot.sizeBytes,
+          kind,
+          snapshot.createdAt,
+        ],
+      );
+      const updated = await client.query(
+        `UPDATE environment_runtime runtime
+         SET workspace_backup_due_at = CASE
+               WHEN environment.workspace_backup_interval_seconds = 0 THEN NULL
+               ELSE NOW() + (
+                 environment.workspace_backup_interval_seconds::BIGINT
+                 * INTERVAL '1 second'
+               )
+             END,
+             workspace_backup_last_completed_at = $3,
+             workspace_backup_retry_at = NULL,
+             workspace_backup_error = NULL,
+             version = version + 1
+         FROM environments environment
+         WHERE runtime.environment_id = $1
+           AND environment.id = runtime.environment_id
+           AND runtime.sandbox_id = $2`,
+        [environmentId, sandboxId, snapshot.createdAt],
+      );
+      if (!updated.rowCount) {
+        throw conflict(
+          "environment_runtime_changed",
+          "The Environment runtime changed while its Workspace backup was being recorded.",
+        );
+      }
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async recordEnvironmentWorkspaceBackupFailure(
+    environmentId: string,
+    sandboxId: string,
+    error: string,
+  ) {
+    await this.pool.query(
+      `UPDATE environment_runtime
+       SET workspace_backup_retry_at = NOW() + INTERVAL '1 minute',
+           workspace_backup_error = $3,
+           version = version + 1
+       WHERE environment_id = $1 AND sandbox_id = $2`,
+      [environmentId, sandboxId, error.slice(0, 2_000)],
+    );
+  }
+
+  async recordEnvironmentWorkspaceBackupHealthy(
+    environmentId: string,
+    sandboxId: string,
+  ) {
+    await this.pool.query(
+      `UPDATE environment_runtime
+       SET workspace_backup_retry_at = NULL,
+           workspace_backup_error = NULL,
+           version = version + 1
+       WHERE environment_id = $1 AND sandbox_id = $2`,
+      [environmentId, sandboxId],
+    );
+  }
+
+  async listEnvironmentWorkspaceBackups(
+    userId: string,
+    environmentId: string,
+    limit = 30,
+  ): Promise<EnvironmentWorkspaceBackup[]> {
+    await this.getEnvironment(userId, environmentId);
+    const result = await this.pool.query<EnvironmentWorkspaceBackupRow>(
+      `SELECT snapshot_id, environment_id, workspace_volume_id, name,
+              size_bytes, backup_kind, created_at
+       FROM environment_workspace_backups
+       WHERE environment_id = $1
+       ORDER BY created_at DESC, snapshot_id DESC
+       LIMIT $2`,
+      [environmentId, limit],
+    );
+    return result.rows.map(environmentWorkspaceBackupFromRow);
+  }
+
+  async assertEnvironmentWorkspaceQuiescent(environmentId: string) {
+    const result = await this.pool.query<{ busy: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1
+         FROM sessions session
+         JOIN session_runtime runtime ON runtime.session_id = session.id
+         WHERE session.environment_id = $1
+           AND (
+             session.status IN ('provisioning', 'running')
+             OR runtime.active_native_turn_id IS NOT NULL
+             OR runtime.pending_turn_phase IS NOT NULL
+           )
+       ) AS busy`,
+      [environmentId],
+    );
+    if (result.rows[0]?.busy) {
+      throw conflict(
+        "environment_workspace_busy",
+        "Wait for every running Turn and Session operation in this Environment to finish.",
+      );
+    }
+  }
+
+  async prepareEnvironmentWorkspaceRestore(
+    environmentId: string,
+    snapshotId: string,
+  ): Promise<PreparedEnvironmentWorkspaceRestore> {
+    const backupResult = await this.pool.query<EnvironmentWorkspaceBackupRow>(
+      `SELECT snapshot_id, environment_id, workspace_volume_id, name,
+              size_bytes, backup_kind, created_at
+       FROM environment_workspace_backups
+       WHERE environment_id = $1 AND snapshot_id = $2`,
+      [environmentId, snapshotId],
+    );
+    const backupRow = backupResult.rows[0];
+    if (!backupRow) {
+      throw notFound(
+        "environment_workspace_backup_not_found",
+        "Workspace backup not found.",
+      );
+    }
+    const runtime = await this.environmentRuntime(environmentId);
+    if (runtime.desiredState === "terminated") {
+      throw conflict(
+        "environment_terminated",
+        "The Environment is being deleted.",
+      );
+    }
+    if (backupRow.workspace_volume_id !== runtime.workspaceVolumeId) {
+      throw conflict(
+        "environment_workspace_backup_stale",
+        "This backup belongs to an older Workspace Volume and cannot be restored into the current Environment.",
+      );
+    }
+    await this.assertEnvironmentWorkspaceQuiescent(environmentId);
+    return {
+      runtime,
+      backup: environmentWorkspaceBackupFromRow(backupRow),
+      resumeAfterRestore: runtime.desiredState === "running",
+    };
+  }
+
+  /**
+   * Reconciles product Session metadata after the native Volume has committed
+   * a restore. Sessions created after the snapshot have no native harness
+   * state in that snapshot, so they remain visible but fail explicitly.
+   */
+  async recordEnvironmentWorkspaceRestored(
+    environmentId: string,
+    sandboxId: string,
+    snapshotId: string,
+  ) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const backupResult = await client.query<{
+        created_at: Date;
+        workspace_volume_id: string;
+      }>(
+        `SELECT backup.created_at, backup.workspace_volume_id
+         FROM environment_workspace_backups backup
+         JOIN environment_runtime runtime
+           ON runtime.environment_id = backup.environment_id
+         WHERE backup.environment_id = $1
+           AND backup.snapshot_id = $2
+           AND runtime.sandbox_id = $3
+         FOR UPDATE OF backup, runtime`,
+        [environmentId, snapshotId, sandboxId],
+      );
+      const backup = backupResult.rows[0];
+      if (!backup) {
+        throw conflict(
+          "environment_runtime_changed",
+          "The Environment runtime changed while its Workspace was being restored.",
+        );
+      }
+      const volumeResult = await client.query<{ workspace_volume_id: string | null }>(
+        "SELECT workspace_volume_id FROM environments WHERE id = $1 FOR UPDATE",
+        [environmentId],
+      );
+      if (
+        volumeResult.rows[0]?.workspace_volume_id !== backup.workspace_volume_id
+      ) {
+        throw conflict(
+          "environment_workspace_backup_stale",
+          "The Workspace Volume changed while its backup was being restored.",
+        );
+      }
+
+      const restoredAt = new Date();
+      await client.query(
+        `UPDATE sessions session
+         SET status = 'waiting', unread = TRUE,
+             metadata = metadata - 'workspaceRestore'
+         FROM session_runtime runtime
+         WHERE runtime.session_id = session.id
+           AND session.environment_id = $1
+           AND session.created_at <= $2
+           AND runtime.runtime_error_code = $3`,
+        [
+          environmentId,
+          backup.created_at,
+          WORKSPACE_RESTORE_UNAVAILABLE_SESSION_ERROR,
+        ],
+      );
+      const unavailable = await client.query<{ id: string }>(
+        `UPDATE sessions
+         SET status = 'failed', unread = TRUE,
+             metadata = metadata || jsonb_build_object(
+               'workspaceRestore', jsonb_build_object(
+                 'snapshotId', $3::TEXT,
+                 'restoredAt', $4::TIMESTAMPTZ,
+                 'reason', 'native-session-created-after-backup'
+               )
+             )
+         WHERE environment_id = $1 AND created_at > $2
+         RETURNING id`,
+        [environmentId, backup.created_at, snapshotId, restoredAt],
+      );
+      await client.query(
+        `UPDATE session_runtime runtime
+         SET runtime_error_code = CASE
+               WHEN session.created_at > $2 THEN $3
+               WHEN runtime.runtime_error_code = $3 THEN NULL
+               ELSE runtime.runtime_error_code
+             END,
+             version = version + 1
+         FROM sessions session
+         WHERE runtime.session_id = session.id
+           AND session.environment_id = $1`,
+        [
+          environmentId,
+          backup.created_at,
+          WORKSPACE_RESTORE_UNAVAILABLE_SESSION_ERROR,
+        ],
+      );
+      await client.query(
+        "UPDATE sessions SET unread = TRUE WHERE environment_id = $1",
+        [environmentId],
+      );
+      await client.query("COMMIT");
+      return { unavailableSessionCount: unavailable.rowCount ?? 0 };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async environmentWorkspaceBackupsBeyondRetention(
+    environmentId: string,
+    retentionCount: number,
+  ): Promise<EnvironmentWorkspaceBackup[]> {
+    const result = await this.pool.query<EnvironmentWorkspaceBackupRow>(
+      `SELECT snapshot_id, environment_id, workspace_volume_id, name,
+              size_bytes, backup_kind, created_at
+       FROM environment_workspace_backups
+       WHERE environment_id = $1
+       ORDER BY created_at DESC, snapshot_id DESC
+       OFFSET $2`,
+      [environmentId, retentionCount],
+    );
+    return result.rows.map(environmentWorkspaceBackupFromRow);
+  }
+
+  async deleteEnvironmentWorkspaceBackupRecord(
+    environmentId: string,
+    snapshotId: string,
+  ) {
+    await this.pool.query(
+      `DELETE FROM environment_workspace_backups
+       WHERE environment_id = $1 AND snapshot_id = $2`,
+      [environmentId, snapshotId],
     );
   }
 
@@ -1824,11 +2343,16 @@ export class SandpiStore {
     return session.environmentId;
   }
 
-  async sessionIdsForEnvironment(environmentId: string) {
+  async sessionIdsForEnvironment(
+    environmentId: string,
+    options: { includeFailed?: boolean } = {},
+  ) {
     const result = await this.pool.query<{ id: string }>(
       `SELECT id FROM sessions
-       WHERE environment_id = $1 AND status <> 'failed' AND archived = FALSE`,
-      [environmentId],
+       WHERE environment_id = $1
+         AND ($2::BOOLEAN OR status <> 'failed')
+         AND archived = FALSE`,
+      [environmentId, options.includeFailed ?? false],
     );
     return result.rows.map((row) => row.id);
   }
@@ -2284,7 +2808,10 @@ export class SandpiStore {
 
 const ENVIRONMENT_SELECT = `
   SELECT environment.*, runtime.sandbox_id, runtime.supervisor_session_id,
-         runtime.observed_state AS sandbox_state
+         runtime.observed_state AS sandbox_state,
+         runtime.workspace_backup_due_at,
+         runtime.workspace_backup_last_completed_at,
+         runtime.workspace_backup_error
   FROM environments environment
   LEFT JOIN environment_runtime runtime
     ON runtime.environment_id = environment.id
@@ -2384,6 +2911,23 @@ function environmentFromRow(row: EnvironmentRow): EnvironmentRecord {
     visibility: row.visibility,
     idlePauseTimeoutSeconds: row.idle_pause_timeout_seconds,
     sandboxMemoryMiB: row.sandbox_memory_mib,
+    workspaceBackup: {
+      intervalSeconds: row.workspace_backup_interval_seconds,
+      retentionCount: row.workspace_backup_retention_count,
+      ...(row.workspace_backup_due_at
+        ? { nextBackupAt: toUnixTimestamp(row.workspace_backup_due_at) }
+        : {}),
+      ...(row.workspace_backup_last_completed_at
+        ? {
+            lastBackupAt: toUnixTimestamp(
+              row.workspace_backup_last_completed_at,
+            ),
+          }
+        : {}),
+      ...(row.workspace_backup_error
+        ? { lastError: row.workspace_backup_error }
+        : {}),
+    },
     name: row.name,
     description: row.description,
     color: row.color,
@@ -2417,6 +2961,19 @@ function environmentFromRow(row: EnvironmentRow): EnvironmentRecord {
     },
     networkPolicy: row.network_policy,
     provisioningError: row.provisioning_error ?? undefined,
+  };
+}
+
+function environmentWorkspaceBackupFromRow(
+  row: EnvironmentWorkspaceBackupRow,
+): EnvironmentWorkspaceBackup {
+  return {
+    id: row.snapshot_id,
+    environmentId: row.environment_id,
+    name: row.name,
+    sizeBytes: Number(row.size_bytes),
+    kind: row.backup_kind,
+    createdAt: toUnixTimestamp(row.created_at),
   };
 }
 

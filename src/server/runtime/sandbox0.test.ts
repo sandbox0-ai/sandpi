@@ -20,6 +20,7 @@ const environment: Environment = {
   visibility: "team",
   idlePauseTimeoutSeconds: 30 * 60,
   sandboxMemoryMiB: 2 * 1024,
+  workspaceBackup: { intervalSeconds: 0, retentionCount: 7 },
   name: "Development",
   description: "",
   color: "#151515",
@@ -312,6 +313,159 @@ test("updates the existing Environment Sandbox memory", async () => {
   assert.deepEqual(updates, [
     { sandboxId: "sandbox-environment", memory: "8192Mi" },
   ]);
+});
+
+test("creates, restores and deletes native snapshots for the Environment Workspace Volume", async () => {
+  const calls: Array<{ operation: string; volumeId: string; value: unknown }> = [];
+  const runtime = runtimeWithClient({
+    volumes: {
+      async createSnapshot(volumeId: string, request: unknown) {
+        calls.push({ operation: "create", volumeId, value: request });
+        return {
+          id: "snapshot-workspace-one",
+          volumeId,
+          name: "sandpi-workspace-backup",
+          sizeBytes: 1_048_576,
+          createdAt: "2026-07-21T12:00:00.000Z",
+        };
+      },
+      async deleteSnapshot(volumeId: string, snapshotId: string) {
+        calls.push({ operation: "delete", volumeId, value: snapshotId });
+        return { message: "deleted" };
+      },
+      async restoreSnapshot(volumeId: string, snapshotId: string) {
+        calls.push({ operation: "restore", volumeId, value: snapshotId });
+        return { status: "restored" };
+      },
+    },
+  });
+  const coordinates: EnvironmentRuntimeRecord = {
+    id: environment.id,
+    sandboxId: environment.sandboxId,
+    workspaceVolumeId: environment.workspaceVolumeId,
+    runtimeGeneration: 1,
+    decoder: {
+      supervisorCursor: 0,
+      tailBase64: "",
+      runtimeGeneration: 1,
+    },
+  };
+
+  const snapshot = await runtime.createEnvironmentWorkspaceBackup(coordinates, {
+    name: "sandpi-workspace-backup",
+    description: "Environment backup",
+  });
+  await runtime.restoreEnvironmentWorkspaceBackup(coordinates, snapshot.id);
+  await runtime.deleteEnvironmentWorkspaceBackup(
+    coordinates,
+    snapshot.id,
+  );
+
+  assert.deepEqual(snapshot, {
+    id: "snapshot-workspace-one",
+    name: "sandpi-workspace-backup",
+    sizeBytes: 1_048_576,
+    createdAt: new Date("2026-07-21T12:00:00.000Z"),
+  });
+  assert.deepEqual(calls, [
+    {
+      operation: "create",
+      volumeId: "volume-environment",
+      value: {
+        name: "sandpi-workspace-backup",
+        description: "Environment backup",
+      },
+    },
+    {
+      operation: "restore",
+      volumeId: "volume-environment",
+      value: "snapshot-workspace-one",
+    },
+    {
+      operation: "delete",
+      volumeId: "volume-environment",
+      value: "snapshot-workspace-one",
+    },
+  ]);
+});
+
+test("waits for the paused Sandbox ctld portal to unmount before restoring a Workspace snapshot", async () => {
+  let attempts = 0;
+  const runtime = runtimeWithClient({
+    volumes: {
+      async restoreSnapshot(volumeId: string, snapshotId: string) {
+        assert.equal(volumeId, "volume-environment");
+        assert.equal(snapshotId, "snapshot-workspace-one");
+        attempts += 1;
+        if (attempts === 1) {
+          throw new APIError({
+            statusCode: 409,
+            code: "conflict",
+            message:
+              "ctld-mounted volumes must be unmounted before snapshot or restore",
+          });
+        }
+        return { status: "restored" };
+      },
+    },
+  });
+  const coordinates: EnvironmentRuntimeRecord = {
+    id: environment.id,
+    sandboxId: environment.sandboxId,
+    workspaceVolumeId: environment.workspaceVolumeId,
+    runtimeGeneration: 1,
+    decoder: {
+      supervisorCursor: 0,
+      tailBase64: "",
+      runtimeGeneration: 1,
+    },
+  };
+
+  await runtime.restoreEnvironmentWorkspaceBackup(
+    coordinates,
+    "snapshot-workspace-one",
+  );
+
+  assert.equal(attempts, 2);
+});
+
+test("does not retry unrelated Workspace snapshot restore conflicts", async () => {
+  let attempts = 0;
+  const runtime = runtimeWithClient({
+    volumes: {
+      async restoreSnapshot() {
+        attempts += 1;
+        throw new APIError({
+          statusCode: 409,
+          code: "conflict",
+          message: "snapshot restore is already in progress",
+        });
+      },
+    },
+  });
+  const coordinates: EnvironmentRuntimeRecord = {
+    id: environment.id,
+    sandboxId: environment.sandboxId,
+    workspaceVolumeId: environment.workspaceVolumeId,
+    runtimeGeneration: 1,
+    decoder: {
+      supervisorCursor: 0,
+      tailBase64: "",
+      runtimeGeneration: 1,
+    },
+  };
+
+  await assert.rejects(
+    runtime.restoreEnvironmentWorkspaceBackup(
+      coordinates,
+      "snapshot-workspace-one",
+    ),
+    (error: unknown) => {
+      assert.equal((error as { code?: string }).code, "sandbox0_conflict");
+      return true;
+    },
+  );
+  assert.equal(attempts, 1);
 });
 
 test("creates, rotates and deletes write-only static header credential sources", async () => {

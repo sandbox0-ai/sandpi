@@ -176,6 +176,19 @@ Web today; iOS / Android / HarmonyOS later
   and 8 GiB presets. Sandpi applies it both when claiming and when updating the
   existing Sandbox. Runtime access and native `turn/completed` events calculate
   the PostgreSQL deadline from that setting.
+  The same Sandbox settings surface can create native SandboxVolume Workspace
+  backups manually or on an hourly, 6-hour, 12-hour, daily or weekly schedule.
+  Scheduled backups are opt-in, retention defaults to seven and can keep 1, 3,
+  7, 14 or 30 backups. PostgreSQL stores the durable due/retry state plus an
+  ownership journal of Sandpi-created snapshot ids; backup bytes and storage
+  metering remain native Sandbox0 state, and retention never deletes snapshots
+  created outside Sandpi. A listed backup can be restored only after typing the
+  current Environment name. Sandpi rejects backup and restore while a Turn,
+  Session provisioning, fork or runtime-recovery operation is active; restore
+  pauses the shared Sandbox, invokes Sandbox0's native Volume restore and
+  returns it to its previous running or paused state. Because Agent Harness
+  state is stored on the Workspace Volume, Sessions created after the selected
+  backup are retained as product records but marked unavailable.
   Any Sandpi replica may scan it, but a per-Environment advisory lock elects
   exactly one replica to pause after it rechecks that no Turn is active or
   pending. Browser disconnection is irrelevant. Sandbox0 auto-resume
@@ -568,6 +581,15 @@ Sandbox0 implementation details.
   following the latest activity; setting it to zero leaves no time-based
   expiration. Deadlines and retries are PostgreSQL state, not process-local
   timers.
+- Workspace backups use Sandbox0's native SandboxVolume snapshot checkpoint.
+  Automatic backups are disabled by default to avoid unexpected snapshot
+  storage usage; a user can still create one immediately from Environment
+  Settings. Creation, retention and restore share the Environment lifecycle
+  lock with pause, recovery and deletion. Failed backup operations remain
+  durable retries; restore is idempotently retryable against the same native
+  snapshot. The Web surface requires the current Environment name before
+  destructive restore and the server independently rechecks that no native
+  Turn or Session operation is active before pausing the Sandbox.
 - Supervisor output is the durable native transport. PostgreSQL stores replay
   identity, cursors and scalar recovery coordinates, never a parallel Codex
   transcript. One cursor-resumable Sandbox0 event stream per Environment

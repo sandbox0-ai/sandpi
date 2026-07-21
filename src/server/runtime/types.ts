@@ -70,6 +70,13 @@ export interface EnvironmentRuntimeRecord {
   decoder: CodexDecoderState;
 }
 
+export interface RuntimeWorkspaceBackupSnapshot {
+  id: string;
+  name: string;
+  sizeBytes: number;
+  createdAt: Date;
+}
+
 export interface RuntimeProvisionEnvironmentInput {
   environment: Environment;
   /** Existing Volume is reused when reconciliation resumes after a crash. */
@@ -112,6 +119,18 @@ export interface RuntimeAdapter {
   updateEnvironmentMemory(
     runtime: EnvironmentRuntimeRecord,
     memoryMiB: number,
+  ): Promise<void>;
+  createEnvironmentWorkspaceBackup(
+    runtime: EnvironmentRuntimeRecord,
+    input: { name: string; description: string },
+  ): Promise<RuntimeWorkspaceBackupSnapshot>;
+  deleteEnvironmentWorkspaceBackup(
+    runtime: EnvironmentRuntimeRecord,
+    snapshotId: string,
+  ): Promise<void>;
+  restoreEnvironmentWorkspaceBackup(
+    runtime: EnvironmentRuntimeRecord,
+    snapshotId: string,
   ): Promise<void>;
   applyEnvironmentSandboxNetworkPolicy(
     runtime: EnvironmentRuntimeRecord,

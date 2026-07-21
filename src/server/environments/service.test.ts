@@ -15,6 +15,7 @@ const environment = {
   visibility: "team",
   idlePauseTimeoutSeconds: 30 * 60,
   sandboxMemoryMiB: 2 * 1024,
+  workspaceBackup: { intervalSeconds: 0, retentionCount: 7 },
   status: "ready",
   networkPolicy: {
     mode: "allow-all",
@@ -137,6 +138,7 @@ test("applies a changed network policy to the shared Environment Sandbox", async
     visibility: "team",
     idlePauseTimeoutSeconds: 30 * 60,
     sandboxMemoryMiB: 2 * 1024,
+    workspaceBackup: environment.workspaceBackup,
     networkPolicy: nextPolicy,
   });
 
@@ -169,6 +171,7 @@ test("lets only the creator change a Team Environment's visibility", async () =>
       visibility: "private",
       idlePauseTimeoutSeconds: 30 * 60,
       sandboxMemoryMiB: 2 * 1024,
+      workspaceBackup: environment.workspaceBackup,
       networkPolicy: environment.networkPolicy,
     }),
     (error: unknown) =>
@@ -228,10 +231,74 @@ test("serializes an idle timeout change with Environment lifecycle transitions",
     visibility: "team",
     idlePauseTimeoutSeconds: 0,
     sandboxMemoryMiB: 2 * 1024,
+    workspaceBackup: environment.workspaceBackup,
     networkPolicy: environment.networkPolicy,
   });
 
   assert.equal(updated.idlePauseTimeoutSeconds, 0);
+  assert.deepEqual(steps, ["read", "lifecycle-lock", "read", "write"]);
+});
+
+test("serializes a Workspace backup policy change without mutating Sandbox resources", async () => {
+  const steps: string[] = [];
+  const store = {
+    async getManageableEnvironment() {
+      steps.push("read");
+      return environment;
+    },
+    async withEnvironmentLifecycleLock(
+      _environmentId: string,
+      operation: (lockedStore: SandpiStore) => Promise<Environment>,
+    ) {
+      steps.push("lifecycle-lock");
+      return {
+        acquired: true as const,
+        value: await operation(store as unknown as SandpiStore),
+      };
+    },
+    async withEnvironmentMcpMutationLock() {
+      assert.fail("a backup policy change must not take the MCP mutation lock");
+    },
+    async getEnvironmentRuntime() {
+      assert.fail("backup policy persistence does not mutate Sandbox resources");
+    },
+    async updateEnvironment(
+      _userId: string,
+      _environmentId: string,
+      input: Environment,
+    ) {
+      steps.push("write");
+      return { ...environment, ...input };
+    },
+  } as unknown as SandpiStore;
+  const runtime = {
+    async updateEnvironmentNetworkPolicy() {
+      assert.fail("an unchanged network policy must not be reapplied");
+    },
+    async updateEnvironmentMemory() {
+      assert.fail("an unchanged memory limit must not be reapplied");
+    },
+  } as unknown as RuntimeAdapter;
+  const service = new EnvironmentService(store, runtime, {
+    info() {},
+    error() {},
+  });
+
+  const updated = await service.update("user-test", environment.id, {
+    name: "Development",
+    description: "",
+    color: "#151515",
+    visibility: "team",
+    idlePauseTimeoutSeconds: 30 * 60,
+    sandboxMemoryMiB: 2 * 1024,
+    workspaceBackup: { intervalSeconds: 86_400, retentionCount: 3 },
+    networkPolicy: environment.networkPolicy,
+  });
+
+  assert.deepEqual(updated.workspaceBackup, {
+    intervalSeconds: 86_400,
+    retentionCount: 3,
+  });
   assert.deepEqual(steps, ["read", "lifecycle-lock", "read", "write"]);
 });
 
@@ -302,6 +369,7 @@ test("applies a memory change to the shared Sandbox under the lifecycle lock", a
     visibility: "team",
     idlePauseTimeoutSeconds: 30 * 60,
     sandboxMemoryMiB: 4 * 1024,
+    workspaceBackup: environment.workspaceBackup,
     networkPolicy: environment.networkPolicy,
   });
 
@@ -363,6 +431,7 @@ test("network updates nest lifecycle locking through the MCP-scoped Store", asyn
         visibility: Environment["visibility"];
         idlePauseTimeoutSeconds: number;
         sandboxMemoryMiB: number;
+        workspaceBackup: Environment["workspaceBackup"];
         networkPolicy: Environment["networkPolicy"];
       },
     ) {
@@ -452,6 +521,7 @@ test("network updates nest lifecycle locking through the MCP-scoped Store", asyn
     visibility: "team",
     idlePauseTimeoutSeconds: 30 * 60,
     sandboxMemoryMiB: 2 * 1024,
+    workspaceBackup: environment.workspaceBackup,
     networkPolicy: nextPolicy,
   });
 
@@ -539,6 +609,7 @@ test("uses the injected network policy applier instead of the legacy runtime met
     visibility: "team",
     idlePauseTimeoutSeconds: 30 * 60,
     sandboxMemoryMiB: 2 * 1024,
+    workspaceBackup: environment.workspaceBackup,
     networkPolicy: nextPolicy,
   });
 
@@ -601,6 +672,7 @@ test("rejects network policy changes after the Environment deletion gate", async
       visibility: "team",
       idlePauseTimeoutSeconds: 30 * 60,
       sandboxMemoryMiB: 2 * 1024,
+      workspaceBackup: environment.workspaceBackup,
       networkPolicy: nextPolicy,
     }),
     (error: unknown) =>

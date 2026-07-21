@@ -30,6 +30,10 @@ test("binds the coding agent to an Environment and every derived Session", () =>
   assert.equal(environment.visibility, "team");
   assert.equal(environment.idlePauseTimeoutSeconds, 30 * 60);
   assert.equal(environment.sandboxMemoryMiB, 2 * 1024);
+  assert.deepEqual(environment.workspaceBackup, {
+    intervalSeconds: 0,
+    retentionCount: 7,
+  });
   assert.equal(session.harness, environment.codingAgent.harness);
   assert.equal(session.harnessLabel, environment.codingAgent.label);
   assert.equal(session.environmentRevision, environment.revision);

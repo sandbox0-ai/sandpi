@@ -153,6 +153,25 @@ export interface NetworkPolicy {
 export type EnvironmentSandboxState =
   "pending" | "provisioning" | "running" | "paused" | "terminated" | "failed";
 
+export interface EnvironmentWorkspaceBackupPolicy {
+  /** Zero disables scheduled backups; manual backups remain available. */
+  intervalSeconds: number;
+  /** Maximum number of Sandpi-owned Workspace backups retained. */
+  retentionCount: number;
+  nextBackupAt?: UnixTimestamp;
+  lastBackupAt?: UnixTimestamp;
+  lastError?: string;
+}
+
+export interface EnvironmentWorkspaceBackup {
+  id: string;
+  environmentId: string;
+  name: string;
+  sizeBytes: number;
+  kind: "automatic" | "manual";
+  createdAt: UnixTimestamp;
+}
+
 export interface Environment {
   id: string;
   /** Immutable Sandpi tenant ownership; never inferred from the Sandbox0 API key. */
@@ -165,6 +184,8 @@ export interface Environment {
   idlePauseTimeoutSeconds: number;
   /** Desired memory limit for the one shared Environment Sandbox, in MiB. */
   sandboxMemoryMiB: number;
+  /** Native SandboxVolume snapshot policy and its durable scheduler state. */
+  workspaceBackup: EnvironmentWorkspaceBackupPolicy;
   name: string;
   description: string;
   color: string;

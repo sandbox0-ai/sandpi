@@ -21,6 +21,10 @@ import {
 } from "@/lib/environment-resources";
 import { MAX_ENVIRONMENT_IDLE_PAUSE_TIMEOUT_SECONDS } from "@/lib/environment-lifecycle";
 import {
+  isEnvironmentWorkspaceBackupIntervalSeconds,
+  isEnvironmentWorkspaceBackupRetentionCount,
+} from "@/lib/environment-workspace-backup";
+import {
   DEFAULT_ENVIRONMENT_METRIC_RANGE_SECONDS,
   isEnvironmentMetricRangeSeconds,
 } from "@/lib/environment-metrics";
@@ -35,6 +39,7 @@ import { seedCommunityDefaults } from "@/server/db/seed";
 import { EnvironmentService } from "@/server/environments/service";
 import { EnvironmentLifecycleService } from "@/server/environments/lifecycle-service";
 import { EnvironmentRuntimeAccessService } from "@/server/environments/runtime-access-service";
+import { EnvironmentWorkspaceBackupService } from "@/server/environments/workspace-backup-service";
 import { CodexEnvironmentAuthService } from "@/server/harnesses/codex/auth-service";
 import { CodexAuthStore } from "@/server/harnesses/codex/auth-store";
 import {
@@ -243,6 +248,11 @@ export async function createSandpiServer(
     app.log,
   );
   const lifecycle = new EnvironmentLifecycleService(store, runtime, app.log);
+  const workspaceBackups = new EnvironmentWorkspaceBackupService(
+    store,
+    runtime,
+    app.log,
+  );
   const runtimeAccess = new EnvironmentRuntimeAccessService(store, runtime);
   const codex = new CodexService(store, runtime, app.log, codexAuth);
   const codexMcp = new CodexMcpIntegrationService(
@@ -262,6 +272,14 @@ export async function createSandpiServer(
   lifecycle.setBeforePause(async (environmentId, lockedStore) => {
     await codex.flushEnvironmentCredentials(environmentId, lockedStore);
     codex.suspendEnvironmentWorker(environmentId);
+  });
+  workspaceBackups.setRestoreHooks({
+    before: async (environmentId, lockedStore) => {
+      await codex.flushEnvironmentCredentials(environmentId, lockedStore);
+      codex.suspendEnvironmentWorker(environmentId);
+    },
+    afterAttempt: (environmentId, result) =>
+      codex.finishEnvironmentWorkspaceRestoreAttempt(environmentId, result),
   });
   environments.setBeforeDelete(async (userId, environmentId) => {
     await codex.flushEnvironmentCredentials(environmentId);
@@ -333,6 +351,7 @@ export async function createSandpiServer(
     codexMcp,
     codexAuth,
     environments,
+    workspaceBackups,
   });
 
   if (existsSync(config.webDir)) {
@@ -352,6 +371,7 @@ export async function createSandpiServer(
   }
 
   app.addHook("onClose", async () => {
+    await workspaceBackups.close();
     await lifecycle.close();
     await codexAuth.close();
     await codex.close();
@@ -361,6 +381,7 @@ export async function createSandpiServer(
 
   await environments.reconcilePending();
   await lifecycle.start();
+  await workspaceBackups.start();
   await codexAuth.resumePending();
   void codexMcp.reconcilePending().catch((error) => {
     app.log.warn({ err: error }, "MCP integration reconciliation deferred");
@@ -458,11 +479,15 @@ function registerApiRoutes(
     codexMcp: CodexMcpIntegrationService;
     codexAuth: CodexEnvironmentAuthService;
     environments: EnvironmentService;
+    workspaceBackups: EnvironmentWorkspaceBackupService;
   },
 ) {
   const deployment = deploymentSummary(services.config, services.runtime);
   app.addHook("onSend", async (request, reply, payload) => {
-    if (request.url.includes("/harnesses/codex/mcp")) {
+    if (
+      request.url.includes("/harnesses/codex/mcp") ||
+      request.url.includes("/workspace-backups")
+    ) {
       reply.header("Cache-Control", "no-store");
     }
     return payload;
@@ -516,6 +541,16 @@ function registerApiRoutes(
             .int()
             .min(ENVIRONMENT_SANDBOX_MEMORY_MIN_MIB)
             .max(ENVIRONMENT_SANDBOX_MEMORY_MAX_MIB),
+          workspaceBackup: z.object({
+            intervalSeconds: z
+              .number()
+              .int()
+              .refine(isEnvironmentWorkspaceBackupIntervalSeconds),
+            retentionCount: z
+              .number()
+              .int()
+              .refine(isEnvironmentWorkspaceBackupRetentionCount),
+          }),
           networkPolicy: networkPolicySchema,
         })
         .parse(request.body);
@@ -524,6 +559,43 @@ function registerApiRoutes(
           request.principal.userId,
           request.params.environmentId,
           body,
+        ),
+      };
+    },
+  );
+  app.get<{ Params: { environmentId: string } }>(
+    "/api/v1/environments/:environmentId/workspace-backups",
+    async (request) => ({
+      data: await services.workspaceBackups.list(
+        request.principal.userId,
+        request.params.environmentId,
+      ),
+    }),
+  );
+  app.post<{ Params: { environmentId: string } }>(
+    "/api/v1/environments/:environmentId/workspace-backups",
+    async (request, reply) =>
+      reply.status(201).send({
+        data: await services.workspaceBackups.createNow(
+          request.principal.userId,
+          request.params.environmentId,
+        ),
+      }),
+  );
+  app.put<{
+    Params: { environmentId: string; snapshotId: string };
+  }>(
+    "/api/v1/environments/:environmentId/workspace-backups/:snapshotId/restore",
+    async (request) => {
+      const body = z
+        .object({ confirmation: z.string().min(1).max(80) })
+        .parse(request.body);
+      return {
+        data: await services.workspaceBackups.restore(
+          request.principal.userId,
+          request.params.environmentId,
+          request.params.snapshotId,
+          body.confirmation,
         ),
       };
     },

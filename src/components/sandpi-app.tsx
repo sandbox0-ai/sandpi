@@ -495,6 +495,21 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
     [],
   );
 
+  const handleEnvironmentWorkspaceRestore = useCallback(
+    (nextEnvironment: Environment) => {
+      handleEnvironmentChange(nextEnvironment);
+      void apiFetch<ApiEnvelope<CodingSession[]>>("/api/v1/sessions")
+        .then((response) => setSessions(response.data))
+        .catch((error) =>
+          console.error(
+            "Unable to refresh Sessions after Workspace restore",
+            error,
+          ),
+        );
+    },
+    [handleEnvironmentChange],
+  );
+
   const handleEnvironmentDeleted = useCallback(
     (environmentId: string) => {
       const remainingEnvironments = environments.filter(
@@ -952,6 +967,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
                 right.updatedAt - left.updatedAt,
             )}
           onChange={handleEnvironmentChange}
+          onWorkspaceRestore={handleEnvironmentWorkspaceRestore}
           onDelete={handleEnvironmentDeleted}
           onRestoreSession={handleRestoreSession}
           onClose={() => setSettingsEnvironmentId(null)}

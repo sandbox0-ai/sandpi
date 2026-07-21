@@ -67,6 +67,7 @@ test("migration history contains every durable Sandpi boundary", async () => {
       "0040_environment_sandbox_memory",
       "0041_remove_environment_hard_ttl",
       "0042_environment_mcp_tool_policies",
+      "0043_environment_workspace_backups",
     ],
   );
 
@@ -565,4 +566,24 @@ test("migration history contains every durable Sandpi boundary", async () => {
     teamOwnershipSql,
     /ALTER TABLE team_memberships[\s\S]+DROP COLUMN plan_assignment_id[\s\S]+DROP COLUMN plan_quotas/,
   );
+
+  const workspaceBackupsSql = migrations[42]?.sql ?? "";
+  assert.match(
+    workspaceBackupsSql,
+    /workspace_backup_interval_seconds INTEGER NOT NULL DEFAULT 0/,
+  );
+  assert.match(
+    workspaceBackupsSql,
+    /workspace_backup_retention_count INTEGER NOT NULL DEFAULT 7/,
+  );
+  assert.match(
+    workspaceBackupsSql,
+    /CREATE TABLE environment_workspace_backups\b/,
+  );
+  assert.match(
+    workspaceBackupsSql,
+    /snapshot_id TEXT PRIMARY KEY[\s\S]+environment_id TEXT NOT NULL REFERENCES environments\(id\) ON DELETE CASCADE/,
+  );
+  assert.match(workspaceBackupsSql, /workspace_backup_retry_at TIMESTAMPTZ/);
+  assert.doesNotMatch(workspaceBackupsSql, /snapshot_(?:content|bytes) BYTEA/i);
 });

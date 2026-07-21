@@ -38,6 +38,7 @@ import type {
 } from "@/server/runtime/types";
 import {
   SandpiStore,
+  WORKSPACE_RESTORE_UNAVAILABLE_SESSION_ERROR,
   type CodexControlTransition,
   type StoredEnvironmentRuntime,
   type StoredSessionRuntime,
@@ -1655,6 +1656,36 @@ export class CodexService {
     this.workers.get(environmentId)?.abort();
   }
 
+  async finishEnvironmentWorkspaceRestoreAttempt(
+    environmentId: string,
+    result: { nativeRestored: boolean; resumeAfterRestore: boolean },
+  ) {
+    this.suspendEnvironmentWorker(environmentId);
+    if (result.nativeRestored) {
+      this.forgetEnvironmentProtocolReadiness(environmentId);
+      this.nativeSessionAttachments.delete(environmentId);
+      this.rpcResponses.delete(environmentId);
+      this.rpcAnchors.delete(environmentId);
+      this.rejectEnvironmentRpcWaitersForEpochChange(environmentId);
+      const ownerPrefix = `${environmentId}\0`;
+      for (const key of this.nativeOwners.keys()) {
+        if (key.startsWith(ownerPrefix)) this.nativeOwners.delete(key);
+      }
+      for (const key of this.requestOwners.keys()) {
+        if (key.startsWith(ownerPrefix)) this.requestOwners.delete(key);
+      }
+      await this.invalidateEnvironmentSessions(
+        environmentId,
+        "environment-workspace-restored",
+        "The shared Workspace was restored; reload the native Session snapshot.",
+        { includeFailed: true },
+      );
+    }
+    if (result.resumeAfterRestore) {
+      this.restartEnvironmentWorker(environmentId);
+    }
+  }
+
   async flushEnvironmentCredentials(
     environmentId: string,
     lockStore?: SandpiStore,
@@ -2797,6 +2828,16 @@ export class CodexService {
 
   private async requireNativeSessionRuntime(userId: string, sessionId: string) {
     const runtime = await this.store.getSessionRuntime(userId, sessionId);
+    if (
+      runtime.runtimeErrorCode ===
+      WORKSPACE_RESTORE_UNAVAILABLE_SESSION_ERROR
+    ) {
+      throw new HttpError(
+        409,
+        "codex_session_unavailable_after_workspace_restore",
+        "This Session was created after the restored Workspace backup, so its native harness state is unavailable.",
+      );
+    }
     if (!runtime.nativeSessionId) {
       throw new HttpError(
         409,
@@ -3282,9 +3323,11 @@ export class CodexService {
     environmentId: string,
     reason: string,
     message: string,
+    options: { includeFailed?: boolean } = {},
   ) {
     for (const sessionId of await this.store.sessionIdsForEnvironment(
       environmentId,
+      options,
     )) {
       this.publishInvalidation(sessionId, reason, { message });
     }

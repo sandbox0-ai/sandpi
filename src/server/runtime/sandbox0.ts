@@ -60,6 +60,7 @@ import {
   type RuntimeProvisionEnvironmentInput,
   type RuntimeStaticHeaderCredentialSourceInput,
   type RuntimeTerminalHandle,
+  type RuntimeWorkspaceBackupSnapshot,
   type RuntimeWorkspaceWatchHandle,
   type Sandbox0AppService,
   type Sandbox0AppServiceView,
@@ -118,6 +119,12 @@ const GIT_STATUS_CONCURRENCY = 4;
 const SANDBOX_AUTO_RESUME_TIMEOUT_MS = 120_000;
 const SANDBOX_AUTO_RESUME_RETRY_DELAY_MS = 250;
 const SANDBOX0_TRANSPORT_RETRY_DELAYS_MS = [100, 250] as const;
+// Sandbox0 commits the paused lifecycle before the deleted runtime Pod's
+// finalizer finishes unbinding its ctld volume portal. Retry only that narrow,
+// pre-mutation restore conflict while the asynchronous unbind catches up.
+const WORKSPACE_RESTORE_UNMOUNT_RETRY_DELAYS_MS = [
+  100, 250, 500, 1_000, 2_000, 4_000, 5_000, 5_000, 5_000, 5_000,
+] as const;
 // Sandbox0's File API lists one directory at a time. Keep cross-harness search
 // as one bounded Sandbox command so large trees do not become recursive HTTP
 // fan-out, and keep the capability below every coding-agent adapter.
@@ -270,6 +277,67 @@ export class Sandbox0Runtime implements RuntimeAdapter {
       );
     } catch (error) {
       throw translateSandbox0Error(error);
+    }
+  }
+
+  async createEnvironmentWorkspaceBackup(
+    runtime: EnvironmentRuntimeRecord,
+    input: { name: string; description: string },
+  ): Promise<RuntimeWorkspaceBackupSnapshot> {
+    try {
+      const snapshot = await this.client.volumes.createSnapshot(
+        runtime.workspaceVolumeId,
+        input,
+      );
+      const nativeCreatedAt = new Date(snapshot.createdAt);
+      return {
+        id: snapshot.id,
+        name: snapshot.name,
+        sizeBytes: snapshot.sizeBytes,
+        // Keep the newly created snapshot manageable even if an older
+        // Sandbox0 deployment returns a malformed optional timestamp.
+        createdAt: Number.isNaN(nativeCreatedAt.getTime())
+          ? new Date()
+          : nativeCreatedAt,
+      };
+    } catch (error) {
+      throw translateSandbox0Error(error);
+    }
+  }
+
+  async deleteEnvironmentWorkspaceBackup(
+    runtime: EnvironmentRuntimeRecord,
+    snapshotId: string,
+  ) {
+    try {
+      await this.client.volumes.deleteSnapshot(
+        runtime.workspaceVolumeId,
+        snapshotId,
+      );
+    } catch (error) {
+      if (isMissingResource(error)) return;
+      throw translateSandbox0Error(error);
+    }
+  }
+
+  async restoreEnvironmentWorkspaceBackup(
+    runtime: EnvironmentRuntimeRecord,
+    snapshotId: string,
+  ) {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        await this.client.volumes.restoreSnapshot(
+          runtime.workspaceVolumeId,
+          snapshotId,
+        );
+        return;
+      } catch (error) {
+        const delayMs = WORKSPACE_RESTORE_UNMOUNT_RETRY_DELAYS_MS[attempt];
+        if (!isWorkspaceRestoreWaitingForUnmount(error) || delayMs === undefined) {
+          throw translateSandbox0Error(error);
+        }
+        await delay(delayMs);
+      }
     }
   }
 
@@ -2884,6 +2952,20 @@ function isSandboxWakingUp(error: unknown): error is APIError {
     error instanceof APIError &&
     error.statusCode === 503 &&
     error.message.toLowerCase().includes("sandbox is waking up")
+  );
+}
+
+function isWorkspaceRestoreWaitingForUnmount(
+  error: unknown,
+): error is APIError {
+  return (
+    error instanceof APIError &&
+    error.statusCode === 409 &&
+    error.message
+      .toLowerCase()
+      .includes(
+        "ctld-mounted volumes must be unmounted before snapshot or restore",
+      )
   );
 }
 

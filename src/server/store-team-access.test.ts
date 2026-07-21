@@ -127,6 +127,7 @@ test("clears the idle deadline when automatic Environment pause is disabled", as
       id: "environment-team",
       idlePauseTimeoutSeconds: 30 * 60,
       sandboxMemoryMiB: 2 * 1024,
+      workspaceBackup: { intervalSeconds: 0, retentionCount: 7 },
     }),
   });
 
@@ -137,6 +138,7 @@ test("clears the idle deadline when automatic Environment pause is disabled", as
     visibility: "team",
     idlePauseTimeoutSeconds: 0,
     sandboxMemoryMiB: 4 * 1024,
+    workspaceBackup: { intervalSeconds: 86_400, retentionCount: 7 },
     networkPolicy: { mode: "allow-all", domainExceptions: [] },
   });
 
@@ -146,13 +148,37 @@ test("clears the idle deadline when automatic Environment pause is disabled", as
   assert.ok(environmentUpdate);
   assert.match(environmentUpdate.sql, /idle_pause_timeout_seconds = \$6/);
   assert.match(environmentUpdate.sql, /sandbox_memory_mib = \$7/);
-  assert.deepEqual(environmentUpdate.values?.slice(5, 7), [0, 4 * 1024]);
+  assert.match(
+    environmentUpdate.sql,
+    /workspace_backup_interval_seconds = \$8/,
+  );
+  assert.match(
+    environmentUpdate.sql,
+    /workspace_backup_retention_count = \$9/,
+  );
+  assert.deepEqual(environmentUpdate.values?.slice(5, 9), [
+    0,
+    4 * 1024,
+    86_400,
+    7,
+  ]);
   const runtimeUpdate = queries.find(({ sql }) =>
-    sql.includes("UPDATE environment_runtime"),
+    sql.includes("UPDATE environment_runtime") &&
+    sql.includes("idle_pause_due_at"),
   );
   assert.ok(runtimeUpdate);
   assert.match(runtimeUpdate.sql, /WHEN \$2::INTEGER = 0 THEN NULL/);
   assert.deepEqual(runtimeUpdate.values, ["environment-team", 0]);
+  const backupRuntimeUpdate = queries.find(({ sql }) =>
+    sql.includes("UPDATE environment_runtime") &&
+    sql.includes("workspace_backup_due_at"),
+  );
+  assert.ok(backupRuntimeUpdate);
+  assert.deepEqual(backupRuntimeUpdate.values, [
+    "environment-team",
+    86_400,
+    true,
+  ]);
 });
 
 test("limits Environment management to its creator or a Team owner or admin", async () => {

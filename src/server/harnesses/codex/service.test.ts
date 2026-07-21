@@ -5,11 +5,12 @@ import type { CodexThread } from "@/harnesses/codex/types";
 import type { CodingSession, Environment } from "@/lib/types";
 import type { RuntimeAdapter } from "@/server/runtime/types";
 import { HttpError } from "@/server/http-error";
-import type {
-  CodexControlTransition,
-  SandpiStore,
-  StoredEnvironmentRuntime,
-  StoredSessionRuntime,
+import {
+  WORKSPACE_RESTORE_UNAVAILABLE_SESSION_ERROR,
+  type CodexControlTransition,
+  type SandpiStore,
+  type StoredEnvironmentRuntime,
+  type StoredSessionRuntime,
 } from "@/server/store";
 import { CodexService, type CodexCredentialProvider } from "./service";
 import type { SupervisorOutputEvent } from "./jsonl";
@@ -47,6 +48,7 @@ const environment: Environment = {
   visibility: "team",
   idlePauseTimeoutSeconds: 30 * 60,
   sandboxMemoryMiB: 2 * 1024,
+  workspaceBackup: { intervalSeconds: 0, retentionCount: 7 },
   name: "Development",
   description: "",
   color: "#151515",
@@ -1797,6 +1799,37 @@ test("does not start a Turn in an archived Session", async () => {
       ),
       false,
     );
+  } finally {
+    await context.close();
+  }
+});
+
+test("reports a Session whose native state was removed by Workspace restore", async () => {
+  const context = fixture({
+    sessions: [
+      {
+        id: "session-after-backup",
+        nativeSessionId: "thread-after-backup",
+      },
+    ],
+  });
+  context.sessionRuntimes.set("session-after-backup", {
+    ...context.sessionRuntimes.get("session-after-backup")!,
+    runtimeErrorCode: WORKSPACE_RESTORE_UNAVAILABLE_SESSION_ERROR,
+  });
+  try {
+    await assert.rejects(
+      context.service.startTurn({
+        userId: "user",
+        sessionId: "session-after-backup",
+        text: "This native Thread no longer exists",
+        images: [],
+      }),
+      (error: unknown) =>
+        error instanceof HttpError &&
+        error.code === "codex_session_unavailable_after_workspace_restore",
+    );
+    assert.equal(context.writes.length, 0);
   } finally {
     await context.close();
   }

@@ -16,6 +16,9 @@ export class UnconfiguredRuntime implements RuntimeAdapter {
   deleteEnvironmentResources = async () => undefined;
   updateEnvironmentNetworkPolicy = unavailable;
   updateEnvironmentMemory = unavailable;
+  createEnvironmentWorkspaceBackup = unavailable;
+  deleteEnvironmentWorkspaceBackup = unavailable;
+  restoreEnvironmentWorkspaceBackup = unavailable;
   applyEnvironmentSandboxNetworkPolicy = unavailable;
   createStaticHeaderCredentialSource = unavailable;
   updateStaticHeaderCredentialSource = unavailable;

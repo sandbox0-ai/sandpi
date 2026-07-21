@@ -4262,6 +4262,219 @@ code.codex-compact-activity-subject {
   background: var(--panel-strong);
 }
 
+.workspace-backup-card {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 14px;
+}
+
+.workspace-backup-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.workspace-backup-heading > div {
+  min-width: 0;
+}
+
+.workspace-backup-heading strong {
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.workspace-backup-heading p {
+  max-width: 500px;
+}
+
+.workspace-backup-fields,
+.workspace-backup-status {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.workspace-backup-status {
+  padding: 11px 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: 7px;
+  background: var(--sidebar);
+}
+
+.workspace-backup-status > span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.workspace-backup-status small,
+.workspace-backup-row time {
+  color: var(--ink-faint);
+  font-size: 9.5px;
+}
+
+.workspace-backup-status strong {
+  overflow: hidden;
+  font-size: 10.5px;
+  font-weight: 590;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-backup-list {
+  border-top: 1px solid var(--line-soft);
+}
+
+.workspace-backup-row {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.workspace-backup-row:last-child {
+  border-bottom: 0;
+}
+
+.workspace-backup-row > span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.workspace-backup-row strong {
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.workspace-backup-row code {
+  color: var(--ink-soft);
+  font-size: 9.5px;
+}
+
+.workspace-backup-row-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.workspace-backup-restore-button {
+  display: inline-flex;
+  height: 27px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-soft);
+  font-size: 9.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.workspace-backup-restore-button:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--red) 55%, var(--line));
+  background: var(--red-soft);
+  color: var(--red);
+}
+
+.workspace-backup-restore-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--red) 48%, var(--line));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--red-soft) 48%, var(--panel));
+}
+
+.workspace-backup-restore-confirm > div:first-child {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  color: var(--red);
+}
+
+.workspace-backup-restore-confirm > div:first-child > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.workspace-backup-restore-confirm > div:first-child span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.workspace-backup-restore-confirm strong {
+  color: var(--ink);
+  font-size: 11px;
+}
+
+.workspace-backup-restore-confirm small {
+  color: var(--ink-soft);
+  font-size: 9.5px;
+  line-height: 1.5;
+}
+
+.workspace-backup-restore-confirm label code {
+  color: var(--ink);
+}
+
+.workspace-backup-restore-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.workspace-backup-restore-submit {
+  display: inline-flex;
+  height: 31px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid var(--red);
+  border-radius: 7px;
+  background: var(--red);
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 620;
+  cursor: pointer;
+}
+
+.workspace-backup-restore-submit:disabled,
+.workspace-backup-restore-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.workspace-backup-empty {
+  margin: 0 !important;
+  color: var(--ink-faint);
+  font-size: 10px;
+}
+
+.settings-inline-success {
+  margin: 0;
+  padding: 9px 11px;
+  border: 1px solid color-mix(in srgb, var(--green) 45%, var(--line));
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--green) 9%, var(--panel));
+  color: var(--green);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
 .definition-card > div {
   display: grid;
   min-height: 39px;
@@ -6838,11 +7051,17 @@ code.codex-compact-activity-subject {
   }
 
   .field-grid.two-columns,
+  .workspace-backup-fields,
+  .workspace-backup-status,
   .network-mode-grid,
   .codex-mcp-preset-grid,
   .codex-mcp-tool-policy-modes,
   .codex-mcp-tool-list {
     grid-template-columns: 1fr;
+  }
+
+  .workspace-backup-heading {
+    flex-direction: column;
   }
 
   .codex-mcp-preset-note {

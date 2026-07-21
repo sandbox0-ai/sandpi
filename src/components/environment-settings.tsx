@@ -32,6 +32,10 @@ import { copyTextToClipboard } from "@/lib/clipboard";
 import { MAX_ENVIRONMENT_IDLE_PAUSE_TIMEOUT_SECONDS } from "@/lib/environment-lifecycle";
 import { ENVIRONMENT_SANDBOX_MEMORY_OPTIONS_MIB } from "@/lib/environment-resources";
 import {
+  ENVIRONMENT_WORKSPACE_BACKUP_INTERVAL_OPTIONS,
+  ENVIRONMENT_WORKSPACE_BACKUP_RETENTION_OPTIONS,
+} from "@/lib/environment-workspace-backup";
+import {
   CodexMcpSettings,
   CodexSkillsSettings,
 } from "@/harnesses/codex/environment-settings";
@@ -51,7 +55,12 @@ import {
   unixTimestampToIso,
   type UnixTimestamp,
 } from "@/lib/time";
-import type { CodingSession, Environment, NetworkPolicy } from "@/lib/types";
+import type {
+  CodingSession,
+  Environment,
+  EnvironmentWorkspaceBackup,
+  NetworkPolicy,
+} from "@/lib/types";
 
 type EnvironmentSettingsTab =
   | "general"
@@ -70,6 +79,7 @@ interface EnvironmentSettingsProps {
   timeZone: string;
   archivedSessions: CodingSession[];
   onChange: (environment: Environment) => void;
+  onWorkspaceRestore: (environment: Environment) => void;
   onDelete: (environmentId: string) => void;
   onRestoreSession: (sessionId: string) => void;
   onClose: () => void;
@@ -121,6 +131,17 @@ function formatArchivedSessionTime(
     dateStyle: "medium",
     timeStyle: "short",
   });
+}
+
+function formatWorkspaceBackupSize(sizeBytes: number) {
+  if (sizeBytes < 1024) return `${sizeBytes} B`;
+  if (sizeBytes < 1024 * 1024) {
+    return `${Math.round(sizeBytes / 1024)} KiB`;
+  }
+  if (sizeBytes < 1024 * 1024 * 1024) {
+    return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MiB`;
+  }
+  return `${(sizeBytes / (1024 * 1024 * 1024)).toFixed(2)} GiB`;
 }
 
 function formatCodexPlan(planType: CodexAccountPlanType | undefined) {
@@ -186,6 +207,7 @@ export function EnvironmentSettings({
   timeZone,
   archivedSessions,
   onChange,
+  onWorkspaceRestore,
   onDelete,
   onRestoreSession,
   onClose,
@@ -196,6 +218,17 @@ export function EnvironmentSettings({
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
+  const [workspaceBackups, setWorkspaceBackups] = useState<
+    EnvironmentWorkspaceBackup[]
+  >([]);
+  const [workspaceBackupsLoading, setWorkspaceBackupsLoading] = useState(false);
+  const [workspaceBackupBusy, setWorkspaceBackupBusy] = useState(false);
+  const [workspaceBackupError, setWorkspaceBackupError] = useState("");
+  const [workspaceRestoreBackup, setWorkspaceRestoreBackup] =
+    useState<EnvironmentWorkspaceBackup | null>(null);
+  const [workspaceRestoreName, setWorkspaceRestoreName] = useState("");
+  const [workspaceRestoreBusy, setWorkspaceRestoreBusy] = useState(false);
+  const [workspaceRestoreSuccess, setWorkspaceRestoreSuccess] = useState("");
   const [deleteConfirming, setDeleteConfirming] = useState(false);
   const [deleteName, setDeleteName] = useState("");
   const [deleting, setDeleting] = useState(false);
@@ -238,7 +271,39 @@ export function EnvironmentSettings({
 
   useEffect(() => {
     setActiveTab("general");
+    setWorkspaceBackups([]);
+    setWorkspaceBackupError("");
+    setWorkspaceRestoreBackup(null);
+    setWorkspaceRestoreName("");
+    setWorkspaceRestoreSuccess("");
   }, [environment.id]);
+
+  useEffect(() => {
+    if (activeTab !== "sandbox") return;
+    const controller = new AbortController();
+    setWorkspaceBackupsLoading(true);
+    setWorkspaceBackupError("");
+    void apiFetch<ApiEnvelope<EnvironmentWorkspaceBackup[]>>(
+      `/api/v1/environments/${encodeURIComponent(environment.id)}/workspace-backups`,
+      { signal: controller.signal },
+    )
+      .then((response) => {
+        if (!controller.signal.aborted) setWorkspaceBackups(response.data);
+      })
+      .catch((error) => {
+        if (!controller.signal.aborted) {
+          setWorkspaceBackupError(
+            error instanceof Error
+              ? error.message
+              : "Workspace backups could not be loaded.",
+          );
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setWorkspaceBackupsLoading(false);
+      });
+    return () => controller.abort();
+  }, [activeTab, environment.id]);
 
   useEffect(() => {
     const previouslyFocused = document.activeElement as HTMLElement | null;
@@ -528,6 +593,10 @@ export function EnvironmentSettings({
             visibility: draft.visibility,
             idlePauseTimeoutSeconds: draft.idlePauseTimeoutSeconds,
             sandboxMemoryMiB: draft.sandboxMemoryMiB,
+            workspaceBackup: {
+              intervalSeconds: draft.workspaceBackup.intervalSeconds,
+              retentionCount: draft.workspaceBackup.retentionCount,
+            },
             networkPolicy: draft.networkPolicy,
           }),
         },
@@ -543,6 +612,101 @@ export function EnvironmentSettings({
           : "Environment changes could not be saved.",
       );
       setSaving(false);
+    }
+  }
+
+  async function createWorkspaceBackup() {
+    if (workspaceBackupBusy || workspaceRestoreBusy) return;
+    setWorkspaceBackupBusy(true);
+    setWorkspaceBackupError("");
+    try {
+      const response = await apiFetch<
+        ApiEnvelope<{
+          backup: EnvironmentWorkspaceBackup;
+          environment: Environment;
+        }>
+      >(
+        `/api/v1/environments/${encodeURIComponent(environment.id)}/workspace-backups`,
+        { method: "POST" },
+      );
+      setWorkspaceBackups((current) => [
+        response.data.backup,
+        ...current.filter(
+          (backup) => backup.id !== response.data.backup.id,
+        ),
+      ]);
+      setDraft((current) => ({
+        ...current,
+        workspaceBackup: response.data.environment.workspaceBackup,
+      }));
+      onChange(response.data.environment);
+    } catch (error) {
+      setWorkspaceBackupError(
+        error instanceof Error
+          ? error.message
+          : "The Workspace backup could not be created.",
+      );
+    } finally {
+      setWorkspaceBackupBusy(false);
+    }
+  }
+
+  async function restoreWorkspaceBackup() {
+    if (
+      !workspaceRestoreBackup ||
+      workspaceRestoreBusy ||
+      workspaceRestoreName !== environment.name
+    ) {
+      return;
+    }
+    setWorkspaceRestoreBusy(true);
+    setWorkspaceBackupError("");
+    setWorkspaceRestoreSuccess("");
+    try {
+      const response = await apiFetch<
+        ApiEnvelope<{
+          backup: EnvironmentWorkspaceBackup;
+          environment: Environment;
+          unavailableSessionCount: number;
+        }>
+      >(
+        `/api/v1/environments/${encodeURIComponent(environment.id)}/workspace-backups/${encodeURIComponent(workspaceRestoreBackup.id)}/restore`,
+        {
+          method: "PUT",
+          body: JSON.stringify({ confirmation: workspaceRestoreName }),
+        },
+      );
+      setDraft((current) => ({
+        ...response.data.environment,
+        name: current.name,
+        description: current.description,
+        color: current.color,
+        visibility: current.visibility,
+        idlePauseTimeoutSeconds: current.idlePauseTimeoutSeconds,
+        sandboxMemoryMiB: current.sandboxMemoryMiB,
+        workspaceBackup: {
+          ...response.data.environment.workspaceBackup,
+          intervalSeconds: current.workspaceBackup.intervalSeconds,
+          retentionCount: current.workspaceBackup.retentionCount,
+        },
+        networkPolicy: current.networkPolicy,
+      }));
+      onWorkspaceRestore(response.data.environment);
+      setWorkspaceRestoreBackup(null);
+      setWorkspaceRestoreName("");
+      setWorkspaceRestoreSuccess(
+        response.data.unavailableSessionCount > 0
+          ? `Workspace restored. ${response.data.unavailableSessionCount} newer ${response.data.unavailableSessionCount === 1 ? "Session is" : "Sessions are"} unavailable because their native harness state was created after this backup.`
+          : "Workspace restored. The shared Sandbox is ready with the selected backup.",
+      );
+    } catch (error) {
+      setWorkspaceBackupError(
+        error instanceof Error
+          ? error.message
+          : "The Workspace backup could not be restored.",
+      );
+    } finally {
+      setWorkspaceRestoreBusy(false);
     }
   }
 
@@ -957,6 +1121,280 @@ export function EnvironmentSettings({
                     CPU capacity from the configured memory ratio.
                   </small>
                 </label>
+                <div className="settings-card workspace-backup-card">
+                  <div className="workspace-backup-heading">
+                    <div>
+                      <strong>Workspace backups</strong>
+                      <p>
+                        Create native snapshots of the shared Workspace Volume.
+                        Retention removes only snapshots created by Sandpi.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      className="secondary-action-button"
+                      disabled={
+                        workspaceBackupBusy ||
+                        workspaceRestoreBusy ||
+                        draft.status !== "ready" ||
+                        !draft.workspaceVolumeId
+                      }
+                      onClick={() => void createWorkspaceBackup()}
+                    >
+                      <RefreshCw
+                        size={13}
+                        className={workspaceBackupBusy ? "is-spinning" : undefined}
+                        aria-hidden="true"
+                      />
+                      {workspaceBackupBusy ? "Backing up…" : "Back up now"}
+                    </button>
+                  </div>
+                  <div className="workspace-backup-fields">
+                    <label className="full-field">
+                      Automatic backup frequency
+                      <select
+                        name="environment-workspace-backup-interval"
+                        aria-label="Workspace backup frequency"
+                        value={draft.workspaceBackup.intervalSeconds}
+                        onChange={(event) => {
+                          const intervalSeconds = Number(
+                            event.currentTarget.value,
+                          );
+                          if (
+                            !ENVIRONMENT_WORKSPACE_BACKUP_INTERVAL_OPTIONS.some(
+                              (option) => option.seconds === intervalSeconds,
+                            )
+                          ) {
+                            return;
+                          }
+                          setDraft((current) => ({
+                            ...current,
+                            workspaceBackup: {
+                              ...current.workspaceBackup,
+                              intervalSeconds,
+                            },
+                          }));
+                        }}
+                      >
+                        {ENVIRONMENT_WORKSPACE_BACKUP_INTERVAL_OPTIONS.map(
+                          (option) => (
+                            <option key={option.seconds} value={option.seconds}>
+                              {option.label}
+                            </option>
+                          ),
+                        )}
+                      </select>
+                      <small>
+                        Off disables scheduled backups; manual backups remain
+                        available.
+                      </small>
+                    </label>
+                    <label className="full-field">
+                      Retention
+                      <select
+                        name="environment-workspace-backup-retention"
+                        aria-label="Workspace backup retention"
+                        value={draft.workspaceBackup.retentionCount}
+                        onChange={(event) => {
+                          const retentionCount = Number(
+                            event.currentTarget.value,
+                          );
+                          if (
+                            !ENVIRONMENT_WORKSPACE_BACKUP_RETENTION_OPTIONS.some(
+                              (option) => option === retentionCount,
+                            )
+                          ) {
+                            return;
+                          }
+                          setDraft((current) => ({
+                            ...current,
+                            workspaceBackup: {
+                              ...current.workspaceBackup,
+                              retentionCount,
+                            },
+                          }));
+                        }}
+                      >
+                        {ENVIRONMENT_WORKSPACE_BACKUP_RETENTION_OPTIONS.map(
+                          (retentionCount) => (
+                            <option key={retentionCount} value={retentionCount}>
+                              Keep {retentionCount}{" "}
+                              {retentionCount === 1 ? "backup" : "backups"}
+                            </option>
+                          ),
+                        )}
+                      </select>
+                      <small>
+                        Applies to both automatic and manual Sandpi backups.
+                      </small>
+                    </label>
+                  </div>
+                  <div className="workspace-backup-status" aria-live="polite">
+                    <span>
+                      <small>Last backup</small>
+                      <strong>
+                        {draft.workspaceBackup.lastBackupAt
+                          ? formatArchivedSessionTime(
+                              draft.workspaceBackup.lastBackupAt,
+                              language,
+                              timeZone,
+                            )
+                          : "No backup yet"}
+                      </strong>
+                    </span>
+                    <span>
+                      <small>Next backup</small>
+                      <strong>
+                        {draft.workspaceBackup.intervalSeconds === 0
+                          ? "Scheduled backups off"
+                          : draft.workspaceBackup.nextBackupAt
+                            ? formatArchivedSessionTime(
+                                draft.workspaceBackup.nextBackupAt,
+                                language,
+                                timeZone,
+                              )
+                            : "Scheduling…"}
+                      </strong>
+                    </span>
+                  </div>
+                  {workspaceBackupError ? (
+                    <p className="settings-inline-error" role="alert">
+                      {workspaceBackupError}
+                    </p>
+                  ) : draft.workspaceBackup.lastError ? (
+                    <p className="settings-inline-error" role="alert">
+                      {draft.workspaceBackup.lastError}
+                    </p>
+                  ) : null}
+                  {workspaceBackupsLoading ? (
+                    <p className="workspace-backup-empty">Loading backups…</p>
+                  ) : workspaceBackups.length > 0 ? (
+                    <div
+                      className="workspace-backup-list"
+                      aria-label="Workspace backups"
+                    >
+                      {workspaceBackups.slice(0, 7).map((backup) => (
+                        <div key={backup.id} className="workspace-backup-row">
+                          <span>
+                            <strong>
+                              {backup.kind === "automatic"
+                                ? "Automatic backup"
+                                : "Manual backup"}
+                            </strong>
+                            <time dateTime={unixTimestampToIso(backup.createdAt)}>
+                              {formatArchivedSessionTime(
+                                backup.createdAt,
+                                language,
+                                timeZone,
+                              )}
+                            </time>
+                          </span>
+                          <div className="workspace-backup-row-actions">
+                            <code>
+                              {formatWorkspaceBackupSize(backup.sizeBytes)}
+                            </code>
+                            <button
+                              type="button"
+                              className="workspace-backup-restore-button"
+                              aria-label={`Restore backup from ${formatArchivedSessionTime(
+                                backup.createdAt,
+                                language,
+                                timeZone,
+                              )}`}
+                              disabled={
+                                workspaceBackupBusy || workspaceRestoreBusy
+                              }
+                              onClick={() => {
+                                setWorkspaceRestoreBackup(backup);
+                                setWorkspaceRestoreName("");
+                                setWorkspaceBackupError("");
+                                setWorkspaceRestoreSuccess("");
+                              }}
+                            >
+                              <RotateCcw size={12} aria-hidden="true" />
+                              Restore
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="workspace-backup-empty">
+                      No Sandpi Workspace backups yet.
+                    </p>
+                  )}
+                  {workspaceRestoreBackup ? (
+                    <div
+                      className="workspace-backup-restore-confirm"
+                      role="group"
+                      aria-label="Confirm Workspace restore"
+                    >
+                      <div>
+                        <TriangleAlert size={16} aria-hidden="true" />
+                        <span>
+                          <strong>Restore the entire shared Workspace?</strong>
+                          <small>
+                            Sandpi pauses the Sandbox and rolls every Workspace
+                            file plus Agent Harness state back to this backup.
+                            Sessions created after it will become unavailable.
+                            This cannot be undone unless you have a newer backup.
+                          </small>
+                        </span>
+                      </div>
+                      <label className="full-field">
+                        Type <code>{environment.name}</code> to confirm
+                        <input
+                          name="environment-workspace-restore-confirmation"
+                          aria-label="Environment name confirmation for Workspace restore"
+                          autoComplete="off"
+                          value={workspaceRestoreName}
+                          disabled={workspaceRestoreBusy}
+                          onChange={(event) =>
+                            setWorkspaceRestoreName(event.currentTarget.value)
+                          }
+                        />
+                      </label>
+                      <div className="workspace-backup-restore-actions">
+                        <button
+                          type="button"
+                          className="secondary-action-button"
+                          disabled={workspaceRestoreBusy}
+                          onClick={() => {
+                            setWorkspaceRestoreBackup(null);
+                            setWorkspaceRestoreName("");
+                          }}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          className="workspace-backup-restore-submit"
+                          disabled={
+                            workspaceRestoreBusy ||
+                            workspaceRestoreName !== environment.name
+                          }
+                          onClick={() => void restoreWorkspaceBackup()}
+                        >
+                          <RotateCcw
+                            size={13}
+                            className={
+                              workspaceRestoreBusy ? "is-spinning" : undefined
+                            }
+                            aria-hidden="true"
+                          />
+                          {workspaceRestoreBusy
+                            ? "Restoring Workspace…"
+                            : "Restore Workspace"}
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+                  {workspaceRestoreSuccess ? (
+                    <p className="settings-inline-success" role="status">
+                      {workspaceRestoreSuccess}
+                    </p>
+                  ) : null}
+                </div>
                 <div className="settings-card definition-card">
                   <DefinitionRow
                     label="Template"

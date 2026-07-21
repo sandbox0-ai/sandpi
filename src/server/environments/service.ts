@@ -105,6 +105,10 @@ export class EnvironmentService {
       visibility: Environment["visibility"];
       idlePauseTimeoutSeconds: number;
       sandboxMemoryMiB: number;
+      workspaceBackup: Pick<
+        Environment["workspaceBackup"],
+        "intervalSeconds" | "retentionCount"
+      >;
       networkPolicy: NetworkPolicy;
     },
   ): Promise<Environment> {
@@ -120,7 +124,17 @@ export class EnvironmentService {
     const idlePauseChanged =
       current.idlePauseTimeoutSeconds !== input.idlePauseTimeoutSeconds;
     const memoryChanged = current.sandboxMemoryMiB !== input.sandboxMemoryMiB;
-    if (!networkChanged && !idlePauseChanged && !memoryChanged) {
+    const backupPolicyChanged =
+      current.workspaceBackup.intervalSeconds !==
+        input.workspaceBackup.intervalSeconds ||
+      current.workspaceBackup.retentionCount !==
+        input.workspaceBackup.retentionCount;
+    if (
+      !networkChanged &&
+      !idlePauseChanged &&
+      !memoryChanged &&
+      !backupPolicyChanged
+    ) {
       return this.store.updateEnvironment(userId, environmentId, input);
     }
 
@@ -183,8 +197,8 @@ export class EnvironmentService {
     // Network policy is a whole-resource Sandbox0 replacement. Serialize its
     // read, external apply and PostgreSQL update with credential-binding
     // mutations and Environment deletion across every Sandpi replica. Memory
-    // and idle-timeout changes need the lifecycle lock so they cannot race a
-    // pause, resume, reprovision or deletion.
+    // and lifecycle/backup changes need the lifecycle lock so they cannot race
+    // a pause, snapshot, resume, reprovision or deletion.
     if (networkChanged) {
       return this.waitForMcpMutationLock(environmentId, (mcpStore) =>
         this.waitForLifecycleLock(

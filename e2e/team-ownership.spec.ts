@@ -5,7 +5,10 @@ import {
   mockSessions,
   mockTeamMemberships,
 } from "../src/lib/mock-data";
-import type { CodingSession } from "../src/lib/types";
+import type {
+  CodingSession,
+  EnvironmentWorkspaceBackup,
+} from "../src/lib/types";
 
 const modelCatalog = {
   data: {
@@ -35,6 +38,13 @@ async function mockTeamWorkspace(
   const viewerId = options.viewerId ?? "user-yan";
   const pins = options.pins ?? new Map<string, Set<string>>();
   const environmentUpdates: Array<Record<string, unknown>> = [];
+  const workspaceBackupCreates: string[] = [];
+  const workspaceRestores: Array<{
+    environmentId: string;
+    snapshotId: string;
+    confirmation: string;
+  }> = [];
+  const workspaceBackups = new Map<string, EnvironmentWorkspaceBackup[]>();
   const viewer = mockTeamMemberships.find(
     (membership) => membership.user.id === viewerId,
   )?.user;
@@ -134,6 +144,104 @@ async function mockTeamWorkspace(
     "**/api/v1/environments/*/harnesses/codex/device-login",
     (route) => route.fulfill({ json: { data: null } }),
   );
+  await page.route(
+    "**/api/v1/environments/*/workspace-backups/*/restore",
+    async (route) => {
+      const path = new URL(route.request().url()).pathname;
+      const match =
+        /^\/api\/v1\/environments\/([^/]+)\/workspace-backups\/([^/]+)\/restore$/.exec(
+          path,
+        );
+      if (route.request().method() !== "PUT" || !match) {
+        await route.fallback();
+        return;
+      }
+      const environmentId = match[1]!;
+      const snapshotId = match[2]!;
+      const body = route.request().postDataJSON() as { confirmation: string };
+      workspaceRestores.push({
+        environmentId,
+        snapshotId,
+        confirmation: body.confirmation,
+      });
+      const environment = getMockBootstrap(
+        "team-sandpi-labs",
+      ).environments.find((candidate) => candidate.id === environmentId);
+      const backup = workspaceBackups
+        .get(environmentId)
+        ?.find((candidate) => candidate.id === snapshotId);
+      if (!environment || !backup) {
+        await route.fulfill({ status: 404, json: { error: "not found" } });
+        return;
+      }
+      await route.fulfill({
+        json: {
+          data: {
+            backup,
+            environment: structuredClone(environment),
+            unavailableSessionCount: 0,
+          },
+        },
+      });
+    },
+  );
+  await page.route(
+    "**/api/v1/environments/*/workspace-backups",
+    async (route) => {
+      const path = new URL(route.request().url()).pathname;
+      const match = /^\/api\/v1\/environments\/([^/]+)\/workspace-backups$/.exec(
+        path,
+      );
+      if (!match) {
+        await route.fallback();
+        return;
+      }
+      const environmentId = match[1]!;
+      if (route.request().method() === "GET") {
+        await route.fulfill({
+          json: { data: workspaceBackups.get(environmentId) ?? [] },
+        });
+        return;
+      }
+      if (route.request().method() === "POST") {
+        workspaceBackupCreates.push(environmentId);
+        const environment = getMockBootstrap(
+          "team-sandpi-labs",
+        ).environments.find((candidate) => candidate.id === environmentId);
+        if (!environment) {
+          await route.fulfill({ status: 404, json: { error: "not found" } });
+          return;
+        }
+        const createdAt = Date.parse("2026-07-21T12:00:00.000Z") / 1_000;
+        const backup: EnvironmentWorkspaceBackup = {
+          id: "snapshot-e2e-manual",
+          environmentId,
+          name: "sandpi-workspace-e2e",
+          sizeBytes: 128 * 1024 * 1024,
+          kind: "manual",
+          createdAt,
+        };
+        workspaceBackups.set(environmentId, [backup]);
+        await route.fulfill({
+          status: 201,
+          json: {
+            data: {
+              backup,
+              environment: {
+                ...structuredClone(environment),
+                workspaceBackup: {
+                  ...environment.workspaceBackup,
+                  lastBackupAt: createdAt,
+                },
+              },
+            },
+          },
+        });
+        return;
+      }
+      await route.fallback();
+    },
+  );
   await page.route("**/api/v1/environments/*", async (route) => {
     const path = new URL(route.request().url()).pathname;
     const match = /^\/api\/v1\/environments\/([^/]+)$/.exec(path);
@@ -216,7 +324,7 @@ async function mockTeamWorkspace(
     route.fulfill({ json: modelCatalog }),
   );
 
-  return { environmentUpdates };
+  return { environmentUpdates, workspaceBackupCreates, workspaceRestores };
 }
 
 test("switches Team-visible and private Environments and shows Session owners", async ({
@@ -281,6 +389,58 @@ test("switches Team-visible and private Environments and shows Session owners", 
     "4 GiB",
     "8 GiB",
   ]);
+  const backupFrequency = settingsDialog.getByLabel(
+    "Workspace backup frequency",
+  );
+  await expect(backupFrequency).toHaveValue("0");
+  await expect(backupFrequency.locator("option")).toHaveText([
+    "Off",
+    "Every hour",
+    "Every 6 hours",
+    "Every 12 hours",
+    "Daily",
+    "Weekly",
+  ]);
+  const backupRetention = settingsDialog.getByLabel(
+    "Workspace backup retention",
+  );
+  await expect(backupRetention).toHaveValue("7");
+  await settingsDialog.getByRole("button", { name: "Back up now" }).click();
+  await expect(
+    settingsDialog.getByLabel("Workspace backups").getByText("Manual backup"),
+  ).toBeVisible();
+  expect(workspace.workspaceBackupCreates).toEqual(["env-personal"]);
+  await settingsDialog
+    .getByRole("button", { name: /Restore backup from/ })
+    .click();
+  const restoreConfirmation = settingsDialog.getByRole("group", {
+    name: "Confirm Workspace restore",
+  });
+  await expect(
+    restoreConfirmation.getByText("Restore the entire shared Workspace?"),
+  ).toBeVisible();
+  const restoreSubmit = restoreConfirmation.getByRole("button", {
+    name: "Restore Workspace",
+  });
+  await expect(restoreSubmit).toBeDisabled();
+  await restoreConfirmation
+    .getByLabel("Environment name confirmation for Workspace restore")
+    .fill("Personal scratchpad");
+  await restoreSubmit.click();
+  await expect(
+    settingsDialog.getByText(
+      "Workspace restored. The shared Sandbox is ready with the selected backup.",
+    ),
+  ).toBeVisible();
+  expect(workspace.workspaceRestores).toEqual([
+    {
+      environmentId: "env-personal",
+      snapshotId: "snapshot-e2e-manual",
+      confirmation: "Personal scratchpad",
+    },
+  ]);
+  await backupFrequency.selectOption("86400");
+  await backupRetention.selectOption("3");
   await sandboxMemory.selectOption("4096");
   await settingsDialog.getByRole("button", { name: "Save changes" }).click();
   await expect(
@@ -290,6 +450,10 @@ test("switches Team-visible and private Environments and shows Session owners", 
     45 * 60,
   );
   expect(workspace.environmentUpdates.at(-1)?.sandboxMemoryMiB).toBe(4 * 1024);
+  expect(workspace.environmentUpdates.at(-1)?.workspaceBackup).toEqual({
+    intervalSeconds: 86_400,
+    retentionCount: 3,
+  });
 
   const teammateSession = page
     .locator(".session-row")
