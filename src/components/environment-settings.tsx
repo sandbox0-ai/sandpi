@@ -28,6 +28,7 @@ import {
 
 import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
 import { copyTextToClipboard } from "@/lib/clipboard";
+import { MAX_ENVIRONMENT_IDLE_PAUSE_TIMEOUT_SECONDS } from "@/lib/environment-lifecycle";
 import {
   ENVIRONMENT_SANDBOX_MEMORY_MAX_MIB,
   ENVIRONMENT_SANDBOX_MEMORY_MIN_MIB,
@@ -799,7 +800,7 @@ export function EnvironmentSettings({
                     name="environment-idle-pause-timeout"
                     aria-label="Environment auto-pause timeout in minutes"
                     min={0}
-                    max={43_200}
+                    max={MAX_ENVIRONMENT_IDLE_PAUSE_TIMEOUT_SECONDS / 60}
                     step={1}
                     value={draft.idlePauseTimeoutSeconds / 60}
                     onChange={(event) => {
@@ -808,13 +809,16 @@ export function EnvironmentSettings({
                       setDraft((current) => ({
                         ...current,
                         idlePauseTimeoutSeconds:
-                          Math.min(43_200, Math.max(0, Math.round(minutes))) * 60,
+                          Math.min(
+                            MAX_ENVIRONMENT_IDLE_PAUSE_TIMEOUT_SECONDS / 60,
+                            Math.max(0, Math.round(minutes)),
+                          ) * 60,
                       }));
                     }}
                   />
                   <small>
                     Sandpi pauses the shared Sandbox after this much idle time.
-                    Set 0 to keep it running until its hard TTL.
+                    Set 0 to keep it running with no time limit.
                   </small>
                 </label>
                 <label className="full-field">

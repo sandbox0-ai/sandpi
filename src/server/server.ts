@@ -19,6 +19,7 @@ import {
   ENVIRONMENT_SANDBOX_MEMORY_MAX_MIB,
   ENVIRONMENT_SANDBOX_MEMORY_MIN_MIB,
 } from "@/lib/environment-resources";
+import { MAX_ENVIRONMENT_IDLE_PAUSE_TIMEOUT_SECONDS } from "@/lib/environment-lifecycle";
 import {
   DEFAULT_ENVIRONMENT_METRIC_RANGE_SECONDS,
   isEnvironmentMetricRangeSeconds,
@@ -33,7 +34,6 @@ import { createDatabasePool } from "@/server/db/pool";
 import { seedCommunityDefaults } from "@/server/db/seed";
 import { EnvironmentService } from "@/server/environments/service";
 import { EnvironmentLifecycleService } from "@/server/environments/lifecycle-service";
-import { ENVIRONMENT_SANDBOX_HARD_TTL_SECONDS } from "@/server/environments/lifecycle-policy";
 import { EnvironmentRuntimeAccessService } from "@/server/environments/runtime-access-service";
 import { CodexEnvironmentAuthService } from "@/server/harnesses/codex/auth-service";
 import { CodexAuthStore } from "@/server/harnesses/codex/auth-store";
@@ -494,7 +494,7 @@ function registerApiRoutes(
             .number()
             .int()
             .min(0)
-            .max(ENVIRONMENT_SANDBOX_HARD_TTL_SECONDS),
+            .max(MAX_ENVIRONMENT_IDLE_PAUSE_TIMEOUT_SECONDS),
           sandboxMemoryMiB: z
             .number()
             .int()

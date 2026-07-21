@@ -98,29 +98,16 @@ export class EnvironmentLifecycleService {
         const runtime =
           await scopedStore.prepareEnvironmentLifecyclePolicy(environmentId);
         if (!runtime) return;
-        const target = runtime.hardExpiresAt;
-        if (!target) return;
         try {
-          // Retrying after a process crash preserves the original absolute
-          // target instead of silently granting a fresh 30-day lifetime.
-          const remainingSeconds = Math.max(
-            1,
-            Math.ceil((target.getTime() - Date.now()) / 1_000),
-          );
-          const configured = await this.runtime.configureEnvironmentLifecycle(
-            runtime,
-            remainingSeconds,
-          );
+          await this.runtime.applyEnvironmentLifecyclePolicy(runtime);
           await scopedStore.recordEnvironmentLifecyclePolicy(
             environmentId,
             runtime.sandboxId,
-            configured.hardExpiresAt,
           );
           this.logger.info(
             {
               environmentId,
               policyVersion: ENVIRONMENT_LIFECYCLE_POLICY_VERSION,
-              hardExpiresAt: configured.hardExpiresAt.toISOString(),
             },
             "Environment Sandbox lifecycle policy applied",
           );

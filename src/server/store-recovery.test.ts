@@ -196,7 +196,6 @@ test("projects Sandbox and Supervisor coordinates from Environment runtime", asy
           observed_state: "running",
           provisioning_error: null,
           lifecycle_policy_version: "1",
-          sandbox_hard_expires_at: new Date("2026-08-15T00:00:00.000Z"),
           last_turn_completed_at: new Date("2026-07-16T00:01:00.000Z"),
           idle_pause_due_at: new Date("2026-07-16T00:04:00.000Z"),
           lifecycle_error: null,
@@ -227,7 +226,6 @@ test("projects Sandbox and Supervisor coordinates from Environment runtime", asy
     observedState: "running",
     provisioningError: undefined,
     lifecyclePolicyVersion: 1,
-    hardExpiresAt: new Date("2026-08-15T00:00:00.000Z"),
     lastTurnCompletedAt: new Date("2026-07-16T00:01:00.000Z"),
     idlePauseDueAt: new Date("2026-07-16T00:04:00.000Z"),
     lifecycleError: undefined,
@@ -241,7 +239,6 @@ test("schedules a newly ready Sandbox from its Environment idle timeout", async 
   await fixture.store.markEnvironmentReady("environment-one", {
     sandboxId: "sandbox-one",
     workspaceVolumeId: "volume-one",
-    hardExpiresAt: new Date("2026-08-15T00:00:00.000Z"),
   });
 
   const runtimeInsert = fixture.calls.find((call) =>
@@ -472,8 +469,7 @@ test("grants a fresh idle window after Sandbox0 auto-resumes an Environment", as
           desired_state: "running",
           observed_state: "running",
           provisioning_error: null,
-          lifecycle_policy_version: "2",
-          sandbox_hard_expires_at: new Date("2026-08-15T00:00:00.000Z"),
+          lifecycle_policy_version: "3",
           last_turn_completed_at: new Date("2026-07-16T00:01:00.000Z"),
           idle_pause_due_at: new Date("2026-07-16T00:07:00.000Z"),
           lifecycle_error: null,

@@ -65,6 +65,7 @@ test("migration history contains every durable Sandpi boundary", async () => {
       "0038_personal_session_pins_and_idle_pause",
       "0039_initialize_configurable_idle_pause_deadlines",
       "0040_environment_sandbox_memory",
+      "0041_remove_environment_hard_ttl",
     ],
   );
 
@@ -266,6 +267,20 @@ test("migration history contains every durable Sandpi boundary", async () => {
   );
   assert.match(sandboxMemorySql, /sandbox_memory_mib >= 128/);
   assert.match(sandboxMemorySql, /sandbox_memory_mib <= 8192/);
+
+  const removedEnvironmentHardTtlSql = migrations[40]?.sql ?? "";
+  assert.match(
+    removedEnvironmentHardTtlSql,
+    /DROP INDEX IF EXISTS environment_runtime_hard_expiry_idx/,
+  );
+  assert.match(
+    removedEnvironmentHardTtlSql,
+    /DROP COLUMN sandbox_hard_expires_at/,
+  );
+  assert.match(
+    removedEnvironmentHardTtlSql,
+    /zero disables automatic pause; maximum 30 days/,
+  );
 
   const runtimeAuthoritySql = migrations[24]?.sql ?? "";
   assert.match(runtimeAuthoritySql, /decoder_attempt_id TEXT/);

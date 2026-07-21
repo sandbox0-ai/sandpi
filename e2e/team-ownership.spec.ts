@@ -248,6 +248,10 @@ test("switches Team-visible and private Environments and shows Session owners", 
     "Environment auto-pause timeout in minutes",
   );
   await expect(idleTimeout).toHaveValue("0");
+  await expect(idleTimeout).toHaveAttribute("max", "43200");
+  await expect(
+    page.getByText("Set 0 to keep it running with no time limit."),
+  ).toBeVisible();
   await idleTimeout.fill("45");
   const sandboxMemory = page.getByLabel(
     "Environment Sandbox memory in GiB",

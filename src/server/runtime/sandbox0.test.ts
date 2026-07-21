@@ -62,7 +62,6 @@ function sandbox0FetchTimeout() {
 }
 
 test("claims exactly one Environment Sandbox around its shared Workspace Volume", async () => {
-  const hardExpiresAt = new Date("2026-08-15T00:00:00.000Z");
   const allocations: Array<Record<string, string>> = [];
   let volumeCreates = 0;
   let claimInput: Record<string, unknown> | undefined;
@@ -81,7 +80,7 @@ test("claims exactly one Environment Sandbox around its shared Workspace Volume"
       },
       async waitForLifecycle(sandboxId: string) {
         assert.equal(sandboxId, "sandbox-environment");
-        return { status: "running", hardExpiresAt };
+        return { status: "running" };
       },
     },
   });
@@ -96,7 +95,6 @@ test("claims exactly one Environment Sandbox around its shared Workspace Volume"
   assert.deepEqual(provisioned, {
     sandboxId: "sandbox-environment",
     workspaceVolumeId: "volume-environment",
-    hardExpiresAt,
   });
   assert.equal(volumeCreates, 0);
   assert.deepEqual((claimInput?.mounts as Array<Record<string, unknown>>)[0], {
@@ -105,7 +103,7 @@ test("claims exactly one Environment Sandbox around its shared Workspace Volume"
   });
   assert.equal(
     ((claimInput?.config ?? {}) as Record<string, unknown>).hardTtl,
-    30 * 24 * 60 * 60,
+    0,
   );
   assert.equal(((claimInput?.config ?? {}) as Record<string, unknown>).ttl, 0);
   assert.equal(
@@ -141,7 +139,6 @@ test("claims exactly one Environment Sandbox around its shared Workspace Volume"
 });
 
 test("creates one Workspace Volume when provisioning a new Environment", async () => {
-  const hardExpiresAt = new Date("2026-08-15T00:00:00.000Z");
   const allocations: Array<Record<string, string>> = [];
   const runtime = runtimeWithClient({
     volumes: {
@@ -158,7 +155,7 @@ test("creates one Workspace Volume when provisioning a new Environment", async (
         return { id: "sandbox-new" };
       },
       async waitForLifecycle() {
-        return { status: "running", hardExpiresAt };
+        return { status: "running" };
       },
     },
   });
@@ -173,7 +170,6 @@ test("creates one Workspace Volume when provisioning a new Environment", async (
   assert.deepEqual(provisioned, {
     sandboxId: "sandbox-new",
     workspaceVolumeId: "volume-new",
-    hardExpiresAt,
   });
   assert.deepEqual(allocations, [
     { workspaceVolumeId: "volume-new" },
@@ -181,8 +177,7 @@ test("creates one Workspace Volume when provisioning a new Environment", async (
   ]);
 });
 
-test("applies the Environment policy and executes Sandpi-owned pause", async () => {
-  const hardExpiresAt = new Date("2026-08-15T00:00:00.000Z");
+test("disables Environment TTLs and executes Sandpi-owned pause", async () => {
   const updates: unknown[] = [];
   let paused = false;
   const runtime = runtimeWithClient({
@@ -190,16 +185,16 @@ test("applies the Environment policy and executes Sandpi-owned pause", async () 
       async update(sandboxId: string, request: unknown) {
         assert.equal(sandboxId, "sandbox-environment");
         updates.push(request);
-        return { hardExpiresAt };
+        return {};
       },
       async get() {
         return paused
-          ? { status: "paused", paused: true, hardExpiresAt }
-          : { status: "running", paused: false, hardExpiresAt };
+          ? { status: "paused", paused: true }
+          : { status: "running", paused: false };
       },
       async pauseAndWait() {
         paused = true;
-        return { status: "paused", paused: true, hardExpiresAt };
+        return { status: "paused", paused: true };
       },
     },
   });
@@ -215,12 +210,9 @@ test("applies the Environment policy and executes Sandpi-owned pause", async () 
     },
   };
 
-  assert.deepEqual(
-    await runtime.configureEnvironmentLifecycle(coordinates, 900),
-    { hardExpiresAt },
-  );
+  await runtime.applyEnvironmentLifecyclePolicy(coordinates);
   assert.deepEqual(updates, [
-    { config: { ttl: 0, hardTtl: 900, autoResume: true } },
+    { config: { ttl: 0, hardTtl: 0, autoResume: true } },
   ]);
   await runtime.pauseEnvironment(coordinates);
   assert.equal(paused, true);

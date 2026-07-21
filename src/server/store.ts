@@ -22,7 +22,6 @@ import { conflict, HttpError, notFound } from "@/server/http-error";
 import {
   ENVIRONMENT_LIFECYCLE_POLICY_VERSION,
   ENVIRONMENT_PAUSE_RETRY_DELAY_MS,
-  ENVIRONMENT_SANDBOX_HARD_TTL_SECONDS,
 } from "@/server/environments/lifecycle-policy";
 import type { CodexDecoderState } from "@/server/harnesses/codex/jsonl";
 import type {
@@ -76,7 +75,6 @@ export interface StoredEnvironmentRuntime extends EnvironmentRuntimeRecord {
     | "failed";
   provisioningError?: string;
   lifecyclePolicyVersion: number;
-  hardExpiresAt?: Date;
   lastTurnCompletedAt?: Date;
   idlePauseDueAt?: Date;
   lifecycleError?: string;
@@ -193,7 +191,6 @@ interface EnvironmentRuntimeRow extends QueryResultRow {
   observed_state: StoredEnvironmentRuntime["observedState"];
   provisioning_error: string | null;
   lifecycle_policy_version: string | number;
-  sandbox_hard_expires_at: Date | null;
   last_turn_completed_at: Date | null;
   idle_pause_due_at: Date | null;
   lifecycle_error: string | null;
@@ -559,7 +556,7 @@ export class SandpiStore {
            terminal_session_id = NULL, attempt_id = NULL,
            supervisor_cursor = 0, stdout_tail = '', runtime_generation = 0,
            decoder_attempt_id = NULL, decoder_runtime_generation = 0,
-           lifecycle_policy_version = 0, sandbox_hard_expires_at = NULL,
+           lifecycle_policy_version = 0,
            idle_pause_due_at = NULL, lifecycle_error = NULL, paused_at = NULL
        WHERE environment_id = $1 AND sandbox_id = $2`,
       [environmentId, sandboxId],
@@ -589,10 +586,9 @@ export class SandpiStore {
       await client.query(
         `INSERT INTO environment_runtime (
            environment_id, sandbox_id, desired_state, observed_state,
-           lifecycle_policy_version, sandbox_hard_expires_at,
-           idle_pause_due_at
+           lifecycle_policy_version, idle_pause_due_at
          )
-         SELECT $1, $2, 'running', 'running', $3, $4,
+         SELECT $1, $2, 'running', 'running', $3,
                 CASE
                   WHEN environment.idle_pause_timeout_seconds = 0 THEN NULL
                   ELSE NOW() + (
@@ -606,17 +602,13 @@ export class SandpiStore {
          SET sandbox_id = EXCLUDED.sandbox_id,
              desired_state = 'running', observed_state = 'running',
              lifecycle_policy_version = EXCLUDED.lifecycle_policy_version,
-             sandbox_hard_expires_at = EXCLUDED.sandbox_hard_expires_at,
              idle_pause_due_at = EXCLUDED.idle_pause_due_at,
              lifecycle_error = NULL, paused_at = NULL,
              provisioning_error = NULL`,
         [
           environmentId,
           resources.sandboxId,
-          resources.hardExpiresAt
-            ? ENVIRONMENT_LIFECYCLE_POLICY_VERSION
-            : 0,
-          resources.hardExpiresAt ?? null,
+          ENVIRONMENT_LIFECYCLE_POLICY_VERSION,
         ],
       );
       await client.query("COMMIT");
@@ -1100,17 +1092,13 @@ export class SandpiStore {
   }
 
   async prepareEnvironmentLifecyclePolicy(environmentId: string) {
-    const target = new Date(
-      Date.now() + ENVIRONMENT_SANDBOX_HARD_TTL_SECONDS * 1_000,
-    );
     const result = await this.pool.query<{ environment_id: string }>(
       `UPDATE environment_runtime
-       SET sandbox_hard_expires_at = COALESCE(sandbox_hard_expires_at, $2),
-           lifecycle_error = NULL
+       SET lifecycle_error = NULL
        WHERE environment_id = $1 AND sandbox_id IS NOT NULL
-         AND lifecycle_policy_version < $3
+         AND lifecycle_policy_version < $2
        RETURNING environment_id`,
-      [environmentId, target, ENVIRONMENT_LIFECYCLE_POLICY_VERSION],
+      [environmentId, ENVIRONMENT_LIFECYCLE_POLICY_VERSION],
     );
     if (!result.rowCount) return undefined;
     return this.environmentRuntime(environmentId);
@@ -1119,20 +1107,13 @@ export class SandpiStore {
   async recordEnvironmentLifecyclePolicy(
     environmentId: string,
     sandboxId: string,
-    hardExpiresAt: Date,
   ) {
     await this.pool.query(
       `UPDATE environment_runtime
        SET lifecycle_policy_version = $3,
-           sandbox_hard_expires_at = $4,
            lifecycle_error = NULL, version = version + 1
        WHERE environment_id = $1 AND sandbox_id = $2`,
-      [
-        environmentId,
-        sandboxId,
-        ENVIRONMENT_LIFECYCLE_POLICY_VERSION,
-        hardExpiresAt,
-      ],
+      [environmentId, sandboxId, ENVIRONMENT_LIFECYCLE_POLICY_VERSION],
     );
   }
 
@@ -2463,7 +2444,6 @@ function environmentRuntimeFromRow(
     observedState: row.observed_state,
     provisioningError: row.provisioning_error ?? undefined,
     lifecyclePolicyVersion: Number(row.lifecycle_policy_version),
-    hardExpiresAt: row.sandbox_hard_expires_at ?? undefined,
     lastTurnCompletedAt: row.last_turn_completed_at ?? undefined,
     idlePauseDueAt: row.idle_pause_due_at ?? undefined,
     lifecycleError: row.lifecycle_error ?? undefined,

@@ -3,10 +3,11 @@ import test from "node:test";
 
 import type { RuntimeAdapter } from "@/server/runtime/types";
 import type { SandpiStore, StoredEnvironmentRuntime } from "@/server/store";
-import { DEFAULT_ENVIRONMENT_IDLE_PAUSE_TIMEOUT_SECONDS } from "./lifecycle-policy";
+import {
+  DEFAULT_ENVIRONMENT_IDLE_PAUSE_TIMEOUT_SECONDS,
+  ENVIRONMENT_LIFECYCLE_POLICY_VERSION,
+} from "./lifecycle-policy";
 import { EnvironmentLifecycleService } from "./lifecycle-service";
-
-const hardExpiresAt = new Date("2026-08-15T00:00:00.000Z");
 
 function storedRuntime(
   overrides: Partial<StoredEnvironmentRuntime> = {},
@@ -27,8 +28,7 @@ function storedRuntime(
     version: 1,
     desiredState: "running",
     observedState: "running",
-    lifecyclePolicyVersion: 2,
-    hardExpiresAt,
+    lifecyclePolicyVersion: ENVIRONMENT_LIFECYCLE_POLICY_VERSION,
     ...overrides,
   };
 }
@@ -83,13 +83,11 @@ test("one elected worker applies policy and pauses a due idle Environment", asyn
   } as unknown as SandpiStore;
   const runtime = {
     mode: "sandbox0",
-    async configureEnvironmentLifecycle(
-      _runtime: StoredEnvironmentRuntime,
-      hardTtlSeconds: number,
+    async applyEnvironmentLifecyclePolicy(
+      received: StoredEnvironmentRuntime,
     ) {
-      assert.ok(hardTtlSeconds > 0);
-      calls.push("configure-policy");
-      return { hardExpiresAt };
+      assert.strictEqual(received, policyRuntime);
+      calls.push("apply-policy");
     },
     async pauseEnvironment() {
       calls.push("pause");
@@ -106,7 +104,7 @@ test("one elected worker applies policy and pauses a due idle Environment", asyn
   assert.deepEqual(calls, [
     "lock",
     "prepare-policy",
-    "configure-policy",
+    "apply-policy",
     "record-policy",
     "lock",
     "prepare-pause",

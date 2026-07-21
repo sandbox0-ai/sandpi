@@ -168,19 +168,19 @@ Web today; iOS / Android / HarmonyOS later
   the newest Turn first while retaining native chronological action order
   within each Turn. An unavailable or partially parseable rollout is reported
   in Activity without blocking the app-server conversation.
-- **Durable lifecycle:** every Environment Sandbox has a 30-day Sandbox0 hard
-  TTL. Each Environment configures its own idle auto-pause timeout, defaulting
-  to thirty minutes; zero disables automatic pause. Environment settings also
-  persist the shared Sandbox memory limit in MiB, defaulting to 2 GiB and capped
-  at 8 GiB; Sandpi applies it both when claiming and when updating the existing
-  Sandbox. Runtime access and native
+- **Durable lifecycle:** Environment Sandboxes explicitly disable Sandbox0 soft
+  and hard TTLs. Each Environment configures its own idle auto-pause timeout,
+  defaulting to thirty minutes; zero leaves no time-based expiration.
+  Environment settings also persist the shared Sandbox memory limit in MiB,
+  defaulting to 2 GiB and capped at 8 GiB; Sandpi applies it both when claiming
+  and when updating the existing Sandbox. Runtime access and native
   `turn/completed` events calculate the PostgreSQL deadline from that setting.
   Any Sandpi replica may scan it, but a per-Environment advisory lock elects
   exactly one replica to pause after it rechecks that no Turn is active or
   pending. Browser disconnection is irrelevant. Sandbox0 auto-resume
   handles the next supported runtime access; Sandpi observes and retries the
-  native `waking up` transition but owns no parallel resume state machine. It
-  explicitly disables Sandbox0 soft TTL. PostgreSQL derives historical idle
+  native `waking up` transition but owns no parallel resume state machine.
+  PostgreSQL derives historical idle
   pause intervals from the current runtime projection, and the Metrics API
   returns overlapping intervals so charts shade intentional pause gaps instead
   of presenting them as missing telemetry.
@@ -543,10 +543,11 @@ Sandbox0 implementation details.
   and one native harness process; all product Sessions in it share them.
 - Every Environment is provisioned from the fixed Sandbox0 `coding-agent`
   template; product Sessions allocate only native harness Sessions.
-- The Environment Sandbox has a 30-day hard TTL. Its configurable idle pause
-  defaults to thirty minutes without a running Turn following the latest
-  activity; setting it to zero disables automatic pause. Deadlines and retries
-  are PostgreSQL state, not process-local timers.
+- The Environment Sandbox explicitly disables Sandbox0 soft and hard TTLs. Its
+  configurable idle pause defaults to thirty minutes without a running Turn
+  following the latest activity; setting it to zero leaves no time-based
+  expiration. Deadlines and retries are PostgreSQL state, not process-local
+  timers.
 - Supervisor output is the durable native transport. PostgreSQL stores replay
   identity, cursors and scalar recovery coordinates, never a parallel Codex
   transcript. One cursor-resumable Sandbox0 event stream per Environment

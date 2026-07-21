@@ -23,7 +23,7 @@ export class UnconfiguredRuntime implements RuntimeAdapter {
   getEnvironmentServices = unavailable;
   replaceEnvironmentServices = unavailable;
   ensureEnvironmentMcpOAuthCallbackService = unavailable;
-  configureEnvironmentLifecycle = unavailable;
+  applyEnvironmentLifecyclePolicy = unavailable;
   pauseEnvironment = unavailable;
   ensureEnvironmentRuntimeAccess = unavailable;
   ensureCodexEnvironmentRuntime = unavailable;

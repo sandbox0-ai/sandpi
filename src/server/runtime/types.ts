@@ -56,7 +56,6 @@ export interface ProvisionedEnvironment {
   sandboxId: string;
   workspaceVolumeId: string;
   rootfsSnapshotId?: string;
-  hardExpiresAt?: Date;
 }
 
 export interface EnvironmentRuntimeRecord {
@@ -84,10 +83,6 @@ export interface RecoveredCodexEnvironmentRuntime {
   attemptId: string;
   runtimeGeneration: number;
   sandboxRestarted: boolean;
-}
-
-export interface EnvironmentLifecyclePolicyResult {
-  hardExpiresAt: Date;
 }
 
 export interface RuntimeMetricWindow {
@@ -140,10 +135,9 @@ export interface RuntimeAdapter {
     runtime: EnvironmentRuntimeRecord,
     input: { port: number },
   ): Promise<RuntimeMcpOAuthCallbackService>;
-  configureEnvironmentLifecycle(
+  applyEnvironmentLifecyclePolicy(
     runtime: EnvironmentRuntimeRecord,
-    hardTtlSeconds: number,
-  ): Promise<EnvironmentLifecyclePolicyResult>;
+  ): Promise<void>;
   pauseEnvironment(
     runtime: EnvironmentRuntimeRecord,
     signal?: AbortSignal,

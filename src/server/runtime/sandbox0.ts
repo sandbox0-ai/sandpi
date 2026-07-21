@@ -40,7 +40,6 @@ import {
   WORKSPACE_ROOT,
 } from "@/lib/workspace-path-policy";
 import { HttpError } from "@/server/http-error";
-import { ENVIRONMENT_SANDBOX_HARD_TTL_SECONDS } from "@/server/environments/lifecycle-policy";
 import {
   isCodexComposerUploadPath,
   MAX_CODEX_COMPOSER_UPLOAD_BYTES,
@@ -105,6 +104,8 @@ const MCP_OAUTH_CALLBACK_SERVICE_ID = "sandpi-codex-mcp-oauth";
 const MCP_OAUTH_CALLBACK_ROUTE_ID = "oauth-callback";
 const MCP_OAUTH_CALLBACK_RATE_LIMIT_RPS = 5;
 const MCP_OAUTH_CALLBACK_RATE_LIMIT_BURST = 10;
+// Auth runners are short-lived credential flows, not durable Environment
+// Sandboxes; retain a fail-safe lifetime if their cleanup process crashes.
 const AUTH_SANDBOX_HARD_TTL_SECONDS = 30 * 60;
 const MAX_GIT_DISCOVERY_DEPTH = 13;
 const MAX_FILE_PREVIEW_BYTES = 5 * 1024 * 1024;
@@ -176,11 +177,11 @@ export class Sandbox0Runtime implements RuntimeAdapter {
             },
           ],
           // Sandpi owns idle-pause policy while Sandbox0 owns runtime wake-up.
-          // Explicitly disable soft TTL so a deployment default cannot race the
-          // durable Turn-based pause deadline maintained by Sandpi.
+          // Explicitly disable both Sandbox0 TTLs so deployment or template
+          // defaults cannot terminate the durable Environment runtime.
           config: {
             ttl: 0,
-            hardTtl: ENVIRONMENT_SANDBOX_HARD_TTL_SECONDS,
+            hardTtl: 0,
             autoResume: true,
             resources: {
               memory: `${input.environment.sandboxMemoryMiB}Mi`,
@@ -191,7 +192,7 @@ export class Sandbox0Runtime implements RuntimeAdapter {
       );
       sandboxId = sandbox.id;
       await input.onResourcesAllocated?.({ sandboxId, workspaceVolumeId });
-      const lifecycle = await this.client.sandboxes.waitForLifecycle(
+      await this.client.sandboxes.waitForLifecycle(
         sandbox.id,
         (state) => state.status === "running",
         { timeoutMs: 120_000 },
@@ -199,9 +200,6 @@ export class Sandbox0Runtime implements RuntimeAdapter {
       return {
         sandboxId,
         workspaceVolumeId,
-        hardExpiresAt: validDate(lifecycle?.hardExpiresAt)
-          ? lifecycle.hardExpiresAt
-          : new Date(Date.now() + ENVIRONMENT_SANDBOX_HARD_TTL_SECONDS * 1_000),
       };
     } catch (error) {
       // The allocation journal owns retry/cleanup once a resource id has been
@@ -390,21 +388,15 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     };
   }
 
-  async configureEnvironmentLifecycle(
-    runtime: EnvironmentRuntimeRecord,
-    hardTtlSeconds: number,
-  ) {
+  async applyEnvironmentLifecyclePolicy(runtime: EnvironmentRuntimeRecord) {
     try {
-      const lifecycle = await this.client.sandboxes.update(runtime.sandboxId, {
+      await this.client.sandboxes.update(runtime.sandboxId, {
         config: {
           ttl: 0,
-          hardTtl: Math.max(1, Math.ceil(hardTtlSeconds)),
+          hardTtl: 0,
           autoResume: true,
         },
       });
-      return {
-        hardExpiresAt: lifecycle.hardExpiresAt,
-      };
     } catch (error) {
       throw translateSandbox0Error(error);
     }
@@ -2924,8 +2916,4 @@ function abortableDelay(milliseconds: number, signal?: AbortSignal) {
     const timer = setTimeout(finish, milliseconds);
     signal.addEventListener("abort", abort, { once: true });
   });
-}
-
-function validDate(value: unknown): value is Date {
-  return value instanceof Date && Number.isFinite(value.getTime());
 }
