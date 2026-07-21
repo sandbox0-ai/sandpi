@@ -29,6 +29,10 @@ import {
 import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
 import { copyTextToClipboard } from "@/lib/clipboard";
 import {
+  ENVIRONMENT_SANDBOX_MEMORY_MAX_MIB,
+  ENVIRONMENT_SANDBOX_MEMORY_MIN_MIB,
+} from "@/lib/environment-resources";
+import {
   CodexMcpSettings,
   CodexSkillsSettings,
 } from "@/harnesses/codex/environment-settings";
@@ -522,6 +526,7 @@ export function EnvironmentSettings({
             color: draft.color,
             visibility: draft.visibility,
             idlePauseTimeoutSeconds: draft.idlePauseTimeoutSeconds,
+            sandboxMemoryMiB: draft.sandboxMemoryMiB,
             networkPolicy: draft.networkPolicy,
           }),
         },
@@ -810,6 +815,36 @@ export function EnvironmentSettings({
                   <small>
                     Sandpi pauses the shared Sandbox after this much idle time.
                     Set 0 to keep it running until its hard TTL.
+                  </small>
+                </label>
+                <label className="full-field">
+                  Sandbox memory (GiB)
+                  <input
+                    type="number"
+                    name="environment-sandbox-memory"
+                    aria-label="Environment Sandbox memory in GiB"
+                    min={ENVIRONMENT_SANDBOX_MEMORY_MIN_MIB / 1024}
+                    max={ENVIRONMENT_SANDBOX_MEMORY_MAX_MIB / 1024}
+                    step={ENVIRONMENT_SANDBOX_MEMORY_MIN_MIB / 1024}
+                    value={draft.sandboxMemoryMiB / 1024}
+                    onChange={(event) => {
+                      const gibibytes = event.currentTarget.valueAsNumber;
+                      if (!Number.isFinite(gibibytes)) return;
+                      setDraft((current) => ({
+                        ...current,
+                        sandboxMemoryMiB: Math.min(
+                          ENVIRONMENT_SANDBOX_MEMORY_MAX_MIB,
+                          Math.max(
+                            ENVIRONMENT_SANDBOX_MEMORY_MIN_MIB,
+                            Math.round(gibibytes * 1024),
+                          ),
+                        ),
+                      }));
+                    }}
+                  />
+                  <small>
+                    Applies immediately to the shared Sandbox. Sandbox0 derives
+                    CPU capacity from the configured memory ratio. Maximum 8 GiB.
                   </small>
                 </label>
                 <div className="settings-card definition-card">
@@ -1597,7 +1632,7 @@ export function EnvironmentSettings({
             ) : activeTab === "network" ? (
               <>Network changes apply to every Session in this Environment.</>
             ) : (
-              <>Changes apply to future Session forks.</>
+              <>Changes apply to this Environment and its shared Sandbox.</>
             )}
           </span>
           <div>

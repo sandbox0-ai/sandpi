@@ -131,6 +131,7 @@ interface EnvironmentRow extends QueryResultRow {
   created_by_user_id: string | null;
   visibility: Environment["visibility"];
   idle_pause_timeout_seconds: number;
+  sandbox_memory_mib: number;
   name: string;
   description: string;
   color: string;
@@ -690,6 +691,7 @@ export class SandpiStore {
       color: string;
       visibility: Environment["visibility"];
       idlePauseTimeoutSeconds: number;
+      sandboxMemoryMiB: number;
       networkPolicy: NetworkPolicy;
     },
   ) {
@@ -703,7 +705,8 @@ export class SandpiStore {
         `UPDATE environments
          SET name = $2, description = $3, color = $4,
              visibility = $5, idle_pause_timeout_seconds = $6,
-             network_policy = $7::JSONB, revision = revision + 1
+             sandbox_memory_mib = $7, network_policy = $8::JSONB,
+             revision = revision + 1
          WHERE id = $1`,
         [
           environmentId,
@@ -712,6 +715,7 @@ export class SandpiStore {
           input.color,
           input.visibility,
           input.idlePauseTimeoutSeconds,
+          input.sandboxMemoryMiB,
           JSON.stringify(input.networkPolicy),
         ],
       );
@@ -2398,6 +2402,7 @@ function environmentFromRow(row: EnvironmentRow): EnvironmentRecord {
     ownerId: row.created_by_user_id ?? undefined,
     visibility: row.visibility,
     idlePauseTimeoutSeconds: row.idle_pause_timeout_seconds,
+    sandboxMemoryMiB: row.sandbox_memory_mib,
     name: row.name,
     description: row.description,
     color: row.color,

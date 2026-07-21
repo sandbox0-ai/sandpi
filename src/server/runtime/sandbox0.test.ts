@@ -19,6 +19,7 @@ const environment: Environment = {
   ownerId: "user-test",
   visibility: "team",
   idlePauseTimeoutSeconds: 30 * 60,
+  sandboxMemoryMiB: 2 * 1024,
   name: "Development",
   description: "",
   color: "#151515",
@@ -110,6 +111,10 @@ test("claims exactly one Environment Sandbox around its shared Workspace Volume"
   assert.equal(
     ((claimInput?.config ?? {}) as Record<string, unknown>).autoResume,
     true,
+  );
+  assert.deepEqual(
+    ((claimInput?.config ?? {}) as Record<string, unknown>).resources,
+    { memory: "2048Mi" },
   );
   assert.deepEqual(
     ((claimInput?.config ?? {}) as Record<string, unknown>).network,
@@ -286,6 +291,35 @@ test("passes a composed Sandbox0 network policy through without dropping credent
   await runtime.applyEnvironmentSandboxNetworkPolicy(coordinates, policy);
 
   assert.strictEqual(applied, policy);
+});
+
+test("updates the existing Environment Sandbox memory", async () => {
+  const updates: Array<{ sandboxId: string; memory: string }> = [];
+  const runtime = runtimeWithClient({
+    sandboxes: {
+      async updateMemory(sandboxId: string, memory: string) {
+        updates.push({ sandboxId, memory });
+        return { id: sandboxId, resources: { memory } };
+      },
+    },
+  });
+  const coordinates: EnvironmentRuntimeRecord = {
+    id: environment.id,
+    sandboxId: environment.sandboxId,
+    workspaceVolumeId: environment.workspaceVolumeId,
+    runtimeGeneration: 1,
+    decoder: {
+      supervisorCursor: 0,
+      tailBase64: "",
+      runtimeGeneration: 1,
+    },
+  };
+
+  await runtime.updateEnvironmentMemory(coordinates, 8 * 1024);
+
+  assert.deepEqual(updates, [
+    { sandboxId: "sandbox-environment", memory: "8192Mi" },
+  ]);
 });
 
 test("creates, rotates and deletes write-only static header credential sources", async () => {
@@ -2323,6 +2357,12 @@ test("lists one Workspace directory without recursively expanding folders", asyn
                 size: 0,
               },
               {
+                name: ".sandpi",
+                path: "/workspace/.sandpi",
+                type: "dir",
+                size: 0,
+              },
+              {
                 name: "node_modules",
                 path: "/workspace/node_modules",
                 type: "dir",
@@ -2367,6 +2407,7 @@ test("lists one Workspace directory without recursively expanding folders", asyn
     })),
     [
       { name: ".codex", kind: "folder", children: undefined },
+      { name: ".sandpi", kind: "folder", children: undefined },
       { name: "src", kind: "folder", children: undefined },
       { name: ".env", kind: "file", children: undefined },
       { name: "README.md", kind: "file", children: undefined },
@@ -2449,6 +2490,11 @@ test("searches Workspace files through the harness-neutral Sandbox0 runtime", as
       kind: "file",
     },
     {
+      name: "server-secret.json",
+      path: "/workspace/.sandpi/server-secret.json",
+      kind: "file",
+    },
+    {
       name: "my-server-test.ts",
       path: "/workspace/src/my-server-test.ts",
       kind: "file",
@@ -2461,13 +2507,83 @@ test("searches Workspace files through the harness-neutral Sandbox0 runtime", as
   assert.equal(commands[0]?.options.envVars?.LC_ALL, "C");
   assert.equal(commands[0]?.options.command[0], "/bin/sh");
   assert.match(commands[0]?.options.command[2] ?? "", /node_modules/);
-  assert.match(commands[0]?.options.command[2] ?? "", /-name '\.\*'/);
+  assert.match(commands[0]?.options.command[2] ?? "", /-name '\.git'/);
+  assert.doesNotMatch(commands[0]?.options.command[2] ?? "", /-name '\.\*'/);
   assert.equal(commands[0]?.options.command.at(-1), "*s*e*r*v*e*r*");
 
   assert.deepEqual(await runtime.searchFiles(coordinates, "*?["), []);
   assert.equal(commands[1]?.options.command.at(-1), "*\\**\\?*\\[*");
   assert.deepEqual(await runtime.searchFiles(coordinates, " "), []);
   assert.equal(commands.length, 2);
+});
+
+test("opens Sandpi-managed Workspace files as read-only", async () => {
+  const managedPath = "/workspace/.sandpi/harnesses/codex/config.toml";
+  const content = Buffer.from("model = \"gpt-5\"\n");
+  let reads = 0;
+  let writes = 0;
+  const runtime = runtimeWithClient({
+    sandboxes: {
+      sandbox(sandboxId: string) {
+        assert.equal(sandboxId, "sandbox-environment");
+        return {
+          async statFile(filePath: string) {
+            if (filePath === managedPath) {
+              return {
+                type: "file",
+                size: content.byteLength,
+                modTime: new Date("2026-07-21T00:00:00.000Z"),
+                isLink: false,
+              };
+            }
+            return { type: "dir", size: 0, isLink: false };
+          },
+          async readFile(filePath: string) {
+            assert.equal(filePath, managedPath);
+            reads += 1;
+            return content;
+          },
+          async writeFile() {
+            writes += 1;
+          },
+        };
+      },
+    },
+  });
+  const coordinates: EnvironmentRuntimeRecord = {
+    id: environment.id,
+    sandboxId: environment.sandboxId,
+    workspaceVolumeId: environment.workspaceVolumeId,
+    runtimeGeneration: 1,
+    decoder: { supervisorCursor: 0, tailBase64: "", runtimeGeneration: 1 },
+  };
+
+  const file = await runtime.readWorkspaceIdeFile(coordinates, managedPath);
+
+  assert.equal(file.path, managedPath);
+  assert.equal(
+    Buffer.from(file.content, "base64").toString("utf8"),
+    content.toString("utf8"),
+  );
+  assert.equal(file.editable, false);
+  assert.equal(file.readOnlyReason, "sandpi-managed");
+  assert.equal(reads, 1);
+  await assert.rejects(
+    runtime.writeWorkspaceIdeFile(
+      coordinates,
+      managedPath,
+      Buffer.from("model = \"other\"\n"),
+      file.revision,
+    ),
+    (error: unknown) => {
+      assert.equal(
+        (error as { code?: string }).code,
+        "workspace_internal_path_protected",
+      );
+      return true;
+    },
+  );
+  assert.equal(writes, 0);
 });
 
 test("writes composer uploads only below the protected Workspace upload root", async () => {

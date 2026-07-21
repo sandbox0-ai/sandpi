@@ -46,6 +46,7 @@ const environment: Environment = {
   ownerId: "user-test",
   visibility: "team",
   idlePauseTimeoutSeconds: 30 * 60,
+  sandboxMemoryMiB: 2 * 1024,
   name: "Development",
   description: "",
   color: "#151515",

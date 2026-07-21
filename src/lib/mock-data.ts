@@ -1,5 +1,6 @@
 import { createMockCodexHarnessState } from "@/harnesses/codex/events";
 import type { CodexSession } from "@/harnesses/codex/types";
+import { ENVIRONMENT_SANDBOX_MEMORY_DEFAULT_MIB } from "@/lib/environment-resources";
 import { createId, randomToken } from "@/lib/id";
 import { toUnixTimestamp, type UnixTimestamp } from "@/lib/time";
 import type {
@@ -270,6 +271,7 @@ export const mockEnvironments: Environment[] = [
     ownerId: mockViewer.id,
     visibility: "team",
     idlePauseTimeoutSeconds: 30 * 60,
+    sandboxMemoryMiB: ENVIRONMENT_SANDBOX_MEMORY_DEFAULT_MIB,
     name: "Development",
     description: "The fast path for everyday coding sessions.",
     color: "#151515",
@@ -306,6 +308,7 @@ export const mockEnvironments: Environment[] = [
     ownerId: "user-mira",
     visibility: "team",
     idlePauseTimeoutSeconds: 30 * 60,
+    sandboxMemoryMiB: ENVIRONMENT_SANDBOX_MEMORY_DEFAULT_MIB,
     name: "Release lab",
     description: "Pinned release tooling and stricter outbound access.",
     color: "#8c5b28",
@@ -337,6 +340,7 @@ export const mockEnvironments: Environment[] = [
     ownerId: mockViewer.id,
     visibility: "team",
     idlePauseTimeoutSeconds: 30 * 60,
+    sandboxMemoryMiB: ENVIRONMENT_SANDBOX_MEMORY_DEFAULT_MIB,
     name: "Experiments",
     description: "Small prototypes and weekend projects.",
     color: "#6b5478",
@@ -368,6 +372,7 @@ export const mockEnvironments: Environment[] = [
     ownerId: mockViewer.id,
     visibility: "private",
     idlePauseTimeoutSeconds: 0,
+    sandboxMemoryMiB: ENVIRONMENT_SANDBOX_MEMORY_DEFAULT_MIB,
     name: "Personal scratchpad",
     description: "A private workspace visible only to its owner.",
     color: "#46627f",

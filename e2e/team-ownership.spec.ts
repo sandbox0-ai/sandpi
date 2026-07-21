@@ -249,6 +249,14 @@ test("switches Team-visible and private Environments and shows Session owners", 
   );
   await expect(idleTimeout).toHaveValue("0");
   await idleTimeout.fill("45");
+  const sandboxMemory = page.getByLabel(
+    "Environment Sandbox memory in GiB",
+  );
+  await expect(sandboxMemory).toHaveValue("2");
+  await expect(sandboxMemory).toHaveAttribute("max", "8");
+  await sandboxMemory.fill("9");
+  await expect(sandboxMemory).toHaveValue("8");
+  await sandboxMemory.fill("4");
   await page.getByRole("button", { name: "Save changes" }).click();
   await expect(
     page.getByRole("dialog", { name: /Personal scratchpad settings/ }),
@@ -256,6 +264,7 @@ test("switches Team-visible and private Environments and shows Session owners", 
   expect(workspace.environmentUpdates.at(-1)?.idlePauseTimeoutSeconds).toBe(
     45 * 60,
   );
+  expect(workspace.environmentUpdates.at(-1)?.sandboxMemoryMiB).toBe(4 * 1024);
 
   const teammateSession = page
     .locator(".session-row")

@@ -126,6 +126,7 @@ test("clears the idle deadline when automatic Environment pause is disabled", as
     value: async () => ({
       id: "environment-team",
       idlePauseTimeoutSeconds: 30 * 60,
+      sandboxMemoryMiB: 2 * 1024,
     }),
   });
 
@@ -135,6 +136,7 @@ test("clears the idle deadline when automatic Environment pause is disabled", as
     color: "#151515",
     visibility: "team",
     idlePauseTimeoutSeconds: 0,
+    sandboxMemoryMiB: 4 * 1024,
     networkPolicy: { mode: "allow-all", domainExceptions: [] },
   });
 
@@ -143,6 +145,8 @@ test("clears the idle deadline when automatic Environment pause is disabled", as
   );
   assert.ok(environmentUpdate);
   assert.match(environmentUpdate.sql, /idle_pause_timeout_seconds = \$6/);
+  assert.match(environmentUpdate.sql, /sandbox_memory_mib = \$7/);
+  assert.deepEqual(environmentUpdate.values?.slice(5, 7), [0, 4 * 1024]);
   const runtimeUpdate = queries.find(({ sql }) =>
     sql.includes("UPDATE environment_runtime"),
   );

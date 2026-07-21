@@ -14,6 +14,7 @@ const environment = {
   ownerId: "user-test",
   visibility: "team",
   idlePauseTimeoutSeconds: 30 * 60,
+  sandboxMemoryMiB: 2 * 1024,
   status: "ready",
   networkPolicy: {
     mode: "allow-all",
@@ -135,6 +136,7 @@ test("applies a changed network policy to the shared Environment Sandbox", async
     color: "#151515",
     visibility: "team",
     idlePauseTimeoutSeconds: 30 * 60,
+    sandboxMemoryMiB: 2 * 1024,
     networkPolicy: nextPolicy,
   });
 
@@ -166,6 +168,7 @@ test("lets only the creator change a Team Environment's visibility", async () =>
       color: "#151515",
       visibility: "private",
       idlePauseTimeoutSeconds: 30 * 60,
+      sandboxMemoryMiB: 2 * 1024,
       networkPolicy: environment.networkPolicy,
     }),
     (error: unknown) =>
@@ -224,11 +227,93 @@ test("serializes an idle timeout change with Environment lifecycle transitions",
     color: "#151515",
     visibility: "team",
     idlePauseTimeoutSeconds: 0,
+    sandboxMemoryMiB: 2 * 1024,
     networkPolicy: environment.networkPolicy,
   });
 
   assert.equal(updated.idlePauseTimeoutSeconds, 0);
   assert.deepEqual(steps, ["read", "lifecycle-lock", "read", "write"]);
+});
+
+test("applies a memory change to the shared Sandbox under the lifecycle lock", async () => {
+  const steps: string[] = [];
+  const runtimeRecord = {
+    id: environment.id,
+    sandboxId: "sandbox-test",
+    workspaceVolumeId: "volume-test",
+    desiredState: "running",
+    runtimeGeneration: 1,
+    decoder: {
+      supervisorCursor: 0,
+      tailBase64: "",
+      runtimeGeneration: 1,
+    },
+  };
+  const store = {
+    async getManageableEnvironment() {
+      steps.push("read");
+      return environment;
+    },
+    async withEnvironmentLifecycleLock(
+      _environmentId: string,
+      operation: (lockedStore: SandpiStore) => Promise<Environment>,
+    ) {
+      steps.push("lifecycle-lock");
+      return {
+        acquired: true as const,
+        value: await operation(store as unknown as SandpiStore),
+      };
+    },
+    async withEnvironmentMcpMutationLock() {
+      assert.fail("a memory change must not take the MCP mutation lock");
+    },
+    async getEnvironmentRuntime() {
+      steps.push("runtime");
+      return runtimeRecord;
+    },
+    async updateEnvironment(
+      _userId: string,
+      _environmentId: string,
+      input: Environment,
+    ) {
+      steps.push("write");
+      return { ...environment, ...input };
+    },
+  } as unknown as SandpiStore;
+  const runtime = {
+    async updateEnvironmentNetworkPolicy() {
+      assert.fail("an unchanged network policy must not be reapplied");
+    },
+    async updateEnvironmentMemory(received: unknown, memoryMiB: number) {
+      assert.strictEqual(received, runtimeRecord);
+      assert.equal(memoryMiB, 4 * 1024);
+      steps.push("memory");
+    },
+  } as unknown as RuntimeAdapter;
+  const service = new EnvironmentService(store, runtime, {
+    info() {},
+    error() {},
+  });
+
+  const updated = await service.update("user-test", environment.id, {
+    name: "Development",
+    description: "",
+    color: "#151515",
+    visibility: "team",
+    idlePauseTimeoutSeconds: 30 * 60,
+    sandboxMemoryMiB: 4 * 1024,
+    networkPolicy: environment.networkPolicy,
+  });
+
+  assert.equal(updated.sandboxMemoryMiB, 4 * 1024);
+  assert.deepEqual(steps, [
+    "read",
+    "lifecycle-lock",
+    "read",
+    "runtime",
+    "memory",
+    "write",
+  ]);
 });
 
 test("network updates nest lifecycle locking through the MCP-scoped Store", async () => {
@@ -277,6 +362,7 @@ test("network updates nest lifecycle locking through the MCP-scoped Store", asyn
         color: string;
         visibility: Environment["visibility"];
         idlePauseTimeoutSeconds: number;
+        sandboxMemoryMiB: number;
         networkPolicy: Environment["networkPolicy"];
       },
     ) {
@@ -365,6 +451,7 @@ test("network updates nest lifecycle locking through the MCP-scoped Store", asyn
     color: "#151515",
     visibility: "team",
     idlePauseTimeoutSeconds: 30 * 60,
+    sandboxMemoryMiB: 2 * 1024,
     networkPolicy: nextPolicy,
   });
 
@@ -451,6 +538,7 @@ test("uses the injected network policy applier instead of the legacy runtime met
     color: "#151515",
     visibility: "team",
     idlePauseTimeoutSeconds: 30 * 60,
+    sandboxMemoryMiB: 2 * 1024,
     networkPolicy: nextPolicy,
   });
 
@@ -512,6 +600,7 @@ test("rejects network policy changes after the Environment deletion gate", async
       color: "#151515",
       visibility: "team",
       idlePauseTimeoutSeconds: 30 * 60,
+      sandboxMemoryMiB: 2 * 1024,
       networkPolicy: nextPolicy,
     }),
     (error: unknown) =>

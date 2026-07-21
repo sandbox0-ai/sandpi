@@ -128,6 +128,7 @@ const copy = {
     backEnvironment: "Back to Environment",
     binary: "Binary files cannot be rendered as text.",
     deletedFile: "Deleted files are read-only. Restore them from Git before editing.",
+    managedFile: "Sandpi-managed files are read-only in the Web IDE.",
     save: "Save file (⌘/Ctrl+S)",
     saved: "Saved",
     saving: "Saving…",
@@ -166,6 +167,7 @@ const copy = {
     backEnvironment: "返回 Environment",
     binary: "二进制文件无法按文本显示。",
     deletedFile: "已删除文件为只读；请先通过 Git 恢复后再编辑。",
+    managedFile: "Sandpi 管理的文件在 Web IDE 中为只读。",
     save: "保存文件（⌘/Ctrl+S）",
     saved: "已保存",
     saving: "正在保存…",
@@ -1568,7 +1570,9 @@ export function WorkspaceIde({
                   <div className={styles.readOnlyNotice}>
                     {selectedFile.readOnlyReason === "deleted"
                       ? ui.deletedFile
-                      : ui.binary}
+                      : selectedFile.readOnlyReason === "sandpi-managed"
+                        ? ui.managedFile
+                        : ui.binary}
                   </div>
                 ) : null}
                 {document?.loading && !selectedFile ? (

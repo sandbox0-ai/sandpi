@@ -114,6 +114,10 @@ export interface RuntimeAdapter {
     runtime: EnvironmentRuntimeRecord,
     policy: NetworkPolicy,
   ): Promise<void>;
+  updateEnvironmentMemory(
+    runtime: EnvironmentRuntimeRecord,
+    memoryMiB: number,
+  ): Promise<void>;
   applyEnvironmentSandboxNetworkPolicy(
     runtime: EnvironmentRuntimeRecord,
     policy: Sandbox0NetworkPolicy,

@@ -121,7 +121,7 @@ const SANDBOX0_TRANSPORT_RETRY_DELAYS_MS = [100, 250] as const;
 // as one bounded Sandbox command so large trees do not become recursive HTTP
 // fan-out, and keep the capability below every coding-agent adapter.
 const WORKSPACE_FILE_SEARCH_PRUNE_EXPRESSION = [
-  "-name '.*'",
+  "-name '.git'",
   ...WORKSPACE_IGNORED_DIRECTORY_NAMES.map(
     (name) => `-name ${shellSingleQuoted(name)}`,
   ),
@@ -182,6 +182,9 @@ export class Sandbox0Runtime implements RuntimeAdapter {
             ttl: 0,
             hardTtl: ENVIRONMENT_SANDBOX_HARD_TTL_SECONDS,
             autoResume: true,
+            resources: {
+              memory: `${input.environment.sandboxMemoryMiB}Mi`,
+            },
             network: toSandbox0NetworkPolicy(input.environment.networkPolicy),
           },
         },
@@ -256,6 +259,20 @@ export class Sandbox0Runtime implements RuntimeAdapter {
       runtime,
       toSandbox0NetworkPolicy(policy),
     );
+  }
+
+  async updateEnvironmentMemory(
+    runtime: EnvironmentRuntimeRecord,
+    memoryMiB: number,
+  ) {
+    try {
+      await this.client.sandboxes.updateMemory(
+        runtime.sandboxId,
+        `${memoryMiB}Mi`,
+      );
+    } catch (error) {
+      throw translateSandbox0Error(error);
+    }
   }
 
   async applyEnvironmentSandboxNetworkPolicy(
@@ -1372,9 +1389,12 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     requestedPath: string,
   ): Promise<WorkspaceIdeFile> {
     const filePath = safeWorkspacePath(requestedPath);
+    const sandpiManaged = isWorkspaceInternalPath(filePath);
     const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
     await assertWorkspacePathHasNoSymlink(sandbox, filePath, true);
-    const git = await this.getWorkspaceGitState(runtime);
+    const git = sandpiManaged
+      ? { repositories: [] }
+      : await this.getWorkspaceGitState(runtime);
     const repository = repositoryForWorkspacePath(git.repositories, filePath);
     const change = repository?.files.find(
       (candidate) => candidate.path === filePath,
@@ -1495,13 +1515,18 @@ export class Sandbox0Runtime implements RuntimeAdapter {
       content: Buffer.from(content).toString("base64"),
       kind: text === undefined ? "binary" : "text",
       bom: hasUtf8Bom(content) ? "utf8" : undefined,
-      editable: text !== undefined && change?.kind !== "deleted",
+      editable:
+        text !== undefined &&
+        change?.kind !== "deleted" &&
+        !sandpiManaged,
       readOnlyReason:
         text === undefined
           ? "binary"
           : change?.kind === "deleted"
             ? "deleted"
-            : undefined,
+            : sandpiManaged
+              ? "sandpi-managed"
+              : undefined,
       size: size === undefined ? undefined : formatFileSize(size),
       modifiedAt: modifiedAt ? toUnixTimestamp(modifiedAt) : undefined,
       git: change,
@@ -1601,8 +1626,7 @@ export class Sandbox0Runtime implements RuntimeAdapter {
               continue;
             }
             if (isWorkspaceIdePathHidden(eventPath)) {
-              // Excluded generated directories are absent from the Workspace
-              // tree. Sandpi-internal paths were rejected above.
+              // Excluded generated directories are absent from the Workspace tree.
               continue;
             }
             yield { event: message.event, path: eventPath };
@@ -2314,13 +2338,6 @@ function fuzzySubsequenceScore(candidate: string, query: string) {
 function safeWorkspacePath(requestedPath: string) {
   const visible = userVisibleWorkspacePath(requestedPath || "/workspace");
   if (visible) return visible;
-  if (isWorkspaceInternalPath(requestedPath)) {
-    throw new HttpError(
-      403,
-      "workspace_internal_path_protected",
-      "Sandpi-managed Workspace state is not available through user file APIs.",
-    );
-  }
   throw new HttpError(
     400,
     "invalid_workspace_path",
@@ -2508,6 +2525,13 @@ async function readBoundedCodexRolloutFile(
 
 function safeEditableWorkspacePath(requestedPath: string) {
   const filePath = safeWorkspacePath(requestedPath);
+  if (isWorkspaceInternalPath(filePath)) {
+    throw new HttpError(
+      403,
+      "workspace_internal_path_protected",
+      "Sandpi-managed Workspace state is read-only in the Web IDE.",
+    );
+  }
   if (path.posix.relative("/workspace", filePath).split("/").includes(".git")) {
     throw new HttpError(
       403,

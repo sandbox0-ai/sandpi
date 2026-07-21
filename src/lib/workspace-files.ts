@@ -1,5 +1,6 @@
 import type { WorkspaceFile, WorkspaceGitFileChange } from "./types";
 import {
+  isWorkspaceInternalPath,
   isWorkspaceIdePathHidden,
   userVisibleWorkspacePath,
 } from "./workspace-path-policy";
@@ -76,6 +77,8 @@ export function mergeWorkspaceGitFiles(
     if (
       !changePath ||
       (change.originalPath && !originalPath) ||
+      isWorkspaceInternalPath(changePath) ||
+      (originalPath !== undefined && isWorkspaceInternalPath(originalPath)) ||
       entries.has(changePath) ||
       !changePath.startsWith("/workspace/")
     ) {

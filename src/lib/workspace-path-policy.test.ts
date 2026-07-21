@@ -21,12 +21,12 @@ test("protects only the Sandpi-owned Workspace root and its descendants", () => 
   assert.equal(isWorkspaceInternalPath("/workspace/src/index.ts"), false);
 });
 
-test("keeps user dot-paths visible while excluding internal and dependency trees", () => {
+test("keeps dot-paths visible while excluding dependency trees", () => {
   assert.equal(isWorkspaceIdePathHidden("/workspace/.codex", true), false);
   assert.equal(isWorkspaceIdePathHidden("/workspace/.codex/state.sqlite"), false);
   assert.equal(isWorkspaceIdePathHidden("/workspace/.git", true), false);
   assert.equal(isWorkspaceIdePathHidden("/workspace/project/.config", true), false);
-  assert.equal(isWorkspaceIdePathHidden("/workspace/.sandpi", true), true);
+  assert.equal(isWorkspaceIdePathHidden("/workspace/.sandpi", true), false);
   assert.equal(isWorkspaceIdePathHidden("/workspace/node_modules/pkg/index.js"), true);
   assert.equal(isWorkspaceIdePathHidden("/workspace/.env"), false);
   assert.equal(isWorkspaceIdePathHidden("/workspace/src/.env"), false);
@@ -39,7 +39,10 @@ test("normalizes user-facing Workspace paths without admitting paths outside Wor
     userVisibleWorkspacePath("/workspace/src/../README.md"),
     "/workspace/README.md",
   );
-  assert.equal(userVisibleWorkspacePath("/workspace/.sandpi/state"), undefined);
+  assert.equal(
+    userVisibleWorkspacePath("/workspace/.sandpi/state"),
+    "/workspace/.sandpi/state",
+  );
   assert.equal(userVisibleWorkspacePath("../../etc/passwd"), undefined);
   assert.equal(userVisibleWorkspacePath("/etc/passwd"), undefined);
   assert.equal(userVisibleWorkspacePath("/workspace/.sandpi-other"), "/workspace/.sandpi-other");
@@ -65,6 +68,6 @@ test("returns the lazy tree directories needed to reveal a Workspace file", () =
   );
   assert.deepEqual(
     workspaceFileParentDirectories("/workspace/.sandpi/state"),
-    [],
+    ["/workspace/.sandpi"],
   );
 });

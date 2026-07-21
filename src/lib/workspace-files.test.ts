@@ -77,7 +77,7 @@ test("does not duplicate a changed file already returned by Sandbox0", () => {
   assert.equal(merged[0]?.children?.[0]?.children?.length, 1);
 });
 
-test("removes internal paths while retaining user-owned dot-directories", () => {
+test("keeps internal files visible without adding internal Git overlays", () => {
   const files: WorkspaceFile[] = [
     {
       id: "workspace",
@@ -130,7 +130,11 @@ test("removes internal paths while retaining user-owned dot-directories", () => 
   const visible = userVisibleWorkspaceFiles(files);
   assert.deepEqual(
     visible[0]?.children?.map((file) => file.path),
-    ["/workspace/.sandpi-other", "/workspace/notes.md"],
+    [
+      "/workspace/.sandpi",
+      "/workspace/.sandpi-other",
+      "/workspace/notes.md",
+    ],
   );
   const merged = mergeWorkspaceGitFiles(files, [
     internalChange,
@@ -138,6 +142,10 @@ test("removes internal paths while retaining user-owned dot-directories", () => 
   ]);
   assert.deepEqual(
     merged[0]?.children?.map((file) => file.path),
-    ["/workspace/.sandpi-other", "/workspace/notes.md"],
+    [
+      "/workspace/.sandpi",
+      "/workspace/.sandpi-other",
+      "/workspace/notes.md",
+    ],
   );
 });

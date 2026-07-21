@@ -4,6 +4,7 @@ import type {
   WorkspaceGitState,
 } from "./types";
 import {
+  isWorkspaceInternalPath,
   isWorkspaceIdePathHidden,
   userVisibleWorkspacePath,
 } from "./workspace-path-policy";
@@ -20,13 +21,23 @@ export function repositoryForWorkspacePath(
   filePath: string,
 ) {
   const visibleFilePath = userVisibleWorkspacePath(filePath);
-  if (!visibleFilePath || isWorkspaceIdePathHidden(visibleFilePath)) {
+  if (
+    !visibleFilePath ||
+    isWorkspaceInternalPath(visibleFilePath) ||
+    isWorkspaceIdePathHidden(visibleFilePath)
+  ) {
     return undefined;
   }
   let selected: WorkspaceGitRepository | undefined;
   for (const repository of repositories) {
     const visibleRoot = userVisibleWorkspacePath(repository.root);
-    if (!visibleRoot || isWorkspaceIdePathHidden(visibleRoot, true)) continue;
+    if (
+      !visibleRoot ||
+      isWorkspaceInternalPath(visibleRoot) ||
+      isWorkspaceIdePathHidden(visibleRoot, true)
+    ) {
+      continue;
+    }
     if (
       containsPath({ ...repository, root: visibleRoot }, visibleFilePath) &&
       (!selected || visibleRoot.length > selected.root.length)
@@ -44,7 +55,13 @@ export function userVisibleWorkspaceGitState(
   return {
     repositories: (state?.repositories ?? []).flatMap((repository) => {
       const root = userVisibleWorkspacePath(repository.root);
-      if (!root || isWorkspaceIdePathHidden(root, true)) return [];
+      if (
+        !root ||
+        isWorkspaceInternalPath(root) ||
+        isWorkspaceIdePathHidden(root, true)
+      ) {
+        return [];
+      }
       const files = repository.files.flatMap((change) => {
         const filePath = userVisibleWorkspacePath(change.path);
         const originalPath = change.originalPath
@@ -52,10 +69,12 @@ export function userVisibleWorkspaceGitState(
           : undefined;
         if (
           !filePath ||
+          isWorkspaceInternalPath(filePath) ||
           isWorkspaceIdePathHidden(filePath) ||
           (filePath !== root && !filePath.startsWith(`${root}/`)) ||
           (change.originalPath &&
             (!originalPath ||
+              isWorkspaceInternalPath(originalPath) ||
               isWorkspaceIdePathHidden(originalPath) ||
               (originalPath !== root && !originalPath.startsWith(`${root}/`))))
         ) {

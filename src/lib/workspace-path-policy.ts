@@ -42,10 +42,7 @@ export function isWorkspaceInternalPath(candidate: string) {
 
 /** Returns the canonical path only when it is valid for user-facing Workspace surfaces. */
 export function userVisibleWorkspacePath(candidate: string) {
-  const normalized = normalizeWorkspacePath(candidate);
-  return normalized && !isWorkspaceInternalPath(normalized)
-    ? normalized
-    : undefined;
+  return normalizeWorkspacePath(candidate);
 }
 
 /** Parent directories that must be loaded to reveal a file in the lazy Workspace tree. */
@@ -63,9 +60,8 @@ export function workspaceFileParentDirectories(candidate: string) {
 }
 
 /**
- * Shared file-tree visibility rule. User-owned dot-files and dot-directories
- * remain visible; only Sandpi-internal paths and generated dependency trees
- * are excluded.
+ * Shared file-tree visibility rule. Dot-files and dot-directories, including
+ * Sandpi-managed state, remain visible; generated dependency trees are omitted.
  */
 export function isWorkspaceIdePathHidden(
   candidate: string,

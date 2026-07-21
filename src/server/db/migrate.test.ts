@@ -64,6 +64,7 @@ test("migration history contains every durable Sandpi boundary", async () => {
       "0037_team_centric_ownership",
       "0038_personal_session_pins_and_idle_pause",
       "0039_initialize_configurable_idle_pause_deadlines",
+      "0040_environment_sandbox_memory",
     ],
   );
 
@@ -257,6 +258,14 @@ test("migration history contains every durable Sandpi boundary", async () => {
   );
   assert.match(initializedIdleDeadlinesSql, /runtime\.observed_state = 'running'/);
   assert.match(initializedIdleDeadlinesSql, /runtime\.idle_pause_due_at IS NULL/);
+
+  const sandboxMemorySql = migrations[39]?.sql ?? "";
+  assert.match(
+    sandboxMemorySql,
+    /sandbox_memory_mib INTEGER NOT NULL DEFAULT 2048/,
+  );
+  assert.match(sandboxMemorySql, /sandbox_memory_mib >= 128/);
+  assert.match(sandboxMemorySql, /sandbox_memory_mib <= 8192/);
 
   const runtimeAuthoritySql = migrations[24]?.sql ?? "";
   assert.match(runtimeAuthoritySql, /decoder_attempt_id TEXT/);

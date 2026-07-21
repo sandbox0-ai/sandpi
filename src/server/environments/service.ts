@@ -104,6 +104,7 @@ export class EnvironmentService {
       color: string;
       visibility: Environment["visibility"];
       idlePauseTimeoutSeconds: number;
+      sandboxMemoryMiB: number;
       networkPolicy: NetworkPolicy;
     },
   ): Promise<Environment> {
@@ -118,7 +119,8 @@ export class EnvironmentService {
       JSON.stringify(current.networkPolicy) !== JSON.stringify(input.networkPolicy);
     const idlePauseChanged =
       current.idlePauseTimeoutSeconds !== input.idlePauseTimeoutSeconds;
-    if (!networkChanged && !idlePauseChanged) {
+    const memoryChanged = current.sandboxMemoryMiB !== input.sandboxMemoryMiB;
+    if (!networkChanged && !idlePauseChanged && !memoryChanged) {
       return this.store.updateEnvironment(userId, environmentId, input);
     }
 
@@ -135,22 +137,24 @@ export class EnvironmentService {
       }
       const lockedNetworkChanged =
         JSON.stringify(locked.networkPolicy) !== JSON.stringify(input.networkPolicy);
-      if (lockedNetworkChanged) {
-          const runtime = await scopedStore.getEnvironmentRuntime(
-            userId,
-            environmentId,
+      const lockedMemoryChanged =
+        locked.sandboxMemoryMiB !== input.sandboxMemoryMiB;
+      if (lockedNetworkChanged || lockedMemoryChanged) {
+        const runtime = await scopedStore.getEnvironmentRuntime(
+          userId,
+          environmentId,
+        );
+        if (runtime.desiredState === "terminated") {
+          throw new HttpError(
+            409,
+            "environment_terminated",
+            "The Environment is being deleted.",
           );
-          if (runtime.desiredState === "terminated") {
-            throw new HttpError(
-              409,
-              "environment_terminated",
-              "The Environment is being deleted.",
-            );
-          }
-          if (locked.status === "ready") {
-            // The Sandbox is owned by the Environment, so policy edits apply to
-            // the running runtime instead of being deferred to a future Session
-            // claim.
+        }
+        if (locked.status === "ready") {
+          // The Sandbox is owned by the Environment, so runtime edits apply to
+          // the existing Sandbox instead of waiting for a future Session.
+          if (lockedNetworkChanged) {
             if (this.networkPolicyApplier) {
               await this.networkPolicyApplier({
                 userId,
@@ -165,14 +169,22 @@ export class EnvironmentService {
               );
             }
           }
+          if (lockedMemoryChanged) {
+            await this.runtime.updateEnvironmentMemory(
+              runtime,
+              input.sandboxMemoryMiB,
+            );
+          }
+        }
       }
       return scopedStore.updateEnvironment(userId, environmentId, input);
     };
 
     // Network policy is a whole-resource Sandbox0 replacement. Serialize its
     // read, external apply and PostgreSQL update with credential-binding
-    // mutations and Environment deletion across every Sandpi replica. Idle
-    // timeout changes need only the lifecycle lock so they cannot race a pause.
+    // mutations and Environment deletion across every Sandpi replica. Memory
+    // and idle-timeout changes need the lifecycle lock so they cannot race a
+    // pause, resume, reprovision or deletion.
     if (networkChanged) {
       return this.waitForMcpMutationLock(environmentId, (mcpStore) =>
         this.waitForLifecycleLock(

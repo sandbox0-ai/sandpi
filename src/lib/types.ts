@@ -163,6 +163,8 @@ export interface Environment {
   visibility: "team" | "private";
   /** Environment-wide idle timeout in seconds; zero disables automatic pause. */
   idlePauseTimeoutSeconds: number;
+  /** Desired memory limit for the one shared Environment Sandbox, in MiB. */
+  sandboxMemoryMiB: number;
   name: string;
   description: string;
   color: string;
@@ -276,8 +278,8 @@ export interface WorkspaceGitState {
  * Cross-client Web IDE contract. Web, iOS, Android and HarmonyOS clients consume
  * this snapshot and treat WorkspaceIdeEvent as an invalidation signal; clients
  * must not connect to a Sandbox0 file endpoint or infer Git state themselves.
- * Server projections must never include `/workspace/.sandpi` or descendants;
- * clients apply the shared path policy again only as defense in depth.
+ * `/workspace/.sandpi` is visible and readable but remains Sandpi-managed and
+ * read-only. Clients apply the shared path policy again as defense in depth.
  */
 export interface WorkspaceIdeSnapshot {
   /** Initial shallow tree: `/workspace` and its direct children only. */
@@ -305,7 +307,7 @@ export interface WorkspaceIdeFile {
   kind: "binary" | "text";
   bom?: "utf8";
   editable: boolean;
-  readOnlyReason?: "binary" | "deleted";
+  readOnlyReason?: "binary" | "deleted" | "sandpi-managed";
   size?: string;
   modifiedAt?: UnixTimestamp;
   git?: WorkspaceGitFileChange;

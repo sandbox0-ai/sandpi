@@ -136,8 +136,10 @@ Web today; iOS / Android / HarmonyOS later
   workbench consume the same Sandpi API. The initial snapshot contains only the
   direct children of `/workspace`; clients request one shallow directory page
   when the user expands a folder and cache already loaded pages. User-owned
-  dot-files and dot-directories are visible; Sandpi's internal subtree and known
-  generated dependency trees are omitted. The recursive Sandbox0 stream is used
+  dot-files and dot-directories are visible, including Sandpi's internal
+  `/workspace/.sandpi` subtree; known generated dependency trees are omitted.
+  Sandpi-managed files are readable but remain read-only in the Web IDE and are
+  excluded from Git projections. The recursive Sandbox0 stream is used
   only for invalidation. Loaded shallow pages
   are reconciled while that native watch is connecting or unavailable, so files
   created by a running agent do not remain hidden until Turn completion. Sandpi discovers
@@ -146,10 +148,8 @@ Web today; iOS / Android / HarmonyOS later
   current line numbers. Sandpi never creates or chooses a repository for the
   user or agent. Text
   saves carry the revision that was opened; stale writes return a conflict
-  instead of silently replacing a newer file. The internal
-  `/workspace/.sandpi` subtree is excluded and rejected by the server, not just
-  hidden by the UI. The browser never receives the deployment API key or a
-  direct Sandbox0 endpoint.
+  instead of silently replacing a newer file. The browser never receives the
+  deployment API key or a direct Sandbox0 endpoint.
 - **Environment grouping:** an Environment owns one Sandbox, one mounted
   Workspace Volume, one harness process, official harness authentication,
   template and network policy. Product Sessions are lightweight references to
@@ -170,7 +170,10 @@ Web today; iOS / Android / HarmonyOS later
   in Activity without blocking the app-server conversation.
 - **Durable lifecycle:** every Environment Sandbox has a 30-day Sandbox0 hard
   TTL. Each Environment configures its own idle auto-pause timeout, defaulting
-  to thirty minutes; zero disables automatic pause. Runtime access and native
+  to thirty minutes; zero disables automatic pause. Environment settings also
+  persist the shared Sandbox memory limit in MiB, defaulting to 2 GiB and capped
+  at 8 GiB; Sandpi applies it both when claiming and when updating the existing
+  Sandbox. Runtime access and native
   `turn/completed` events calculate the PostgreSQL deadline from that setting.
   Any Sandpi replica may scan it, but a per-Environment advisory lock elects
   exactly one replica to pause after it rechecks that no Turn is active or

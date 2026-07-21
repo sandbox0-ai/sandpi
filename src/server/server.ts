@@ -16,6 +16,10 @@ import { ZodError, z } from "zod";
 
 import type { SandpiDeploymentSummary, SandpiPreferences } from "@/lib/types";
 import {
+  ENVIRONMENT_SANDBOX_MEMORY_MAX_MIB,
+  ENVIRONMENT_SANDBOX_MEMORY_MIN_MIB,
+} from "@/lib/environment-resources";
+import {
   DEFAULT_ENVIRONMENT_METRIC_RANGE_SECONDS,
   isEnvironmentMetricRangeSeconds,
 } from "@/lib/environment-metrics";
@@ -491,6 +495,11 @@ function registerApiRoutes(
             .int()
             .min(0)
             .max(ENVIRONMENT_SANDBOX_HARD_TTL_SECONDS),
+          sandboxMemoryMiB: z
+            .number()
+            .int()
+            .min(ENVIRONMENT_SANDBOX_MEMORY_MIN_MIB)
+            .max(ENVIRONMENT_SANDBOX_MEMORY_MAX_MIB),
           networkPolicy: networkPolicySchema,
         })
         .parse(request.body);

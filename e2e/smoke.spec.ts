@@ -2591,6 +2591,12 @@ test("renders the dedicated live Web IDE with Git state and changed lines", asyn
             kind: "folder",
           },
           {
+            id: "sandpi-state",
+            name: ".sandpi",
+            path: "/workspace/.sandpi",
+            kind: "folder",
+          },
+          {
             id: "src",
             name: "src",
             path: "/workspace/src",
@@ -2652,6 +2658,19 @@ test("renders the dedicated live Web IDE with Git state and changed lines", asyn
       { line: 3, kind: "added", staged: false, unstaged: true },
     ],
   };
+  const managedFile: WorkspaceIdeFile = {
+    path: "/workspace/.sandpi/config.json",
+    name: "config.json",
+    revision: `sha256:${"d".repeat(43)}`,
+    encoding: "base64",
+    content: Buffer.from('{"managed":true}\n').toString("base64"),
+    kind: "text",
+    editable: false,
+    readOnlyReason: "sandpi-managed",
+    size: "17 B",
+    modifiedAt: now,
+    lineChanges: [],
+  };
   const browserErrors: string[] = [];
   page.on("console", (message) => {
     if (
@@ -2664,11 +2683,32 @@ test("renders the dedicated live Web IDE with Git state and changed lines", asyn
   page.on("pageerror", (error) => browserErrors.push(error.message));
   let savedContent = "";
   let directoryLoads = 0;
+  let managedDirectoryLoads = 0;
   let remoteFile = file;
   await page.route("**/api/v1/environments/**/files?*", async (route) => {
     const directoryPath = new URL(route.request().url()).searchParams.get(
       "path",
     );
+    if (directoryPath === "/workspace/.sandpi") {
+      managedDirectoryLoads += 1;
+      const listing: WorkspaceDirectoryListing = {
+        path: directoryPath,
+        refreshedAt: now,
+        entries: [
+          {
+            id: "sandpi-config",
+            name: "config.json",
+            path: managedFile.path,
+            kind: "file",
+            language: "JSON",
+            size: managedFile.size,
+            modifiedAt: now,
+          },
+        ],
+      };
+      await route.fulfill({ json: { data: listing } });
+      return;
+    }
     expect(directoryPath).toBe("/workspace/src");
     directoryLoads += 1;
     const listing: WorkspaceDirectoryListing = {
@@ -2689,6 +2729,12 @@ test("renders the dedicated live Web IDE with Git state and changed lines", asyn
     await route.fulfill({ json: { data: listing } });
   });
   await page.route("**/api/v1/environments/**/ide/file?*", async (route) => {
+    const filePath = new URL(route.request().url()).searchParams.get("path");
+    if (filePath === managedFile.path) {
+      expect(route.request().method()).toBe("GET");
+      await route.fulfill({ json: { data: managedFile } });
+      return;
+    }
     if (route.request().method() === "PUT") {
       const body = route.request().postDataJSON() as {
         content: string;
@@ -2745,6 +2791,9 @@ test("renders the dedicated live Web IDE with Git state and changed lines", asyn
   await expect(page.getByText("workspace", { exact: true })).toBeVisible();
   await expect(
     page.locator('button[title="/workspace/.github"]'),
+  ).toBeVisible();
+  await expect(
+    page.locator('button[title="/workspace/.sandpi"]'),
   ).toBeVisible();
   await expect(
     page.locator('button[title="/workspace/src/demo.ts"]'),
@@ -2811,6 +2860,18 @@ test("renders the dedicated live Web IDE with Git state and changed lines", asyn
   await expect(
     page.getByText("No Git repositories in this Workspace", { exact: true }),
   ).toBeVisible();
+  await page.locator('button[title="/workspace/.sandpi"]').click();
+  const managedFileButton = page.locator(
+    'button[title="/workspace/.sandpi/config.json"]',
+  );
+  await expect(managedFileButton).toBeVisible();
+  await managedFileButton.click();
+  await expect(
+    page.getByText("Sandpi-managed files are read-only in the Web IDE."),
+  ).toBeVisible();
+  await expect(page.getByText('{"managed":true}')).toBeVisible();
+  await expect(save).toBeDisabled();
+  expect(managedDirectoryLoads).toBeGreaterThan(0);
   await expect.poll(() => pageBlocksUnload(page)).toBe(true);
   expect(browserErrors).toEqual([]);
 });
