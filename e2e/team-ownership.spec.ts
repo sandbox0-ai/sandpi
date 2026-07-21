@@ -243,17 +243,36 @@ test("switches Team-visible and private Environments and shows Session owners", 
   await privateEnvironment
     .getByRole("button", { name: "Personal scratchpad settings" })
     .click();
-  await expect(page.getByLabel("Environment visibility")).toHaveValue("private");
-  const idleTimeout = page.getByLabel(
+  const settingsDialog = page.getByRole("dialog", {
+    name: "Personal scratchpad settings",
+  });
+  await expect(settingsDialog.getByLabel("Environment visibility")).toHaveValue(
+    "private",
+  );
+  await expect(
+    settingsDialog.getByRole("button", { name: "Agent harness", exact: true }),
+  ).toBeVisible();
+  await expect(
+    settingsDialog.getByRole("button", { name: "Coding agent", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    settingsDialog.getByLabel("Environment Sandbox memory"),
+  ).toHaveCount(0);
+  await settingsDialog
+    .getByRole("button", { name: "Sandbox", exact: true })
+    .click();
+  const idleTimeout = settingsDialog.getByLabel(
     "Environment auto-pause timeout in minutes",
   );
   await expect(idleTimeout).toHaveValue("0");
   await expect(idleTimeout).toHaveAttribute("max", "43200");
   await expect(
-    page.getByText("Set 0 to keep it running with no time limit."),
+    settingsDialog.getByText("Set 0 to keep it running with no time limit."),
   ).toBeVisible();
   await idleTimeout.fill("45");
-  const sandboxMemory = page.getByLabel("Environment Sandbox memory");
+  const sandboxMemory = settingsDialog.getByLabel(
+    "Environment Sandbox memory",
+  );
   await expect(sandboxMemory).toHaveValue("2048");
   await expect(sandboxMemory.locator("option")).toHaveText([
     "512 MiB",
@@ -263,7 +282,7 @@ test("switches Team-visible and private Environments and shows Session owners", 
     "8 GiB",
   ]);
   await sandboxMemory.selectOption("4096");
-  await page.getByRole("button", { name: "Save changes" }).click();
+  await settingsDialog.getByRole("button", { name: "Save changes" }).click();
   await expect(
     page.getByRole("dialog", { name: /Personal scratchpad settings/ }),
   ).toHaveCount(0);

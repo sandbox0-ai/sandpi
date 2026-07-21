@@ -171,11 +171,11 @@ Web today; iOS / Android / HarmonyOS later
 - **Durable lifecycle:** Environment Sandboxes explicitly disable Sandbox0 soft
   and hard TTLs. Each Environment configures its own idle auto-pause timeout,
   defaulting to thirty minutes; zero leaves no time-based expiration.
-  Environment settings also persist the shared Sandbox memory limit in MiB,
-  defaulting to 2 GiB and offering 512 MiB, 1 GiB, 2 GiB, 4 GiB and 8 GiB
-  presets. Sandpi applies it both when claiming and when updating the existing
-  Sandbox. Runtime access and native `turn/completed` events calculate the
-  PostgreSQL deadline from that setting.
+  **Environment Settings → Sandbox** also persists the shared Sandbox memory
+  limit in MiB, defaulting to 2 GiB and offering 512 MiB, 1 GiB, 2 GiB, 4 GiB
+  and 8 GiB presets. Sandpi applies it both when claiming and when updating the
+  existing Sandbox. Runtime access and native `turn/completed` events calculate
+  the PostgreSQL deadline from that setting.
   Any Sandpi replica may scan it, but a per-Environment advisory lock elects
   exactly one replica to pause after it rechecks that no Turn is active or
   pending. Browser disconnection is irrelevant. Sandbox0 auto-resume
@@ -305,7 +305,7 @@ pool.
 
 ### Connect Codex
 
-Open the Environment menu, choose **Coding agent**, and select **Connect Codex**.
+Open the Environment menu, choose **Agent harness**, and select **Connect Codex**.
 Sandpi starts the official Codex device-login protocol in a short-lived
 `coding-agent` Sandbox and displays the native verification URL and user code.
 The resulting `auth.json` becomes an encrypted Environment-scoped Credential

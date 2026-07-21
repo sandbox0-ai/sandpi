@@ -2,6 +2,7 @@
 
 import {
   Archive,
+  Box,
   Cable,
   Check,
   Copy,
@@ -54,6 +55,7 @@ import type { CodingSession, Environment, NetworkPolicy } from "@/lib/types";
 
 type EnvironmentSettingsTab =
   | "general"
+  | "sandbox"
   | "archived-sessions"
   | "credentials"
   | "skills"
@@ -102,8 +104,9 @@ const tabs: Array<{
   icon: React.ComponentType<{ size?: number }>;
 }> = [
   { id: "general", label: "General", icon: Settings2 },
+  { id: "sandbox", label: "Sandbox", icon: Box },
   { id: "archived-sessions", label: "Archived sessions", icon: Archive },
-  { id: "credentials", label: "Coding agent", icon: KeyRound },
+  { id: "credentials", label: "Agent harness", icon: KeyRound },
   { id: "skills", label: "Skills", icon: Sparkles },
   { id: "mcp", label: "MCP servers", icon: Cable },
   { id: "network", label: "Network", icon: Network },
@@ -790,94 +793,11 @@ export function EnvironmentSettings({
                       : "Only the Environment creator can change visibility."}
                   </small>
                 </label>
-                <label className="full-field">
-                  Auto-pause after idle (minutes)
-                  <input
-                    type="number"
-                    name="environment-idle-pause-timeout"
-                    aria-label="Environment auto-pause timeout in minutes"
-                    min={0}
-                    max={MAX_ENVIRONMENT_IDLE_PAUSE_TIMEOUT_SECONDS / 60}
-                    step={1}
-                    value={draft.idlePauseTimeoutSeconds / 60}
-                    onChange={(event) => {
-                      const minutes = event.currentTarget.valueAsNumber;
-                      if (!Number.isFinite(minutes)) return;
-                      setDraft((current) => ({
-                        ...current,
-                        idlePauseTimeoutSeconds:
-                          Math.min(
-                            MAX_ENVIRONMENT_IDLE_PAUSE_TIMEOUT_SECONDS / 60,
-                            Math.max(0, Math.round(minutes)),
-                          ) * 60,
-                      }));
-                    }}
-                  />
-                  <small>
-                    Sandpi pauses the shared Sandbox after this much idle time.
-                    Set 0 to keep it running with no time limit.
-                  </small>
-                </label>
-                <label className="full-field">
-                  Sandbox memory
-                  <select
-                    name="environment-sandbox-memory"
-                    aria-label="Environment Sandbox memory"
-                    value={draft.sandboxMemoryMiB}
-                    onChange={(event) => {
-                      const memoryMiB = Number(event.currentTarget.value);
-                      if (
-                        !ENVIRONMENT_SANDBOX_MEMORY_OPTIONS_MIB.some(
-                          (optionMiB) => optionMiB === memoryMiB,
-                        )
-                      ) {
-                        return;
-                      }
-                      setDraft((current) => ({
-                        ...current,
-                        sandboxMemoryMiB: memoryMiB,
-                      }));
-                    }}
-                  >
-                    {ENVIRONMENT_SANDBOX_MEMORY_OPTIONS_MIB.map((memoryMiB) => (
-                      <option key={memoryMiB} value={memoryMiB}>
-                        {memoryMiB < 1024
-                          ? `${memoryMiB} MiB`
-                          : `${memoryMiB / 1024} GiB`}
-                      </option>
-                    ))}
-                  </select>
-                  <small>
-                    Applies immediately to the shared Sandbox. Sandbox0 derives
-                    CPU capacity from the configured memory ratio.
-                  </small>
-                </label>
                 <div className="settings-card definition-card">
                   <DefinitionRow label="Team" value={teamName} />
                   <DefinitionRow
                     label="Current revision"
                     value={`r${draft.revision}`}
-                  />
-                  <DefinitionRow
-                    label="Template"
-                    value={draft.templateId}
-                    code
-                  />
-                  <DefinitionRow
-                    label="Rootfs snapshot"
-                    value={draft.rootfsSnapshotId}
-                    code
-                  />
-                  <DefinitionRow
-                    label="Workspace Volume"
-                    value={draft.workspaceVolumeId}
-                    code
-                  />
-                  <DefinitionRow label="Sandbox" value={draft.sandboxId} code />
-                  <DefinitionRow
-                    label="Harness Supervisor"
-                    value={draft.supervisorSessionId || "Starts on demand"}
-                    code={Boolean(draft.supervisorSessionId)}
                   />
                 </div>
                 <div
@@ -969,6 +889,100 @@ export function EnvironmentSettings({
               </SettingsSection>
             ) : null}
 
+            {activeTab === "sandbox" ? (
+              <SettingsSection
+                eyebrow="Environment runtime"
+                title="Sandbox"
+                description="Configure lifecycle and resources for the shared Sandbox used by every Session in this Environment."
+              >
+                <label className="full-field">
+                  Auto-pause after idle (minutes)
+                  <input
+                    type="number"
+                    name="environment-idle-pause-timeout"
+                    aria-label="Environment auto-pause timeout in minutes"
+                    min={0}
+                    max={MAX_ENVIRONMENT_IDLE_PAUSE_TIMEOUT_SECONDS / 60}
+                    step={1}
+                    value={draft.idlePauseTimeoutSeconds / 60}
+                    onChange={(event) => {
+                      const minutes = event.currentTarget.valueAsNumber;
+                      if (!Number.isFinite(minutes)) return;
+                      setDraft((current) => ({
+                        ...current,
+                        idlePauseTimeoutSeconds:
+                          Math.min(
+                            MAX_ENVIRONMENT_IDLE_PAUSE_TIMEOUT_SECONDS / 60,
+                            Math.max(0, Math.round(minutes)),
+                          ) * 60,
+                      }));
+                    }}
+                  />
+                  <small>
+                    Sandpi pauses the shared Sandbox after this much idle time.
+                    Set 0 to keep it running with no time limit.
+                  </small>
+                </label>
+                <label className="full-field">
+                  Sandbox memory
+                  <select
+                    name="environment-sandbox-memory"
+                    aria-label="Environment Sandbox memory"
+                    value={draft.sandboxMemoryMiB}
+                    onChange={(event) => {
+                      const memoryMiB = Number(event.currentTarget.value);
+                      if (
+                        !ENVIRONMENT_SANDBOX_MEMORY_OPTIONS_MIB.some(
+                          (optionMiB) => optionMiB === memoryMiB,
+                        )
+                      ) {
+                        return;
+                      }
+                      setDraft((current) => ({
+                        ...current,
+                        sandboxMemoryMiB: memoryMiB,
+                      }));
+                    }}
+                  >
+                    {ENVIRONMENT_SANDBOX_MEMORY_OPTIONS_MIB.map((memoryMiB) => (
+                      <option key={memoryMiB} value={memoryMiB}>
+                        {memoryMiB < 1024
+                          ? `${memoryMiB} MiB`
+                          : `${memoryMiB / 1024} GiB`}
+                      </option>
+                    ))}
+                  </select>
+                  <small>
+                    Applies immediately to the shared Sandbox. Sandbox0 derives
+                    CPU capacity from the configured memory ratio.
+                  </small>
+                </label>
+                <div className="settings-card definition-card">
+                  <DefinitionRow
+                    label="Template"
+                    value={draft.templateId}
+                    code
+                  />
+                  <DefinitionRow
+                    label="Rootfs snapshot"
+                    value={draft.rootfsSnapshotId}
+                    code
+                  />
+                  <DefinitionRow
+                    label="Workspace Volume"
+                    value={draft.workspaceVolumeId}
+                    code
+                  />
+                  <DefinitionRow label="Sandbox" value={draft.sandboxId} code />
+                  <DefinitionRow
+                    label="Harness Supervisor"
+                    value={draft.supervisorSessionId || "Starts on demand"}
+                    code={Boolean(draft.supervisorSessionId)}
+                  />
+                </div>
+              </SettingsSection>
+            ) : null}
+
             {activeTab === "archived-sessions" ? (
               <SettingsSection
                 eyebrow="Session history"
@@ -1040,8 +1054,8 @@ export function EnvironmentSettings({
             {activeTab === "credentials" ? (
               <SettingsSection
                 eyebrow="Bound to this Environment"
-                title="Coding agent & account"
-                description="The coding agent is selected when an Environment is created. Every Session inherits that agent and its pinned official authentication state."
+                title="Agent harness & account"
+                description="The agent harness is selected when an Environment is created. Every Session inherits that harness and its pinned official authentication state."
               >
                 <div className="immutable-agent-callout">
                   <LockKeyhole size={17} />

@@ -155,7 +155,7 @@ test("loads the live workspace and Environment credential surface", async ({
     .getByRole("button", { name: "Development settings" })
     .last()
     .click();
-  await page.getByRole("button", { name: /Coding agent/ }).click();
+  await page.getByRole("button", { name: "Agent harness" }).click();
   const settingsLayout = await page
     .locator(".settings-content")
     .evaluate((content) => {
@@ -592,7 +592,7 @@ test("refreshes the Codex account and live limits after device login", async ({
   const settingsDialog = page.getByRole("dialog", {
     name: `${environment.name} settings`,
   });
-  await settingsDialog.getByRole("button", { name: "Coding agent" }).click();
+  await settingsDialog.getByRole("button", { name: "Agent harness" }).click();
   await settingsDialog.getByRole("button", { name: "Connect Codex" }).click();
 
   await expect(
