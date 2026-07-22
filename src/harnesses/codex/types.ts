@@ -69,6 +69,12 @@ export type CodexCommandAction =
 
 export type CodexNativeToolStatus = "inProgress" | "completed" | "failed";
 
+export interface CodexTurnError {
+  message: string;
+  codexErrorInfo: unknown | null;
+  additionalDetails: string | null;
+}
+
 export interface CodexMcpToolCallAppContext {
   connectorId: string;
   linkId: string | null;
@@ -193,11 +199,7 @@ export interface CodexTurn {
   items: CodexThreadItem[];
   itemsView: "notLoaded" | "summary" | "full";
   status: "completed" | "interrupted" | "failed" | "inProgress";
-  error: {
-    message: string;
-    codexErrorInfo: unknown | null;
-    additionalDetails: string | null;
-  } | null;
+  error: CodexTurnError | null;
   startedAt: number | null;
   completedAt: number | null;
   durationMs: number | null;
@@ -226,7 +228,20 @@ export interface CodexThread {
 
 export type CodexServerNotification =
   | { method: "thread/started"; params: { thread: { id: string } } }
+  | {
+      method: "thread/status/changed";
+      params: { threadId: string; status: CodexThreadStatus };
+    }
   | { method: "turn/started"; params: { threadId: string; turn: CodexTurn } }
+  | {
+      method: "error";
+      params: {
+        error: CodexTurnError;
+        willRetry: boolean;
+        threadId: string;
+        turnId: string;
+      };
+    }
   | {
       method: "item/started";
       params: {
@@ -336,7 +351,9 @@ export type CodexServerNotification =
  * names intact: this is a Codex transport contract, not a cross-harness event vocabulary.
  */
 export const CODEX_TRANSCRIPT_NOTIFICATION_METHODS = [
+  "thread/status/changed",
   "turn/started",
+  "error",
   "item/started",
   "item/agentMessage/delta",
   "item/plan/delta",

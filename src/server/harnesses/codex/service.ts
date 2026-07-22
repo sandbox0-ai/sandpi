@@ -1452,8 +1452,31 @@ export class CodexService {
     const activeNativeTurnId = thread.turns.find(
       (turn) => turn.status === "inProgress",
     )?.id;
-    const nativeIdle = ["idle", "notLoaded"].includes(thread.status.type);
-    await this.store.reconcileNativeSessionState({
+    const nativeSettled = ["idle", "notLoaded", "systemError"].includes(
+      thread.status.type,
+    );
+    const pendingRecoveryCutoff = nativeSettled
+      ? new Date(
+          Date.now() -
+            (this.options.exceptionalPendingTurnGraceMs ??
+              EXCEPTIONAL_PENDING_TURN_GRACE_MS),
+        )
+      : undefined;
+    const pendingRecoveryEligible = Boolean(
+      pendingRecoveryCutoff &&
+      sessionRuntime.pendingTurnStartedAt &&
+      sessionRuntime.pendingTurnStartedAt <= pendingRecoveryCutoff,
+    );
+    const expectedSessionStatus =
+      activeNativeTurnId ||
+      (sessionRuntime.pendingTurnPhase && !pendingRecoveryEligible)
+        ? "running"
+        : "waiting";
+    const projectionChanged =
+      sessionRuntime.activeNativeTurnId !== activeNativeTurnId ||
+      pendingRecoveryEligible ||
+      sessionRuntime.sessionStatus !== expectedSessionStatus;
+    const reconciled = await this.store.reconcileNativeSessionState({
       sessionId,
       nativeSessionId: sessionRuntime.nativeSessionId,
       historyRevision: sessionRuntime.historyRevision,
@@ -1463,15 +1486,14 @@ export class CodexService {
       environmentAttemptId: responseRuntime.attemptId,
       environmentRuntimeGeneration: responseRuntime.runtimeGeneration,
       activeNativeTurnId,
-      clearPendingWhenNativeIdle: nativeIdle,
-      clearPendingStartedBefore: nativeIdle
-        ? new Date(
-            Date.now() -
-              (this.options.exceptionalPendingTurnGraceMs ??
-                EXCEPTIONAL_PENDING_TURN_GRACE_MS),
-          )
-        : undefined,
+      clearPendingWhenNativeIdle: nativeSettled,
+      clearPendingStartedBefore: pendingRecoveryCutoff,
     });
+    if (reconciled && projectionChanged) {
+      this.publishInvalidation(sessionId, "native-session-state-reconciled", {
+        message: "Codex execution state was repaired from the native Thread.",
+      });
+    }
     const latest = await this.store.sessionRuntime(sessionId);
     const forkableTurnIds = thread.turns
       .filter((turn) => turn.status !== "inProgress")
@@ -2437,7 +2459,7 @@ export class CodexService {
     ) {
       return;
     }
-    if (!["idle", "notLoaded"].includes(thread.status.type)) {
+    if (!["idle", "notLoaded", "systemError"].includes(thread.status.type)) {
       if (thread.status.type === "active") {
         this.requestExceptionalSessionRerun(
           reconciliation,

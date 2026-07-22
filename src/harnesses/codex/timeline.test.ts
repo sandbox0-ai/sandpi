@@ -592,6 +592,135 @@ test("renders interruption from native thread/read without a synthetic recovery"
   assert.equal(projected.entries[1]?.kind, "turnResult");
 });
 
+test("projects a legacy completed Turn as failed when its Thread has a system error", () => {
+  const failedTurn = liveTurn("turn-system-error", "completed", [
+    {
+      type: "userMessage",
+      id: "user-system-error",
+      clientId: "client-system-error",
+      content: [
+        { type: "text", text: "Continue", text_elements: [] },
+      ],
+    },
+  ]);
+  const thread = createMockCodexThread("thread-system-error", [failedTurn]);
+  thread.status = { type: "systemError" };
+
+  const projected = projectCodexTimeline(thread);
+
+  assert.equal(projected.activeTurn, undefined);
+  assert.equal(projected.turns[0]?.status, "failed");
+  assert.deepEqual(
+    projected.entries.map((entry) => entry.kind),
+    ["message", "turnResult"],
+  );
+  assert.equal(
+    projected.entries[1]?.kind === "turnResult"
+      ? projected.entries[1].status
+      : undefined,
+    "failed",
+  );
+});
+
+test("ends live work on a non-retrying Codex error notification", () => {
+  const turnId = "turn-live-system-error";
+  const command: Extract<CodexThreadItem, { type: "commandExecution" }> = {
+    type: "commandExecution",
+    id: "command-live-system-error",
+    command: "run security check",
+    cwd: "/workspace",
+    processId: null,
+    source: "agent",
+    status: "inProgress",
+    commandActions: [],
+    aggregatedOutput: "",
+    exitCode: null,
+    durationMs: null,
+  };
+  const events = [
+    nativeEvent(70, {
+      method: "turn/started",
+      params: { threadId: nativeThread.id, turn: liveTurn(turnId) },
+    }),
+    nativeEvent(71, {
+      method: "item/started",
+      params: {
+        threadId: nativeThread.id,
+        turnId,
+        item: command,
+        startedAtMs: Date.parse("2026-07-12T01:01:11Z"),
+      },
+    }),
+  ];
+
+  const retrying = projectCodexTimeline(nativeThread, [
+    ...events,
+    nativeEvent(72, {
+      method: "error",
+      params: {
+        threadId: nativeThread.id,
+        turnId,
+        willRetry: true,
+        error: {
+          message: "Temporary upstream failure",
+          codexErrorInfo: null,
+          additionalDetails: null,
+        },
+      },
+    }),
+  ]);
+  assert.equal(retrying.activeTurn?.turnId, turnId);
+
+  const failed = projectCodexTimeline(nativeThread, [
+    ...events,
+    nativeEvent(73, {
+      method: "error",
+      params: {
+        threadId: nativeThread.id,
+        turnId,
+        willRetry: false,
+        error: {
+          message: "The Codex request failed",
+          codexErrorInfo: null,
+          additionalDetails: null,
+        },
+      },
+    }),
+  ]);
+  assert.equal(failed.activeTurn, undefined);
+  const failedCommand = failed.entries.find(
+    (entry) => entry.id === command.id,
+  );
+  assert.equal(
+    failedCommand?.kind === "command" ? failedCommand.status : undefined,
+    "failed",
+  );
+  const result = failed.entries.find(
+    (entry) => entry.kind === "turnResult" && entry.turnId === turnId,
+  );
+  assert.equal(result?.kind === "turnResult" ? result.detail : undefined, "The Codex request failed");
+});
+
+test("a new Turn clears a previous Thread system-error projection", () => {
+  const previous = liveTurn("turn-previous-error", "completed");
+  const thread = createMockCodexThread("thread-retried", [previous]);
+  thread.status = { type: "systemError" };
+  const next = liveTurn("turn-after-error");
+
+  const projected = projectCodexTimeline(thread, [
+    nativeEvent(80, {
+      method: "turn/started",
+      params: { threadId: thread.id, turn: next },
+    }),
+  ]);
+
+  assert.equal(projected.activeTurn?.turnId, next.id);
+  assert.equal(
+    projected.entries.some((entry) => entry.kind === "turnResult"),
+    false,
+  );
+});
+
 test("renders modeled tools natively and unknown ThreadItems as Codex fallbacks", () => {
   const nativeTool = mcpToolCall("mcp-tool-1", "completed");
   const futureTool = {
@@ -693,6 +822,11 @@ test("never projects private live reasoning text into Codex activity", () => {
 });
 
 test("keeps every modeled plan and reasoning notification in the live suffix", () => {
+  assert.equal(
+    CODEX_TRANSCRIPT_NOTIFICATION_METHODS.includes("thread/status/changed"),
+    true,
+  );
+  assert.equal(CODEX_TRANSCRIPT_NOTIFICATION_METHODS.includes("error"), true);
   assert.equal(CODEX_TRANSCRIPT_NOTIFICATION_METHODS.includes("item/plan/delta"), true);
   assert.equal(
     CODEX_TRANSCRIPT_NOTIFICATION_METHODS.includes(

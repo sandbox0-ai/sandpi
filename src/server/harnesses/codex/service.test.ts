@@ -2107,6 +2107,63 @@ test("rechecks an active native Thread until missed completion state is repaired
   }
 });
 
+test("settles exceptional Session recovery on a native Thread system error", async () => {
+  let reads = 0;
+  const context = fixture({
+    sessions: [
+      {
+        id: "session-system-error",
+        nativeSessionId: "thread-system-error",
+        status: "running",
+        activeNativeTurnId: "turn-system-error",
+      },
+    ],
+    exceptionalSessionRecoveryDelayMs: 0,
+    exceptionalSessionRetryBaseMs: 5,
+    onRequest(message) {
+      if (message.method !== "thread/read") return undefined;
+      reads += 1;
+      return {
+        id: message.id,
+        result: {
+          thread: {
+            id: "thread-system-error",
+            status: { type: "systemError" },
+            turns: [],
+          },
+        },
+      };
+    },
+  });
+  try {
+    await context.service.resumeWorkers();
+    await eventually(
+      () => context.sessions.get("session-system-error")?.status === "waiting",
+      "native Thread system error did not settle the Session projection",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    assert.equal(reads, 1);
+    assert.equal(
+      context.sessionRuntimes.get("session-system-error")
+        ?.activeNativeTurnId,
+      undefined,
+    );
+    assert.equal(
+      context.service
+        .listLiveNotifications("session-system-error")
+        .some(
+          (update) =>
+            update.kind === "invalidation" &&
+            update.reason === "native-session-state-reconciled",
+        ),
+      true,
+    );
+  } finally {
+    await context.close();
+  }
+});
+
 test("metadata-only repair preserves an active native Thread without loading replies", async () => {
   const context = fixture({
     sessions: [
@@ -3045,6 +3102,58 @@ test("repairs only the selected Session projection from its native snapshot", as
   }
 });
 
+test("repairs a stale running Session from a native Thread system error", async () => {
+  const context = fixture({
+    sessions: [
+      {
+        id: "session-system-error",
+        nativeSessionId: "thread-system-error",
+        status: "running",
+        activeNativeTurnId: "turn-system-error",
+      },
+    ],
+    onRequest(message) {
+      if (message.method !== "thread/read") return undefined;
+      return {
+        id: message.id,
+        result: {
+          thread: {
+            id: "thread-system-error",
+            status: { type: "systemError" },
+            turns: [completedTurn("turn-system-error")],
+          },
+        },
+      };
+    },
+  });
+  try {
+    const snapshot = await context.service.readNativeSnapshot(
+      "user",
+      "session-system-error",
+    );
+
+    assert.equal(snapshot.thread.status.type, "systemError");
+    assert.equal(snapshot.sessionStatus, "waiting");
+    assert.equal(
+      context.sessionRuntimes.get("session-system-error")
+        ?.activeNativeTurnId,
+      undefined,
+    );
+    assert.equal(
+      context.service
+        .listLiveNotifications("session-system-error")
+        .some(
+          (update) =>
+            update.kind === "invalidation" &&
+            update.reason === "native-session-state-reconciled",
+        ),
+      true,
+    );
+  } finally {
+    await context.close();
+  }
+});
+
 test("lazily attaches only the native Session that starts a Turn", async () => {
   const context = fixture({
     sessions: [
@@ -3634,6 +3743,52 @@ test("marks completed Turns for persisted Activity refresh", async () => {
           : undefined,
       ),
       [false, true],
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("streams native Thread status and Turn error notifications", async () => {
+  const context = fixture();
+  context.enqueue([
+    {
+      method: "thread/status/changed",
+      params: {
+        threadId: "thread-one",
+        status: { type: "systemError" },
+      },
+    },
+    {
+      method: "error",
+      params: {
+        threadId: "thread-one",
+        turnId: "turn-system-error",
+        willRetry: false,
+        error: {
+          message: "simulated failure",
+          codexErrorInfo: null,
+          additionalDetails: null,
+        },
+      },
+    },
+  ]);
+
+  try {
+    context.service.ensureWorker("session-one");
+    await eventually(
+      () => context.service.listLiveNotifications("session-one").length === 2,
+      "native error state notifications were not streamed",
+    );
+    assert.deepEqual(
+      context.service
+        .listLiveNotifications("session-one")
+        .map((update) =>
+          update.kind === "notification"
+            ? update.event.notification.method
+            : "",
+        ),
+      ["thread/status/changed", "error"],
     );
   } finally {
     await context.close();

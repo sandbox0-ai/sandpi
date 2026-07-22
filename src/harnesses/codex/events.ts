@@ -475,6 +475,7 @@ export function projectCodexTimeline(
   const turns = new Map<string, TurnState>();
   const seenSequences = new Set<number>();
   let projectionSequence = 0;
+  let projectedThreadStatus = thread?.status;
 
   const upsert = (entry: CodexTimelineEntry) => {
     const index = entryIndex.get(entry.id);
@@ -505,6 +506,59 @@ export function projectCodexTimeline(
     };
     turns.set(turnId, created);
     return created;
+  };
+
+  const finishProjectedTurn = (
+    state: TurnState,
+    status: Exclude<CodexTurn["status"], "inProgress">,
+    completedAt: UnixTimestamp,
+    detail?: string,
+  ) => {
+    state.status = status;
+    state.completedAt ??= completedAt;
+    state.durationMs ??= Math.max(
+      0,
+      (state.completedAt - state.startedAt) * 1_000,
+    );
+    state.sequence = ++projectionSequence;
+    state.activeItems.clear();
+    for (const entry of entries) {
+      if (entry.turnId !== state.id) continue;
+      if (entry.kind === "message" && entry.role === "assistant") {
+        if (entry.streaming) upsert({ ...entry, streaming: false });
+        continue;
+      }
+      if ("status" in entry && entry.status === "running") {
+        upsert({
+          ...entry,
+          status:
+            status === "failed"
+              ? "failed"
+              : status === "interrupted"
+                ? "interrupted"
+                : "completed",
+        });
+      }
+    }
+    if (status === "failed" || status === "interrupted") {
+      const existingResultIndex = entryIndex.get(`turn-result:${state.id}`);
+      const existingResult =
+        existingResultIndex === undefined
+          ? undefined
+          : entries[existingResultIndex];
+      upsert({
+        kind: "turnResult",
+        id: `turn-result:${state.id}`,
+        turnId: state.id,
+        createdAt: state.completedAt,
+        status,
+        detail:
+          detail ??
+          (existingResult?.kind === "turnResult"
+            ? existingResult.detail
+            : undefined),
+      });
+    }
   };
 
   const upsertAssistant = (
@@ -822,6 +876,7 @@ export function projectCodexTimeline(
 
     if (notification.method === "turn/started") {
       const { turn } = notification.params;
+      projectedThreadStatus = { type: "active", activeFlags: [] };
       const state = ensureTurn(
         turn.id,
         turn.startedAt ?? event.receivedAt,
@@ -835,6 +890,26 @@ export function projectCodexTimeline(
       state.sequence = projectionSequence;
       for (const item of turn.items) {
         upsertItem(item, turn.id, state.startedAt, "inProgress", true);
+      }
+      continue;
+    }
+
+    if (notification.method === "thread/status/changed") {
+      projectedThreadStatus = notification.params.status;
+      continue;
+    }
+
+    if (notification.method === "error") {
+      const { error, turnId, willRetry } = notification.params;
+      if (!willRetry) {
+        const state = ensureTurn(
+          turnId,
+          event.receivedAt,
+          "inProgress",
+          projectionSequence,
+        );
+        finishProjectedTurn(state, "failed", event.receivedAt, error.message);
+        projectedThreadStatus = { type: "systemError" };
       }
       continue;
     }
@@ -1060,7 +1135,32 @@ export function projectCodexTimeline(
     if (notification.method === "turn/completed") {
       const { turn } = notification.params;
       reconcileTurn(turn, event.receivedAt);
+      if (turn.status === "failed") {
+        projectedThreadStatus = { type: "systemError" };
+      } else if (projectedThreadStatus?.type !== "systemError") {
+        projectedThreadStatus = { type: "idle" };
+      }
     }
+  }
+
+  const newestTurn = [...turns.values()].sort(
+    (left, right) => right.sequence - left.sequence,
+  )[0];
+  if (newestTurn && projectedThreadStatus?.type === "systemError") {
+    finishProjectedTurn(
+      newestTurn,
+      "failed",
+      newestTurn.completedAt ?? newestTurn.startedAt,
+    );
+  } else if (
+    newestTurn?.status === "inProgress" &&
+    (projectedThreadStatus?.type === "idle" ||
+      projectedThreadStatus?.type === "notLoaded")
+  ) {
+    // Thread status is authoritative for whether work is still active. This
+    // fallback clears a stale spinner when a terminal turn notification was
+    // missed; a replacement native snapshot supplies the exact final state.
+    finishProjectedTurn(newestTurn, "completed", newestTurn.startedAt);
   }
 
   const activeState = [...turns.values()]
