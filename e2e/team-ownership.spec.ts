@@ -7,6 +7,7 @@ import {
 } from "../src/lib/mock-data";
 import type {
   CodingSession,
+  Environment,
   EnvironmentWorkspaceBackup,
 } from "../src/lib/types";
 
@@ -38,6 +39,7 @@ async function mockTeamWorkspace(
   const viewerId = options.viewerId ?? "user-yan";
   const pins = options.pins ?? new Map<string, Set<string>>();
   const environmentUpdates: Array<Record<string, unknown>> = [];
+  const createdEnvironments: Environment[] = [];
   const workspaceBackupCreates: string[] = [];
   const workspaceRestores: Array<{
     environmentId: string;
@@ -141,9 +143,65 @@ async function mockTeamWorkspace(
     route.fulfill({ json: modelCatalog }),
   );
   await page.route(
+    "**/api/v1/environments/*/harnesses/codex/account",
+    (route) => route.fulfill({ json: { data: null } }),
+  );
+  await page.route(
     "**/api/v1/environments/*/harnesses/codex/device-login",
     (route) => route.fulfill({ json: { data: null } }),
   );
+  await page.route(/\/api\/v1\/environments(?:\?.*)?$/, async (route) => {
+    if (route.request().method() === "GET") {
+      const environments = [
+        ...getMockBootstrap().environments,
+        ...createdEnvironments,
+      ].filter(
+        (environment) =>
+          activeTeamIds.has(environment.teamId) &&
+          (environment.visibility === "team" ||
+            environment.ownerId === viewerId),
+      );
+      await route.fulfill({ json: { data: environments } });
+      return;
+    }
+    if (route.request().method() === "POST") {
+      const input = route.request().postDataJSON() as Pick<
+        Environment,
+        "teamId" | "name" | "visibility"
+      >;
+      const template = getMockBootstrap().environments.find(
+        (environment) => environment.teamId === input.teamId,
+      );
+      if (!template) {
+        await route.fulfill({ status: 404, json: { error: "not found" } });
+        return;
+      }
+      const environment: Environment = {
+        ...structuredClone(template),
+        id: "env-created-e2e",
+        teamId: input.teamId,
+        ownerId: viewerId,
+        name: input.name,
+        visibility: input.visibility,
+        status: "updating",
+        sandboxState: "provisioning",
+        sandboxId: "",
+        workspaceVolumeId: "",
+        supervisorSessionId: "",
+        revision: 1,
+        credentialRevision: 0,
+        codingAgent: {
+          harness: "codex",
+          label: "Codex",
+          status: "not-connected",
+        },
+      };
+      createdEnvironments.push(environment);
+      await route.fulfill({ status: 201, json: { data: environment } });
+      return;
+    }
+    await route.fallback();
+  });
   await page.route(
     "**/api/v1/environments/*/workspace-backups/*/restore",
     async (route) => {
@@ -324,7 +382,11 @@ async function mockTeamWorkspace(
     route.fulfill({ json: modelCatalog }),
   );
 
-  return { environmentUpdates, workspaceBackupCreates, workspaceRestores };
+  return {
+    environmentUpdates,
+    workspaceBackupCreates,
+    workspaceRestores,
+  };
 }
 
 test("switches Team-visible and private Environments and shows Session owners", async ({
@@ -486,7 +548,45 @@ test("switches Team-visible and private Environments and shows Session owners", 
   await expect(
     page.getByText("New Environments are Team-visible by default."),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Close New Environment dialog" }).click();
+  await page.locator('input[name="name"]').fill("Onboarding lab");
+  const browserPageCount = page.context().pages().length;
+  await page
+    .getByRole("button", { name: "Create Environment" })
+    .click();
+
+  const onboardingSettings = page.getByRole("dialog", {
+    name: "Onboarding lab settings",
+  });
+  await expect(onboardingSettings).toHaveCount(0);
+  expect(page.context().pages()).toHaveLength(browserPageCount);
+
+  await expect(
+    page.getByRole("status").filter({
+      hasText: "Preparing Environment Workspace…",
+    }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("alert").filter({
+      hasText: "Preparing Environment Workspace…",
+    }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByText(
+      "Sign in once for this Environment. Every Session here will reuse its encrypted Codex credential.",
+    ),
+  ).toBeVisible();
+  await expect(
+    page.getByText(
+      "Connect Codex in Environment settings before starting a Session.",
+    ),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: "Connect Codex", exact: true }).click();
+  await expect(onboardingSettings).toBeVisible();
+  await expect(
+    onboardingSettings.getByRole("heading", {
+      name: "Agent harness & account",
+    }),
+  ).toBeVisible();
 
   expect(browserErrors).toEqual([]);
 });

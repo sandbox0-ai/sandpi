@@ -585,14 +585,13 @@ test("refreshes the Codex account and live limits after device login", async ({
   await page.goto(
     `/?team=${encodeURIComponent(environment.teamId)}&environment=${encodeURIComponent(environment.id)}&new=1`,
   );
-  await page
-    .getByRole("button", { name: `${environment.name} settings` })
-    .last()
-    .click();
+  await page.getByRole("button", { name: "Connect Codex", exact: true }).click();
   const settingsDialog = page.getByRole("dialog", {
     name: `${environment.name} settings`,
   });
-  await settingsDialog.getByRole("button", { name: "Agent harness" }).click();
+  await expect(
+    settingsDialog.getByRole("heading", { name: "Agent harness & account" }),
+  ).toBeVisible();
   await settingsDialog.getByRole("button", { name: "Connect Codex" }).click();
 
   await expect(
@@ -1919,17 +1918,26 @@ test("keeps Codex Session Activity native", async ({
     .getByLabel("Codex conversation", { exact: true })
     .getByRole("button", { name: environment.name, exact: true })
     .click();
-  const settingsDialog = page.getByRole("dialog", {
-    name: `${environment.name} settings`,
-  });
-  await expect(settingsDialog).toBeVisible();
   await expect(
-    settingsDialog.getByRole("button", { name: "Audit", exact: true }),
+    page.getByRole("heading", { name: "What should Codex work on?" }),
+  ).toBeVisible();
+  await expect.poll(() => {
+    const url = new URL(page.url());
+    return {
+      team: url.searchParams.get("team"),
+      environment: url.searchParams.get("environment"),
+      session: url.searchParams.get("session"),
+      newSession: url.searchParams.get("new"),
+    };
+  }).toEqual({
+    team: environment.teamId,
+    environment: environment.id,
+    session: null,
+    newSession: "1",
+  });
+  await expect(
+    page.getByRole("dialog", { name: `${environment.name} settings` }),
   ).toHaveCount(0);
-  await settingsDialog
-    .getByRole("button", { name: "Close Environment settings" })
-    .click();
-  await expect(settingsDialog).toBeHidden();
   await expect.poll(() => auditRequests).toBe(0);
   expect(browserErrors).toEqual([]);
 });

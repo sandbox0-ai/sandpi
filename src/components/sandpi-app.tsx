@@ -12,7 +12,10 @@ import {
 
 import { Conversation } from "@/components/conversation";
 import { AppFrame } from "@/components/app-frame";
-import { EnvironmentSettings } from "@/components/environment-settings";
+import {
+  EnvironmentSettings,
+  type EnvironmentSettingsTab,
+} from "@/components/environment-settings";
 import { Inspector, type InspectorTab } from "@/components/inspector";
 import { NewEnvironmentDialog } from "@/components/new-environment-dialog";
 import { NewSessionWorkspace } from "@/components/new-session-workspace";
@@ -89,9 +92,10 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
   const [selectedSessionId, setSelectedSessionId] = useState(
     initialData.selectedSessionId,
   );
-  const [settingsEnvironmentId, setSettingsEnvironmentId] = useState<
-    string | null
-  >(null);
+  const [settingsTarget, setSettingsTarget] = useState<{
+    environmentId: string;
+    initialTab: EnvironmentSettingsTab;
+  } | null>(null);
   const [newEnvironmentOpen, setNewEnvironmentOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(false);
@@ -369,18 +373,24 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
   const settingsEnvironment = useMemo(
     () =>
       teamEnvironments.find(
-        (environment) => environment.id === settingsEnvironmentId,
+        (environment) => environment.id === settingsTarget?.environmentId,
       ) ?? null,
-    [settingsEnvironmentId, teamEnvironments],
+    [settingsTarget?.environmentId, teamEnvironments],
   );
 
   const openEnvironmentSettings = useCallback(
-    (environmentId: string) => {
+    (
+      environmentId: string,
+      initialTab: EnvironmentSettingsTab = "general",
+    ) => {
       const environment = environments.find(
         (candidate) => candidate.id === environmentId,
       );
       if (environment && canManageEnvironment(environment)) {
-        setSettingsEnvironmentId(environmentId);
+        setSettingsTarget({
+          environmentId,
+          initialTab,
+        });
       }
     },
     [canManageEnvironment, environments],
@@ -402,7 +412,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
       setSelectedEnvironmentId(nextEnvironment?.id ?? "");
       setSelectedSessionId(nextSession?.id ?? "");
       if (nextSession) void hydrateSession(nextSession.id);
-      setSettingsEnvironmentId(null);
+      setSettingsTarget(null);
       setTerminalOpen(false);
       setSidebarOpen(false);
       if (nextEnvironment) {
@@ -445,6 +455,23 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
       setSidebarOpen(false);
     },
     [hydrateSession, selectedTeamId, sessions, teamEnvironments],
+  );
+
+  const handleNewSession = useCallback(
+    (environmentId: string) => {
+      if (
+        !teamEnvironments.some(
+          (environment) => environment.id === environmentId,
+        )
+      ) {
+        return;
+      }
+      setSelectedEnvironmentId(environmentId);
+      setSelectedSessionId("");
+      replaceWorkspaceUrl(selectedTeamId, environmentId);
+      setSidebarOpen(false);
+    },
+    [selectedTeamId, teamEnvironments],
   );
 
   const handleToggleNavigation = useCallback(() => {
@@ -535,7 +562,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
       setSessions((current) =>
         current.filter((session) => session.environmentId !== environmentId),
       );
-      setSettingsEnvironmentId(null);
+      setSettingsTarget(null);
       setTerminalOpen(false);
 
       if (selectedEnvironmentId === environmentId) {
@@ -765,12 +792,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
       onSelectSession={handleSelectSession}
       onSelectTeam={handleSelectTeam}
       onNewEnvironment={() => setNewEnvironmentOpen(true)}
-      onNewSession={(environmentId) => {
-        setSelectedEnvironmentId(environmentId);
-        setSelectedSessionId("");
-        replaceWorkspaceUrl(selectedTeam.id, environmentId);
-        setSidebarOpen(false);
-      }}
+      onNewSession={handleNewSession}
       onEnvironmentSettings={(environmentId) => {
         handleSelectEnvironment(environmentId);
         openEnvironmentSettings(environmentId);
@@ -893,12 +915,11 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
           inspectorOpen={showInspector}
           inspectorTab={inspectorTab}
           terminalOpen={showTerminal}
-          canManageEnvironment={canManageEnvironment(selectedEnvironment)}
           onToggleSidebar={handleToggleNavigation}
           onToggleInspector={() => handleInspectorOpenChange(!showInspector)}
           onInspectorTabChange={handleInspectorTabChange}
           onToggleTerminal={() => setTerminalOpen((open) => !open)}
-          onOpenSettings={() => openEnvironmentSettings(selectedEnvironment.id)}
+          onNewSession={() => handleNewSession(selectedEnvironment.id)}
           onOpenInspector={(tab) => {
             handleInspectorTabChange(tab);
             handleInspectorOpenChange(true);
@@ -919,6 +940,9 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
           onCreated={handleSessionCreated}
           onOpenSettings={() =>
             openEnvironmentSettings(selectedEnvironment.id)
+          }
+          onOpenAgentHarnessSettings={() =>
+            openEnvironmentSettings(selectedEnvironment.id, "credentials")
           }
           onToggleSidebar={handleToggleNavigation}
           terminalOpen={showTerminal}
@@ -952,6 +976,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
         <EnvironmentSettings
           key={settingsEnvironment.id}
           environment={settingsEnvironment}
+          initialTab={settingsTarget?.initialTab}
           teamName={selectedTeam.name}
           canChangeVisibility={settingsEnvironment.ownerId === initialData.viewer.id}
           language={preferences.general.language}
@@ -970,7 +995,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
           onWorkspaceRestore={handleEnvironmentWorkspaceRestore}
           onDelete={handleEnvironmentDeleted}
           onRestoreSession={handleRestoreSession}
-          onClose={() => setSettingsEnvironmentId(null)}
+          onClose={() => setSettingsTarget(null)}
         />
       ) : null}
 

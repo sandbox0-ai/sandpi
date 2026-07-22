@@ -16,12 +16,11 @@ interface ConversationProps {
   inspectorOpen: boolean;
   inspectorTab: InspectorTab;
   terminalOpen: boolean;
-  canManageEnvironment: boolean;
   onToggleSidebar: () => void;
   onToggleInspector: () => void;
   onInspectorTabChange: (tab: InspectorTab) => void;
   onToggleTerminal: () => void;
-  onOpenSettings: () => void;
+  onNewSession: () => void;
   onOpenInspector: (tab: InspectorTab) => void;
   workspaceNavigationRequest?: WorkspaceFileNavigationRequest;
   onOpenWorkspacePath: (path: string) => void;

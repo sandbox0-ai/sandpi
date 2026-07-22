@@ -4,6 +4,7 @@ import Image from "next/image";
 import {
   ArrowUp,
   GitFork,
+  KeyRound,
   LockKeyhole,
   LoaderCircle,
   Menu,
@@ -63,6 +64,7 @@ interface NewSessionWorkspaceProps {
   onEnvironmentChange: (environment: Environment) => void;
   onCreated: (session: CodexSession) => void;
   onOpenSettings: () => void;
+  onOpenAgentHarnessSettings: () => void;
   onToggleSidebar: () => void;
   terminalOpen: boolean;
   onToggleTerminal: () => void;
@@ -76,6 +78,7 @@ export function CodexNewSessionWorkspace({
   onEnvironmentChange,
   onCreated,
   onOpenSettings,
+  onOpenAgentHarnessSettings,
   onToggleSidebar,
   terminalOpen,
   onToggleTerminal,
@@ -231,9 +234,11 @@ export function CodexNewSessionWorkspace({
       return;
     }
     if (environment.codingAgent.status !== "connected") {
-      setError(
-        `Connect ${environment.codingAgent.label} in Environment settings before starting a Session.`,
-      );
+      if (canManageEnvironment) {
+        onOpenAgentHarnessSettings();
+      } else {
+        setError(ui.askAdminToConnect(environment.codingAgent.label));
+      }
       return;
     }
     if (!selectedModel || modelCatalogState !== "ready") {
@@ -507,13 +512,16 @@ export function CodexNewSessionWorkspace({
             onReasoningEffortChange={selectReasoningEffort}
             status={{
               state:
+                environment.codingAgent.status !== "connected" ||
                 modelCatalogState === "error"
                   ? "unavailable"
                   : modelCatalogState === "ready"
                     ? "ready"
                     : "loading",
               label:
-                modelCatalogState === "error"
+                environment.codingAgent.status !== "connected"
+                  ? ui.connectAgent(environment.codingAgent.label)
+                  : modelCatalogState === "error"
                   ? ui.modelsUnavailable
                   : modelCatalogState === "ready"
                     ? ui.environmentReady(environment.revision)
@@ -546,27 +554,48 @@ export function CodexNewSessionWorkspace({
           />
         </div>
 
-        {modelCatalogState === "loading" &&
-        environment.status === "ready" &&
-        environment.codingAgent.status === "connected" ? (
+        {environment.status === "updating" ||
+        (modelCatalogState === "loading" &&
+          environment.status === "ready" &&
+          environment.codingAgent.status === "connected") ? (
           <p className={styles.runtimeStatus} role="status">
             <LoaderCircle size={12} aria-hidden="true" />
-            {ui.startingAgent(environment.codingAgent.label)}
+            {environment.status === "updating"
+              ? ui.preparingEnvironment
+              : ui.startingAgent(environment.codingAgent.label)}
           </p>
         ) : null}
 
-        {error ||
-        modelCatalogError ||
-        environment.status !== "ready" ||
-        environment.codingAgent.status !== "connected" ? (
+        {environment.codingAgent.status === "not-connected" &&
+        environment.status !== "error" ? (
+          <div className={styles.setupNotice}>
+            <span className={styles.setupNoticeIcon} aria-hidden="true">
+              <KeyRound size={15} />
+            </span>
+            <div>
+              <strong>
+                {ui.connectAgent(environment.codingAgent.label)}
+              </strong>
+              <p>
+                {canManageEnvironment
+                  ? ui.connectAgentDescription(environment.codingAgent.label)
+                  : ui.askAdminToConnect(environment.codingAgent.label)}
+              </p>
+            </div>
+            {canManageEnvironment ? (
+              <button type="button" onClick={onOpenAgentHarnessSettings}>
+                {ui.connectAgent(environment.codingAgent.label)}
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+
+        {error || modelCatalogError || environment.status === "error" ? (
           <p className={styles.error} role="alert">
             {error ||
               modelCatalogError ||
-              (environment.status === "error"
-                ? environment.provisioningError ?? "Environment provisioning failed."
-                : environment.status === "updating"
-                  ? ui.preparingEnvironment
-                  : `Connect ${environment.codingAgent.label} in Environment settings before starting a Session.`)}
+              environment.provisioningError ||
+              "Environment provisioning failed."}
             {environment.status === "error" ? (
               <button
                 type="button"

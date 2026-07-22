@@ -62,7 +62,7 @@ import type {
   NetworkPolicy,
 } from "@/lib/types";
 
-type EnvironmentSettingsTab =
+export type EnvironmentSettingsTab =
   | "general"
   | "sandbox"
   | "archived-sessions"
@@ -73,6 +73,7 @@ type EnvironmentSettingsTab =
 
 interface EnvironmentSettingsProps {
   environment: Environment;
+  initialTab?: EnvironmentSettingsTab;
   teamName: string;
   canChangeVisibility: boolean;
   language: OperationLanguage;
@@ -201,6 +202,7 @@ function mergeCredentialProjection(
 
 export function EnvironmentSettings({
   environment,
+  initialTab = "general",
   teamName,
   canChangeVisibility,
   language,
@@ -213,7 +215,7 @@ export function EnvironmentSettings({
   onClose,
 }: EnvironmentSettingsProps) {
   const [activeTab, setActiveTab] =
-    useState<EnvironmentSettingsTab>("general");
+    useState<EnvironmentSettingsTab>(initialTab);
   const [draft, setDraft] = useState(environment);
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -270,13 +272,13 @@ export function EnvironmentSettings({
     : "No exceptions. All outbound destinations are allowed.";
 
   useEffect(() => {
-    setActiveTab("general");
+    setActiveTab(initialTab);
     setWorkspaceBackups([]);
     setWorkspaceBackupError("");
     setWorkspaceRestoreBackup(null);
     setWorkspaceRestoreName("");
     setWorkspaceRestoreSuccess("");
-  }, [environment.id]);
+  }, [environment.id, initialTab]);
 
   useEffect(() => {
     if (activeTab !== "sandbox") return;

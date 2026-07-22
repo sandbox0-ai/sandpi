@@ -325,6 +325,11 @@ const copy = {
       modelListFailed: "Could not load Codex models.",
       modelsUnavailable: "Models unavailable",
       waitForModels: "Wait for Codex to finish loading its model list.",
+      connectAgent: (agent: string) => `Connect ${agent}`,
+      connectAgentDescription: (agent: string) =>
+        `Sign in once for this Environment. Every Session here will reuse its encrypted ${agent} credential.`,
+      askAdminToConnect: (agent: string) =>
+        `Ask the Environment owner or a Team admin to connect ${agent}.`,
       starting: "Starting Session",
       sendAndStart: "Send instruction and start Session",
       starterLabel: "Starter instructions",
@@ -654,6 +659,11 @@ const copy = {
       modelListFailed: "无法加载 Codex 模型。",
       modelsUnavailable: "模型不可用",
       waitForModels: "请等待 Codex 完成启动并加载模型列表。",
+      connectAgent: (agent: string) => `连接 ${agent}`,
+      connectAgentDescription: (agent: string) =>
+        `为此环境登录一次；之后这里的所有 Session 都会复用加密保存的 ${agent} 凭据。`,
+      askAdminToConnect: (agent: string) =>
+        `请让环境所有者或 Team 管理员连接 ${agent}。`,
       starting: "正在启动会话",
       sendAndStart: "发送指令并启动会话",
       starterLabel: "入门指令",

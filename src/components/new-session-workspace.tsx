@@ -13,6 +13,7 @@ interface NewSessionWorkspaceProps {
   onEnvironmentChange: (environment: Environment) => void;
   onCreated: (session: CodingSession) => void;
   onOpenSettings: () => void;
+  onOpenAgentHarnessSettings: () => void;
   onToggleSidebar: () => void;
   terminalOpen: boolean;
   onToggleTerminal: () => void;

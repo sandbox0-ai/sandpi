@@ -318,7 +318,9 @@ pool.
 
 ### Connect Codex
 
-Open the Environment menu, choose **Agent harness**, and select **Connect Codex**.
+After creating an Environment, select **Connect Codex** on its New Session page
+or open **Agent harness** from Environment settings. Sandpi does not open setup
+or an external page until the user chooses that action.
 Sandpi starts the official Codex device-login protocol in a short-lived
 `coding-agent` Sandbox and displays the native verification URL and user code.
 The resulting `auth.json` becomes an encrypted Environment-scoped Credential
