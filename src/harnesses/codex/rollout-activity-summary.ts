@@ -1,3 +1,5 @@
+import JSON5 from "json5";
+
 import type { CodexRolloutToolActivity } from "./rollout-activity";
 
 export type CodexRolloutActionKind =
@@ -78,13 +80,28 @@ function parseJsonRecord(value: unknown): Record<string, unknown> | null {
   return objectRecord(value);
 }
 
-function findBalancedJsonObject(source: string, start: number) {
+function staticCodeModeObject(source: string, start: number) {
   if (source[start] !== "{") return null;
   let depth = 0;
-  let quote: '"' | null = null;
+  let quote: '"' | "'" | null = null;
   let escaped = false;
+  let lineComment = false;
+  let blockComment = false;
+
   for (let index = start; index < source.length; index += 1) {
     const character = source[index]!;
+    const next = source[index + 1];
+    if (lineComment) {
+      if (character === "\n" || character === "\r") lineComment = false;
+      continue;
+    }
+    if (blockComment) {
+      if (character === "*" && next === "/") {
+        blockComment = false;
+        index += 1;
+      }
+      continue;
+    }
     if (quote) {
       if (escaped) {
         escaped = false;
@@ -95,21 +112,40 @@ function findBalancedJsonObject(source: string, start: number) {
       }
       continue;
     }
-    if (character === '"') {
+    if (character === "/" && next === "/") {
+      lineComment = true;
+      index += 1;
+      continue;
+    }
+    if (character === "/" && next === "*") {
+      blockComment = true;
+      index += 1;
+      continue;
+    }
+    if (character === '"' || character === "'") {
       quote = character;
       continue;
     }
     if (character === "{") depth += 1;
-    if (character === "}") {
-      depth -= 1;
-      if (depth === 0) return source.slice(start, index + 1);
+    if (character !== "}") continue;
+    depth -= 1;
+    if (depth !== 0) continue;
+
+    let cursor = index + 1;
+    while (/\s/.test(source[cursor] ?? "")) cursor += 1;
+    if (source[cursor] !== ")") return null;
+    try {
+      return objectRecord(JSON5.parse(source.slice(start, index + 1)));
+    } catch {
+      // JSON5 accepts data-only JavaScript literals, never executable expressions.
+      return null;
     }
   }
   return null;
 }
 
 /**
- * Code-mode input is arbitrary JavaScript. Only accept a literal JSON object
+ * Code-mode input is arbitrary JavaScript. Only accept a static object literal
  * passed directly to a known tools call; never evaluate the source.
  */
 function staticCodeModeArguments(input: string, toolName: string) {
@@ -131,15 +167,8 @@ function staticCodeModeArguments(input: string, toolName: string) {
       }
       cursor += 1;
       while (/\s/.test(input[cursor] ?? "")) cursor += 1;
-      const literal = findBalancedJsonObject(input, cursor);
-      if (literal) {
-        try {
-          const parsed = objectRecord(JSON.parse(literal));
-          if (parsed) return parsed;
-        } catch {
-          // JavaScript object literals are deliberately not interpreted.
-        }
-      }
+      const parsed = staticCodeModeObject(input, cursor);
+      if (parsed) return parsed;
       offset = cursor + 1;
     }
   }

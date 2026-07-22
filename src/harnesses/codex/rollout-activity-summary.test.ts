@@ -72,6 +72,22 @@ test("summarizes a code-mode command without evaluating its JavaScript", () => {
   assert.equal(codexRolloutActivityFailed(activity), true);
 });
 
+test("summarizes current Codex JavaScript object-literal arguments", () => {
+  const activity = rollout({
+    codeModeTools: ["exec_command"],
+    callPayload: {
+      input:
+        'const r = await tools.exec_command({cmd:"npm run build",workdir:\'/workspace\',"yield_time_ms":30000,tty:true}); text(JSON.stringify(r));',
+    },
+  });
+
+  const summary = summarizeCodexRolloutActivity(activity);
+  assert.equal(summary.kind, "command");
+  assert.equal(summary.subject, "npm run build");
+  assert.equal(summary.command, "npm run build");
+  assert.equal(summary.cwd, "/workspace");
+});
+
 test("does not infer failure from an incidental exit trailer in program output", () => {
   const activity = rollout({
     codeModeTools: ["exec_command"],
@@ -129,6 +145,23 @@ test("falls back safely for non-JSON code-mode arguments", () => {
   delete globalThis.__sandpiActivityParserExecuted;
 });
 
+test("does not evaluate expressions inside object-literal arguments", () => {
+  globalThis.__sandpiActivityParserExecuted = false;
+  const activity = rollout({
+    codeModeTools: ["exec_command"],
+    callPayload: {
+      input:
+        'tools.exec_command({cmd:(globalThis.__sandpiActivityParserExecuted = true, "unsafe")});',
+    },
+  });
+
+  const summary = summarizeCodexRolloutActivity(activity);
+  assert.equal(summary.subject, "exec_command");
+  assert.equal(summary.command, null);
+  assert.equal(globalThis.__sandpiActivityParserExecuted, false);
+  delete globalThis.__sandpiActivityParserExecuted;
+});
+
 test("extracts patch paths from a static patch variable", () => {
   const activity = rollout({
     codeModeTools: ["apply_patch"],
@@ -157,7 +190,7 @@ test("links background command, wait, and terminal updates by native handles", (
       codeModeTools: ["exec_command"],
       callPayload: {
         input:
-          'tools.exec_command({"cmd":"npm run build","workdir":"/workspace"});',
+          'tools.exec_command({cmd:"npm run build",workdir:"/workspace"});',
       },
       outputs: [
         {
@@ -180,7 +213,7 @@ test("links background command, wait, and terminal updates by native handles", (
     rollout({
       codeModeTools: ["write_stdin"],
       callPayload: {
-        input: 'tools.write_stdin({"session_id":79113,"chars":"\\u0003"});',
+        input: 'tools.write_stdin({session_id:79113,chars:"\\u0003"});',
       },
     }),
   );

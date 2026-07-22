@@ -1593,7 +1593,7 @@ test("keeps Codex Session Activity native", async ({
             call_id: "call-e2e-rollout-exec",
             name: "exec",
             input:
-              'const r = await tools.exec_command({"cmd":"git status --short"});',
+              'const r = await tools.exec_command({cmd:"git status --short"});',
           },
           outputs: [
             {

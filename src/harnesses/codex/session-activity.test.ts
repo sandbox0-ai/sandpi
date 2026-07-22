@@ -375,8 +375,8 @@ test("restores the real 30-call rollout shape alongside its modeled file change"
       callPayload: {
         input:
           index === 11
-            ? 'const r = await tools.exec_command({"cmd":"command-11","workdir":"/workspace"}); text(`\\nexit=${r.exit_code}`);'
-            : `tools.exec_command({"cmd":"command-${index}","workdir":"/workspace"});`,
+            ? 'const r = await tools.exec_command({cmd:"command-11",workdir:"/workspace"}); text(`\\nexit=${r.exit_code}`);'
+            : `tools.exec_command({cmd:"command-${index}",workdir:"/workspace"});`,
       },
       outputs:
         index < 10
@@ -425,7 +425,7 @@ test("restores the real 30-call rollout shape alongside its modeled file change"
       callType: "custom_tool_call",
       codeModeTools: ["write_stdin"],
       callPayload: {
-        input: 'tools.write_stdin({"session_id":79113,"chars":""});',
+        input: 'tools.write_stdin({session_id:79113,chars:""});',
       },
     }),
     ...Array.from({ length: 10 }, (_, index) =>
