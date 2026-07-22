@@ -548,6 +548,12 @@ test("switches Team-visible and private Environments and shows Session owners", 
   await expect(
     page.getByText("New Environments are Team-visible by default."),
   ).toBeVisible();
+  await expect(
+    page.getByRole("group", { name: "Agent harness" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("group", { name: "Coding agent" }),
+  ).toHaveCount(0);
   await page.locator('input[name="name"]').fill("Onboarding lab");
   const browserPageCount = page.context().pages().length;
   await page

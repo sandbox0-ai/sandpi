@@ -196,7 +196,7 @@ export function NewEnvironmentDialog({
               <h1 id={titleId}>New Environment</h1>
               <p id={descriptionId}>
                 Create a reusable workspace for {teamName}. Every new Session inherits its
-                coding agent and Team ownership.
+                agent harness and Team ownership.
               </p>
             </div>
             <button
@@ -296,7 +296,7 @@ export function NewEnvironmentDialog({
             </fieldset>
 
             <fieldset className={styles.fieldset} disabled={creating}>
-              <legend>Coding agent</legend>
+              <legend>Agent harness</legend>
               <label className={styles.agentOption} aria-describedby={agentHelpId}>
                 <input
                   className={styles.agentRadio}
@@ -313,7 +313,7 @@ export function NewEnvironmentDialog({
                 <span className={styles.agentCopy}>
                   <span className={styles.agentEyebrow}>First supported harness</span>
                   <strong>Codex</strong>
-                  <small>Native coding harness</small>
+                  <small>Native agent harness</small>
                 </span>
                 <span className={styles.lockedBadge}>
                   <Check size={12} aria-hidden="true" /> Selected · locked
@@ -323,9 +323,9 @@ export function NewEnvironmentDialog({
               <p id={agentHelpId} className={styles.agentHelp}>
                 <LockKeyhole size={15} aria-hidden="true" />
                 <span>
-                  The coding agent is bound when this Environment is created. Every Session
-                  inherits Codex and cannot switch to another coding agent later. Future harnesses
-                  will be selected by creating a separate Environment.
+                  The agent harness is bound when this Environment is created. Every Session
+                  inherits Codex and cannot switch to another agent harness later. Future
+                  harnesses will be selected by creating a separate Environment.
                 </span>
               </p>
             </fieldset>
