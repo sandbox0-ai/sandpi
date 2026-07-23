@@ -16,10 +16,25 @@ import type { Sandbox } from "sandbox0";
 
 export const CODEX_ENVIRONMENT_CREDENTIAL_PATH =
   "/dev/shm/sandpi-codex-auth.json";
+export const CODEX_MCP_OAUTH_CALLBACK_PORT = 43_419;
+/** Codex appends a server-specific identifier below this callback base path. */
+export const CODEX_MCP_OAUTH_CALLBACK_BASE_PATH = "/callback";
 
 export type Sandbox0NetworkPolicy = Parameters<
   Sandbox["updateNetworkPolicy"]
 >[0];
+export type Sandbox0AppService = Parameters<
+  Sandbox["updateServices"]
+>[0][number];
+export type Sandbox0AppServiceView = Awaited<
+  ReturnType<Sandbox["getServices"]>
+>["services"][number];
+
+export interface RuntimeMcpOAuthCallbackService {
+  port: number;
+  publicUrl: string;
+}
+
 export interface ProvisionedEnvironment {
   sandboxId: string;
   workspaceVolumeId: string;
@@ -88,6 +103,10 @@ export interface RuntimeAdapter {
     runtime: EnvironmentRuntimeRecord,
     memoryMiB: number,
   ): Promise<void>;
+  ensureEnvironmentMcpOAuthCallbackService(
+    runtime: EnvironmentRuntimeRecord,
+    input: { port: number },
+  ): Promise<RuntimeMcpOAuthCallbackService>;
   createEnvironmentWorkspaceBackup(
     runtime: EnvironmentRuntimeRecord,
     input: { name: string; description: string },

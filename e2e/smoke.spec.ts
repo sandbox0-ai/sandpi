@@ -617,7 +617,8 @@ test("refreshes the Codex account and live limits after device login", async ({
   expect(completedEnvironmentRefreshes).toBeGreaterThan(0);
 });
 
-test("lists native MCP servers and toggles user-level definitions", async ({
+test("connects native MCP OAuth and toggles user-level definitions", async ({
+  context,
   page,
   request,
 }) => {
@@ -630,9 +631,39 @@ test("lists native MCP servers and toggles user-level definitions", async ({
 
   let enabled = true;
   let submitted: unknown;
+  let loginSubmitted = false;
+  let linearConnected = false;
+  await context.route("https://linear.example.test/**", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "text/html",
+      body: "<title>Linear connected</title>",
+    });
+  });
   await page.route(
     `**/api/v1/environments/${encodeURIComponent(environment.id)}/harnesses/codex/mcp-servers**`,
     async (route) => {
+      const requestUrl = new URL(route.request().url());
+      if (
+        route.request().method() === "POST" &&
+        requestUrl.pathname.endsWith("/linear/oauth/login")
+      ) {
+        loginSubmitted = true;
+        linearConnected = true;
+        await route.fulfill({
+          status: 202,
+          contentType: "application/json",
+          body: JSON.stringify({
+            data: {
+              name: "linear",
+              authorizationUrl:
+                "https://linear.example.test/oauth/authorize?state=e2e",
+              expiresAt: Date.now() / 1_000 + 300,
+            },
+          }),
+        });
+        return;
+      }
       if (route.request().method() === "PUT") {
         submitted = route.request().postDataJSON();
         enabled = false;
@@ -653,6 +684,20 @@ test("lists native MCP servers and toggles user-level definitions", async ({
                 authStatus: "unknown",
                 runtimeStatus: "unavailable",
                 toolCount: 0,
+                resourceCount: 0,
+              },
+              {
+                name: "linear",
+                transport: "streamable-http",
+                args: [],
+                url: "https://mcp.linear.app/mcp",
+                enabled: true,
+                managed: true,
+                runtimeStatus: linearConnected
+                  ? "connected"
+                  : "authentication-required",
+                serverTitle: linearConnected ? "Linear" : undefined,
+                toolCount: linearConnected ? 12 : 0,
                 resourceCount: 0,
               },
               {
@@ -696,6 +741,23 @@ test("lists native MCP servers and toggles user-level definitions", async ({
   await expect(settingsDialog.getByText("Read only")).toBeVisible();
   await expect(
     settingsDialog.getByRole("button", { name: /Configure|Add MCP/ }),
+  ).toHaveCount(0);
+
+  const popupPromise = page.waitForEvent("popup");
+  await settingsDialog
+    .getByRole("button", { name: "Connect linear" })
+    .click();
+  const popup = await popupPromise;
+  await popup.waitForURL(
+    "https://linear.example.test/oauth/authorize?state=e2e",
+  );
+  expect(loginSubmitted).toBe(true);
+  await expect(
+    settingsDialog.getByText("Linear", { exact: true }),
+  ).toBeVisible();
+  await expect(settingsDialog.getByText("12 tools")).toBeVisible();
+  await expect(
+    settingsDialog.getByRole("button", { name: "Connect linear" }),
   ).toHaveCount(0);
 
   await settingsDialog.getByRole("switch", { name: "Disable docs" }).click();

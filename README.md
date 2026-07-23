@@ -343,17 +343,23 @@ It does not place the credential in the Environment Workspace Volume.
 
 ### Configure MCP servers
 
-Codex native configuration is the only source of truth for MCP servers. Add,
-remove or authenticate servers through Codex `config.toml` or the Codex CLI.
+Codex native configuration is the only source of truth for MCP servers. Add or
+remove servers through Codex `config.toml` or the Codex CLI.
 Open **Environment Settings → MCP servers** to inspect the effective native
 inventory, refresh its runtime status, and enable or disable definitions from
-the Environment's user layer. Project and admin definitions are visible but
-read-only.
+the Environment's user layer. A remote server that reports **Sign-in required**
+can start Codex's native OAuth flow from the same list. Project and admin
+definitions are visible but read-only, while their native OAuth connection
+remains available when required.
 
 Sandpi does not maintain an MCP catalog, copy definitions into PostgreSQL,
 store MCP API keys or OAuth tokens, or apply a separate MCP tool policy.
 Authentication and tool behavior remain native to Codex and the MCP provider.
-Environment network settings continue to control ordinary sandbox egress.
+For a remote Environment, Sandpi publishes a constrained, rate-limited
+Sandbox0 callback route so the browser can return to Codex's listener. The
+callback cannot auto-resume a paused Environment and no OAuth flow or token is
+projected into Sandpi storage. Environment network settings continue to control
+ordinary sandbox egress.
 
 Local STDIO servers run beside Codex with access to the Environment Workspace.
 Treat their command and package as trusted code.

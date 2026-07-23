@@ -154,6 +154,7 @@ interface Fixture {
     path: string;
     nativeSessionId: string;
   }>;
+  mcpOAuthCallbacks: Array<{ port: number }>;
   exceptionalCandidateQueryCount(): number;
   lifecycleLockActive(): boolean;
   runtimeRecoveryCount(): number;
@@ -262,6 +263,7 @@ function fixture(
     authoritativeEpochFence?: boolean;
     rollouts?: Record<string, string | Error | Promise<string>>;
     credentials?: CodexCredentialProvider;
+    mcpOAuthCallbackPublicUrl?: string;
   } = {},
 ): Fixture {
   const initial = input.sessions ?? [
@@ -343,6 +345,7 @@ function fixture(
     ...(input.exceptionalCandidateErrors ?? []),
   ];
   const rolloutReads: Fixture["rolloutReads"] = [];
+  const mcpOAuthCallbacks: Fixture["mcpOAuthCallbacks"] = [];
   let exceptionalCandidateQueries = 0;
   let lifecycleLockDepth = 0;
   let runtimeRecoveries = 0;
@@ -921,6 +924,18 @@ function fixture(
       return "{}";
     },
     async installCodexEnvironmentCredential() {},
+    async ensureEnvironmentMcpOAuthCallbackService(
+      _runtime: StoredEnvironmentRuntime,
+      callback: { port: number },
+    ) {
+      mcpOAuthCallbacks.push(callback);
+      return {
+        port: callback.port,
+        publicUrl:
+          input.mcpOAuthCallbackPublicUrl ??
+          "https://oauth-callback.example.test",
+      };
+    },
     async writeCodexMessage(
       runtime: StoredEnvironmentRuntime,
       value: unknown,
@@ -1046,6 +1061,7 @@ function fixture(
     recoveryLockEvents,
     streamStarts,
     rolloutReads,
+    mcpOAuthCallbacks,
     exceptionalCandidateQueryCount: () => exceptionalCandidateQueries,
     lifecycleLockActive: () => lifecycleLockDepth > 0,
     runtimeRecoveryCount: () => runtimeRecoveries,
@@ -4031,6 +4047,203 @@ test("lists native MCP definitions and toggles only the user layer", async () =>
       (error) =>
         error instanceof HttpError &&
         error.code === "codex_mcp_server_not_managed",
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("starts native MCP OAuth with a constrained remote callback", async () => {
+  const context = fixture({
+    onRequest(message) {
+      if (message.method === "config/read") {
+        const linear = {
+          url: "https://mcp.linear.app/mcp",
+          enabled: true,
+        };
+        return {
+          id: message.id,
+          result: {
+            config: { mcp_servers: { linear } },
+            layers: [
+              {
+                name: { type: "user", profile: null },
+                config: { mcp_servers: { linear } },
+              },
+            ],
+          },
+        };
+      }
+      if (message.method === "mcpServerStatus/list") {
+        return {
+          id: message.id,
+          result: {
+            data: [
+              {
+                name: "linear",
+                serverInfo: null,
+                tools: {},
+                resources: [],
+                resourceTemplates: [],
+                authStatus: "notLoggedIn",
+              },
+            ],
+            nextCursor: null,
+          },
+        };
+      }
+      if (message.method === "config/batchWrite") {
+        return { id: message.id, result: { status: "ok" } };
+      }
+      if (message.method === "mcpServer/oauth/login") {
+        return {
+          id: message.id,
+          result: {
+            authorizationUrl:
+              "https://linear.example.test/oauth/authorize?state=test",
+          },
+        };
+      }
+      return undefined;
+    },
+  });
+  try {
+    const startedAt = Date.now() / 1_000;
+    const login = await context.service.startEnvironmentMcpServerOAuthLogin({
+      userId: "user",
+      environmentId: environment.id,
+      name: "linear",
+    });
+
+    assert.equal(login.name, "linear");
+    assert.equal(
+      login.authorizationUrl,
+      "https://linear.example.test/oauth/authorize?state=test",
+    );
+    assert.ok(login.expiresAt >= startedAt + 299);
+    assert.ok(login.expiresAt <= startedAt + 301);
+    assert.deepEqual(context.mcpOAuthCallbacks, [{ port: 43_419 }]);
+
+    const configWrite = context.writes.find(
+      ({ message }) => message.method === "config/batchWrite",
+    );
+    assert.deepEqual(configWrite?.message.params, {
+      edits: [
+        {
+          keyPath: "mcp_oauth_credentials_store",
+          value: "file",
+          mergeStrategy: "replace",
+        },
+        {
+          keyPath: "mcp_oauth_callback_port",
+          value: 43_419,
+          mergeStrategy: "replace",
+        },
+        {
+          keyPath: "mcp_oauth_callback_url",
+          value: "https://oauth-callback.example.test/callback/",
+          mergeStrategy: "replace",
+        },
+      ],
+      reloadUserConfig: true,
+    });
+    const loginWrite = context.writes.find(
+      ({ message }) => message.method === "mcpServer/oauth/login",
+    );
+    assert.deepEqual(loginWrite?.message.params, {
+      name: "linear",
+      timeoutSecs: 300,
+    });
+  } finally {
+    await context.close();
+  }
+});
+
+test("rejects an unsafe Sandbox0 MCP OAuth callback URL", async () => {
+  const context = fixture({
+    mcpOAuthCallbackPublicUrl: "http://oauth.example.test",
+    onRequest(message) {
+      if (message.method === "config/read") {
+        const linear = {
+          url: "https://mcp.linear.app/mcp",
+          enabled: true,
+        };
+        return {
+          id: message.id,
+          result: {
+            config: { mcp_servers: { linear } },
+            layers: [
+              {
+                name: { type: "user", profile: null },
+                config: { mcp_servers: { linear } },
+              },
+            ],
+          },
+        };
+      }
+      if (message.method === "mcpServerStatus/list") {
+        return {
+          id: message.id,
+          result: {
+            data: [
+              {
+                name: "linear",
+                serverInfo: null,
+                tools: {},
+                resources: [],
+                resourceTemplates: [],
+                authStatus: "notLoggedIn",
+              },
+            ],
+            nextCursor: null,
+          },
+        };
+      }
+      return undefined;
+    },
+  });
+  try {
+    await assert.rejects(
+      context.service.startEnvironmentMcpServerOAuthLogin({
+        userId: "user",
+        environmentId: environment.id,
+        name: "linear",
+      }),
+      (error) =>
+        error instanceof HttpError &&
+        error.code === "sandbox0_mcp_oauth_callback_url_invalid",
+    );
+    assert.equal(
+      context.writes.some(
+        ({ message }) => message.method === "config/batchWrite",
+      ),
+      false,
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("reloads native MCP servers after OAuth completes", async () => {
+  const context = fixture();
+  try {
+    context.enqueue([
+      {
+        method: "mcpServer/oauthLogin/completed",
+        params: {
+          name: "linear",
+          threadId: null,
+          success: true,
+        },
+      },
+    ]);
+    context.service.ensureWorker("session-one");
+    await eventually(
+      () =>
+        context.writes.some(
+          ({ message }) => message.method === "config/mcpServer/reload",
+        ),
+      "successful MCP OAuth did not reload native servers",
     );
   } finally {
     await context.close();

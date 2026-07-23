@@ -6,7 +6,11 @@ import { APIError } from "sandbox0";
 
 import type { Environment } from "@/lib/types";
 import { createSandbox0FetchWithRetry, Sandbox0Runtime } from "./sandbox0";
-import type { EnvironmentRuntimeRecord } from "./types";
+import {
+  CODEX_MCP_OAUTH_CALLBACK_BASE_PATH,
+  CODEX_MCP_OAUTH_CALLBACK_PORT,
+  type EnvironmentRuntimeRecord,
+} from "./types";
 
 const environment: Environment = {
   id: "environment-test",
@@ -212,7 +216,7 @@ test("disables Environment TTLs and executes Sandpi-owned pause", async () => {
   assert.equal(paused, true);
 });
 
- test("updates the existing Environment Sandbox memory", async () => {
+test("updates the existing Environment Sandbox memory", async () => {
   const updates: Array<{ sandboxId: string; memory: string }> = [];
   const runtime = runtimeWithClient({
     sandboxes: {
@@ -239,6 +243,131 @@ test("disables Environment TTLs and executes Sandpi-owned pause", async () => {
   assert.deepEqual(updates, [
     { sandboxId: "sandbox-environment", memory: "8192Mi" },
   ]);
+});
+
+test("preserves unrelated services and installs a constrained MCP OAuth callback", async () => {
+  assert.equal(CODEX_MCP_OAUTH_CALLBACK_BASE_PATH, "/callback");
+  let replacement: unknown;
+  const unrelated = {
+    id: "preview",
+    displayName: "Preview",
+    port: 3000,
+    runtime: { type: "manual" as const },
+    ingress: {
+      _public: true,
+      routes: [{ id: "preview", pathPrefix: "/", resume: true }],
+    },
+    publishable: true,
+    publicUrl: "https://preview.example.invalid",
+  };
+  const staleCallback = {
+    id: "sandpi-codex-mcp-oauth",
+    port: 1234,
+    runtime: { type: "manual" as const },
+    ingress: { _public: false, routes: [] },
+    publishable: false,
+  };
+  const runtime = runtimeWithClient({
+    sandboxes: {
+      sandbox(sandboxId: string) {
+        assert.equal(sandboxId, "sandbox-environment");
+        return {
+          async getServices() {
+            return {
+              sandboxId,
+              services: [unrelated, staleCallback],
+            };
+          },
+          async updateServices(services: unknown[]) {
+            replacement = services;
+            return {
+              sandboxId,
+              services: services.map((service) => {
+                const candidate = service as { id: string };
+                return {
+                  ...candidate,
+                  publishable: true,
+                  publicUrl:
+                    candidate.id === "sandpi-codex-mcp-oauth"
+                      ? "https://oauth.example.invalid"
+                      : "https://preview.example.invalid",
+                };
+              }),
+            };
+          },
+        };
+      },
+    },
+  });
+  const coordinates: EnvironmentRuntimeRecord = {
+    id: environment.id,
+    sandboxId: environment.sandboxId,
+    workspaceVolumeId: environment.workspaceVolumeId,
+    runtimeGeneration: 1,
+    decoder: {
+      supervisorCursor: 0,
+      tailBase64: "",
+      runtimeGeneration: 1,
+    },
+  };
+
+  const callback = await runtime.ensureEnvironmentMcpOAuthCallbackService(
+    coordinates,
+    { port: CODEX_MCP_OAUTH_CALLBACK_PORT },
+  );
+
+  assert.deepEqual(callback, {
+    port: CODEX_MCP_OAUTH_CALLBACK_PORT,
+    publicUrl: "https://oauth.example.invalid",
+  });
+  assert.deepEqual(replacement, [
+    {
+      id: "preview",
+      displayName: "Preview",
+      port: 3000,
+      runtime: {
+        type: "manual",
+        command: undefined,
+        envVars: undefined,
+      },
+      ingress: {
+        _public: true,
+        routes: [
+          {
+            id: "preview",
+            pathPrefix: "/",
+            resume: true,
+            methods: undefined,
+            auth: undefined,
+            cors: undefined,
+            rateLimit: undefined,
+          },
+        ],
+      },
+      healthCheck: undefined,
+    },
+    {
+      id: "sandpi-codex-mcp-oauth",
+      displayName: "Codex MCP OAuth callback",
+      port: CODEX_MCP_OAUTH_CALLBACK_PORT,
+      runtime: { type: "manual" },
+      ingress: {
+        _public: true,
+        routes: [
+          {
+            id: "oauth-callback",
+            pathPrefix: `${CODEX_MCP_OAUTH_CALLBACK_BASE_PATH}/`,
+            methods: ["GET"],
+            auth: { mode: "none" },
+            rateLimit: { rps: 5, burst: 10 },
+            resume: false,
+          },
+        ],
+      },
+    },
+  ]);
+  assert.equal(JSON.stringify(replacement).includes("publicUrl"), false);
+  assert.equal(JSON.stringify(replacement).includes("publishable"), false);
 });
 
 test("creates, restores and deletes native snapshots for the Environment Workspace Volume", async () => {

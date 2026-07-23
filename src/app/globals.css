@@ -4847,6 +4847,33 @@ code.codex-compact-activity-subject {
   white-space: nowrap;
 }
 
+.codex-mcp-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.codex-mcp-actions .secondary-action-button {
+  height: 29px;
+  padding: 0 9px;
+  font-size: 9px;
+}
+
+.codex-mcp-auth-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+  color: var(--accent);
+  font-size: 9.5px;
+  font-weight: 620;
+  text-decoration: none;
+}
+
+.codex-mcp-auth-link:hover {
+  text-decoration: underline;
+}
+
 .codex-extension-main > p {
   overflow: hidden;
   margin: 4px 0 0;

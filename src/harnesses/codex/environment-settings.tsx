@@ -1,11 +1,18 @@
 "use client";
 
-import { AlertTriangle, RefreshCw, Server, Sparkles } from "lucide-react";
+import {
+  AlertTriangle,
+  ExternalLink,
+  RefreshCw,
+  Server,
+  Sparkles,
+} from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
 import type {
   CodexEnvironmentSkill,
   CodexMcpInventory,
+  CodexMcpOAuthLogin,
   CodexMcpServer,
   CodexSkillsInventory,
 } from "@/harnesses/codex/environment-tools";
@@ -189,7 +196,16 @@ export function CodexMcpSettings({
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [busyName, setBusyName] = useState("");
+  const [login, setLogin] = useState<CodexMcpOAuthLogin | null>(null);
   const [error, setError] = useState("");
+
+  const fetchInventory = useCallback(
+    () =>
+      apiFetch<ApiEnvelope<CodexMcpInventory>>(
+        `/api/v1/environments/${encodeURIComponent(environmentId)}/harnesses/codex/mcp-servers`,
+      ),
+    [environmentId],
+  );
 
   const load = useCallback(
     async (force = false) => {
@@ -200,9 +216,7 @@ export function CodexMcpSettings({
       }
       setError("");
       try {
-        const response = await apiFetch<ApiEnvelope<CodexMcpInventory>>(
-          `/api/v1/environments/${encodeURIComponent(environmentId)}/harnesses/codex/mcp-servers`,
-        );
+        const response = await fetchInventory();
         setInventory(response.data);
       } catch (loadError) {
         setError(errorMessage(loadError, "Could not load Codex MCP servers."));
@@ -211,15 +225,61 @@ export function CodexMcpSettings({
         setRefreshing(false);
       }
     },
-    [environmentId],
+    [fetchInventory],
   );
 
   useEffect(() => {
     void load();
   }, [load]);
 
+  useEffect(() => {
+    if (!login) return;
+    let stopped = false;
+    let timer: number | undefined;
+
+    const poll = async () => {
+      if (Date.now() >= login.expiresAt * 1_000) {
+        setLogin(null);
+        setError(
+          `Sign-in for ${login.name} expired. Start a new connection attempt.`,
+        );
+        return;
+      }
+      try {
+        const response = await fetchInventory();
+        if (stopped) return;
+        setInventory(response.data);
+        const server = response.data.servers.find(
+          (candidate) => candidate.name === login.name,
+        );
+        if (server?.runtimeStatus === "connected") {
+          setLogin(null);
+          setError("");
+          return;
+        }
+        if (!server || !server.enabled) {
+          setLogin(null);
+          setError(
+            `${login.name} is no longer enabled in the Codex MCP configuration.`,
+          );
+          return;
+        }
+      } catch {
+        // The native login remains authoritative. A transient status read can
+        // retry until the bounded OAuth attempt expires.
+      }
+      if (!stopped) timer = window.setTimeout(() => void poll(), 1_000);
+    };
+
+    timer = window.setTimeout(() => void poll(), 750);
+    return () => {
+      stopped = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [fetchInventory, login]);
+
   async function setEnabled(server: CodexMcpServer, enabled: boolean) {
-    if (busyName || !server.managed) return;
+    if (busyName || login || !server.managed) return;
     setBusyName(server.name);
     setError("");
     try {
@@ -234,6 +294,41 @@ export function CodexMcpSettings({
     } catch (updateError) {
       setError(
         errorMessage(updateError, "Could not update the Codex MCP server."),
+      );
+    } finally {
+      setBusyName("");
+    }
+  }
+
+  async function startOAuthLogin(server: CodexMcpServer) {
+    if (
+      busyName ||
+      login ||
+      server.runtimeStatus !== "authentication-required"
+    ) {
+      return;
+    }
+    const popup = window.open("about:blank", "_blank");
+    if (popup) {
+      popup.opener = null;
+      popup.document.title = `Connect ${server.name}`;
+      popup.document.body.textContent = "Preparing secure sign-in…";
+    }
+    setBusyName(server.name);
+    setError("");
+    try {
+      const response = await apiFetch<ApiEnvelope<CodexMcpOAuthLogin>>(
+        `/api/v1/environments/${encodeURIComponent(environmentId)}/harnesses/codex/mcp-servers/${encodeURIComponent(server.name)}/oauth/login`,
+        { method: "POST" },
+      );
+      setLogin(response.data);
+      if (popup && !popup.closed) {
+        popup.location.replace(response.data.authorizationUrl);
+      }
+    } catch (loginError) {
+      popup?.close();
+      setError(
+        errorMessage(loginError, "Could not start Codex MCP sign-in."),
       );
     } finally {
       setBusyName("");
@@ -263,7 +358,9 @@ export function CodexMcpSettings({
                   <strong>{server.serverTitle ?? server.name}</strong>
                   <span>{server.transport}</span>
                   <span className={`codex-mcp-status is-${server.runtimeStatus}`}>
-                    {mcpStatusLabel(server)}
+                    {login?.name === server.name
+                      ? "Waiting for sign-in"
+                      : mcpStatusLabel(server)}
                   </span>
                 </div>
                 {server.serverTitle && server.serverTitle !== server.name ? (
@@ -278,17 +375,41 @@ export function CodexMcpSettings({
                     <span>{server.resourceCount} resources</span>
                   </div>
                 ) : null}
+                {login?.name === server.name ? (
+                  <a
+                    className="codex-mcp-auth-link"
+                    href={login.authorizationUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Continue sign-in
+                    <ExternalLink size={11} aria-hidden="true" />
+                  </a>
+                ) : null}
               </div>
-              {server.managed ? (
-                <NativeToggle
-                  label={`${server.enabled ? "Disable" : "Enable"} ${server.name}`}
-                  checked={server.enabled}
-                  disabled={Boolean(busyName)}
-                  onChange={(enabled) => void setEnabled(server, enabled)}
-                />
-              ) : (
-                <span className="codex-extension-read-only">Read only</span>
-              )}
+              <div className="codex-mcp-actions">
+                {server.runtimeStatus === "authentication-required" ? (
+                  <button
+                    type="button"
+                    className="secondary-action-button"
+                    aria-label={`Connect ${server.name}`}
+                    disabled={Boolean(busyName || login)}
+                    onClick={() => void startOAuthLogin(server)}
+                  >
+                    {login?.name === server.name ? "Waiting…" : "Connect"}
+                  </button>
+                ) : null}
+                {server.managed ? (
+                  <NativeToggle
+                    label={`${server.enabled ? "Disable" : "Enable"} ${server.name}`}
+                    checked={server.enabled}
+                    disabled={Boolean(busyName || login)}
+                    onChange={(enabled) => void setEnabled(server, enabled)}
+                  />
+                ) : (
+                  <span className="codex-extension-read-only">Read only</span>
+                )}
+              </div>
             </article>
           ))}
         </div>
@@ -301,7 +422,8 @@ export function CodexMcpSettings({
       )}
       <p className="settings-footnote">
         Codex configuration is the source of truth. Sandpi only discovers
-        servers and writes native enablement for user-level definitions.
+        servers, starts native OAuth, and writes native enablement for user-level
+        definitions.
       </p>
     </div>
   );

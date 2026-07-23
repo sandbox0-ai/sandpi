@@ -300,10 +300,18 @@ the native `enabled` value for definitions in the user configuration layer.
 Project and admin definitions remain visible and read-only.
 
 There is no Sandpi MCP catalog, integration record, credential store, OAuth
-callback, endpoint-consent record or tool allowlist. Remote authentication is
-handled by Codex and the provider. Ordinary Environment network policy remains
-the sandbox egress boundary, but it is not composed with MCP-specific
-credentials or protocol rules.
+flow projection, endpoint-consent record or tool allowlist. Remote
+authentication is handled by Codex and the provider. Sandpi starts the native
+`mcpServer/oauth/login` request and exposes only Codex's callback listener
+through a constrained Sandbox0 manual app service because a browser cannot
+reach the remote Sandbox's loopback address. The public route accepts only
+rate-limited callback GETs and cannot auto-resume the Environment. The
+short-lived attempt and resulting credential remain native Codex state; Sandpi
+stores neither in PostgreSQL. A successful native completion queues
+`config/mcpServer/reload` so loaded Threads receive the new tool surface on
+their next active Turn. Ordinary Environment network policy remains the
+sandbox egress boundary, but it is not composed with MCP-specific credentials
+or protocol rules.
 
 Local STDIO definitions remain inside the native harness trust boundary. Codex
 launches those processes in the Environment Sandbox, where they can access the

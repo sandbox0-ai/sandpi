@@ -17,6 +17,7 @@ import type {
   CodexCreditsSnapshot,
   CodexEnvironmentSkill,
   CodexMcpInventory,
+  CodexMcpOAuthLogin,
   CodexMcpServer,
   CodexMcpTransport,
   CodexRateLimitSnapshot,
@@ -32,6 +33,10 @@ import { HttpError } from "@/server/http-error";
 import type {
   EnvironmentRuntimeRecord,
   RuntimeAdapter,
+} from "@/server/runtime/types";
+import {
+  CODEX_MCP_OAUTH_CALLBACK_BASE_PATH,
+  CODEX_MCP_OAUTH_CALLBACK_PORT,
 } from "@/server/runtime/types";
 import {
   SandpiStore,
@@ -75,6 +80,7 @@ const CODEX_ROLLOUT_ROOTS = [
 ] as const;
 const CODEX_ROLLOUT_READ_TIMEOUT_MS = 30_000;
 const CODEX_MCP_SERVER_NAME = /^[A-Za-z0-9_-]{1,64}$/;
+const CODEX_MCP_OAUTH_TIMEOUT_SECONDS = 5 * 60;
 const MAX_CODEX_RATE_LIMIT_BUCKETS = 16;
 const CODEX_ACCOUNT_PLAN_TYPES = new Set<CodexAccountPlanType>([
   "free",
@@ -211,6 +217,7 @@ export class CodexService {
   >();
   private readonly initializing = new Map<string, Promise<void>>();
   private readonly credentialSyncs = new Map<string, Promise<void>>();
+  private readonly mcpReloads = new Map<string, Promise<void>>();
   private readonly rpcResponses = new Map<
     string,
     Map<string, Record<string, unknown>>
@@ -616,6 +623,124 @@ export class CodexService {
     return this.readEnvironmentMcpInventory(input.environmentId, runtime);
   }
 
+  async startEnvironmentMcpServerOAuthLogin(input: {
+    userId: string;
+    environmentId: string;
+    name: string;
+  }): Promise<CodexMcpOAuthLogin> {
+    const runtime = await this.environmentRuntimeForEnvironment(
+      input.userId,
+      input.environmentId,
+    );
+    const name = requireMcpServerName(input.name);
+    const inventory = await this.readEnvironmentMcpInventory(
+      input.environmentId,
+      runtime,
+    );
+    const server = inventory.servers.find(
+      (candidate) => candidate.name === name,
+    );
+    if (!server) {
+      throw new HttpError(
+        404,
+        "codex_mcp_server_not_found",
+        "This MCP server is not present in the Environment Codex configuration.",
+      );
+    }
+    if (!server.enabled) {
+      throw new HttpError(
+        409,
+        "codex_mcp_server_disabled",
+        "Enable this MCP server before connecting it.",
+      );
+    }
+    if (server.transport !== "streamable-http") {
+      throw new HttpError(
+        409,
+        "codex_mcp_oauth_unsupported",
+        "OAuth login is available only for streamable HTTP MCP servers.",
+      );
+    }
+    if (server.runtimeStatus !== "authentication-required") {
+      throw new HttpError(
+        409,
+        server.runtimeStatus === "connected"
+          ? "codex_mcp_server_already_connected"
+          : "codex_mcp_oauth_unavailable",
+        server.runtimeStatus === "connected"
+          ? "This MCP server is already connected."
+          : "Codex did not report that this MCP server supports OAuth login.",
+      );
+    }
+
+    const callback =
+      await this.runtime.ensureEnvironmentMcpOAuthCallbackService(runtime, {
+        port: CODEX_MCP_OAUTH_CALLBACK_PORT,
+      });
+    const callbackUrl = mcpOAuthCallbackUrl(callback.publicUrl);
+    const configResponse = await this.requestCodex(
+      input.environmentId,
+      runtime,
+      {
+        method: "config/batchWrite",
+        id: rpcId("mcp-oauth-config", input.environmentId),
+        params: {
+          edits: [
+            {
+              keyPath: "mcp_oauth_credentials_store",
+              value: "file",
+              mergeStrategy: "replace",
+            },
+            {
+              keyPath: "mcp_oauth_callback_port",
+              value: callback.port,
+              mergeStrategy: "replace",
+            },
+            {
+              keyPath: "mcp_oauth_callback_url",
+              value: callbackUrl,
+              mergeStrategy: "replace",
+            },
+          ],
+          reloadUserConfig: true,
+        },
+      },
+    );
+    requireMcpRpcResult(
+      configResponse,
+      "codex_mcp_oauth_config_failed",
+      "Codex could not configure the MCP OAuth callback.",
+    );
+
+    const loginResponse = await this.requestCodex(
+      input.environmentId,
+      runtime,
+      {
+        method: "mcpServer/oauth/login",
+        id: rpcId("mcp-oauth-login", `${input.environmentId}-${name}`),
+        params: {
+          name,
+          timeoutSecs: CODEX_MCP_OAUTH_TIMEOUT_SECONDS,
+        },
+      },
+    );
+    const login = requireMcpRpcResult(
+      loginResponse,
+      "codex_mcp_oauth_login_failed",
+      "Codex could not start MCP OAuth login.",
+    );
+    const authorizationUrl = safeMcpOAuthAuthorizationUrl(
+      objectString(login, "authorizationUrl"),
+    );
+    return {
+      name,
+      authorizationUrl,
+      expiresAt: toUnixTimestamp(
+        new Date(Date.now() + CODEX_MCP_OAUTH_TIMEOUT_SECONDS * 1_000),
+      ),
+    };
+  }
+
   private async readEnvironmentMcpInventory(
     environmentId: string,
     runtime: StoredEnvironmentRuntime,
@@ -753,6 +878,28 @@ export class CodexService {
       "codex_mcp_reload_failed",
       "Codex saved the MCP configuration but could not reload it.",
     );
+  }
+
+  private scheduleEnvironmentMcpReload(
+    environmentId: string,
+    runtime: StoredEnvironmentRuntime,
+  ) {
+    if (this.closed || this.mcpReloads.has(environmentId)) return;
+    const reload = Promise.resolve()
+      .then(() => this.reloadEnvironmentMcpServers(environmentId, runtime))
+      .catch((error) => {
+        if (this.closed) return;
+        this.logger.warn(
+          { environmentId, error: errorMessage(error) },
+          "Codex MCP servers could not reload after OAuth login",
+        );
+      })
+      .finally(() => {
+        if (this.mcpReloads.get(environmentId) === reload) {
+          this.mcpReloads.delete(environmentId);
+        }
+      });
+    this.mcpReloads.set(environmentId, reload);
   }
 
   async startTurn(input: {
@@ -1404,6 +1551,12 @@ export class CodexService {
     );
     if (!committed) throw new EnvironmentEventStreamSupersededError();
 
+    if (records.some(isSuccessfulMcpOAuthLoginNotification)) {
+      // Never await a new RPC inside the stream consumer that must decode its
+      // response. The detached task is coalesced per Environment and starts
+      // after this committed batch returns to the worker loop.
+      this.scheduleEnvironmentMcpReload(stored.id, next);
+    }
     for (const record of records) {
       if (!isTranscriptNotification(record.message)) continue;
       const nativeSessionId = notificationThreadId(record.message);
@@ -1495,6 +1648,7 @@ export class CodexService {
     await Promise.allSettled(this.startupRecoveries);
     await Promise.allSettled(this.recovering.values());
     await Promise.allSettled(this.credentialSyncs.values());
+    await Promise.allSettled(this.mcpReloads.values());
     await Promise.allSettled(exceptionalTasks);
     this.workers.clear();
     this.workerTasks.clear();
@@ -1508,6 +1662,7 @@ export class CodexService {
     this.exceptionalSessionTasks.clear();
     this.deferredExceptionalSessionReconciliations.clear();
     this.interactiveEnvironmentOperations.clear();
+    this.mcpReloads.clear();
   }
 
   private async ensureEnvironmentRuntimeForUser(
@@ -2997,6 +3152,11 @@ function controlTransitions(
   return transitions;
 }
 
+function isSuccessfulMcpOAuthLoginNotification(record: DecodedCodexRecord) {
+  if (record.message.method !== "mcpServer/oauthLogin/completed") return false;
+  return objectBoolean(objectRecord(record.message.params), "success") === true;
+}
+
 function isTranscriptNotification(
   message: Record<string, unknown>,
 ): message is Record<string, unknown> & CodexServerNotification {
@@ -3363,6 +3523,61 @@ function requireMcpServerName(value: string) {
     );
   }
   return name;
+}
+
+function mcpOAuthCallbackUrl(publicUrl: string) {
+  let published: URL;
+  try {
+    published = new URL(publicUrl);
+  } catch {
+    throw invalidMcpOAuthCallbackUrl();
+  }
+  if (
+    published.protocol !== "https:" ||
+    published.username ||
+    published.password ||
+    published.search ||
+    published.hash ||
+    (published.pathname !== "/" && published.pathname !== "")
+  ) {
+    throw invalidMcpOAuthCallbackUrl();
+  }
+  return new URL(
+    `${CODEX_MCP_OAUTH_CALLBACK_BASE_PATH}/`,
+    published.origin,
+  ).toString();
+}
+
+function invalidMcpOAuthCallbackUrl() {
+  return new HttpError(
+    502,
+    "sandbox0_mcp_oauth_callback_url_invalid",
+    "Sandbox0 returned an unsafe MCP OAuth callback URL.",
+  );
+}
+
+function safeMcpOAuthAuthorizationUrl(value: string | undefined) {
+  let authorizationUrl: URL;
+  try {
+    authorizationUrl = new URL(value ?? "");
+  } catch {
+    throw invalidMcpOAuthAuthorizationUrl();
+  }
+  if (
+    authorizationUrl.protocol !== "https:" ||
+    authorizationUrl.username ||
+    authorizationUrl.password
+  ) {
+    throw invalidMcpOAuthAuthorizationUrl();
+  }
+  return authorizationUrl.toString();
+}
+
+function invalidMcpOAuthAuthorizationUrl() {
+  return invalidCodexResponse(
+    "codex_mcp_oauth_login_failed",
+    "Codex returned an invalid MCP OAuth authorization URL.",
+  );
 }
 
 function mcpTransport(

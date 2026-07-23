@@ -119,3 +119,9 @@ export interface CodexMcpServer {
 export interface CodexMcpInventory {
   servers: CodexMcpServer[];
 }
+
+export interface CodexMcpOAuthLogin {
+  name: string;
+  authorizationUrl: string;
+  expiresAt: UnixTimestamp;
+}

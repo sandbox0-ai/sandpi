@@ -47,16 +47,20 @@ import {
 import { toSandbox0NetworkPolicy } from "./network-policy";
 import {
   CODEX_ENVIRONMENT_CREDENTIAL_PATH,
+  CODEX_MCP_OAUTH_CALLBACK_BASE_PATH,
   type CodexAuthRuntime,
   type EnvironmentRuntimeRecord,
   type ProvisionedEnvironment,
   type RecoveredCodexEnvironmentRuntime,
   type RuntimeAdapter,
   type RuntimeCodexEventStreamHandle,
+  type RuntimeMcpOAuthCallbackService,
   type RuntimeProvisionEnvironmentInput,
   type RuntimeTerminalHandle,
   type RuntimeWorkspaceBackupSnapshot,
   type RuntimeWorkspaceWatchHandle,
+  type Sandbox0AppService,
+  type Sandbox0AppServiceView,
   type Sandbox0NetworkPolicy,
 } from "./types";
 import {
@@ -85,6 +89,10 @@ const TERMINAL_EVENT_RETENTION_BYTES = 4 * 1024 * 1024;
 const ENVIRONMENT_CODEX_HOME = "/workspace/.sandpi/harnesses/codex";
 const WORKSPACE_CODEX_LAYOUT_MARKER = `${ENVIRONMENT_CODEX_HOME}/.sandpi-layout-environment-v1`;
 const ENVIRONMENT_CODEX_AUTH_FILE = CODEX_ENVIRONMENT_CREDENTIAL_PATH;
+const MCP_OAUTH_CALLBACK_SERVICE_ID = "sandpi-codex-mcp-oauth";
+const MCP_OAUTH_CALLBACK_ROUTE_ID = "oauth-callback";
+const MCP_OAUTH_CALLBACK_RATE_LIMIT_RPS = 5;
+const MCP_OAUTH_CALLBACK_RATE_LIMIT_BURST = 10;
 const DEVICE_CODEX_HOME = "/dev/shm/sandpi-codex-device";
 const DEVICE_CODEX_AUTH_FILE = `${DEVICE_CODEX_HOME}/auth.json`;
 const CODEX_AUTH_MAX_BYTES = 4 * 1024 * 1024;
@@ -259,6 +267,50 @@ export class Sandbox0Runtime implements RuntimeAdapter {
         `${memoryMiB}Mi`,
       );
     } catch (error) {
+      throw translateSandbox0Error(error);
+    }
+  }
+
+  async ensureEnvironmentMcpOAuthCallbackService(
+    runtime: EnvironmentRuntimeRecord,
+    input: { port: number },
+  ): Promise<RuntimeMcpOAuthCallbackService> {
+    if (
+      !Number.isInteger(input.port) ||
+      input.port < 1 ||
+      input.port > 65_535
+    ) {
+      throw new HttpError(
+        400,
+        "invalid_mcp_oauth_callback_port",
+        "The MCP OAuth callback port must be an integer between 1 and 65535.",
+      );
+    }
+
+    try {
+      const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
+      const existing = await sandbox.getServices();
+      const services = existing.services
+        .filter((service) => service.id !== MCP_OAUTH_CALLBACK_SERVICE_ID)
+        .map(sandboxAppServiceFromView);
+      services.push(mcpOAuthCallbackService(input.port));
+      const updated = await sandbox.updateServices(services);
+      const callback = updated.services.find(
+        (service) => service.id === MCP_OAUTH_CALLBACK_SERVICE_ID,
+      );
+      if (!callback?.publicUrl) {
+        throw new HttpError(
+          502,
+          "sandbox0_mcp_oauth_callback_unavailable",
+          "Sandbox0 did not publish the MCP OAuth callback service.",
+        );
+      }
+      return {
+        port: input.port,
+        publicUrl: callback.publicUrl,
+      };
+    } catch (error) {
+      if (error instanceof HttpError) throw error;
       throw translateSandbox0Error(error);
     }
   }
@@ -1730,6 +1782,82 @@ export class Sandbox0Runtime implements RuntimeAdapter {
       close: () => connection.close(),
     };
   }
+}
+
+function sandboxAppServiceFromView(
+  service: Sandbox0AppServiceView,
+): Sandbox0AppService {
+  return {
+    id: service.id,
+    displayName: service.displayName,
+    port: service.port,
+    runtime: service.runtime
+      ? {
+          ...service.runtime,
+          command: service.runtime.command
+            ? [...service.runtime.command]
+            : undefined,
+          envVars: service.runtime.envVars
+            ? { ...service.runtime.envVars }
+            : undefined,
+        }
+      : undefined,
+    ingress: {
+      ...service.ingress,
+      routes: service.ingress.routes?.map((route) => ({
+        ...route,
+        methods: route.methods ? [...route.methods] : undefined,
+        auth: route.auth ? { ...route.auth } : undefined,
+        cors: route.cors
+          ? {
+              ...route.cors,
+              allowedOrigins: route.cors.allowedOrigins
+                ? [...route.cors.allowedOrigins]
+                : undefined,
+              allowedMethods: route.cors.allowedMethods
+                ? [...route.cors.allowedMethods]
+                : undefined,
+              allowedHeaders: route.cors.allowedHeaders
+                ? [...route.cors.allowedHeaders]
+                : undefined,
+              exposeHeaders: route.cors.exposeHeaders
+                ? [...route.cors.exposeHeaders]
+                : undefined,
+            }
+          : undefined,
+        rateLimit: route.rateLimit ? { ...route.rateLimit } : undefined,
+      })),
+    },
+    healthCheck: service.healthCheck ? { ...service.healthCheck } : undefined,
+  };
+}
+
+function mcpOAuthCallbackService(port: number): Sandbox0AppService {
+  return {
+    id: MCP_OAUTH_CALLBACK_SERVICE_ID,
+    displayName: "Codex MCP OAuth callback",
+    port,
+    runtime: { type: models.SandboxAppServiceRuntimeTypeEnum.Manual },
+    ingress: {
+      _public: true,
+      routes: [
+        {
+          id: MCP_OAUTH_CALLBACK_ROUTE_ID,
+          pathPrefix: `${CODEX_MCP_OAUTH_CALLBACK_BASE_PATH}/`,
+          methods: ["GET"],
+          auth: {
+            mode: models.SandboxAppServiceRouteAuthModeEnum.None,
+          },
+          rateLimit: {
+            rps: MCP_OAUTH_CALLBACK_RATE_LIMIT_RPS,
+            burst: MCP_OAUTH_CALLBACK_RATE_LIMIT_BURST,
+          },
+          // An unauthenticated callback must never wake a paused Environment.
+          resume: false,
+        },
+      ],
+    },
+  };
 }
 
 /**

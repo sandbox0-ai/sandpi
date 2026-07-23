@@ -661,6 +661,17 @@ function registerApiRoutes(
       };
     },
   );
+  app.post<{ Params: { environmentId: string; name: string } }>(
+    "/api/v1/environments/:environmentId/harnesses/codex/mcp-servers/:name/oauth/login",
+    async (request, reply) =>
+      reply.status(202).send({
+        data: await services.codex.startEnvironmentMcpServerOAuthLogin({
+          userId: request.principal.userId,
+          environmentId: request.params.environmentId,
+          name: request.params.name,
+        }),
+      }),
+  );
 
   app.get("/api/v1/sessions", async (request) => ({
     data: await services.store.listSessions(request.principal.userId),
