@@ -49,6 +49,12 @@ const nativeActivityTurn: CodexTurn = {
       text: "Inspect locally, then query the release provider.",
     },
     {
+      type: "reasoning",
+      id: "activity-private-reasoning",
+      summary: [],
+      content: ["private reasoning must not become a status-only activity"],
+    },
+    {
       type: "commandExecution",
       id: "activity-command",
       command: "git status --short",
@@ -225,6 +231,10 @@ test("filters native Codex activity without including conversation messages", ()
     "Inspect the repository and check the release.",
   );
   assert.equal(all.entries.length, 9);
+  assert.equal(
+    all.entries.some((entry) => entry.id === "activity-private-reasoning"),
+    false,
+  );
 
   const [external] = selectCodexSessionActivity(projection, "external");
   assert.deepEqual(

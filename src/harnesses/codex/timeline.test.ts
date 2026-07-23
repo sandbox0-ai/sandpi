@@ -810,15 +810,74 @@ test("never projects private live reasoning text into Codex activity", () => {
         summaryIndex: 0,
       },
     }),
+    nativeEvent(34, {
+      method: "item/completed",
+      params: {
+        threadId: nativeThread.id,
+        turnId,
+        item: reasoning,
+        completedAtMs: Date.parse("2026-07-12T01:00:34Z"),
+      },
+    }),
   ]);
 
   const activity = projected.entries.find(
     (entry) => entry.id === reasoning.id,
   );
   assert.ok(activity?.kind === "nativeItem");
+  assert.equal(activity.status, "completed");
   assert.equal(activity.detail, "Checked the public API");
   assert.equal(activity.detail.includes("private chain"), false);
-  assert.equal(projected.activeTurn?.detail, "Checked the public API");
+  assert.equal(projected.activeTurn?.detail, undefined);
+});
+
+test("omits reasoning lifecycle rows that have no public summary", () => {
+  const turnId = "turn-private-reasoning-only";
+  const reasoning: Extract<CodexThreadItem, { type: "reasoning" }> = {
+    type: "reasoning",
+    id: "reasoning-private-only",
+    summary: [],
+    content: [],
+  };
+  const projected = projectCodexTimeline(nativeThread, [
+    nativeEvent(40, {
+      method: "turn/started",
+      params: { threadId: nativeThread.id, turn: liveTurn(turnId) },
+    }),
+    nativeEvent(41, {
+      method: "item/started",
+      params: {
+        threadId: nativeThread.id,
+        turnId,
+        item: reasoning,
+        startedAtMs: Date.parse("2026-07-12T01:00:40Z"),
+      },
+    }),
+    nativeEvent(42, {
+      method: "item/reasoning/textDelta",
+      params: {
+        threadId: nativeThread.id,
+        turnId,
+        itemId: reasoning.id,
+        delta: "private chain of thought",
+        contentIndex: 0,
+      },
+    }),
+    nativeEvent(43, {
+      method: "item/completed",
+      params: {
+        threadId: nativeThread.id,
+        turnId,
+        item: reasoning,
+        completedAtMs: Date.parse("2026-07-12T01:00:43Z"),
+      },
+    }),
+  ]);
+
+  assert.equal(
+    projected.entries.some((entry) => entry.id === reasoning.id),
+    false,
+  );
 });
 
 test("keeps every modeled plan and reasoning notification in the live suffix", () => {

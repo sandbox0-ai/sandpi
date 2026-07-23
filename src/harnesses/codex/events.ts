@@ -616,6 +616,36 @@ export function projectCodexTimeline(
       );
       return;
     }
+    if (item.type === "reasoning") {
+      const existingIndex = entryIndex.get(item.id);
+      const existing =
+        existingIndex === undefined ? undefined : entries[existingIndex];
+      const detail = activeItemDetail(item);
+
+      // A reasoning ThreadItem without a public summary is only a lifecycle
+      // signal. Keep it in activeItems so the Turn can still report "thinking",
+      // but do not turn it into an empty activity row in either conversation
+      // history or Session Activity.
+      if (!detail && existing?.kind !== "nativeItem") return;
+
+      upsert({
+        kind: "nativeItem",
+        id: item.id,
+        turnId,
+        createdAt:
+          existing?.kind === "nativeItem" ? existing.createdAt : createdAt,
+        status: nativeItemStatus(
+          item as unknown as Record<string, unknown>,
+          turnStatus,
+          streaming,
+        ),
+        itemType: item.type,
+        detail:
+          detail ??
+          (existing?.kind === "nativeItem" ? existing.detail : undefined),
+      });
+      return;
+    }
     if (item.type === "commandExecution") {
       const existingIndex = entryIndex.get(item.id);
       const existing =
@@ -1009,6 +1039,19 @@ export function projectCodexTimeline(
           ...existing,
           status: "running",
           detail: `${existing.detail ?? ""}${delta}`.slice(0, 2_000),
+        });
+      } else if (active.detail?.trim()) {
+        upsert({
+          kind: "nativeItem",
+          id: itemId,
+          turnId,
+          createdAt: event.receivedAt,
+          status: "running",
+          itemType:
+            notification.method === "item/plan/delta"
+              ? "plan"
+              : "reasoning",
+          detail: active.detail.slice(0, 2_000),
         });
       }
       continue;
