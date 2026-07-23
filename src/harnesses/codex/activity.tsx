@@ -1027,6 +1027,20 @@ export function CodexRolloutToolCallActivity({
                 <code>{description.detail}</code>
               </p>
             ) : null}
+            {description.commands.length > 1 ? (
+              <section className="codex-rollout-command-list">
+                <strong>{ui.commandActivity}</strong>
+                {description.commands.map((command, index) => (
+                  <pre
+                    className="codex-command-output"
+                    key={`${index}:${command}`}
+                    tabIndex={0}
+                  >
+                    <code>{displayCodexCommand(command)}</code>
+                  </pre>
+                ))}
+              </section>
+            ) : null}
             {readableOutput ? (
               <pre
                 className="codex-command-output"

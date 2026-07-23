@@ -20,6 +20,7 @@ export interface CodexRolloutActivitySummary {
   subject: string;
   detail: string | null;
   command: string | null;
+  commands: string[];
   cwd: string | null;
   output: string;
   exitCode: number | null;
@@ -49,6 +50,8 @@ const AGENT_TOOLS = new Set([
   "wait_agent",
 ]);
 const MAX_OUTPUT_CHARS = 16 * 1024;
+const MAX_STATIC_COMMANDS = 32;
+const MAX_STATIC_COMMAND_CHARS = 32 * 1024;
 const SUMMARY_CACHE = new WeakMap<
   CodexRolloutToolActivity,
   CodexRolloutActivitySummary
@@ -173,6 +176,214 @@ function staticCodeModeArguments(input: string, toolName: string) {
     }
   }
   return null;
+}
+
+function skipCodeModeTrivia(source: string, start: number): number {
+  let cursor = start;
+  while (cursor < source.length) {
+    if (/\s/.test(source[cursor] ?? "")) {
+      cursor += 1;
+      continue;
+    }
+    if (source[cursor] === "/" && source[cursor + 1] === "/") {
+      cursor += 2;
+      while (
+        cursor < source.length &&
+        source[cursor] !== "\n" &&
+        source[cursor] !== "\r"
+      ) {
+        cursor += 1;
+      }
+      continue;
+    }
+    if (source[cursor] === "/" && source[cursor + 1] === "*") {
+      const end = source.indexOf("*/", cursor + 2);
+      if (end < 0) return source.length;
+      cursor = end + 2;
+      continue;
+    }
+    break;
+  }
+  return cursor;
+}
+
+function hasIndirectCodeModeCall(input: string, toolName: string) {
+  const candidates = [toolName, leafToolName(toolName)].filter(
+    (candidate, index, values) => values.indexOf(candidate) === index,
+  );
+  for (const candidate of candidates) {
+    const marker = `tools.${candidate}`;
+    let offset = 0;
+    while (offset < input.length) {
+      const markerIndex = input.indexOf(marker, offset);
+      if (markerIndex < 0) break;
+      let cursor = skipCodeModeTrivia(input, markerIndex + marker.length);
+      if (input[cursor] !== "(") {
+        offset = cursor + 1;
+        continue;
+      }
+      cursor = skipCodeModeTrivia(input, cursor + 1);
+      if (!/[$A-Z_a-z]/.test(input[cursor] ?? "")) {
+        offset = cursor + 1;
+        continue;
+      }
+      cursor += 1;
+      while (/[$\w]/.test(input[cursor] ?? "")) cursor += 1;
+      while (true) {
+        cursor = skipCodeModeTrivia(input, cursor);
+        if (input[cursor] !== ".") break;
+        cursor = skipCodeModeTrivia(input, cursor + 1);
+        if (!/[$A-Z_a-z]/.test(input[cursor] ?? "")) break;
+        cursor += 1;
+        while (/[$\w]/.test(input[cursor] ?? "")) cursor += 1;
+      }
+      if (input[skipCodeModeTrivia(input, cursor)] === ")") return true;
+      offset = cursor + 1;
+    }
+  }
+  return false;
+}
+
+function decodeStaticTemplateLiteral(raw: string) {
+  let decoded = "";
+  for (let index = 0; index < raw.length; index += 1) {
+    const character = raw[index]!;
+    if (character !== "\\") {
+      decoded += character;
+      continue;
+    }
+    const escaped = raw[index + 1];
+    if (escaped === undefined) return null;
+    index += 1;
+    if (escaped === "\n") continue;
+    if (escaped === "\r") {
+      if (raw[index + 1] === "\n") index += 1;
+      continue;
+    }
+    const simple =
+      ({
+        n: "\n",
+        r: "\r",
+        t: "\t",
+        b: "\b",
+        f: "\f",
+        v: "\v",
+        "0": "\0",
+      } as Record<string, string>)[escaped];
+    if (simple !== undefined) {
+      decoded += simple;
+      continue;
+    }
+    if (escaped === "x") {
+      const value = raw.slice(index + 1, index + 3);
+      if (!/^[\da-f]{2}$/i.test(value)) return null;
+      decoded += String.fromCodePoint(Number.parseInt(value, 16));
+      index += 2;
+      continue;
+    }
+    if (escaped === "u") {
+      const value = raw.slice(index + 1, index + 5);
+      if (!/^[\da-f]{4}$/i.test(value)) return null;
+      decoded += String.fromCodePoint(Number.parseInt(value, 16));
+      index += 4;
+      continue;
+    }
+    decoded += escaped;
+  }
+  return decoded;
+}
+
+function staticCodeModeStringLiteral(source: string, start: number) {
+  const quote = source[start];
+  if (quote !== '"' && quote !== "'" && quote !== "`") return null;
+  let escaped = false;
+  let interpolated = false;
+  for (let index = start + 1; index < source.length; index += 1) {
+    const character = source[index]!;
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (character === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (quote === "`" && character === "$" && source[index + 1] === "{") {
+      interpolated = true;
+      continue;
+    }
+    if (character !== quote) continue;
+    const literal = source.slice(start, index + 1);
+    if (quote === "`") {
+      return {
+        end: index + 1,
+        value: interpolated
+          ? null
+          : decodeStaticTemplateLiteral(literal.slice(1, -1)),
+      };
+    }
+    try {
+      const value = JSON5.parse(literal);
+      return {
+        end: index + 1,
+        value: typeof value === "string" ? value : null,
+      };
+    } catch {
+      return { end: index + 1, value: null };
+    }
+  }
+  return null;
+}
+
+/**
+ * Recover data-only string properties from code-mode orchestration such as
+ * a static jobs array consumed through `jobs.map(...)`. The source is scanned
+ * as text and string literals are decoded without executing JavaScript.
+ */
+function staticCodeModeStringProperties(input: string, property: string) {
+  const values: string[] = [];
+  let cursor = 0;
+  while (cursor < input.length && values.length < MAX_STATIC_COMMANDS) {
+    cursor = skipCodeModeTrivia(input, cursor);
+    const character = input[cursor];
+    if (character === undefined) break;
+
+    let key: string | null = null;
+    let tokenEnd = cursor + 1;
+    if (/[$A-Z_a-z]/.test(character)) {
+      tokenEnd = cursor + 1;
+      while (/[$\w]/.test(input[tokenEnd] ?? "")) tokenEnd += 1;
+      key = input.slice(cursor, tokenEnd);
+    } else if (character === '"' || character === "'") {
+      const literal = staticCodeModeStringLiteral(input, cursor);
+      if (!literal) break;
+      tokenEnd = literal.end;
+      key = literal.value;
+    } else if (character === "`") {
+      const literal = staticCodeModeStringLiteral(input, cursor);
+      cursor = literal?.end ?? input.length;
+      continue;
+    } else {
+      cursor += 1;
+      continue;
+    }
+
+    const colon = skipCodeModeTrivia(input, tokenEnd);
+    if (key !== property || input[colon] !== ":") {
+      cursor = tokenEnd;
+      continue;
+    }
+    const valueStart = skipCodeModeTrivia(input, colon + 1);
+    const literal = staticCodeModeStringLiteral(input, valueStart);
+    if (!literal) {
+      cursor = valueStart + 1;
+      continue;
+    }
+    cursor = literal.end;
+    const value = literal.value?.trim();
+    if (value) values.push(value.slice(0, MAX_STATIC_COMMAND_CHARS));
+  }
+  return values;
 }
 
 function callInput(activity: CodexRolloutToolActivity) {
@@ -397,6 +608,33 @@ function argumentString(
     : null;
 }
 
+function commonStaticStringProperty(input: string, ...keys: string[]) {
+  const values = keys.flatMap((key) =>
+    staticCodeModeStringProperties(input, key),
+  );
+  const unique = [...new Set(values)];
+  return unique.length === 1 ? unique[0]! : null;
+}
+
+function commandSubject(commands: string[]) {
+  if (commands.length === 1) return displayCodexCommand(commands[0]!);
+  const headlines = commands.slice(0, 2).map((command) => {
+    const displayed = displayCodexCommand(command);
+    const firstLine =
+      displayed
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .find(Boolean) ?? displayed;
+    return firstLine.length <= 120
+      ? firstLine
+      : `${firstLine.slice(0, 119)}…`;
+  });
+  if (commands.length > headlines.length) {
+    headlines.push(`+${commands.length - headlines.length}`);
+  }
+  return headlines.join(" · ");
+}
+
 function localShellCommand(activity: CodexRolloutToolActivity) {
   const payload = objectRecord(activity.callPayload);
   const action = objectRecord(payload?.action);
@@ -455,20 +693,34 @@ export function summarizeCodexRolloutActivity(
   const exitCode = activityExitCode(activity, output);
   const filePaths = kind === "fileChange" ? patchPaths(input, args) : [];
   const localCommand = localShellCommand(activity);
-  const command =
-    kind === "command"
-      ? argumentString(args, "cmd") ?? localCommand
-      : null;
+  const directCommand =
+    kind === "command" ? argumentString(args, "cmd") ?? localCommand : null;
+  const recoverStaticBatch =
+    kind === "command" &&
+    !directCommand &&
+    hasIndirectCodeModeCall(input, toolName);
+  const commands =
+    kind !== "command"
+      ? []
+      : directCommand
+        ? [directCommand]
+        : recoverStaticBatch
+          ? staticCodeModeStringProperties(input, "cmd")
+          : [];
+  const command = commands.length === 1 ? commands[0]! : null;
   const cwd =
     argumentString(args, "workdir") ??
     argumentString(args, "working_directory") ??
-    localShellWorkingDirectory(activity);
+    localShellWorkingDirectory(activity) ??
+    (recoverStaticBatch && commands.length > 0
+      ? commonStaticStringProperty(input, "workdir", "working_directory")
+      : null);
   const cellId = argumentString(args, "cell_id");
   const sessionId = argumentString(args, "session_id");
   const chars = typeof args?.chars === "string" ? args.chars : "";
   if (leaf === "write_stdin" && chars) kind = "backgroundInput";
   const subject =
-    (command ? displayCodexCommand(command) : null) ??
+    (commands.length > 0 ? commandSubject(commands) : null) ??
     (filePaths.length > 0 ? filePaths.slice(0, 2).join(", ") : null) ??
     (cellId ? `#${cellId}` : null) ??
     (sessionId ? `#${sessionId}` : null) ??
@@ -497,6 +749,7 @@ export function summarizeCodexRolloutActivity(
     subject,
     detail,
     command,
+    commands,
     cwd,
     output,
     exitCode,

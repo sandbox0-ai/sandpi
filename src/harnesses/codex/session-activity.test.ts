@@ -519,6 +519,42 @@ test("categorizes namespaced Codex code-mode tools without cross-harness normali
   });
 });
 
+test("omits successful Codex plan bookkeeping from Session Activity", () => {
+  const emptyProjection = projectCodexTimeline(
+    createMockCodexThread("thread-plan-bookkeeping", [
+      createMockCodexTurn({
+        content: "Inspect the repository.",
+        assistantText: "Done.",
+        createdAt: startedAt,
+      }),
+    ]),
+  );
+  const activity = rolloutFeed([
+    rolloutTool(1, {
+      turnId: emptyProjection.turns[0]!.turnId,
+      name: "exec",
+      callType: "custom_tool_call",
+      codeModeTools: ["update_plan"],
+      callPayload: {
+        input:
+          'tools.update_plan({plan:[{step:"Inspect",status:"completed"}]});',
+      },
+    }),
+  ]);
+
+  assert.deepEqual(selectCodexSessionActivity(emptyProjection, "all", activity), []);
+  assert.deepEqual(summarizeCodexSessionActivity(emptyProjection, activity), {
+    total: 0,
+    records: 0,
+    issues: 0,
+    external: 0,
+    commands: 0,
+    files: 0,
+    agents: 0,
+    system: 0,
+  });
+});
+
 test("deduplicates rollout calls only when the same Turn has an exact native id", () => {
   const sameId = rolloutTool(1, {
     callId: "activity-command",

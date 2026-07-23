@@ -61,6 +61,7 @@ test("summarizes a code-mode command without evaluating its JavaScript", () => {
     subject: "npx tsc --noEmit && printf '$(safe)'",
     detail: "/workspace",
     command: "npx tsc --noEmit && printf '$(safe)'",
+    commands: ["npx tsc --noEmit && printf '$(safe)'"],
     cwd: "/workspace",
     output: "Type error\nexit=1",
     exitCode: 1,
@@ -86,6 +87,68 @@ test("summarizes current Codex JavaScript object-literal arguments", () => {
   assert.equal(summary.subject, "npm run build");
   assert.equal(summary.command, "npm run build");
   assert.equal(summary.cwd, "/workspace");
+});
+
+test("extracts concrete commands from a static code-mode batch", () => {
+  const activity = rollout({
+    codeModeTools: ["exec_command"],
+    callPayload: {
+      input: `const jobs = [
+  {
+    name: "identity",
+    args: {
+      cmd: \`uname -a
+id\`,
+      workdir: "/workspace"
+    }
+  },
+  {
+    name: "mounts",
+    args: {
+      cmd: \`findmnt -rn
+cat /proc/self/cgroup\`,
+      workdir: "/workspace"
+    }
+  },
+  {
+    name: "network",
+    args: {
+      cmd: "ip -brief address",
+      workdir: "/workspace"
+    }
+  }
+];
+await Promise.all(jobs.map((job) => tools.exec_command(job.args)));`,
+    },
+  });
+
+  const summary = summarizeCodexRolloutActivity(activity);
+  assert.equal(summary.kind, "command");
+  assert.equal(summary.command, null);
+  assert.deepEqual(summary.commands, [
+    "uname -a\nid",
+    "findmnt -rn\ncat /proc/self/cgroup",
+    "ip -brief address",
+  ]);
+  assert.equal(summary.subject, "uname -a · findmnt -rn · +1");
+  assert.equal(summary.cwd, "/workspace");
+});
+
+test("does not interpret an interpolated command template", () => {
+  globalThis.__sandpiActivityParserExecuted = false;
+  const activity = rollout({
+    codeModeTools: ["exec_command"],
+    callPayload: {
+      input:
+        "const job = {cmd: `echo ${globalThis.__sandpiActivityParserExecuted = true}`}; tools.exec_command(job);",
+    },
+  });
+
+  const summary = summarizeCodexRolloutActivity(activity);
+  assert.deepEqual(summary.commands, []);
+  assert.equal(summary.subject, "exec_command");
+  assert.equal(globalThis.__sandpiActivityParserExecuted, false);
+  delete globalThis.__sandpiActivityParserExecuted;
 });
 
 test("does not infer failure from an incidental exit trailer in program output", () => {

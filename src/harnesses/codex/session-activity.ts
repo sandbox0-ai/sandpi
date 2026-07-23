@@ -100,6 +100,19 @@ const CODEX_ROLLOUT_AGENT_TOOLS = new Set([
   "spawn_agent",
   "wait_agent",
 ]);
+const CODEX_HIDDEN_ROLLOUT_TOOLS = new Set(["update_plan"]);
+
+function codexRolloutActivityIsVisible(entry: CodexRolloutToolActivity) {
+  if (entry.status === "failed") return true;
+  const names =
+    entry.codeModeTools.length > 0 ? entry.codeModeTools : [entry.name];
+  return !(
+    names.length > 0 &&
+    names.every((name) =>
+      CODEX_HIDDEN_ROLLOUT_TOOLS.has(name.split(".").at(-1) ?? name),
+    )
+  );
+}
 
 function rolloutToolCategories(
   entry: CodexRolloutToolActivity,
@@ -398,6 +411,9 @@ export function selectCodexSessionActivity(
     nativeIdsByTurn.set(entry.turnId, ids);
   }
   for (const entry of rolloutActivity?.records ?? []) {
+    // Plan updates are internal Codex bookkeeping, not useful Session actions.
+    // Keep failures inspectable, but omit successful lifecycle-only records.
+    if (!codexRolloutActivityIsVisible(entry)) continue;
     if (
       nativeIdsByTurn.get(entry.turnId)?.has(entry.callId) ||
       nativeIdsByTurn.get(entry.turnId)?.has(entry.id)
