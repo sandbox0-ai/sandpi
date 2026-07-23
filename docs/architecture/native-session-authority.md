@@ -290,116 +290,25 @@ Codex-native MCP, dynamic tool and web-search activity describes semantic tool
 execution in Session Activity. Environment network policy remains shared
 runtime configuration and is not projected into a product Session timeline.
 
-## MCP integration authority
+## MCP native authority
 
-Environment MCP settings include a curated shortcut catalog in three groups:
-aggregator services, hosted third-party servers and local STDIO servers. Every
-non-local shortcut prefills the service provider's hosted HTTPS endpoint;
-self-hosted endpoints remain available through Custom server. The catalog
-itself is the only maintained preset list. Documentation describes category and
-security boundaries rather than copying entries that can drift.
+Codex owns MCP definitions, authentication, discovery and tool behavior.
+Sandpi reads the effective server inventory through Codex native RPCs and does
+not project it into PostgreSQL. The Environment settings surface mirrors the
+Skills model: it lists the native inventory, refreshes status, and writes only
+the native `enabled` value for definitions in the user configuration layer.
+Project and admin definitions remain visible and read-only.
 
-Codex `config.toml` remains authoritative for server URL or command, enablement,
-timeouts, scopes and approval behavior. Sandpi persists only the non-secret
-orchestration metadata needed to reconcile that definition with external
-resources: preset and auth mode, endpoint fingerprint, credential source and
-binding references, destination match, lifecycle status and the desired remote
-tool policy. It is not a second MCP definition. Changing the endpoint
-invalidates the prior consent and prevents an existing credential from being
-rebound to a different host without review. When a selected tool policy exists,
-the endpoint or permission authority cannot change until the user explicitly
-switches to unrestricted mode. Deletion removes the Codex definition before it
-withdraws the Sandbox0 allowlist, so failures retain the narrower policy.
+There is no Sandpi MCP catalog, integration record, credential store, OAuth
+callback, endpoint-consent record or tool allowlist. Remote authentication is
+handled by Codex and the provider. Ordinary Environment network policy remains
+the sandbox egress boundary, but it is not composed with MCP-specific
+credentials or protocol rules.
 
-Codex supplies discovery, not authorization. Sandpi reads the paginated raw MCP
-tool map from Codex `mcpServerStatus/list` and exposes its names and display
-metadata to the settings UI. It removes legacy Codex `enabled_tools` and
-`disabled_tools` values so that discovery remains complete and no second filter
-can drift. Tool descriptions and annotations are untrusted display hints; they
-never grant access automatically.
+Local STDIO definitions remain inside the native harness trust boundary. Codex
+launches those processes in the Environment Sandbox, where they can access the
+Workspace and any network destinations allowed by the Environment policy.
 
-For a managed HTTPS server, `selected` policy stores a non-empty explicit set of
-raw `tools/call.params.name` values. The effective Environment network policy
-emits a Sandbox0 `protocolRules` MCP allowlist with exact domain, port 443 and
-path matching plus terminate-and-reoriginate TLS inspection. Sandbox0 is the
-policy enforcement point: `tools/list` stays complete, while a denied
-`tools/call` fails outside the coding-agent process. A newly advertised name is
-therefore denied until a user selects it. `all` emits no MCP restriction. An
-empty selected set is invalid; disabling the server is the supported way to
-load no tools.
-
-Protocol Control identifies the network endpoint, not Codex's local server
-alias. Definitions sharing one endpoint must have identical policy or
-composition fails closed. Aggregator presets emit no tool rule because their
-permissions are owned by the aggregation platform. STDIO servers are outside
-network Protocol Control and are reported as unavailable rather than silently
-falling back to Codex filtering. Desired policy and convergence status are
-durable; failed Sandbox0 replacement is retried by normal MCP reconciliation.
-
-Static remote credentials are write-only. A browser submits a replacement
-value to Sandpi once; Sandpi creates a new immutable Sandbox0 `static_headers`
-Credential Source without persisting the value in its integration row.
-Sandbox0's egress credential binding injects the managed header only for the
-exact HTTPS domain, port and path, with fail-closed matching. The credential
-does not enter Codex `config.toml`, process environment, Workspace files, logs
-or a Sandpi response. Rotation switches the complete network policy to the new
-source before retiring the old source, without restarting Codex. Removal first
-detaches the binding so no stale header remains.
-
-Credential injection and traffic authorization are orthogonal. Composing an MCP
-binding preserves the Environment's user traffic policy and never turns a deny
-into an allow. A `block-all` Environment must explicitly allow the remote MCP
-domain in **Environment Settings → Network** before Codex can connect. Endpoint
-consent only authorizes which destination may receive the credential.
-
-OAuth reuses Codex's native `mcpServer/oauth/login` flow, state and callback
-validation, scope handling and refresh behavior. Sandpi publishes only the
-Environment's fixed callback port through a constrained Sandbox0 manual app
-service. The callback route accepts `GET /callback/`, does not enable
-auto-resume and is rate-limited. Sandpi polls its non-secret flow record for UI
-status; a successful OAuth completion moves the UI to checking until a fresh
-Codex MCP initialize/status result proves readiness.
-
-Every authorization attempt gets a dedicated ephemeral native Thread before
-the login request starts. The durable flow stores that Thread id together with
-the exact runtime generation and attempt. A completion notification is accepted
-only when its name, Thread and runtime tuple all match; Sandpi never falls back
-to whichever flow happens to be active. The native event coordinates are
-journaled in the same PostgreSQL statement that publishes the terminal flow, so
-replayed Supervisor records are idempotent. Thread unsubscription is durable
-cleanup performed by startup or ordinary API reconciliation, never by the
-event-consumer callback that must remain free to decode its own RPC response.
-If the Sandpi process crashes after creating that Thread but before journaling
-its id, native login has not yet been submitted: the unused in-memory Thread
-cannot alter credentials and is reclaimed with the Environment runtime.
-
-Cancelling authorization leaves a short-lived durable quarantine longer than
-Codex's native login timeout. Sandpi revokes any token that wins the
-cancellation race and blocks update or deletion of that server definition until
-the old listener cannot complete. A late successful notification is discarded
-and makes the shared credential slot require authorization again rather than
-being attributed to a newer attempt.
-
-Codex's MCP OAuth credential file is materialized in
-`/dev/shm/sandpi-codex-mcp-oauth.json`; persistent
-`CODEX_HOME/.credentials.json` is only a symlink. Sandpi encrypts that native
-JSON as a separate Environment credential slot for recovery and never stores
-authorization codes or tokens in the OAuth flow row. Pause or runtime recovery
-re-materializes the file before app-server starts. Whole-file synchronization
-is serialized across Sandpi replicas by an Environment advisory lock and inside
-the Sandbox by Codex's native `mcp-oauth-locks/file-store.lock`; installs use a
-protected temporary file and atomic rename, while reads use a locked snapshot.
-The global lock order is MCP mutation, Environment lifecycle, then OAuth
-credential. Advisory locks use a pool separate from ordinary queries, and
-nested locks reuse the outer lock-scoped connection to avoid pool starvation.
-
-Local STDIO servers stay entirely on the native harness side. Codex launches
-their configured process inside the Environment Sandbox, not in the browser or
-Sandpi server. They use the Environment filesystem and process trust boundary,
-receive no remote egress credential binding, and must obtain any package or
-external-network access through the Environment's ordinary network policy.
-They are trusted code beside Codex, can access the workspace, and curated
-shortcuts therefore pin package versions instead of following mutable tags.
 
 ## Environment lifecycle
 

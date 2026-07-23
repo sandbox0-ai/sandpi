@@ -6,12 +6,7 @@ import { APIError } from "sandbox0";
 
 import type { Environment } from "@/lib/types";
 import { createSandbox0FetchWithRetry, Sandbox0Runtime } from "./sandbox0";
-import {
-  CODEX_MCP_OAUTH_CALLBACK_BASE_PATH,
-  CODEX_MCP_OAUTH_CALLBACK_PORT,
-  CODEX_MCP_OAUTH_CREDENTIAL_PATH,
-  type EnvironmentRuntimeRecord,
-} from "./types";
+import type { EnvironmentRuntimeRecord } from "./types";
 
 const environment: Environment = {
   id: "environment-test",
@@ -217,74 +212,7 @@ test("disables Environment TTLs and executes Sandpi-owned pause", async () => {
   assert.equal(paused, true);
 });
 
-test("passes a composed Sandbox0 network policy through without dropping credential rules", async () => {
-  let applied: unknown;
-  const runtime = runtimeWithClient({
-    sandboxes: {
-      sandbox(sandboxId: string) {
-        assert.equal(sandboxId, "sandbox-environment");
-        return {
-          async updateNetworkPolicy(policy: unknown) {
-            applied = policy;
-            return policy;
-          },
-        };
-      },
-    },
-  });
-  const coordinates: EnvironmentRuntimeRecord = {
-    id: environment.id,
-    sandboxId: environment.sandboxId,
-    workspaceVolumeId: environment.workspaceVolumeId,
-    runtimeGeneration: 1,
-    decoder: {
-      supervisorCursor: 0,
-      tailBase64: "",
-      runtimeGeneration: 1,
-    },
-  };
-  const policy = {
-    mode: "block-all" as const,
-    egress: {
-      credentialRules: [
-        {
-          name: "managed-mcp-github",
-          credentialRef: "mcp-github",
-          rollout: "enabled" as const,
-          protocol: "https" as const,
-          tlsMode: "terminate-reoriginate" as const,
-          failurePolicy: "fail-closed" as const,
-          domains: ["api.githubcopilot.com"],
-          ports: [{ port: 443, protocol: "tcp" as const }],
-          httpMatch: { pathPrefixes: ["/mcp/"] },
-        },
-      ],
-    },
-    credentialBindings: [
-      {
-        ref: "mcp-github",
-        sourceRef: "sandpi-mcp-github",
-        projection: {
-          type: "http_headers" as const,
-          httpHeaders: {
-            headers: [
-              {
-                name: "Authorization",
-                valueTemplate: "Bearer {{ .token }}",
-              },
-            ],
-          },
-        },
-      },
-    ],
-  };
-
-  await runtime.applyEnvironmentSandboxNetworkPolicy(coordinates, policy);
-
-  assert.strictEqual(applied, policy);
-});
-
-test("updates the existing Environment Sandbox memory", async () => {
+ test("updates the existing Environment Sandbox memory", async () => {
   const updates: Array<{ sandboxId: string; memory: string }> = [];
   const runtime = runtimeWithClient({
     sandboxes: {
@@ -466,476 +394,7 @@ test("does not retry unrelated Workspace snapshot restore conflicts", async () =
   assert.equal(attempts, 1);
 });
 
-test("creates, rotates and deletes write-only static header credential sources", async () => {
-  const calls: Array<{ operation: string; name?: string; request?: unknown }> =
-    [];
-  const createdAt = new Date("2026-07-20T00:00:00.000Z");
-  const updatedAt = new Date("2026-07-20T01:00:00.000Z");
-  const runtime = runtimeWithClient({
-    credentialSources: {
-      async create(request: unknown) {
-        calls.push({ operation: "create", request });
-        return {
-          name: "sandpi-mcp-github",
-          resolverKind: "static_headers",
-          currentVersion: 1,
-          status: "ready",
-          createdAt,
-          spec: {
-            staticHeaders: { values: { token: "must-not-be-returned" } },
-          },
-        };
-      },
-      async update(name: string, request: unknown) {
-        calls.push({ operation: "update", name, request });
-        return {
-          name,
-          resolverKind: "static_headers",
-          currentVersion: 2,
-          status: "ready",
-          createdAt,
-          updatedAt,
-          spec: {
-            staticHeaders: { values: { token: "must-not-be-returned" } },
-          },
-        };
-      },
-      async delete(name: string) {
-        calls.push({ operation: "delete", name });
-        return { message: "deleted" };
-      },
-    },
-  });
-
-  const created = await runtime.createStaticHeaderCredentialSource({
-    name: "sandpi-mcp-github",
-    headers: { token: "github-secret-v1" },
-  });
-  const updated = await runtime.updateStaticHeaderCredentialSource({
-    name: "sandpi-mcp-github",
-    headers: { token: "github-secret-v2" },
-  });
-  await runtime.deleteCredentialSource("sandpi-mcp-github");
-
-  assert.deepEqual(calls, [
-    {
-      operation: "create",
-      request: {
-        name: "sandpi-mcp-github",
-        resolverKind: "static_headers",
-        spec: {
-          staticHeaders: { values: { token: "github-secret-v1" } },
-        },
-      },
-    },
-    {
-      operation: "update",
-      name: "sandpi-mcp-github",
-      request: {
-        name: "sandpi-mcp-github",
-        resolverKind: "static_headers",
-        spec: {
-          staticHeaders: { values: { token: "github-secret-v2" } },
-        },
-      },
-    },
-    { operation: "delete", name: "sandpi-mcp-github" },
-  ]);
-  assert.deepEqual(created, {
-    name: "sandpi-mcp-github",
-    resolverKind: "static_headers",
-    currentVersion: 1,
-    status: "ready",
-    createdAt,
-    updatedAt: undefined,
-  });
-  assert.deepEqual(updated, {
-    name: "sandpi-mcp-github",
-    resolverKind: "static_headers",
-    currentVersion: 2,
-    status: "ready",
-    createdAt,
-    updatedAt,
-  });
-  assert.equal(JSON.stringify(created).includes("must-not-be-returned"), false);
-  assert.equal(JSON.stringify(updated).includes("must-not-be-returned"), false);
-});
-
-test("redacts upstream credential source errors", async () => {
-  const secret = "github-secret-that-must-not-escape";
-  const runtime = runtimeWithClient({
-    credentialSources: {
-      async create() {
-        throw new APIError({
-          statusCode: 400,
-          code: "invalid_credential",
-          message: `invalid value ${secret}`,
-        });
-      },
-    },
-  });
-
-  await assert.rejects(
-    runtime.createStaticHeaderCredentialSource({
-      name: "sandpi-mcp-github",
-      headers: { token: secret },
-    }),
-    (error: unknown) => {
-      const candidate = error as { code?: string; message?: string };
-      assert.equal(candidate.code, "sandbox0_invalid_credential");
-      assert.equal(candidate.message?.includes(secret), false);
-      return true;
-    },
-  );
-});
-
-test("preserves unrelated services and installs a constrained MCP OAuth callback", async () => {
-  assert.equal(CODEX_MCP_OAUTH_CALLBACK_BASE_PATH, "/callback");
-  let replacement: unknown;
-  const unrelated = {
-    id: "preview",
-    displayName: "Preview",
-    port: 3000,
-    runtime: { type: "manual" as const },
-    ingress: {
-      _public: true,
-      routes: [{ id: "preview", pathPrefix: "/", resume: true }],
-    },
-    publishable: true,
-    publicUrl: "https://preview.example.invalid",
-  };
-  const staleCallback = {
-    id: "sandpi-codex-mcp-oauth",
-    port: 1234,
-    runtime: { type: "manual" as const },
-    ingress: { _public: false, routes: [] },
-    publishable: false,
-  };
-  const runtime = runtimeWithClient({
-    sandboxes: {
-      sandbox(sandboxId: string) {
-        assert.equal(sandboxId, "sandbox-environment");
-        return {
-          async getServices() {
-            return {
-              sandboxId,
-              services: [unrelated, staleCallback],
-            };
-          },
-          async updateServices(services: unknown[]) {
-            replacement = services;
-            return {
-              sandboxId,
-              services: services.map((service) => {
-                const candidate = service as { id: string };
-                return {
-                  ...candidate,
-                  publishable: true,
-                  publicUrl:
-                    candidate.id === "sandpi-codex-mcp-oauth"
-                      ? "https://oauth.example.invalid"
-                      : "https://preview.example.invalid",
-                };
-              }),
-            };
-          },
-        };
-      },
-    },
-  });
-  const coordinates: EnvironmentRuntimeRecord = {
-    id: environment.id,
-    sandboxId: environment.sandboxId,
-    workspaceVolumeId: environment.workspaceVolumeId,
-    runtimeGeneration: 1,
-    decoder: {
-      supervisorCursor: 0,
-      tailBase64: "",
-      runtimeGeneration: 1,
-    },
-  };
-
-  const callback = await runtime.ensureEnvironmentMcpOAuthCallbackService(
-    coordinates,
-    { port: CODEX_MCP_OAUTH_CALLBACK_PORT },
-  );
-
-  assert.deepEqual(callback, {
-    serviceId: "sandpi-codex-mcp-oauth",
-    port: CODEX_MCP_OAUTH_CALLBACK_PORT,
-    publicUrl: "https://oauth.example.invalid",
-  });
-  assert.deepEqual(replacement, [
-    {
-      id: "preview",
-      displayName: "Preview",
-      port: 3000,
-      runtime: {
-        type: "manual",
-        command: undefined,
-        envVars: undefined,
-      },
-      ingress: {
-        _public: true,
-        routes: [
-          {
-            id: "preview",
-            pathPrefix: "/",
-            resume: true,
-            methods: undefined,
-            auth: undefined,
-            cors: undefined,
-            rateLimit: undefined,
-          },
-        ],
-      },
-      healthCheck: undefined,
-    },
-    {
-      id: "sandpi-codex-mcp-oauth",
-      displayName: "Codex MCP OAuth callback",
-      port: CODEX_MCP_OAUTH_CALLBACK_PORT,
-      runtime: { type: "manual" },
-      ingress: {
-        _public: true,
-        routes: [
-          {
-            id: "oauth-callback",
-            pathPrefix: `${CODEX_MCP_OAUTH_CALLBACK_BASE_PATH}/`,
-            methods: ["GET"],
-            auth: { mode: "none" },
-            rateLimit: { rps: 5, burst: 10 },
-            resume: false,
-          },
-        ],
-      },
-    },
-  ]);
-  assert.equal(JSON.stringify(replacement).includes("publicUrl"), false);
-  assert.equal(JSON.stringify(replacement).includes("publishable"), false);
-});
-
-test("runs Codex MCP logout with validated argv and no credential environment", async () => {
-  const commands: Array<{ name: string; options: unknown }> = [];
-  const runtime = runtimeWithClient({
-    sandboxes: {
-      sandbox() {
-        return {
-          async cmd(name: string, options: unknown) {
-            commands.push({ name, options });
-            return { exitCode: 0, stdout: "removed", stderr: "" };
-          },
-        };
-      },
-    },
-  });
-  const coordinates: EnvironmentRuntimeRecord = {
-    id: environment.id,
-    sandboxId: environment.sandboxId,
-    workspaceVolumeId: environment.workspaceVolumeId,
-    runtimeGeneration: 1,
-    decoder: {
-      supervisorCursor: 0,
-      tailBase64: "",
-      runtimeGeneration: 1,
-    },
-  };
-
-  await runtime.logoutEnvironmentMcpServer(coordinates, "github_remote");
-
-  assert.deepEqual(commands, [
-    {
-      name: "codex-mcp-logout",
-      options: {
-        command: ["codex", "mcp", "logout", "github_remote"],
-        cwd: "/workspace",
-        envVars: {
-          HOME: "/workspace",
-          CODEX_HOME: "/workspace/.sandpi/harnesses/codex",
-        },
-        ttlSec: 30,
-      },
-    },
-  ]);
-  await assert.rejects(
-    runtime.logoutEnvironmentMcpServer(coordinates, "github; rm -rf /"),
-    (error: unknown) => {
-      assert.equal(
-        (error as { code?: string }).code,
-        "invalid_codex_mcp_server_name",
-      );
-      return true;
-    },
-  );
-  assert.equal(commands.length, 1);
-});
-
-test("snapshots and atomically installs MCP OAuth credentials under the Codex native lock", async () => {
-  const secret = '{"github":{"access_token":"oauth-secret"}}';
-  const writes: Array<{ path: string; content: string }> = [];
-  const reads: string[] = [];
-  const operations: string[] = [];
-  const commands: Array<{
-    name: string;
-    command: string[];
-    stdout: string;
-  }> = [];
-  const files = new Map<string, Uint8Array>();
-  const runtime = runtimeWithClient({
-    sandboxes: {
-      sandbox() {
-        return {
-          async mkdir(path: string) {
-            assert.equal(path, "/dev/shm");
-            operations.push(`mkdir:${path}`);
-          },
-          async writeFile(path: string, content: Uint8Array) {
-            operations.push(`write:${path}`);
-            writes.push({
-              path,
-              content: Buffer.from(content).toString("utf8"),
-            });
-            files.set(path, content);
-          },
-          async readFile(path: string) {
-            operations.push(`read:${path}`);
-            reads.push(path);
-            const content = files.get(path);
-            if (!content) {
-              throw new APIError({
-                statusCode: 404,
-                code: "not_found",
-                message: "file not found",
-              });
-            }
-            return content;
-          },
-          async deleteFile(path: string) {
-            operations.push(`delete:${path}`);
-            if (!files.delete(path)) {
-              throw new APIError({
-                statusCode: 404,
-                code: "not_found",
-                message: "file not found",
-              });
-            }
-            return { message: "deleted" };
-          },
-          async cmd(name: string, options: { command: string[] }) {
-            const command = options.command;
-            commands.push({ name, command, stdout: "" });
-            operations.push(`cmd:${name}`);
-            const source = command[6]!;
-            const destination = command[7]!;
-            if (name === "snapshot-codex-mcp-oauth-credential") {
-              const content = files.get(source);
-              if (!content) return { exitCode: 44, stdout: "", stderr: "" };
-              files.set(destination, content);
-            } else if (name === "install-codex-mcp-oauth-credential") {
-              const content = files.get(source);
-              assert.ok(content);
-              files.delete(source);
-              files.set(destination, content);
-            }
-            return { exitCode: 0, stdout: "", stderr: "" };
-          },
-        };
-      },
-    },
-  });
-  const coordinates: EnvironmentRuntimeRecord = {
-    id: environment.id,
-    sandboxId: environment.sandboxId,
-    workspaceVolumeId: environment.workspaceVolumeId,
-    runtimeGeneration: 1,
-    decoder: {
-      supervisorCursor: 0,
-      tailBase64: "",
-      runtimeGeneration: 1,
-    },
-  };
-
-  assert.equal(
-    await runtime.readCodexMcpOauthCredentials(coordinates),
-    undefined,
-  );
-  await runtime.installCodexMcpOauthCredentials(coordinates, secret);
-  assert.equal(await runtime.readCodexMcpOauthCredentials(coordinates), secret);
-  assert.equal(writes.length, 1);
-  assert.match(
-    writes[0]!.path,
-    /^\/dev\/shm\/\.sandpi-codex-mcp-oauth\.install\.[0-9a-f-]+\.json$/,
-  );
-  assert.equal(writes[0]!.content, secret);
-  assert.ok(
-    reads.every((read) =>
-      /^\/dev\/shm\/\.sandpi-codex-mcp-oauth\.snapshot\.[0-9a-f-]+\.json$/.test(
-        read,
-      ),
-    ),
-  );
-  assert.equal(reads.includes(CODEX_MCP_OAUTH_CREDENTIAL_PATH), false);
-
-  const install = commands.find(
-    (command) => command.name === "install-codex-mcp-oauth-credential",
-  );
-  const snapshots = commands.filter(
-    (command) => command.name === "snapshot-codex-mcp-oauth-credential",
-  );
-  assert.ok(install);
-  assert.equal(snapshots.length, 2);
-  assert.equal(
-    install.command[5],
-    "/workspace/.sandpi/harnesses/codex/mcp-oauth-locks/file-store.lock",
-  );
-  assert.equal(install.command[7], CODEX_MCP_OAUTH_CREDENTIAL_PATH);
-  assert.match(install.command[2]!, /flock -x "\$2" mv -f -- "\$3" "\$4"/);
-  assert.ok(
-    install.command[2]!.indexOf('chmod 600 -- "$2" "$3"') <
-      install.command[2]!.indexOf('flock -x "$2"'),
-  );
-  for (const snapshot of snapshots) {
-    assert.equal(
-      snapshot.command[5],
-      "/workspace/.sandpi/harnesses/codex/mcp-oauth-locks/file-store.lock",
-    );
-    assert.equal(snapshot.command[6], CODEX_MCP_OAUTH_CREDENTIAL_PATH);
-    assert.match(snapshot.command[2]!, /flock -x "\$2"/);
-  }
-  assert.equal(JSON.stringify(commands).includes("oauth-secret"), false);
-
-  const firstSnapshotCommand = operations.indexOf(
-    "cmd:snapshot-codex-mcp-oauth-credential",
-  );
-  const firstSnapshotCleanup = operations.findIndex((operation) =>
-    operation.startsWith("delete:/dev/shm/.sandpi-codex-mcp-oauth.snapshot."),
-  );
-  const installWrite = operations.findIndex((operation) =>
-    operation.startsWith("write:/dev/shm/.sandpi-codex-mcp-oauth.install."),
-  );
-  const installCommand = operations.indexOf(
-    "cmd:install-codex-mcp-oauth-credential",
-  );
-  const installCleanup = operations.findIndex((operation) =>
-    operation.startsWith("delete:/dev/shm/.sandpi-codex-mcp-oauth.install."),
-  );
-  const finalSnapshotCommand = operations.lastIndexOf(
-    "cmd:snapshot-codex-mcp-oauth-credential",
-  );
-  const snapshotRead = operations.findIndex((operation) =>
-    operation.startsWith("read:/dev/shm/.sandpi-codex-mcp-oauth.snapshot."),
-  );
-  const finalSnapshotCleanup = operations.findLastIndex((operation) =>
-    operation.startsWith("delete:/dev/shm/.sandpi-codex-mcp-oauth.snapshot."),
-  );
-  assert.ok(firstSnapshotCommand < firstSnapshotCleanup);
-  assert.ok(installWrite < installCommand);
-  assert.ok(installCommand < installCleanup);
-  assert.ok(finalSnapshotCommand < snapshotRead);
-  assert.ok(snapshotRead < finalSnapshotCleanup);
-});
-
-test("uses Sandbox0 runtime access to auto-resume a paused Environment", async () => {
+ test("uses Sandbox0 runtime access to auto-resume a paused Environment", async () => {
   let paused = true;
   let runtimeGeneration = 1;
   let workspaceAccesses = 0;
@@ -1617,8 +1076,6 @@ test("repairs a disconnected Workspace portal for harness-neutral access", async
 });
 
 test("starts one Environment-scoped Codex app-server with native state on the Volume", async () => {
-  const mcpOauthJson =
-    '{"https://mcp.example.invalid":{"access_token":"mcp-oauth-secret"}}';
   const writes: Array<{ path: string; content: string }> = [];
   const commands: Array<{ name: string; command?: string[] }> = [];
   const sessions: Array<{
@@ -1683,7 +1140,6 @@ test("starts one Environment-scoped Codex app-server with native state on the Vo
   const recovered = await runtime.ensureCodexEnvironmentRuntime(
     coordinates,
     '{"tokens":{"access_token":"test"}}',
-    mcpOauthJson,
   );
 
   assert.deepEqual(recovered, {
@@ -1692,16 +1148,11 @@ test("starts one Environment-scoped Codex app-server with native state on the Vo
     runtimeGeneration: 3,
     sandboxRestarted: false,
   });
-  assert.equal(writes.length, 2);
+  assert.equal(writes.length, 1);
   assert.deepEqual(writes[0], {
     path: "/dev/shm/sandpi-codex-auth.json",
     content: '{"tokens":{"access_token":"test"}}',
   });
-  assert.match(
-    writes[1]!.path,
-    /^\/dev\/shm\/\.sandpi-codex-mcp-oauth\.install\.[0-9a-f-]+\.json$/,
-  );
-  assert.equal(writes[1]!.content, mcpOauthJson);
   assert.equal(sessions.length, 1);
   assert.equal(
     sessions[0]?.idempotencyKey,
@@ -1712,24 +1163,7 @@ test("starts one Environment-scoped Codex app-server with native state on the Vo
     HOME: "/workspace",
     CODEX_HOME: "/workspace/.sandpi/harnesses/codex",
   });
-  assert.equal(
-    JSON.stringify(sessions[0]?.spec).includes("mcp-oauth-secret"),
-    false,
-  );
-  assert.equal(JSON.stringify(commands).includes("mcp-oauth-secret"), false);
-  const mcpInstallCommand = commands.find(
-    (command) => command.name === "install-codex-mcp-oauth-credential",
-  );
-  assert.ok(mcpInstallCommand);
-  assert.equal(
-    mcpInstallCommand.command?.[5],
-    "/workspace/.sandpi/harnesses/codex/mcp-oauth-locks/file-store.lock",
-  );
-  assert.match(
-    mcpInstallCommand.command?.[2] ?? "",
-    /flock -x "\$2" mv -f -- "\$3" "\$4"/,
-  );
-  assert.match(
+  assert.doesNotMatch(
     String((sessions[0]?.spec.command as string[] | undefined)?.at(-1)),
     /mcp_oauth_credentials_store="file"/,
   );
@@ -1740,7 +1174,9 @@ test("starts one Environment-scoped Codex app-server with native state on the Vo
         command.command?.at(-1)?.includes("environment_v1") &&
         command.command
           ?.at(-1)
-          ?.includes("/dev/shm/sandpi-codex-mcp-oauth.json"),
+          ?.includes(
+            'readlink "$home/.credentials.json")" = "/dev/shm/sandpi-codex-mcp-oauth.json"',
+          ),
     ),
   );
 });

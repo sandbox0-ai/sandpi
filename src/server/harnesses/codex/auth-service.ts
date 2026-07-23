@@ -13,10 +13,7 @@ import {
   type CodexDeviceAuthFlow,
   publicCodexDeviceAuthFlow,
 } from "./auth-store";
-import type {
-  CodexCredentialMaterial,
-  CodexMcpOAuthCredentialMaterial,
-} from "./service";
+import type { CodexCredentialMaterial } from "./service";
 import {
   decodeCodexSupervisorEvents,
   type DecodedCodexRecord,
@@ -27,9 +24,6 @@ const LOGIN_FLOW_LIFETIME_MS = 20 * 60 * 1_000;
 const RPC_TIMEOUT_MS = 30_000;
 const WORKER_INTERVAL_MS = 1_000;
 const CREDENTIAL_ASSOCIATED_DATA_PREFIX = "sandpi:codex:environment-credential:";
-const MCP_OAUTH_ASSOCIATED_DATA_PREFIX =
-  "sandpi:codex:environment-mcp-oauth-credential:";
-const MAX_MCP_OAUTH_CREDENTIAL_BYTES = 4 * 1024 * 1024;
 const CODEX_ACCOUNT_PLAN_TYPES = new Set<CodexAccountPlanType>([
   "free",
   "go",
@@ -211,93 +205,6 @@ export class CodexEnvironmentAuthService {
     return this.materializeCredential(stored.environmentId, result.credential);
   }
 
-  async mcpOAuthCredentialForEnvironmentRuntime(environmentId: string) {
-    const stored =
-      await this.authStore.getMcpOAuthCredentialForEnvironmentRuntime(
-        environmentId,
-      );
-    if (!stored) return undefined;
-    return this.materializeMcpOAuthCredential(environmentId, stored);
-  }
-
-  async markMcpOAuthCredentialMaterialized(
-    environmentId: string,
-    credential: CodexMcpOAuthCredentialMaterial,
-  ) {
-    await this.authStore.markMcpOAuthCredentialMaterialized(
-      environmentId,
-      credential.sourceId,
-      credential.revision,
-    );
-  }
-
-  async syncMcpOAuthCredentialFromRuntime(
-    environmentId: string,
-    credentialsJson: string | undefined,
-  ) {
-    const stored =
-      await this.authStore.getMcpOAuthCredentialForEnvironmentRuntime(
-        environmentId,
-      );
-    const credentials =
-      credentialsJson === undefined
-        ? undefined
-        : validateCodexMcpOAuthCredentialJson(credentialsJson);
-    if (
-      credentialsJson === undefined ||
-      credentials === undefined ||
-      Object.keys(credentials).length === 0
-    ) {
-      if (!stored) return undefined;
-      const result =
-        await this.authStore.revokeMcpOAuthCredentialFromEnvironment(
-          environmentId,
-          stored?.bindingSourceId,
-        );
-      if (result.revoked) return undefined;
-      return this.materializeMcpOAuthCredential(
-        environmentId,
-        result.credential,
-      );
-    }
-    if (stored) {
-      const current = this.decryptMcpOAuthCredential(
-        environmentId,
-        stored.encrypted,
-      );
-      if (current === credentialsJson) {
-        await this.authStore.markMcpOAuthCredentialMaterialized(
-          environmentId,
-          stored.sourceId,
-          stored.revision,
-        );
-        return undefined;
-      }
-    }
-    const encrypted = this.requireEncryption().encrypt(
-      credentialsJson,
-      codexMcpOAuthCredentialAssociatedData(environmentId),
-    );
-    const result = await this.authStore.replaceMcpOAuthCredentialFromEnvironment(
-      environmentId,
-      stored?.bindingSourceId,
-      encrypted,
-      { type: "mcp-oauth" },
-    );
-    if (result.replaced) {
-      await this.authStore.markMcpOAuthCredentialMaterialized(
-        environmentId,
-        result.credential.sourceId,
-        result.credential.revision,
-      );
-      return undefined;
-    }
-    return this.materializeMcpOAuthCredential(
-      environmentId,
-      result.credential,
-    );
-  }
-
   async accountForEnvironment(
     userId: string,
     environmentId: string,
@@ -316,10 +223,6 @@ export class CodexEnvironmentAuthService {
       stored.metadata,
       environment.codingAgent.lastVerified,
     );
-  }
-
-  requireMcpOAuthPersistence() {
-    this.requireEncryption();
   }
 
   async resumePending() {
@@ -387,44 +290,6 @@ export class CodexEnvironmentAuthService {
       sourceId: stored.sourceId,
       revision: stored.revision,
       authJson: this.decryptCredential(environmentId, stored.encrypted),
-    };
-  }
-
-  private decryptMcpOAuthCredential(
-    environmentId: string,
-    encrypted: EncryptedValue,
-  ) {
-    try {
-      const credentialsJson = this.requireEncryption().decrypt(
-        encrypted,
-        codexMcpOAuthCredentialAssociatedData(environmentId),
-      );
-      validateCodexMcpOAuthCredentialJson(credentialsJson);
-      return credentialsJson;
-    } catch {
-      throw new HttpError(
-        500,
-        "codex_mcp_oauth_credential_unreadable",
-        "The Environment's Codex MCP OAuth credentials cannot be decrypted.",
-      );
-    }
-  }
-
-  private materializeMcpOAuthCredential(
-    environmentId: string,
-    stored: {
-      sourceId: string;
-      revision: number;
-      encrypted: EncryptedValue;
-    },
-  ): CodexMcpOAuthCredentialMaterial {
-    return {
-      sourceId: stored.sourceId,
-      revision: stored.revision,
-      credentialsJson: this.decryptMcpOAuthCredential(
-        environmentId,
-        stored.encrypted,
-      ),
     };
   }
 
@@ -707,20 +572,6 @@ export function validateCodexCredentialJson(authJson: string) {
   if (!isRecord(value)) throw new Error("Codex auth.json must contain an object");
 }
 
-export function validateCodexMcpOAuthCredentialJson(credentialsJson: string) {
-  if (
-    Buffer.byteLength(credentialsJson, "utf8") === 0 ||
-    Buffer.byteLength(credentialsJson, "utf8") > MAX_MCP_OAUTH_CREDENTIAL_BYTES
-  ) {
-    throw new Error("Codex MCP OAuth credentials are invalid");
-  }
-  const value = JSON.parse(credentialsJson) as unknown;
-  if (!isRecord(value)) {
-    throw new Error("Codex MCP OAuth credentials must contain an object");
-  }
-  return value;
-}
-
 function supervisorOutputEvent(value: unknown): SupervisorOutputEvent | undefined {
   if (!isRecord(value)) return undefined;
   if (
@@ -743,10 +594,6 @@ function rpcError(code: string, value: unknown) {
 
 export function codexCredentialAssociatedData(environmentId: string) {
   return `${CREDENTIAL_ASSOCIATED_DATA_PREFIX}${environmentId}`;
-}
-
-export function codexMcpOAuthCredentialAssociatedData(environmentId: string) {
-  return `${MCP_OAUTH_ASSOCIATED_DATA_PREFIX}${environmentId}`;
 }
 
 function isActive(flow: CodexDeviceAuthFlow) {

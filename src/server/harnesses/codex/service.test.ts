@@ -32,13 +32,6 @@ const credentials = {
   async syncCredentialFromRuntime() {
     return undefined;
   },
-  async mcpOAuthCredentialForEnvironmentRuntime() {
-    return undefined;
-  },
-  async markMcpOAuthCredentialMaterialized() {},
-  async syncMcpOAuthCredentialFromRuntime() {
-    return undefined;
-  },
 } satisfies CodexCredentialProvider;
 
 const environment: Environment = {
@@ -161,12 +154,10 @@ interface Fixture {
     path: string;
     nativeSessionId: string;
   }>;
-  mcpLogoutNames: string[];
   exceptionalCandidateQueryCount(): number;
   lifecycleLockActive(): boolean;
   runtimeRecoveryCount(): number;
   environmentRuntime(): StoredEnvironmentRuntime;
-  setMcpOauthCredentialsJson(value: string | undefined): void;
   reconciledEnvironmentEpochs(): Array<{
     supervisorSessionId?: string;
     attemptId?: string;
@@ -271,7 +262,6 @@ function fixture(
     authoritativeEpochFence?: boolean;
     rollouts?: Record<string, string | Error | Promise<string>>;
     credentials?: CodexCredentialProvider;
-    mcpOauthCredentialsJson?: string;
   } = {},
 ): Fixture {
   const initial = input.sessions ?? [
@@ -353,8 +343,6 @@ function fixture(
     ...(input.exceptionalCandidateErrors ?? []),
   ];
   const rolloutReads: Fixture["rolloutReads"] = [];
-  const mcpLogoutNames: string[] = [];
-  let mcpOauthCredentialsJson = input.mcpOauthCredentialsJson;
   let exceptionalCandidateQueries = 0;
   let lifecycleLockDepth = 0;
   let runtimeRecoveries = 0;
@@ -527,17 +515,6 @@ function fixture(
       } finally {
         lifecycleLockDepth -= 1;
       }
-    },
-    async withEnvironmentMcpOAuthCredentialLock(
-      _environmentId: string,
-      operation: (lockedStore: SandpiStore) => Promise<unknown>,
-    ) {
-      if (input.assertScopedRecoveryLocks) {
-        assert.fail(
-          "credential lock must be acquired through the lifecycle-scoped Store",
-        );
-      }
-      return operation(rootStore);
     },
     async withEnvironmentRuntimeAccessLock(
       _environmentId: string,
@@ -905,33 +882,9 @@ function fixture(
     },
   } as unknown as SandpiStore;
   const rootStore = store;
-  const recoveryCredentialStore = Object.assign(
-    Object.create(store) as SandpiStore,
-    {
-      async environmentRuntime() {
-        assert.fail(
-          "runtime reconciliation must retain the outer lifecycle-scoped Store",
-        );
-      },
-      async recordCodexEnvironmentRuntime() {
-        assert.fail(
-          "runtime reconciliation must retain the outer lifecycle-scoped Store",
-        );
-      },
-    },
-  );
   const recoveryLifecycleStore = Object.assign(
     Object.create(store) as SandpiStore,
     {
-      async withEnvironmentMcpOAuthCredentialLock<T>(
-        requestedEnvironmentId: string,
-        operation: (lockedStore: SandpiStore) => Promise<T>,
-      ) {
-        assert.equal(requestedEnvironmentId, environment.id);
-        assert.equal(lifecycleLockDepth, 1);
-        recoveryLockEvents.push("credential");
-        return operation(recoveryCredentialStore);
-      },
       async environmentRuntime(requestedEnvironmentId: string) {
         assert.equal(requestedEnvironmentId, environment.id);
         recoveryLockEvents.push("lifecycle-runtime-read");
@@ -968,17 +921,6 @@ function fixture(
       return "{}";
     },
     async installCodexEnvironmentCredential() {},
-    async readCodexMcpOauthCredentials() {
-      return mcpOauthCredentialsJson;
-    },
-    async installCodexMcpOauthCredentials() {},
-    async logoutEnvironmentMcpServer(
-      _runtime: StoredEnvironmentRuntime,
-      name: string,
-    ) {
-      mcpLogoutNames.push(name);
-      mcpOauthCredentialsJson = undefined;
-    },
     async writeCodexMessage(
       runtime: StoredEnvironmentRuntime,
       value: unknown,
@@ -1104,14 +1046,10 @@ function fixture(
     recoveryLockEvents,
     streamStarts,
     rolloutReads,
-    mcpLogoutNames,
     exceptionalCandidateQueryCount: () => exceptionalCandidateQueries,
     lifecycleLockActive: () => lifecycleLockDepth > 0,
     runtimeRecoveryCount: () => runtimeRecoveries,
     environmentRuntime: () => environmentRuntime,
-    setMcpOauthCredentialsJson: (value) => {
-      mcpOauthCredentialsJson = value;
-    },
     reconciledEnvironmentEpochs: () => [...reconciledEnvironmentEpochs],
     setRuntimeState: ({ desiredState, observedState }) => {
       environmentRuntime = {
@@ -1378,14 +1316,13 @@ test("retries an epoch change raised inside Environment lifecycle recovery", asy
   }
 });
 
-test("recovery nests credential locking through the lifecycle-scoped Store", async () => {
+test("recovery keeps runtime reads on the lifecycle-scoped Store", async () => {
   const context = fixture({ assertScopedRecoveryLocks: true });
   try {
     await context.service.resumeWorkers();
 
     assert.deepEqual(context.recoveryLockEvents, [
       "lifecycle",
-      "credential",
       "lifecycle-runtime-read",
       "lifecycle-runtime-write",
     ]);
@@ -2627,89 +2564,7 @@ test("filters stale records when one Supervisor batch returns to the current epo
   }
 });
 
-test("replays MCP lifecycle notifications when their handler fails before cursor commit", async () => {
-  const context = fixture();
-  const handlerError = new Error("durable MCP transition failed");
-  const handledAtCursors: number[] = [];
-  const handledEvents: Array<{
-    supervisorSequence: number;
-    recordIndex: number;
-    runtimeGeneration: number;
-    attemptId?: string;
-    occurredAt: string;
-  }> = [];
-  let attempts = 0;
-  const responseId = "mcp-response-before-lifecycle";
-  const takeRpcResponse = (
-    context.service as unknown as {
-      takeRpcResponse(
-        environmentId: string,
-        requestId: string,
-      ): Record<string, unknown> | undefined;
-    }
-  ).takeRpcResponse;
-  context.service.setMcpNotificationHandler({
-    async handleCodexMcpNotification(
-      _environmentId,
-      _runtime,
-      _message,
-      event,
-    ) {
-      attempts += 1;
-      handledEvents.push(event);
-      handledAtCursors.push(
-        context.environmentRuntime().decoder.supervisorCursor,
-      );
-      assert.deepEqual(
-        takeRpcResponse.call(context.service, environment.id, responseId),
-        { id: responseId, result: { accepted: true } },
-      );
-      if (attempts === 1) throw handlerError;
-    },
-  });
-  const batch = [
-    supervisorOutputEvent(1, [
-      {
-        method: "mcpServer/oauthLogin/completed",
-        params: { name: "github_remote", success: true },
-      },
-      { id: responseId, result: { accepted: true } },
-    ]),
-  ];
-  try {
-    await assert.rejects(
-      context.commitEvents(batch),
-      (error: unknown) => error === handlerError,
-    );
-    assert.equal(context.environmentRuntime().decoder.supervisorCursor, 0);
-
-    await context.commitEvents(batch);
-
-    assert.equal(attempts, 2);
-    assert.deepEqual(handledAtCursors, [0, 0]);
-    assert.deepEqual(handledEvents, [
-      {
-        supervisorSequence: 1,
-        recordIndex: 0,
-        runtimeGeneration: 1,
-        attemptId: "attempt-environment-test",
-        occurredAt: "2026-07-16T00:00:00.000Z",
-      },
-      {
-        supervisorSequence: 1,
-        recordIndex: 0,
-        runtimeGeneration: 1,
-        attemptId: "attempt-environment-test",
-        occurredAt: "2026-07-16T00:00:00.000Z",
-      },
-    ]);
-    assert.equal(context.environmentRuntime().decoder.supervisorCursor, 1);
-  } finally {
-    await context.close();
-  }
-});
-
-test("uses the runtime that actually submitted a recovered native snapshot", async () => {
+ test("uses the runtime that actually submitted a recovered native snapshot", async () => {
   const context = fixture({ authoritativeEpochFence: true });
   try {
     await context.service.resumeWorkers();
@@ -4050,594 +3905,36 @@ test("lists and toggles Environment skills through Codex native RPCs", async () 
   }
 });
 
-test("correlates an MCP OAuth login with an isolated ephemeral Thread", async () => {
-  const context = fixture({
-    onRequest(message) {
-      if (message.method === "mcpServer/oauth/login") {
-        return {
-          id: message.id,
-          result: {
-            authorizationUrl:
-              "https://identity.example/authorize?state=test-only",
-          },
-        };
-      }
-      return undefined;
-    },
-  });
-  try {
-    const correlation =
-      await context.service.createEnvironmentMcpOAuthCorrelationThread({
-        userId: "user",
-        environmentId: environment.id,
-      });
-    const login = await context.service.beginEnvironmentMcpOAuthLogin({
-      environmentId: environment.id,
-      name: "github_remote",
-      nativeThreadId: correlation.nativeThreadId,
-      runtime: correlation.runtime,
-      scopes: ["repo"],
-      timeoutSecs: 600,
-    });
-
-    assert.equal(
-      login.authorizationUrl,
-      "https://identity.example/authorize?state=test-only",
-    );
-    const threadStart = context.writes.find(
-      ({ message }) =>
-        message.method === "thread/start" &&
-        (message.params as { ephemeral?: boolean }).ephemeral === true,
-    );
-    assert.ok(threadStart);
-    const oauthLogin = context.writes.find(
-      ({ message }) => message.method === "mcpServer/oauth/login",
-    );
-    assert.equal(
-      (oauthLogin?.message.params as { threadId?: string }).threadId,
-      correlation.nativeThreadId,
-    );
-    await context.service.releaseEnvironmentMcpOAuthCorrelationThread(
-      correlation.runtime,
-      correlation.nativeThreadId,
-    );
-    assert.equal(
-      (
-        context.writes.find(
-          ({ message }) => message.method === "thread/unsubscribe",
-        )?.message.params as { threadId?: string }
-      ).threadId,
-      correlation.nativeThreadId,
-    );
-  } finally {
-    await context.close();
-  }
-});
-
-test("MCP logout persists an absent native token store instead of reviving it", async () => {
-  const synchronized: Array<{
-    environmentId: string;
-    credentialsJson: string | undefined;
-  }> = [];
-  const credentialProvider = {
-    ...credentials,
-    async syncMcpOAuthCredentialFromRuntime(
-      environmentId: string,
-      credentialsJson: string | undefined,
-    ) {
-      synchronized.push({ environmentId, credentialsJson });
-      return undefined;
-    },
-  } satisfies CodexCredentialProvider;
-  const context = fixture({
-    credentials: credentialProvider,
-    onRequest(message) {
-      if (message.method === "mcpServerStatus/list") {
-        return {
-          id: message.id,
-          result: { data: [], nextCursor: null },
-        };
-      }
-      if (message.method === "config/read") {
-        return {
-          id: message.id,
-          result: {
-            config: { mcp_servers: {} },
-            origins: {},
-            layers: [],
-          },
-        };
-      }
-      return undefined;
-    },
-  });
-  try {
-    await context.service.logoutEnvironmentMcpServer({
-      userId: "user",
-      environmentId: environment.id,
-      name: "github_remote",
-    });
-
-    assert.deepEqual(context.mcpLogoutNames, ["github_remote"]);
-    assert.deepEqual(synchronized, [
-      {
-        environmentId: environment.id,
-        credentialsJson: undefined,
-      },
-    ]);
-  } finally {
-    await context.close();
-  }
-});
-
-test("MCP logout waits for an older persist and then reads native credentials again", async () => {
-  const oldCredentials = JSON.stringify({
-    github_remote: { access_token: "old-token" },
-  });
-  const synchronized: Array<string | undefined> = [];
-  let markFirstSyncStarted!: () => void;
-  const firstSyncStarted = new Promise<void>((resolve) => {
-    markFirstSyncStarted = resolve;
-  });
-  let releaseFirstSync: (() => void) | undefined;
-  const firstSyncBlocked = new Promise<void>((resolve) => {
-    releaseFirstSync = resolve;
-  });
-  const credentialProvider = {
-    ...credentials,
-    async syncMcpOAuthCredentialFromRuntime(
-      _environmentId: string,
-      credentialsJson: string | undefined,
-    ) {
-      synchronized.push(credentialsJson);
-      if (synchronized.length === 1) {
-        markFirstSyncStarted();
-        await firstSyncBlocked;
-      }
-      return undefined;
-    },
-  } satisfies CodexCredentialProvider;
-  const context = fixture({
-    credentials: credentialProvider,
-    mcpOauthCredentialsJson: oldCredentials,
-    onRequest(message) {
-      if (message.method === "mcpServerStatus/list") {
-        return {
-          id: message.id,
-          result: { data: [], nextCursor: null },
-        };
-      }
-      if (message.method === "config/read") {
-        return {
-          id: message.id,
-          result: {
-            config: { mcp_servers: {} },
-            origins: {},
-            layers: [],
-          },
-        };
-      }
-      return undefined;
-    },
-  });
-  try {
-    const backgroundPersist =
-      context.service.persistEnvironmentMcpOAuthCredential(
-        context.environmentRuntime(),
-      );
-    await firstSyncStarted;
-
-    let logoutSettled = false;
-    const logout = context.service
-      .logoutEnvironmentMcpServer({
-        userId: "user",
-        environmentId: environment.id,
-        name: "github_remote",
-      })
-      .finally(() => {
-        logoutSettled = true;
-      });
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.equal(logoutSettled, false);
-    assert.deepEqual(context.mcpLogoutNames, []);
-
-    releaseFirstSync?.();
-    await Promise.all([backgroundPersist, logout]);
-    assert.deepEqual(context.mcpLogoutNames, ["github_remote"]);
-    assert.deepEqual(synchronized, [oldCredentials, undefined]);
-  } finally {
-    releaseFirstSync?.();
-    await context.close();
-  }
-});
-
-test("MCP logout fails when the durable OAuth revocation fails", async () => {
-  const revokeError = new Error("durable MCP OAuth revoke failed");
-  const credentialProvider = {
-    ...credentials,
-    async syncMcpOAuthCredentialFromRuntime(
-      _environmentId: string,
-      credentialsJson: string | undefined,
-    ) {
-      assert.equal(credentialsJson, undefined);
-      throw revokeError;
-    },
-  } satisfies CodexCredentialProvider;
-  const context = fixture({ credentials: credentialProvider });
-  try {
-    await assert.rejects(
-      context.service.logoutEnvironmentMcpServer({
-        userId: "user",
-        environmentId: environment.id,
-        name: "github_remote",
-      }),
-      (error: unknown) => error === revokeError,
-    );
-    assert.deepEqual(context.mcpLogoutNames, ["github_remote"]);
-    assert.equal(
-      context.writes.some(
-        ({ message }) => message.method === "config/mcpServer/reload",
-      ),
-      false,
-    );
-  } finally {
-    await context.close();
-  }
-});
-
-test("credential flush queues a fresh MCP OAuth read behind an older persist", async () => {
-  const synchronized: Array<string | undefined> = [];
-  let markFirstSyncStarted!: () => void;
-  const firstSyncStarted = new Promise<void>((resolve) => {
-    markFirstSyncStarted = resolve;
-  });
-  let releaseFirstSync: (() => void) | undefined;
-  const firstSyncBlocked = new Promise<void>((resolve) => {
-    releaseFirstSync = resolve;
-  });
-  const credentialProvider = {
-    ...credentials,
-    async syncMcpOAuthCredentialFromRuntime(
-      _environmentId: string,
-      credentialsJson: string | undefined,
-    ) {
-      synchronized.push(credentialsJson);
-      if (synchronized.length === 1) {
-        markFirstSyncStarted();
-        await firstSyncBlocked;
-      }
-      return undefined;
-    },
-  } satisfies CodexCredentialProvider;
-  const context = fixture({
-    credentials: credentialProvider,
-    mcpOauthCredentialsJson: '{"github_remote":{"access_token":"old-token"}}',
-  });
-  try {
-    const backgroundPersist =
-      context.service.persistEnvironmentMcpOAuthCredential(
-        context.environmentRuntime(),
-      );
-    await firstSyncStarted;
-    context.setMcpOauthCredentialsJson(undefined);
-
-    const flush = context.service.flushEnvironmentCredentials(environment.id);
-    releaseFirstSync?.();
-    await Promise.all([backgroundPersist, flush]);
-    assert.deepEqual(synchronized, [
-      '{"github_remote":{"access_token":"old-token"}}',
-      undefined,
-    ]);
-  } finally {
-    releaseFirstSync?.();
-    await context.close();
-  }
-});
-
-test("MCP RPC failures do not expose provider-controlled error details", async () => {
-  const secret = "provider-error-secret";
+test("lists native MCP definitions and toggles only the user layer", async () => {
+  let docsEnabled = true;
   const context = fixture({
     onRequest(message) {
       if (message.method === "config/read") {
-        return {
-          id: message.id,
-          error: { message: `Authorization failed for ${secret}` },
-        };
-      }
-      return undefined;
-    },
-  });
-  try {
-    await assert.rejects(
-      context.service.listEnvironmentMcpServers("user", environment.id),
-      (error: unknown) => {
-        assert.ok(error instanceof HttpError);
-        assert.equal(error.code, "codex_config_read_failed");
-        assert.equal(
-          error.message,
-          "Codex could not read the Environment configuration.",
-        );
-        assert.equal(error.message.includes(secret), false);
-        return true;
-      },
-    );
-  } finally {
-    await context.close();
-  }
-});
-
-test("creates remote and local Environment MCP servers and reloads every native Thread", async () => {
-  let configured = 0;
-  const definition = {
-    url: "https://docs.example.test/mcp",
-    enabled: true,
-    required: false,
-    default_tools_approval_mode: "prompt",
-  };
-  const localDefinition = {
-    command: "npx",
-    args: ["-y", "@playwright/mcp@latest", "--headless", "--no-sandbox"],
-    enabled: true,
-    required: false,
-    startup_timeout_sec: 120,
-    default_tools_approval_mode: "prompt",
-  };
-  const context = fixture({
-    onRequest(message) {
-      if (message.method === "config/read") {
-        const mcpServers =
-          configured === 0
-            ? {}
-            : configured === 1
-              ? { docs: definition }
-              : { docs: definition, playwright: localDefinition };
-        return {
-          id: message.id,
-          result: {
-            config: { mcp_servers: mcpServers },
-            origins: {},
-            layers: [
-              {
-                name: {
-                  type: "user",
-                  file: "/workspace/.sandpi/harnesses/codex/config.toml",
-                  profile: null,
-                },
-                version: "one",
-                config: { mcp_servers: mcpServers },
-              },
-            ],
-          },
-        };
-      }
-      if (message.method === "config/batchWrite") {
-        configured += 1;
-        return {
-          id: message.id,
-          result: {
-            status: "ok",
-            version: "two",
-            filePath: "/workspace/.sandpi/harnesses/codex/config.toml",
-            overriddenMetadata: null,
-          },
-        };
-      }
-      if (message.method === "config/mcpServer/reload") {
-        return { id: message.id, result: {} };
-      }
-      if (message.method === "mcpServerStatus/list") {
-        return {
-          id: message.id,
-          result: {
-            data:
-              configured > 0
-                ? [
-                    {
-                      name: "docs",
-                      serverInfo: {
-                        name: "docs-server",
-                        title: "Docs",
-                        version: "1.0.0",
-                      },
-                      tools: {
-                        search: {
-                          name: "search",
-                          title: "Search docs",
-                          description: "Search the documentation index.",
-                        },
-                      },
-                      resources: [],
-                      resourceTemplates: [],
-                      authStatus: "unsupported",
-                    },
-                    ...(configured > 1
-                      ? [
-                          {
-                            name: "playwright",
-                            serverInfo: {
-                              name: "playwright",
-                              title: "Playwright",
-                              version: "1.0.0",
-                            },
-                            tools: {},
-                            resources: [],
-                            resourceTemplates: [],
-                            authStatus: "unsupported",
-                          },
-                        ]
-                      : []),
-                  ]
-                : [],
-            nextCursor: null,
-          },
-        };
-      }
-      return undefined;
-    },
-  });
-  try {
-    const inventory = await context.service.createEnvironmentMcpServer({
-      userId: "user",
-      environmentId: environment.id,
-      name: "docs",
-      server: {
-        transport: "streamable-http",
-        url: definition.url,
-        args: [],
-        enabled: true,
-        required: false,
-        defaultToolsApprovalMode: "prompt",
-      },
-    });
-    assert.equal(inventory.servers[0]?.runtimeStatus, "connected");
-    assert.equal(inventory.servers[0]?.managed, true);
-    assert.equal(inventory.servers[0]?.toolCount, 1);
-    assert.deepEqual(inventory.servers[0]?.tools, [
-      {
-        name: "search",
-        title: "Search docs",
-        description: "Search the documentation index.",
-      },
-    ]);
-
-    const batch = context.writes.find(
-      ({ message }) => message.method === "config/batchWrite",
-    );
-    const edits = (
-      batch?.message.params as { edits: Array<Record<string, unknown>> }
-    ).edits;
-    assert.ok(
-      edits.some(
-        (edit) =>
-          edit.keyPath === "mcp_servers.docs.url" &&
-          edit.value === definition.url,
-      ),
-    );
-    assert.ok(
-      edits.some(
-        (edit) =>
-          edit.keyPath === "mcp_servers.docs.enabled_tools" &&
-          edit.value === null,
-      ),
-    );
-    assert.ok(
-      edits.some(
-        (edit) =>
-          edit.keyPath === "mcp_servers.docs.disabled_tools" &&
-          edit.value === null,
-      ),
-    );
-    assert.ok(
-      edits.some(
-        (edit) =>
-          edit.keyPath === "mcp_servers.docs.command" && edit.value === null,
-      ),
-    );
-    assert.equal(
-      context.writes.some(
-        ({ message }) => message.method === "config/mcpServer/reload",
-      ),
-      true,
-    );
-
-    const localInventory = await context.service.createEnvironmentMcpServer({
-      userId: "user",
-      environmentId: environment.id,
-      name: "playwright",
-      server: {
-        transport: "stdio",
-        command: localDefinition.command,
-        args: localDefinition.args,
-        enabled: true,
-        required: false,
-        startupTimeoutSec: 120,
-        defaultToolsApprovalMode: "prompt",
-      },
-    });
-    const local = localInventory.servers.find(
-      (server) => server.name === "playwright",
-    );
-    assert.equal(local?.transport, "stdio");
-    assert.equal(local?.command, "npx");
-    assert.deepEqual(local?.args, localDefinition.args);
-
-    const batches = context.writes.filter(
-      ({ message }) => message.method === "config/batchWrite",
-    );
-    const localEdits = (
-      batches[1]?.message.params as { edits: Array<Record<string, unknown>> }
-    ).edits;
-    assert.ok(
-      localEdits.some(
-        (edit) =>
-          edit.keyPath === "mcp_servers.playwright.command" &&
-          edit.value === "npx",
-      ),
-    );
-    assert.ok(
-      localEdits.some(
-        (edit) =>
-          edit.keyPath === "mcp_servers.playwright.args" &&
-          Array.isArray(edit.value) &&
-          edit.value.join("\n") === localDefinition.args.join("\n"),
-      ),
-    );
-    assert.ok(
-      localEdits.some(
-        (edit) =>
-          edit.keyPath === "mcp_servers.playwright.url" && edit.value === null,
-      ),
-    );
-    assert.ok(
-      localEdits.some(
-        (edit) =>
-          edit.keyPath === "mcp_servers.playwright.startup_timeout_sec" &&
-          edit.value === 120,
-      ),
-    );
-    assert.equal(
-      context.writes.filter(
-        ({ message }) => message.method === "config/mcpServer/reload",
-      ).length,
-      2,
-    );
-  } finally {
-    await context.close();
-  }
-});
-
-test("removes legacy Codex MCP tool filters before exposing the full inventory", async () => {
-  let cleaned = false;
-  const context = fixture({
-    onRequest(message) {
-      if (message.method === "config/read") {
-        const definition = {
+        const docs = {
           url: "https://docs.example.test/mcp",
+          enabled: docsEnabled,
+        };
+        const admin = {
+          command: "admin-mcp",
+          args: ["--stdio"],
           enabled: true,
-          ...(!cleaned
-            ? { enabled_tools: ["search"], disabled_tools: ["publish"] }
-            : {}),
         };
         return {
           id: message.id,
           result: {
-            config: { mcp_servers: { docs: definition } },
-            origins: {},
+            config: { mcp_servers: { admin, docs } },
             layers: [
               {
                 name: { type: "user", profile: null },
-                config: { mcp_servers: { docs: definition } },
+                config: { mcp_servers: { docs } },
+              },
+              {
+                name: { type: "admin", profile: null },
+                config: { mcp_servers: { admin } },
               },
             ],
           },
         };
-      }
-      if (message.method === "config/batchWrite") {
-        cleaned = true;
-        return { id: message.id, result: { status: "ok" } };
-      }
-      if (message.method === "config/mcpServer/reload") {
-        return { id: message.id, result: {} };
       }
       if (message.method === "mcpServerStatus/list") {
         return {
@@ -4646,17 +3943,27 @@ test("removes legacy Codex MCP tool filters before exposing the full inventory",
             data: [
               {
                 name: "docs",
-                serverInfo: { name: "docs", version: "1" },
-                tools: {
-                  search: { name: "search" },
-                  publish: { name: "publish" },
+                serverInfo: {
+                  name: "docs",
+                  title: "Documentation",
+                  version: "1.0.0",
                 },
+                tools: { search: { name: "search" } },
+                resources: [{}],
+                resourceTemplates: [],
                 authStatus: "unsupported",
               },
             ],
             nextCursor: null,
           },
         };
+      }
+      if (message.method === "config/value/write") {
+        docsEnabled = false;
+        return { id: message.id, result: { status: "ok" } };
+      }
+      if (message.method === "config/mcpServer/reload") {
+        return { id: message.id, result: {} };
       }
       return undefined;
     },
@@ -4667,30 +3974,63 @@ test("removes legacy Codex MCP tool filters before exposing the full inventory",
       environment.id,
     );
     assert.deepEqual(
-      inventory.servers[0]?.tools.map((tool) => tool.name),
-      ["publish", "search"],
-    );
-    const cleanup = context.writes.find(
-      ({ message }) => message.method === "config/batchWrite",
-    );
-    assert.deepEqual(
-      (
-        cleanup?.message.params as {
-          edits: Array<{ keyPath: string; value: unknown }>;
-        }
-      ).edits,
+      inventory.servers.map((server) => ({
+        name: server.name,
+        transport: server.transport,
+        managed: server.managed,
+        runtimeStatus: server.runtimeStatus,
+        toolCount: server.toolCount,
+        resourceCount: server.resourceCount,
+      })),
       [
         {
-          keyPath: "mcp_servers.docs.enabled_tools",
-          value: null,
-          mergeStrategy: "replace",
+          name: "admin",
+          transport: "stdio",
+          managed: false,
+          runtimeStatus: "unavailable",
+          toolCount: 0,
+          resourceCount: 0,
         },
         {
-          keyPath: "mcp_servers.docs.disabled_tools",
-          value: null,
-          mergeStrategy: "replace",
+          name: "docs",
+          transport: "streamable-http",
+          managed: true,
+          runtimeStatus: "connected",
+          toolCount: 1,
+          resourceCount: 1,
         },
       ],
+    );
+
+    const updated = await context.service.setEnvironmentMcpServerEnabled({
+      userId: "user",
+      environmentId: environment.id,
+      name: "docs",
+      enabled: false,
+    });
+    assert.equal(
+      updated.servers.find((server) => server.name === "docs")?.runtimeStatus,
+      "disabled",
+    );
+    const write = context.writes.find(
+      ({ message }) => message.method === "config/value/write",
+    );
+    assert.deepEqual(write?.message.params, {
+      keyPath: "mcp_servers.docs.enabled",
+      value: false,
+      mergeStrategy: "replace",
+    });
+
+    await assert.rejects(
+      context.service.setEnvironmentMcpServerEnabled({
+        userId: "user",
+        environmentId: environment.id,
+        name: "admin",
+        enabled: false,
+      }),
+      (error) =>
+        error instanceof HttpError &&
+        error.code === "codex_mcp_server_not_managed",
     );
   } finally {
     await context.close();

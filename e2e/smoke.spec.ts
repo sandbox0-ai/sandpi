@@ -617,7 +617,7 @@ test("refreshes the Codex account and live limits after device login", async ({
   expect(completedEnvironmentRefreshes).toBeGreaterThan(0);
 });
 
-test("prefills native MCP definitions from the three shortcut groups", async ({
+test("lists native MCP servers and toggles user-level definitions", async ({
   page,
   request,
 }) => {
@@ -628,139 +628,14 @@ test("prefills native MCP definitions from the three shortcut groups", async ({
   test.skip(!environment, "An Environment is required for this check.");
   if (!environment) return;
 
-  await page.route(
-    `**/api/v1/environments/${encodeURIComponent(environment.id)}/harnesses/codex/mcp-servers`,
-    async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({
-          data: {
-            servers: [
-              {
-                name: "github",
-                transport: "streamable-http",
-                args: [],
-                url: "https://api.githubcopilot.com/mcp/",
-                enabled: true,
-                required: false,
-                managed: false,
-                authStatus: "notLoggedIn",
-                runtimeStatus: "authentication-required",
-                tools: [],
-                toolPolicy: {
-                  enforcement: "unavailable",
-                  allowedTools: [],
-                },
-                toolCount: 0,
-                resourceCount: 0,
-              },
-            ],
-          },
-        }),
-      });
-    },
-  );
-
-  await page.goto(
-    `/?environment=${encodeURIComponent(environment.id)}&new=1`,
-  );
-  await page
-    .getByRole("button", { name: `${environment.name} settings` })
-    .last()
-    .click();
-  const settingsDialog = page.getByRole("dialog", {
-    name: `${environment.name} settings`,
-  });
-  await expect(
-    settingsDialog.getByRole("button", { name: "Functions", exact: true }),
-  ).toHaveCount(0);
-  await expect(
-    settingsDialog.getByRole("button", { name: "Sharing", exact: true }),
-  ).toHaveCount(0);
-  await settingsDialog.getByRole("button", { name: "MCP servers" }).click();
-
-  await expect(
-    settingsDialog.getByText("Aggregator services", { exact: true }),
-  ).toBeVisible();
-  await expect(
-    settingsDialog.getByText("Third-party MCP servers", { exact: true }),
-  ).toBeVisible();
-  await expect(
-    settingsDialog.getByText("Local MCP servers", { exact: true }),
-  ).toBeVisible();
-  await expect(
-    settingsDialog.getByRole("button", { name: "GitHub is configured" }),
-  ).toBeDisabled();
-
-  await settingsDialog
-    .getByRole("button", { name: "Configure OpenConnector" })
-    .click();
-  await expect(settingsDialog.getByLabel("Transport")).toHaveValue(
-    "streamable-http",
-  );
-  await expect(
-    settingsDialog.getByLabel("Server URL", { exact: true }),
-  ).toHaveValue("https://connector.oomol.com/v1/mcp");
-  await settingsDialog.getByRole("button", { name: "Cancel" }).click();
-
-  await settingsDialog
-    .getByRole("button", { name: "Configure Playwright" })
-    .click();
-  await expect(
-    settingsDialog.getByText("Playwright", { exact: true }),
-  ).toBeInViewport();
-  await expect(
-    settingsDialog.getByText(/Trusted code: runs beside Codex/),
-  ).toBeInViewport();
-  await expect(settingsDialog.getByLabel("Name")).toHaveValue("playwright");
-  await expect(settingsDialog.getByLabel("Transport")).toHaveValue("stdio");
-  await expect(settingsDialog.getByLabel("Command")).toHaveValue("npx");
-  await expect(settingsDialog.getByLabel(/Arguments/)).toHaveValue(
-    "-y\n@playwright/mcp@0.0.78\n--headless\n--no-sandbox",
-  );
-
-  await settingsDialog.getByRole("button", { name: "Cancel" }).click();
-  await settingsDialog
-    .getByRole("button", { name: "Configure Context7" })
-    .click();
-  await expect(settingsDialog.getByLabel("Name")).toHaveValue("context7");
-  await expect(settingsDialog.getByLabel("Transport")).toHaveValue(
-    "streamable-http",
-  );
-  await expect(
-    settingsDialog.getByLabel("Server URL", { exact: true }),
-  ).toHaveValue("https://mcp.context7.com/mcp");
-});
-
-test("configures remote MCP tools through Sandbox0 while delegating aggregators", async ({
-  page,
-  request,
-}) => {
-  const response = await request.get("/api/v1/bootstrap");
-  expect(response.ok()).toBeTruthy();
-  const bootstrap = (await response.json()) as ApiEnvelope<SandpiBootstrap>;
-  const environment = bootstrap.data.environments[0];
-  test.skip(!environment, "An Environment is required for this check.");
-  if (!environment) return;
-
-  const browserErrors: string[] = [];
-  let submittedPolicy: unknown;
-  let selected = false;
-  page.on("console", (message) => {
-    if (message.type() === "error") browserErrors.push(message.text());
-  });
-  page.on("pageerror", (error) => browserErrors.push(error.message));
-
+  let enabled = true;
+  let submitted: unknown;
   await page.route(
     `**/api/v1/environments/${encodeURIComponent(environment.id)}/harnesses/codex/mcp-servers**`,
     async (route) => {
-      if (
-        route.request().method() === "PUT" &&
-        route.request().url().endsWith("/github/tool-policy")
-      ) {
-        submittedPolicy = route.request().postDataJSON();
-        selected = true;
+      if (route.request().method() === "PUT") {
+        submitted = route.request().postDataJSON();
+        enabled = false;
       }
       await route.fulfill({
         status: 200,
@@ -769,70 +644,29 @@ test("configures remote MCP tools through Sandbox0 while delegating aggregators"
           data: {
             servers: [
               {
-                name: "github",
-                transport: "streamable-http",
-                args: [],
-                url: "https://api.githubcopilot.com/mcp/",
+                name: "admin",
+                transport: "stdio",
+                command: "admin-mcp",
+                args: ["--stdio"],
                 enabled: true,
-                required: false,
-                managed: true,
-                authStatus: "bearerToken",
-                runtimeStatus: "connected",
-                credentialState: "key-configured",
-                readiness: "ready",
-                hasServerInfo: true,
-                presetId: "github",
-                authMode: "bearer",
-                tools: [
-                  {
-                    name: "get_issue",
-                    title: "Get issue",
-                    description: "Read an issue.",
-                  },
-                  {
-                    name: "update_issue",
-                    title: "Update issue",
-                    description: "Modify an issue.",
-                  },
-                ],
-                toolPolicy: selected
-                  ? {
-                      enforcement: "sandbox0",
-                      mode: "selected",
-                      allowedTools: ["get_issue"],
-                      status: "active",
-                    }
-                  : {
-                      enforcement: "sandbox0",
-                      mode: "all",
-                      allowedTools: [],
-                      status: "active",
-                    },
-                toolCount: 2,
+                managed: false,
+                authStatus: "unknown",
+                runtimeStatus: "unavailable",
+                toolCount: 0,
                 resourceCount: 0,
               },
               {
-                name: "composio",
+                name: "docs",
                 transport: "streamable-http",
                 args: [],
-                url: "https://connect.composio.dev/mcp",
-                enabled: true,
-                required: false,
+                url: "https://docs.example.test/mcp",
+                enabled,
                 managed: true,
-                authStatus: "oAuth",
-                runtimeStatus: "connected",
-                credentialState: "oauth-authorized",
-                readiness: "ready",
-                hasServerInfo: true,
-                presetId: "composio-connect",
-                authMode: "oauth",
-                tools: [{ name: "GMAIL_SEND_EMAIL" }],
-                toolPolicy: {
-                  enforcement: "platform",
-                  allowedTools: [],
-                },
-                toolCount: 1,
-                resourceCount: 0,
+                authStatus: "unsupported",
+                runtimeStatus: enabled ? "connected" : "disabled",
+                serverTitle: "Documentation",
+                toolCount: 3,
+                resourceCount: 1,
               },
             ],
           },
@@ -845,7 +679,9 @@ test("configures remote MCP tools through Sandbox0 while delegating aggregators"
     `/?environment=${encodeURIComponent(environment.id)}&new=1`,
   );
   await page
-    .getByRole("button", { name: `${environment.name} settings` })
+    .locator(".environment-group")
+    .filter({ hasText: environment.name })
+    .locator(".environment-row-actions button")
     .last()
     .click();
   const settingsDialog = page.getByRole("dialog", {
@@ -854,27 +690,19 @@ test("configures remote MCP tools through Sandbox0 while delegating aggregators"
   await settingsDialog.getByRole("button", { name: "MCP servers" }).click();
 
   await expect(
-    settingsDialog.getByText("Tool permissions are managed by the aggregator"),
+    settingsDialog.getByText("Documentation", { exact: true }),
   ).toBeVisible();
-  await settingsDialog.getByText("Sandbox0 tool access").click();
-  await settingsDialog
-    .getByRole("radio", { name: /Only selected tools/ })
-    .check();
-  await settingsDialog
-    .getByRole("checkbox", { name: /Update issue/ })
-    .uncheck();
-  await settingsDialog
-    .getByRole("button", { name: "Apply tool policy" })
-    .click();
+  await expect(settingsDialog.getByText("3 tools")).toBeVisible();
+  await expect(settingsDialog.getByText("Read only")).toBeVisible();
+  await expect(
+    settingsDialog.getByRole("button", { name: /Configure|Add MCP/ }),
+  ).toHaveCount(0);
 
-  await expect.poll(() => submittedPolicy).toEqual({
-    mode: "selected",
-    allowedTools: ["get_issue"],
-  });
-  await expect(settingsDialog.getByText("1 tool allowed")).toBeVisible();
-  await expect(settingsDialog.getByLabel("Enabled tools")).toHaveCount(0);
-  await expect(settingsDialog.getByLabel("Disabled tools")).toHaveCount(0);
-  expect(browserErrors).toEqual([]);
+  await settingsDialog.getByRole("switch", { name: "Disable docs" }).click();
+  await expect.poll(() => submitted).toEqual({ enabled: false });
+  await expect(
+    settingsDialog.getByRole("switch", { name: "Enable docs" }),
+  ).toHaveAttribute("aria-checked", "false");
 });
 
 test("configures Sandbox0 network modes through safe domain exceptions", async ({

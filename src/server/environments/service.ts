@@ -2,23 +2,13 @@ import { setTimeout as delay } from "node:timers/promises";
 
 import type { Environment, NetworkPolicy } from "@/lib/types";
 import { conflict, HttpError } from "@/server/http-error";
-import type {
-  EnvironmentRuntimeRecord,
-  RuntimeAdapter,
-} from "@/server/runtime/types";
+import type { RuntimeAdapter } from "@/server/runtime/types";
 import { SandpiStore } from "@/server/store";
 
 interface ServiceLogger {
   info(fields: object, message: string): void;
   error(fields: object, message: string): void;
 }
-
-export type EnvironmentNetworkPolicyApplier = (input: {
-  userId: string;
-  environmentId: string;
-  runtime: EnvironmentRuntimeRecord;
-  userPolicy: NetworkPolicy;
-}) => Promise<void>;
 
 export class EnvironmentService {
   private reconciliation?: Promise<void>;
@@ -32,7 +22,6 @@ export class EnvironmentService {
     private readonly store: SandpiStore,
     private readonly runtime: RuntimeAdapter,
     private readonly logger: ServiceLogger,
-    private readonly networkPolicyApplier?: EnvironmentNetworkPolicyApplier,
   ) {}
 
   setBeforeDelete(
@@ -154,19 +143,10 @@ export class EnvironmentService {
           // The Sandbox is owned by the Environment, so runtime edits apply to
           // the existing Sandbox instead of waiting for a future Session.
           if (lockedNetworkChanged) {
-            if (this.networkPolicyApplier) {
-              await this.networkPolicyApplier({
-                userId,
-                environmentId,
-                runtime,
-                userPolicy: input.networkPolicy,
-              });
-            } else {
-              await this.runtime.updateEnvironmentNetworkPolicy(
-                runtime,
-                input.networkPolicy,
-              );
-            }
+            await this.runtime.updateEnvironmentNetworkPolicy(
+              runtime,
+              input.networkPolicy,
+            );
           }
           if (lockedMemoryChanged) {
             await this.runtime.updateEnvironmentMemory(
@@ -179,20 +159,8 @@ export class EnvironmentService {
       return scopedStore.updateEnvironment(userId, environmentId, input);
     };
 
-    // Network policy is a whole-resource Sandbox0 replacement. Serialize its
-    // read, external apply and PostgreSQL update with credential-binding
-    // mutations and Environment deletion across every Sandpi replica. Memory
-    // and lifecycle/backup changes need the lifecycle lock so they cannot race
-    // a pause, snapshot, resume, reprovision or deletion.
-    if (networkChanged) {
-      return this.waitForMcpMutationLock(environmentId, (mcpStore) =>
-        this.waitForLifecycleLock(
-          environmentId,
-          updateWhileLifecycleLocked,
-          mcpStore,
-        ),
-      );
-    }
+    // Runtime edits use the lifecycle lock so they cannot race a pause,
+    // snapshot, resume, reprovision or deletion.
     return this.waitForLifecycleLock(
       environmentId,
       updateWhileLifecycleLocked,
@@ -224,8 +192,6 @@ export class EnvironmentService {
     }
 
     // Publish the terminal intent before cleanup releases the lifecycle lock.
-    // MCP credential/OAuth mutations use this durable gate to reject new
-    // external resources while deletion is in progress.
     await this.waitForLifecycleLock(environmentId, async (lockedStore) => {
       await lockedStore.prepareEnvironmentDeletion(userId, environmentId);
     });
@@ -281,26 +247,6 @@ export class EnvironmentService {
       503,
       "environment_lifecycle_busy",
       "Timed out waiting for the Environment lifecycle lock.",
-    );
-  }
-
-  private async waitForMcpMutationLock<T>(
-    environmentId: string,
-    operation: (store: SandpiStore) => Promise<T>,
-  ): Promise<T> {
-    const deadline = Date.now() + 130_000;
-    while (Date.now() < deadline) {
-      const result = await this.store.withEnvironmentMcpMutationLock(
-        environmentId,
-        (lockedStore) => operation(lockedStore ?? this.store),
-      );
-      if (result.acquired) return result.value;
-      await delay(250);
-    }
-    throw new HttpError(
-      503,
-      "environment_mcp_mutation_busy",
-      "Timed out waiting to update the Environment network policy.",
     );
   }
 

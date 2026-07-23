@@ -4,10 +4,7 @@ import test from "node:test";
 import type { Environment } from "@/lib/types";
 import type { RuntimeAdapter } from "@/server/runtime/types";
 import type { SandpiStore } from "@/server/store";
-import {
-  EnvironmentService,
-  type EnvironmentNetworkPolicyApplier,
-} from "./service";
+import { EnvironmentService } from "./service";
 
 const environment = {
   id: "env-test",
@@ -82,15 +79,6 @@ test("applies a changed network policy to the shared Environment Sandbox", async
     async getManageableEnvironment() {
       return environment;
     },
-    async withEnvironmentMcpMutationLock(
-      _environmentId: string,
-      operation: () => Promise<Environment>,
-    ) {
-      return {
-        acquired: true as const,
-        value: await operation(),
-      };
-    },
     async withEnvironmentLifecycleLock(
       _environmentId: string,
       operation: (lockedStore: SandpiStore) => Promise<Environment>,
@@ -161,9 +149,6 @@ test("serializes an idle timeout change with Environment lifecycle transitions",
         value: await operation(store as unknown as SandpiStore),
       };
     },
-    async withEnvironmentMcpMutationLock() {
-      assert.fail("an idle timeout change must not take the MCP mutation lock");
-    },
     async getEnvironmentRuntime() {
       assert.fail("an idle timeout change does not need a runtime policy apply");
     },
@@ -216,9 +201,6 @@ test("serializes a Workspace backup policy change without mutating Sandbox resou
         acquired: true as const,
         value: await operation(store as unknown as SandpiStore),
       };
-    },
-    async withEnvironmentMcpMutationLock() {
-      assert.fail("a backup policy change must not take the MCP mutation lock");
     },
     async getEnvironmentRuntime() {
       assert.fail("backup policy persistence does not mutate Sandbox resources");
@@ -291,9 +273,6 @@ test("applies a memory change to the shared Sandbox under the lifecycle lock", a
         value: await operation(store as unknown as SandpiStore),
       };
     },
-    async withEnvironmentMcpMutationLock() {
-      assert.fail("a memory change must not take the MCP mutation lock");
-    },
     async getEnvironmentRuntime() {
       steps.push("runtime");
       return runtimeRecord;
@@ -343,244 +322,6 @@ test("applies a memory change to the shared Sandbox under the lifecycle lock", a
   ]);
 });
 
-test("network updates nest lifecycle locking through the MCP-scoped Store", async () => {
-  const steps: string[] = [];
-  const nextPolicy: Environment["networkPolicy"] = {
-    mode: "block-all",
-    domainExceptions: ["github.com"],
-  };
-  const runtimeRecord = {
-    id: environment.id,
-    sandboxId: "sandbox-test",
-    workspaceVolumeId: "volume-test",
-    desiredState: "running",
-    runtimeGeneration: 1,
-    decoder: {
-      supervisorCursor: 0,
-      tailBase64: "",
-      runtimeGeneration: 1,
-    },
-  };
-  let mutationLockActive = false;
-  let lifecycleLockActive = false;
-  const lifecycleStore = {
-    async getManageableEnvironment(userId: string, environmentId: string) {
-      assert.equal(userId, "user-test");
-      assert.equal(environmentId, environment.id);
-      assert.equal(mutationLockActive, true);
-      assert.equal(lifecycleLockActive, true);
-      steps.push("L-read-environment");
-      return environment;
-    },
-    async getEnvironmentRuntime(userId: string, environmentId: string) {
-      assert.equal(userId, "user-test");
-      assert.equal(environmentId, environment.id);
-      assert.equal(mutationLockActive, true);
-      assert.equal(lifecycleLockActive, true);
-      steps.push("L-read-runtime");
-      return runtimeRecord;
-    },
-    async updateEnvironment(
-      userId: string,
-      environmentId: string,
-      input: {
-        name: string;
-        description: string;
-        color: string;
-        idlePauseTimeoutSeconds: number;
-        sandboxMemoryMiB: number;
-        workspaceBackup: Environment["workspaceBackup"];
-        networkPolicy: Environment["networkPolicy"];
-      },
-    ) {
-      assert.equal(userId, "user-test");
-      assert.equal(environmentId, environment.id);
-      assert.equal(mutationLockActive, true);
-      assert.equal(lifecycleLockActive, true);
-      steps.push("L-write");
-      return { ...environment, ...input };
-    },
-  } as unknown as SandpiStore;
-  const mutationStore = {
-    async withEnvironmentLifecycleLock(
-      environmentId: string,
-      operation: (lockedStore: SandpiStore) => Promise<Environment>,
-    ) {
-      assert.equal(environmentId, environment.id);
-      assert.equal(mutationLockActive, true);
-      steps.push("L");
-      lifecycleLockActive = true;
-      try {
-        return {
-          acquired: true as const,
-          value: await operation(lifecycleStore),
-        };
-      } finally {
-        lifecycleLockActive = false;
-      }
-    },
-    async getManageableEnvironment() {
-      assert.fail("network reads must use the lifecycle-scoped Store");
-    },
-    async getEnvironmentRuntime() {
-      assert.fail("runtime reads must use the lifecycle-scoped Store");
-    },
-    async updateEnvironment() {
-      assert.fail("network writes must use the lifecycle-scoped Store");
-    },
-  } as unknown as SandpiStore;
-  const rootStore = {
-    async getManageableEnvironment() {
-      steps.push("root-read");
-      return environment;
-    },
-    async withEnvironmentMcpMutationLock(
-      environmentId: string,
-      operation: (lockedStore: SandpiStore) => Promise<Environment>,
-    ) {
-      assert.equal(environmentId, environment.id);
-      assert.equal(mutationLockActive, false);
-      steps.push("M");
-      mutationLockActive = true;
-      try {
-        return {
-          acquired: true as const,
-          value: await operation(mutationStore),
-        };
-      } finally {
-        mutationLockActive = false;
-      }
-    },
-    async withEnvironmentLifecycleLock() {
-      assert.fail("lifecycle lock must be acquired through the MCP-scoped Store");
-    },
-  } as unknown as SandpiStore;
-  const runtime = {
-    async updateEnvironmentNetworkPolicy(
-      received: unknown,
-      policy: Environment["networkPolicy"],
-    ) {
-      assert.strictEqual(received, runtimeRecord);
-      assert.strictEqual(policy, nextPolicy);
-      assert.equal(mutationLockActive, true);
-      assert.equal(lifecycleLockActive, true);
-      steps.push("apply");
-    },
-  } as unknown as RuntimeAdapter;
-  const service = new EnvironmentService(rootStore, runtime, {
-    info() {},
-    error() {},
-  });
-
-  const updated = await service.update("user-test", environment.id, {
-    name: "Development",
-    description: "",
-    color: "#151515",
-    idlePauseTimeoutSeconds: 30 * 60,
-    sandboxMemoryMiB: 2 * 1024,
-    workspaceBackup: environment.workspaceBackup,
-    networkPolicy: nextPolicy,
-  });
-
-  assert.deepEqual(steps, [
-    "root-read",
-    "M",
-    "L",
-    "L-read-environment",
-    "L-read-runtime",
-    "apply",
-    "L-write",
-  ]);
-  assert.deepEqual(updated.networkPolicy, nextPolicy);
-});
-
-test("uses the injected network policy applier instead of the legacy runtime method", async () => {
-  const nextPolicy: Environment["networkPolicy"] = {
-    mode: "block-all",
-    domainExceptions: ["api.githubcopilot.com"],
-  };
-  const runtimeRecord = {
-    id: environment.id,
-    sandboxId: "sandbox-test",
-    workspaceVolumeId: "volume-test",
-    desiredState: "running",
-    runtimeGeneration: 1,
-    decoder: {
-      supervisorCursor: 0,
-      tailBase64: "",
-      runtimeGeneration: 1,
-    },
-  };
-  const store = {
-    async getManageableEnvironment() {
-      return environment;
-    },
-    async withEnvironmentMcpMutationLock(
-      _environmentId: string,
-      operation: () => Promise<Environment>,
-    ) {
-      return {
-        acquired: true as const,
-        value: await operation(),
-      };
-    },
-    async withEnvironmentLifecycleLock(
-      _environmentId: string,
-      operation: (lockedStore: SandpiStore) => Promise<Environment>,
-    ) {
-      return {
-        acquired: true as const,
-        value: await operation(store as unknown as SandpiStore),
-      };
-    },
-    async getEnvironmentRuntime() {
-      return runtimeRecord;
-    },
-    async updateEnvironment() {
-      return { ...environment, networkPolicy: nextPolicy };
-    },
-  } as unknown as SandpiStore;
-  let legacyCalls = 0;
-  const runtime = {
-    async updateEnvironmentNetworkPolicy() {
-      legacyCalls += 1;
-    },
-  } as unknown as RuntimeAdapter;
-  const applied: Parameters<EnvironmentNetworkPolicyApplier>[0][] = [];
-  const service = new EnvironmentService(
-    store,
-    runtime,
-    {
-      info() {},
-      error() {},
-    },
-    async (input) => {
-      applied.push(input);
-    },
-  );
-
-  const updated = await service.update("user-test", environment.id, {
-    name: "Development",
-    description: "",
-    color: "#151515",
-    idlePauseTimeoutSeconds: 30 * 60,
-    sandboxMemoryMiB: 2 * 1024,
-    workspaceBackup: environment.workspaceBackup,
-    networkPolicy: nextPolicy,
-  });
-
-  assert.equal(legacyCalls, 0);
-  assert.deepEqual(applied, [
-    {
-      userId: "user-test",
-      environmentId: environment.id,
-      runtime: runtimeRecord,
-      userPolicy: nextPolicy,
-    },
-  ]);
-  assert.deepEqual(updated.networkPolicy, nextPolicy);
-});
-
 test("rejects network policy changes after the Environment deletion gate", async () => {
   const nextPolicy: Environment["networkPolicy"] = {
     mode: "block-all",
@@ -590,12 +331,6 @@ test("rejects network policy changes after the Environment deletion gate", async
   const store = {
     async getManageableEnvironment() {
       return environment;
-    },
-    async withEnvironmentMcpMutationLock(
-      _environmentId: string,
-      operation: () => Promise<Environment>,
-    ) {
-      return { acquired: true as const, value: await operation() };
     },
     async withEnvironmentLifecycleLock(
       _environmentId: string,

@@ -95,57 +95,11 @@ export interface CodexSkillsInventory {
 }
 
 export type CodexMcpTransport = "stdio" | "streamable-http";
-export type CodexMcpApprovalMode = "auto" | "prompt" | "writes" | "approve";
-export type CodexMcpAuthStatus =
-  | "unsupported"
-  | "notLoggedIn"
-  | "bearerToken"
-  | "oAuth"
-  | "unknown";
 export type CodexMcpRuntimeStatus =
   | "connected"
   | "authentication-required"
   | "unavailable"
   | "disabled";
-export type CodexMcpCredentialState =
-  | "public"
-  | "key-missing"
-  | "key-configured"
-  | "oauth-required"
-  | "oauth-authorized"
-  | "reauth-required"
-  | "unknown";
-export type CodexMcpReadiness =
-  | "unknown"
-  | "checking"
-  | "ready"
-  | "failed"
-  | "disabled"
-  | "stale";
-export type CodexMcpRemoteAuthMethod = "none" | "oauth" | "bearer" | "header";
-export type CodexMcpCredentialMutation = "keep" | "replace" | "remove";
-
-export interface CodexMcpTool {
-  /** Raw MCP tool name used by tools/call. */
-  name: string;
-  title?: string;
-  description?: string;
-}
-
-export type CodexMcpToolPolicyEnforcement =
-  | "sandbox0"
-  | "platform"
-  | "unavailable";
-export type CodexMcpToolPolicyMode = "all" | "selected";
-export type CodexMcpToolPolicyStatus = "active" | "updating" | "error";
-
-export interface CodexMcpToolPolicy {
-  enforcement: CodexMcpToolPolicyEnforcement;
-  mode?: CodexMcpToolPolicyMode;
-  allowedTools: string[];
-  status?: CodexMcpToolPolicyStatus;
-  error?: string;
-}
 
 export interface CodexMcpServer {
   name: string;
@@ -154,81 +108,14 @@ export interface CodexMcpServer {
   args: string[];
   url?: string;
   enabled: boolean;
-  required: boolean;
-  startupTimeoutSec?: number;
-  toolTimeoutSec?: number;
-  defaultToolsApprovalMode?: CodexMcpApprovalMode;
   /** True when the definition is owned by the Environment's Codex user config. */
   managed: boolean;
-  authStatus: CodexMcpAuthStatus;
-  /** Legacy combined status. New clients should use credentialState + readiness. */
   runtimeStatus: CodexMcpRuntimeStatus;
-  credentialState?: CodexMcpCredentialState;
-  readiness?: CodexMcpReadiness;
-  /** Distinguishes a successfully initialized zero-tool server from no response. */
-  hasServerInfo?: boolean;
-  startupError?: string;
-  presetId?: string;
-  authMode?: CodexMcpRemoteAuthMethod;
-  scopes?: string[];
   serverTitle?: string;
-  serverVersion?: string;
-  tools: CodexMcpTool[];
-  toolPolicy: CodexMcpToolPolicy;
   toolCount: number;
   resourceCount: number;
 }
 
 export interface CodexMcpInventory {
   servers: CodexMcpServer[];
-  /** The one persisted non-terminal Environment OAuth flow, when present. */
-  activeOAuthFlow?: CodexMcpOAuthFlow;
-}
-
-export interface CodexMcpServerInput {
-  transport: CodexMcpTransport;
-  command?: string;
-  args: string[];
-  url?: string;
-  enabled: boolean;
-  required: boolean;
-  startupTimeoutSec?: number;
-  toolTimeoutSec?: number;
-  defaultToolsApprovalMode?: CodexMcpApprovalMode;
-  scopes?: string[];
-}
-
-export interface CodexMcpToolPolicyInput {
-  mode: CodexMcpToolPolicyMode;
-  allowedTools: string[];
-}
-
-export interface CodexMcpCredentialInput {
-  method: Extract<CodexMcpRemoteAuthMethod, "bearer" | "header">;
-  secret: string;
-  headerName?: string;
-  valueTemplate?: string;
-  presetId?: string;
-}
-
-export type CodexMcpOAuthFlowStatus =
-  | "starting"
-  | "awaiting_user"
-  | "completed"
-  | "failed"
-  | "expired"
-  | "cancelled";
-
-export interface CodexMcpOAuthFlow {
-  id: string;
-  serverName: string;
-  status: CodexMcpOAuthFlowStatus;
-  authorizationUrl?: string;
-  expiresAt?: string;
-  error?: string;
-}
-
-export interface CodexMcpOAuthLoginInput {
-  presetId?: string;
-  scopes?: string[];
 }

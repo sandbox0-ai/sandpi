@@ -69,6 +69,7 @@ test("migration history contains every durable Sandpi boundary", async () => {
       "0042_environment_mcp_tool_policies",
       "0043_environment_workspace_backups",
       "0044_user_owned_resources",
+      "0045_codex_native_mcp",
     ],
   );
 
@@ -597,4 +598,29 @@ test("migration history contains every durable Sandpi boundary", async () => {
   );
   assert.match(workspaceBackupsSql, /workspace_backup_retry_at TIMESTAMPTZ/);
   assert.doesNotMatch(workspaceBackupsSql, /snapshot_(?:content|bytes) BYTEA/i);
+
+  const codexNativeMcpSql = migrations[44]?.sql ?? "";
+  assert.match(
+    codexNativeMcpSql,
+    /Cannot remove legacy MCP integration state[\s\S]+ERRCODE = 'check_violation'/,
+  );
+  assert.match(
+    codexNativeMcpSql,
+    /DELETE FROM environment_credential_bindings[\s\S]+credential_slot = 'mcp-oauth'/,
+  );
+  assert.match(
+    codexNativeMcpSql,
+    /DELETE FROM harness_credentials[\s\S]+credential_slot = 'mcp-oauth'/,
+  );
+  assert.match(codexNativeMcpSql, /DROP TABLE environment_mcp_oauth_events/);
+  assert.match(codexNativeMcpSql, /DROP TABLE environment_mcp_oauth_flows/);
+  assert.match(codexNativeMcpSql, /DROP TABLE environment_mcp_integrations/);
+  assert.match(
+    codexNativeMcpSql,
+    /harness_credentials_codex_slot_check[\s\S]+credential_slot = 'account'[\s\S]+credential_type = 'codex-native-auth-json'/,
+  );
+  assert.match(
+    codexNativeMcpSql,
+    /environment_credential_bindings_codex_slot_check[\s\S]+credential_slot = 'account'[\s\S]+native_target_path = '\/dev\/shm\/sandpi-codex-auth\.json'/,
+  );
 });

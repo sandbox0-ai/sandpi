@@ -16,11 +16,8 @@ import type {
   CodexAccountRateLimits,
   CodexCreditsSnapshot,
   CodexEnvironmentSkill,
-  CodexMcpAuthStatus,
   CodexMcpInventory,
   CodexMcpServer,
-  CodexMcpServerInput,
-  CodexMcpTool,
   CodexMcpTransport,
   CodexRateLimitSnapshot,
   CodexRateLimitWindow,
@@ -44,9 +41,7 @@ import {
   type StoredSessionRuntime,
 } from "@/server/store";
 import {
-  codexNativeEventIdentity,
   decodeCodexSupervisorEvents,
-  type CodexNativeEventIdentity,
   type CodexDecoderState,
   type DecodedCodexRecord,
   type SupervisorOutputEvent,
@@ -98,6 +93,12 @@ const CODEX_ACCOUNT_PLAN_TYPES = new Set<CodexAccountPlanType>([
 const TRANSCRIPT_NOTIFICATION_METHODS = new Set<string>(
   CODEX_TRANSCRIPT_NOTIFICATION_METHODS,
 );
+type CodexMcpAuthStatus =
+  | "unsupported"
+  | "notLoggedIn"
+  | "bearerToken"
+  | "oAuth"
+  | "unknown";
 
 interface ServiceLogger {
   debug(fields: object, message: string): void;
@@ -170,14 +171,7 @@ export interface CodexCredentialMaterial {
   authJson: string;
 }
 
-export interface CodexMcpOAuthCredentialMaterial {
-  sourceId: string;
-  revision: number;
-  credentialsJson: string;
-}
-
 export interface CodexCredentialProvider {
-  requireMcpOAuthPersistence?(): void;
   credentialForEnvironment(
     userId: string,
     environmentId: string,
@@ -193,17 +187,6 @@ export interface CodexCredentialProvider {
     environmentId: string,
     authJson: string,
   ): Promise<CodexCredentialMaterial | undefined>;
-  mcpOAuthCredentialForEnvironmentRuntime(
-    environmentId: string,
-  ): Promise<CodexMcpOAuthCredentialMaterial | undefined>;
-  markMcpOAuthCredentialMaterialized(
-    environmentId: string,
-    credential: CodexMcpOAuthCredentialMaterial,
-  ): Promise<void>;
-  syncMcpOAuthCredentialFromRuntime(
-    environmentId: string,
-    credentialsJson: string | undefined,
-  ): Promise<CodexMcpOAuthCredentialMaterial | undefined>;
 }
 
 export interface CodexNativeSnapshotRead {
@@ -212,15 +195,6 @@ export interface CodexNativeSnapshotRead {
   liveCursor: number;
   /** Supplemental rollout read that never delays the conversation snapshot. */
   activity: Promise<CodexRolloutActivityFeed>;
-}
-
-export interface CodexMcpNotificationHandler {
-  handleCodexMcpNotification(
-    environmentId: string,
-    runtime: StoredEnvironmentRuntime,
-    message: Record<string, unknown>,
-    event: CodexNativeEventIdentity & { occurredAt: string },
-  ): Promise<void>;
 }
 
 /**
@@ -237,7 +211,6 @@ export class CodexService {
   >();
   private readonly initializing = new Map<string, Promise<void>>();
   private readonly credentialSyncs = new Map<string, Promise<void>>();
-  private readonly mcpOAuthCredentialSyncs = new Map<string, Promise<void>>();
   private readonly rpcResponses = new Map<
     string,
     Map<string, Record<string, unknown>>
@@ -264,7 +237,6 @@ export class CodexService {
   private readonly events = new EventEmitter();
   private readonly startupRecoveries = new Set<Promise<void>>();
   private readonly advisoryLockScope = new AsyncLocalStorage<SandpiStore>();
-  private mcpNotificationHandler?: CodexMcpNotificationHandler;
   private closed = false;
 
   constructor(
@@ -285,10 +257,6 @@ export class CodexService {
     } = {},
   ) {
     this.events.setMaxListeners(0);
-  }
-
-  setMcpNotificationHandler(handler: CodexMcpNotificationHandler) {
-    this.mcpNotificationHandler = handler;
   }
 
   /**
@@ -618,298 +586,6 @@ export class CodexService {
     return this.readEnvironmentMcpInventory(environmentId, runtime);
   }
 
-  async environmentRuntimeForMcp(userId: string, environmentId: string) {
-    return this.environmentRuntimeForEnvironment(userId, environmentId);
-  }
-
-  requireEnvironmentMcpOAuthPersistence() {
-    if (!this.credentials.requireMcpOAuthPersistence) {
-      throw new HttpError(
-        503,
-        "credential_encryption_not_configured",
-        "MCP OAuth credential persistence is not configured.",
-      );
-    }
-    this.credentials.requireMcpOAuthPersistence();
-  }
-
-  async configureEnvironmentMcpOAuthCallback(input: {
-    userId: string;
-    environmentId: string;
-    port: number;
-    url: string;
-  }) {
-    const runtime = await this.environmentRuntimeForEnvironment(
-      input.userId,
-      input.environmentId,
-    );
-    const response = await this.requestCodex(input.environmentId, runtime, {
-      method: "config/batchWrite",
-      id: rpcId("mcp-oauth-config", input.environmentId),
-      params: {
-        edits: [
-          {
-            keyPath: "mcp_oauth_credentials_store",
-            value: "file",
-            mergeStrategy: "replace",
-          },
-          {
-            keyPath: "mcp_oauth_callback_port",
-            value: input.port,
-            mergeStrategy: "replace",
-          },
-          {
-            keyPath: "mcp_oauth_callback_url",
-            value: input.url,
-            mergeStrategy: "replace",
-          },
-        ],
-        reloadUserConfig: true,
-      },
-    });
-    requireMcpRpcResult(
-      response,
-      "codex_mcp_oauth_config_failed",
-      "Codex could not configure the MCP OAuth callback.",
-    );
-    return runtime;
-  }
-
-  async createEnvironmentMcpOAuthCorrelationThread(input: {
-    userId: string;
-    environmentId: string;
-  }) {
-    const runtime = await this.environmentRuntimeForEnvironment(
-      input.userId,
-      input.environmentId,
-    );
-    const submitted = await this.requestCodexWithRuntime(
-      input.environmentId,
-      runtime,
-      {
-        method: "thread/start",
-        id: rpcId("mcp-oauth-thread", input.environmentId),
-        params: {
-          ...threadConfiguration(),
-          ephemeral: true,
-        },
-      },
-    );
-    const response = submitted.response;
-    if (response.error) {
-      throw new HttpError(
-        502,
-        "codex_mcp_oauth_correlation_failed",
-        "Codex could not create an isolated MCP OAuth attempt.",
-      );
-    }
-    const nativeThreadId = threadIdFromRpcResponse(response);
-    if (!nativeThreadId) {
-      throw invalidCodexResponse(
-        "codex_mcp_oauth_correlation_failed",
-        "Codex returned an invalid MCP OAuth correlation Thread.",
-      );
-    }
-    return { nativeThreadId, runtime: submitted.runtime };
-  }
-
-  async beginEnvironmentMcpOAuthLogin(input: {
-    environmentId: string;
-    name: string;
-    nativeThreadId: string;
-    runtime: StoredEnvironmentRuntime;
-    scopes?: string[];
-    timeoutSecs?: number;
-  }) {
-    if (input.runtime.id !== input.environmentId) {
-      throw new Error("MCP OAuth runtime belongs to another Environment.");
-    }
-    const name = requireMcpServerName(input.name);
-    const submitted = await this.requestCodexWithRuntime(
-      input.environmentId,
-      input.runtime,
-      {
-        method: "mcpServer/oauth/login",
-        id: rpcId("mcp-oauth-login", `${input.environmentId}-${name}`),
-        params: {
-          name,
-          threadId: input.nativeThreadId,
-          ...(input.scopes?.length ? { scopes: input.scopes } : {}),
-          ...(input.timeoutSecs ? { timeoutSecs: input.timeoutSecs } : {}),
-        },
-      },
-      undefined,
-      undefined,
-      false,
-    );
-    const response = submitted.response;
-    const result = requireMcpRpcResult(
-      response,
-      "codex_mcp_oauth_login_failed",
-      "Codex could not start MCP OAuth login.",
-    );
-    const authorizationUrl = objectString(result, "authorizationUrl");
-    if (!authorizationUrl) {
-      throw invalidCodexResponse(
-        "codex_mcp_oauth_login_failed",
-        "Codex returned an invalid MCP OAuth authorization URL.",
-      );
-    }
-    return { authorizationUrl, runtime: submitted.runtime };
-  }
-
-  async releaseEnvironmentMcpOAuthCorrelationThread(
-    runtime: StoredEnvironmentRuntime,
-    nativeThreadId: string,
-  ) {
-    if (!nativeThreadId.trim()) {
-      throw new Error("MCP OAuth correlation Thread id is required.");
-    }
-    const response = await this.requestCodex(
-      runtime.id,
-      runtime,
-      {
-        method: "thread/unsubscribe",
-        id: rpcId("mcp-oauth-unsubscribe", nativeThreadId),
-        params: { threadId: nativeThreadId },
-      },
-      undefined,
-      undefined,
-      false,
-    );
-    requireMcpRpcResult(
-      response,
-      "codex_mcp_oauth_correlation_cleanup_failed",
-      "Codex could not release the MCP OAuth correlation Thread.",
-    );
-  }
-
-  async testEnvironmentMcpServer(input: {
-    userId: string;
-    environmentId: string;
-    name: string;
-  }) {
-    const runtime = await this.environmentRuntimeForEnvironment(
-      input.userId,
-      input.environmentId,
-    );
-    const name = requireMcpServerName(input.name);
-    await this.reloadEnvironmentMcpServers(input.environmentId, runtime);
-    const inventory = await this.readEnvironmentMcpInventory(
-      input.environmentId,
-      runtime,
-    );
-    if (!inventory.servers.some((server) => server.name === name)) {
-      throw new HttpError(
-        404,
-        "codex_mcp_server_not_found",
-        "The MCP server is no longer configured.",
-      );
-    }
-    return inventory;
-  }
-
-  async logoutEnvironmentMcpServer(input: {
-    userId: string;
-    environmentId: string;
-    name: string;
-  }) {
-    const runtime = await this.environmentRuntimeForEnvironment(
-      input.userId,
-      input.environmentId,
-    );
-    await this.discardEnvironmentMcpOAuthCredential(runtime, input.name);
-    await this.reloadEnvironmentMcpServers(input.environmentId, runtime);
-    return this.readEnvironmentMcpInventory(input.environmentId, runtime);
-  }
-
-  async persistEnvironmentMcpOAuthCredential(
-    runtime: StoredEnvironmentRuntime,
-  ) {
-    await this.syncFreshEnvironmentMcpOAuthCredential(runtime);
-  }
-
-  async discardEnvironmentMcpOAuthCredential(
-    runtime: StoredEnvironmentRuntime,
-    name: string,
-  ) {
-    const validatedName = requireMcpServerName(name);
-    await this.syncFreshEnvironmentMcpOAuthCredential(runtime, () =>
-      this.runtime.logoutEnvironmentMcpServer(runtime, validatedName),
-    );
-  }
-
-  async createEnvironmentMcpServer(input: {
-    userId: string;
-    environmentId: string;
-    name: string;
-    server: CodexMcpServerInput;
-  }) {
-    const runtime = await this.environmentRuntimeForEnvironment(
-      input.userId,
-      input.environmentId,
-    );
-    const config = await this.readEnvironmentCodexConfig(
-      input.environmentId,
-      runtime,
-    );
-    const name = requireMcpServerName(input.name);
-    if (Object.hasOwn(config.effectiveServers, name)) {
-      throw new HttpError(
-        409,
-        "codex_mcp_server_exists",
-        "An MCP server with this name already exists in the effective Codex configuration.",
-      );
-    }
-    await this.writeEnvironmentMcpServer(
-      input.environmentId,
-      runtime,
-      name,
-      input.server,
-    );
-    return this.readEnvironmentMcpInventory(input.environmentId, runtime);
-  }
-
-  async updateEnvironmentMcpServer(input: {
-    userId: string;
-    environmentId: string;
-    name: string;
-    server: CodexMcpServerInput;
-  }) {
-    const runtime = await this.environmentRuntimeForEnvironment(
-      input.userId,
-      input.environmentId,
-    );
-    const config = await this.readEnvironmentCodexConfig(
-      input.environmentId,
-      runtime,
-    );
-    const name = requireMcpServerName(input.name);
-    const current = objectRecord(config.userServers[name]);
-    if (!current) {
-      throw new HttpError(
-        404,
-        "codex_mcp_server_not_managed",
-        "This MCP server is not managed by the Environment Codex configuration.",
-      );
-    }
-    const currentTransport = mcpTransport(current);
-    if (currentTransport && currentTransport !== input.server.transport) {
-      throw new HttpError(
-        409,
-        "codex_mcp_transport_immutable",
-        "Remove and recreate the MCP server to change its transport.",
-      );
-    }
-    await this.writeEnvironmentMcpServer(
-      input.environmentId,
-      runtime,
-      name,
-      input.server,
-    );
-    return this.readEnvironmentMcpInventory(input.environmentId, runtime);
-  }
-
   async setEnvironmentMcpServerEnabled(input: {
     userId: string;
     environmentId: string;
@@ -940,52 +616,14 @@ export class CodexService {
     return this.readEnvironmentMcpInventory(input.environmentId, runtime);
   }
 
-  async deleteEnvironmentMcpServer(input: {
-    userId: string;
-    environmentId: string;
-    name: string;
-  }) {
-    const runtime = await this.environmentRuntimeForEnvironment(
-      input.userId,
-      input.environmentId,
-    );
-    const config = await this.readEnvironmentCodexConfig(
-      input.environmentId,
-      runtime,
-    );
-    const name = requireMcpServerName(input.name);
-    if (!Object.hasOwn(config.userServers, name)) {
-      throw new HttpError(
-        404,
-        "codex_mcp_server_not_managed",
-        "This MCP server is not managed by the Environment Codex configuration.",
-      );
-    }
-    await this.writeCodexConfigValue(input.environmentId, runtime, {
-      keyPath: `mcp_servers.${name}`,
-      value: null,
-    });
-    await this.reloadEnvironmentMcpServers(input.environmentId, runtime);
-    return this.readEnvironmentMcpInventory(input.environmentId, runtime);
-  }
-
   private async readEnvironmentMcpInventory(
     environmentId: string,
     runtime: StoredEnvironmentRuntime,
   ): Promise<CodexMcpInventory> {
-    let config = await this.readEnvironmentCodexConfig(
+    const config = await this.readEnvironmentCodexConfig(
       environmentId,
       runtime,
     );
-    if (
-      await this.clearLegacyEnvironmentMcpToolFilters(
-        environmentId,
-        runtime,
-        config.userServers,
-      )
-    ) {
-      config = await this.readEnvironmentCodexConfig(environmentId, runtime);
-    }
     const statuses = new Map<string, Record<string, unknown>>();
     let cursor: string | undefined;
     do {
@@ -1047,43 +685,6 @@ export class CodexService {
     };
   }
 
-  private async clearLegacyEnvironmentMcpToolFilters(
-    environmentId: string,
-    runtime: StoredEnvironmentRuntime,
-    userServers: Record<string, unknown>,
-  ) {
-    const serverNames = Object.entries(userServers).flatMap(([name, value]) => {
-      const definition = objectRecord(value);
-      return definition &&
-        (objectStringArray(definition.enabled_tools).length > 0 ||
-          objectStringArray(definition.disabled_tools).length > 0)
-        ? [name]
-        : [];
-    });
-    if (serverNames.length === 0) return false;
-    const response = await this.requestCodex(environmentId, runtime, {
-      method: "config/batchWrite",
-      id: rpcId("mcp-tool-filter-cleanup", environmentId),
-      params: {
-        edits: serverNames.flatMap((name) =>
-          ["enabled_tools", "disabled_tools"].map((key) => ({
-            keyPath: `mcp_servers.${name}.${key}`,
-            value: null,
-            mergeStrategy: "replace",
-          })),
-        ),
-        reloadUserConfig: true,
-      },
-    });
-    requireMcpRpcResult(
-      response,
-      "codex_mcp_update_failed",
-      "Codex could not remove legacy MCP tool filters.",
-    );
-    await this.reloadEnvironmentMcpServers(environmentId, runtime);
-    return true;
-  }
-
   private async readEnvironmentCodexConfig(
     environmentId: string,
     runtime: StoredEnvironmentRuntime,
@@ -1117,33 +718,6 @@ export class CodexService {
       effectiveServers,
       userServers: objectRecord(userConfig?.mcp_servers) ?? {},
     };
-  }
-
-  private async writeEnvironmentMcpServer(
-    environmentId: string,
-    runtime: StoredEnvironmentRuntime,
-    name: string,
-    server: CodexMcpServerInput,
-  ) {
-    const values = codexMcpConfigValues(server);
-    const response = await this.requestCodex(environmentId, runtime, {
-      method: "config/batchWrite",
-      id: rpcId("mcp-config-write", environmentId),
-      params: {
-        edits: Object.entries(values).map(([key, value]) => ({
-          keyPath: `mcp_servers.${name}.${key}`,
-          value,
-          mergeStrategy: "replace",
-        })),
-        reloadUserConfig: true,
-      },
-    });
-    requireMcpRpcResult(
-      response,
-      "codex_mcp_update_failed",
-      "Codex could not update the MCP server.",
-    );
-    await this.reloadEnvironmentMcpServers(environmentId, runtime);
   }
 
   private async writeCodexConfigValue(
@@ -1708,19 +1282,9 @@ export class CodexService {
     }
   }
 
-  async flushEnvironmentCredentials(
-    environmentId: string,
-    lockStore?: SandpiStore,
-  ) {
+  async flushEnvironmentCredentials(environmentId: string) {
     const runtime = await this.store.environmentRuntime(environmentId);
-    await Promise.all([
-      this.captureEnvironmentCredential(runtime),
-      this.syncFreshEnvironmentMcpOAuthCredential(
-        runtime,
-        undefined,
-        lockStore ?? this.advisoryLockStore(),
-      ),
-    ]);
+    await this.captureEnvironmentCredential(runtime);
   }
 
   /**
@@ -1826,26 +1390,8 @@ export class CodexService {
       throw codexRuntimeEpochLostAfterSubmission();
     }
 
-    // Cache every response before lifecycle handlers run. An MCP operation can
-    // be waiting on a response from this same batch while its lifecycle handler
-    // waits for that operation's mutation lock.
     for (const record of records) {
       this.cacheRpcRecord(stored.id, record);
-    }
-    // MCP lifecycle work is part of consuming the native event. Keep the
-    // durable cursor behind it so a crash or handler failure replays the event.
-    for (const record of records) {
-      if (isMcpLifecycleNotification(record.message)) {
-        await this.mcpNotificationHandler?.handleCodexMcpNotification(
-          stored.id,
-          next,
-          record.message,
-          {
-            ...codexNativeEventIdentity(record),
-            occurredAt: record.receivedAt,
-          },
-        );
-      }
     }
     const committed = await this.store.commitEnvironmentTransport(
       stored.id,
@@ -1949,7 +1495,6 @@ export class CodexService {
     await Promise.allSettled(this.startupRecoveries);
     await Promise.allSettled(this.recovering.values());
     await Promise.allSettled(this.credentialSyncs.values());
-    await Promise.allSettled(this.mcpOAuthCredentialSyncs.values());
     await Promise.allSettled(exceptionalTasks);
     this.workers.clear();
     this.workerTasks.clear();
@@ -2040,32 +1585,16 @@ export class CodexService {
             environmentId,
             async (lockedStore) => {
               const scopedStore = lockedStore ?? this.store;
-              return scopedStore.withEnvironmentMcpOAuthCredentialLock(
+              const ready = await this.reconcileEnvironmentRuntime(
                 environmentId,
-                async () => {
-                  const mcpOAuthCredential =
-                    await this.credentials.mcpOAuthCredentialForEnvironmentRuntime(
-                      environmentId,
-                    );
-                  const ready = await this.reconcileEnvironmentRuntime(
-                    environmentId,
-                    credential,
-                    mcpOAuthCredential,
-                    scopedStore,
-                  );
-                  await this.credentials.markCredentialMaterialized(
-                    environmentId,
-                    credential,
-                  );
-                  if (mcpOAuthCredential) {
-                    await this.credentials.markMcpOAuthCredentialMaterialized(
-                      environmentId,
-                      mcpOAuthCredential,
-                    );
-                  }
-                  return ready;
-                },
+                credential,
+                scopedStore,
               );
+              await this.credentials.markCredentialMaterialized(
+                environmentId,
+                credential,
+              );
+              return ready;
             },
           );
         if (locked.acquired) {
@@ -2096,14 +1625,12 @@ export class CodexService {
   private async reconcileEnvironmentRuntime(
     environmentId: string,
     credential: CodexCredentialMaterial,
-    mcpOAuthCredential: CodexMcpOAuthCredentialMaterial | undefined,
     lockedStore: SandpiStore,
   ) {
     const current = await lockedStore.environmentRuntime(environmentId);
     const recovered = await this.runtime.ensureCodexEnvironmentRuntime(
       current,
       credential.authJson,
-      mcpOAuthCredential?.credentialsJson,
     );
     const ready = await lockedStore.recordCodexEnvironmentRuntime(
       environmentId,
@@ -2172,68 +1699,6 @@ export class CodexService {
     });
     this.credentialSyncs.set(runtime.id, sync);
     return sync;
-  }
-
-  /**
-   * Explicit lifecycle transitions must observe native state after every older
-   * capture, rather than coalescing with a capture that may predate the change.
-   */
-  private syncFreshEnvironmentMcpOAuthCredential(
-    runtime: StoredEnvironmentRuntime,
-    beforeRead?: () => Promise<void>,
-    lockStore?: SandpiStore,
-  ) {
-    const previous =
-      this.mcpOAuthCredentialSyncs.get(runtime.id) ?? Promise.resolve();
-    const sync = previous.then(() =>
-      (
-        lockStore ?? this.advisoryLockStore()
-      ).withEnvironmentMcpOAuthCredentialLock(runtime.id, async () => {
-        await beforeRead?.();
-        await this.synchronizeEnvironmentMcpOAuthCredential(runtime);
-      }),
-    );
-    this.trackEnvironmentMcpOAuthCredentialSync(runtime.id, sync);
-    return sync;
-  }
-
-  private async synchronizeEnvironmentMcpOAuthCredential(
-    runtime: StoredEnvironmentRuntime,
-  ) {
-    const credentialsJson =
-      await this.runtime.readCodexMcpOauthCredentials(runtime);
-    const authoritative =
-      await this.credentials.syncMcpOAuthCredentialFromRuntime(
-        runtime.id,
-        credentialsJson,
-      );
-    if (!authoritative) return;
-    await this.runtime.installCodexMcpOauthCredentials(
-      runtime,
-      authoritative.credentialsJson,
-    );
-    await this.credentials.markMcpOAuthCredentialMaterialized(
-      runtime.id,
-      authoritative,
-    );
-  }
-
-  private trackEnvironmentMcpOAuthCredentialSync(
-    environmentId: string,
-    operation: Promise<void>,
-  ) {
-    const tail = operation
-      .then(
-        () => undefined,
-        () => undefined,
-      )
-      .finally(() => {
-        if (this.mcpOAuthCredentialSyncs.get(environmentId) === tail) {
-          this.mcpOAuthCredentialSyncs.delete(environmentId);
-        }
-      });
-    this.mcpOAuthCredentialSyncs.set(environmentId, tail);
-    return tail;
   }
 
   /**
@@ -3541,13 +3006,6 @@ function isTranscriptNotification(
   );
 }
 
-function isMcpLifecycleNotification(message: Record<string, unknown>) {
-  return (
-    message.method === "mcpServer/oauthLogin/completed" ||
-    message.method === "mcpServer/startupStatus/updated"
-  );
-}
-
 function notificationThreadId(message: Record<string, unknown>) {
   const params = objectRecord(message.params);
   return (
@@ -3915,27 +3373,6 @@ function mcpTransport(
   return undefined;
 }
 
-function codexMcpConfigValues(server: CodexMcpServerInput) {
-  return {
-    command: server.transport === "stdio" ? server.command : null,
-    args:
-      server.transport === "stdio" && server.args.length > 0
-        ? server.args
-        : null,
-    url: server.transport === "streamable-http" ? server.url : null,
-    enabled: server.enabled,
-    required: server.required,
-    startup_timeout_sec: server.startupTimeoutSec ?? null,
-    tool_timeout_sec: server.toolTimeoutSec ?? null,
-    default_tools_approval_mode: server.defaultToolsApprovalMode ?? null,
-    scopes: server.scopes?.length ? server.scopes : null,
-    // Sandbox0 Protocol Control is the enforcement point. Clearing legacy
-    // Codex filters keeps tools/list complete and avoids two policy truths.
-    enabled_tools: null,
-    disabled_tools: null,
-  };
-}
-
 function codexMcpServer(
   name: string,
   definition: Record<string, unknown>,
@@ -3946,7 +3383,7 @@ function codexMcpServer(
   const enabled = objectBoolean(definition, "enabled") ?? true;
   const authStatus = codexMcpAuthStatus(objectString(status, "authStatus"));
   const serverInfo = objectRecord(status?.serverInfo);
-  const tools = codexMcpTools(status?.tools);
+  const tools = objectRecord(status?.tools);
   const resources = Array.isArray(status?.resources) ? status.resources : [];
   const resourceTemplates = Array.isArray(status?.resourceTemplates)
     ? status.resourceTemplates
@@ -3958,16 +3395,6 @@ function codexMcpServer(
       : authStatus === "notLoggedIn"
         ? "authentication-required"
         : "unavailable";
-  const credentialState =
-    transport === "stdio"
-      ? "public"
-      : authStatus === "bearerToken"
-        ? "key-configured"
-        : authStatus === "oAuth"
-          ? "oauth-authorized"
-          : authStatus === "notLoggedIn"
-            ? "oauth-required"
-            : "unknown";
   return {
     name,
     transport,
@@ -3975,48 +3402,13 @@ function codexMcpServer(
     args: objectStringArray(definition.args),
     url: objectString(definition, "url"),
     enabled,
-    required: objectBoolean(definition, "required") ?? false,
-    startupTimeoutSec: objectNumber(definition, "startup_timeout_sec"),
-    toolTimeoutSec: objectNumber(definition, "tool_timeout_sec"),
-    defaultToolsApprovalMode: codexMcpApprovalMode(
-      objectString(definition, "default_tools_approval_mode"),
-    ),
-    scopes: objectStringArray(definition.scopes),
     managed,
-    authStatus,
     runtimeStatus,
-    credentialState,
-    readiness: !enabled ? "disabled" : serverInfo ? "ready" : "failed",
-    hasServerInfo: Boolean(serverInfo),
     serverTitle:
       objectString(serverInfo, "title") ?? objectString(serverInfo, "name"),
-    serverVersion: objectString(serverInfo, "version"),
-    tools,
-    toolPolicy: { enforcement: "unavailable", allowedTools: [] },
-    toolCount: tools.length,
+    toolCount: tools ? Object.keys(tools).length : 0,
     resourceCount: resources.length + resourceTemplates.length,
   };
-}
-
-function codexMcpTools(value: unknown): CodexMcpTool[] {
-  const tools = objectRecord(value);
-  if (!tools) return [];
-  return Object.entries(tools)
-    .flatMap(([mapName, value]): CodexMcpTool[] => {
-      const tool = objectRecord(value);
-      const name = objectString(tool, "name") ?? mapName.trim();
-      if (!tool || !name || name.length > 256 || name.includes("\0")) return [];
-      const title = objectString(tool, "title");
-      const description = objectString(tool, "description");
-      return [
-        {
-          name,
-          ...(title ? { title } : {}),
-          ...(description ? { description } : {}),
-        },
-      ];
-    })
-    .sort((left, right) => left.name.localeCompare(right.name));
 }
 
 function codexMcpAuthStatus(value: string | undefined): CodexMcpAuthStatus {
@@ -4026,17 +3418,6 @@ function codexMcpAuthStatus(value: string | undefined): CodexMcpAuthStatus {
     value === "oAuth"
     ? value
     : "unknown";
-}
-
-function codexMcpApprovalMode(
-  value: string | undefined,
-): CodexMcpServer["defaultToolsApprovalMode"] {
-  return value === "auto" ||
-    value === "prompt" ||
-    value === "writes" ||
-    value === "approve"
-    ? value
-    : undefined;
 }
 
 function modelListPage(result: unknown) {

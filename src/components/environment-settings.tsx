@@ -1833,7 +1833,7 @@ export function EnvironmentSettings({
               <SettingsSection
                 eyebrow={`${draft.codingAgent.label} native capabilities`}
                 title="MCP servers"
-                description={`MCP definitions and runtime status come directly from ${draft.codingAgent.label}. Sandpi keeps this configuration scoped to the Environment.`}
+                description={`MCP definitions and runtime status come directly from ${draft.codingAgent.label}. Sandpi only mirrors the native inventory and user-layer enablement.`}
               >
                 {draft.codingAgent.harness === "codex" ? (
                   <CodexMcpSettings environmentId={draft.id} />
