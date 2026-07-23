@@ -12,7 +12,6 @@ import {
 const environment = {
   id: "env-test",
   ownerId: "user-test",
-  visibility: "team",
   idlePauseTimeoutSeconds: 30 * 60,
   sandboxMemoryMiB: 2 * 1024,
   workspaceBackup: { intervalSeconds: 0, retentionCount: 7 },
@@ -135,7 +134,6 @@ test("applies a changed network policy to the shared Environment Sandbox", async
     name: "Development",
     description: "",
     color: "#151515",
-    visibility: "team",
     idlePauseTimeoutSeconds: 30 * 60,
     sandboxMemoryMiB: 2 * 1024,
     workspaceBackup: environment.workspaceBackup,
@@ -144,42 +142,6 @@ test("applies a changed network policy to the shared Environment Sandbox", async
 
   assert.deepEqual(applied, [nextPolicy]);
   assert.deepEqual(updated.networkPolicy, nextPolicy);
-});
-
-test("lets only the creator change a Team Environment's visibility", async () => {
-  let updates = 0;
-  const store = {
-    async getManageableEnvironment() {
-      return { ...environment, ownerId: "user-creator" };
-    },
-    async updateEnvironment() {
-      updates += 1;
-      return environment;
-    },
-  } as unknown as SandpiStore;
-  const service = new EnvironmentService(
-    store,
-    {} as RuntimeAdapter,
-    { info() {}, error() {} },
-  );
-
-  await assert.rejects(
-    service.update("user-admin", environment.id, {
-      name: "Development",
-      description: "",
-      color: "#151515",
-      visibility: "private",
-      idlePauseTimeoutSeconds: 30 * 60,
-      sandboxMemoryMiB: 2 * 1024,
-      workspaceBackup: environment.workspaceBackup,
-      networkPolicy: environment.networkPolicy,
-    }),
-    (error: unknown) =>
-      error instanceof Error &&
-      "code" in error &&
-      error.code === "environment_visibility_forbidden",
-  );
-  assert.equal(updates, 0);
 });
 
 test("serializes an idle timeout change with Environment lifecycle transitions", async () => {
@@ -228,7 +190,6 @@ test("serializes an idle timeout change with Environment lifecycle transitions",
     name: "Development",
     description: "",
     color: "#151515",
-    visibility: "team",
     idlePauseTimeoutSeconds: 0,
     sandboxMemoryMiB: 2 * 1024,
     workspaceBackup: environment.workspaceBackup,
@@ -288,7 +249,6 @@ test("serializes a Workspace backup policy change without mutating Sandbox resou
     name: "Development",
     description: "",
     color: "#151515",
-    visibility: "team",
     idlePauseTimeoutSeconds: 30 * 60,
     sandboxMemoryMiB: 2 * 1024,
     workspaceBackup: { intervalSeconds: 86_400, retentionCount: 3 },
@@ -366,7 +326,6 @@ test("applies a memory change to the shared Sandbox under the lifecycle lock", a
     name: "Development",
     description: "",
     color: "#151515",
-    visibility: "team",
     idlePauseTimeoutSeconds: 30 * 60,
     sandboxMemoryMiB: 4 * 1024,
     workspaceBackup: environment.workspaceBackup,
@@ -428,7 +387,6 @@ test("network updates nest lifecycle locking through the MCP-scoped Store", asyn
         name: string;
         description: string;
         color: string;
-        visibility: Environment["visibility"];
         idlePauseTimeoutSeconds: number;
         sandboxMemoryMiB: number;
         workspaceBackup: Environment["workspaceBackup"];
@@ -518,7 +476,6 @@ test("network updates nest lifecycle locking through the MCP-scoped Store", asyn
     name: "Development",
     description: "",
     color: "#151515",
-    visibility: "team",
     idlePauseTimeoutSeconds: 30 * 60,
     sandboxMemoryMiB: 2 * 1024,
     workspaceBackup: environment.workspaceBackup,
@@ -606,7 +563,6 @@ test("uses the injected network policy applier instead of the legacy runtime met
     name: "Development",
     description: "",
     color: "#151515",
-    visibility: "team",
     idlePauseTimeoutSeconds: 30 * 60,
     sandboxMemoryMiB: 2 * 1024,
     workspaceBackup: environment.workspaceBackup,
@@ -669,7 +625,6 @@ test("rejects network policy changes after the Environment deletion gate", async
       name: "Development",
       description: "",
       color: "#151515",
-      visibility: "team",
       idlePauseTimeoutSeconds: 30 * 60,
       sandboxMemoryMiB: 2 * 1024,
       workspaceBackup: environment.workspaceBackup,

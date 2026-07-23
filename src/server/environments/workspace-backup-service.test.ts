@@ -33,9 +33,7 @@ const runtimeState: StoredEnvironmentRuntime = {
 
 const environment: Environment = {
   id: runtimeState.id,
-  teamId: "team-one",
   ownerId: "user-one",
-  visibility: "team",
   idlePauseTimeoutSeconds: 1_800,
   sandboxMemoryMiB: 2_048,
   workspaceBackup: {

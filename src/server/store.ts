@@ -11,12 +11,8 @@ import type {
   NetworkPolicy,
   SandpiBootstrap,
   SandpiDeploymentSummary,
-  SandpiPlan,
   SandpiPreferences,
   SandpiUser,
-  Team,
-  TeamMembership,
-  TeamPlanState,
 } from "@/lib/types";
 import { parseUnixTimestamp, toUnixTimestamp } from "@/lib/time";
 import { conflict, HttpError, notFound } from "@/server/http-error";
@@ -31,27 +27,6 @@ import type {
   RecoveredCodexEnvironmentRuntime,
   RuntimeWorkspaceBackupSnapshot,
 } from "@/server/runtime/types";
-
-export const SANDPI_PLANS: SandpiPlan[] = [
-  {
-    id: "free",
-    name: "Free",
-    execution: { weeklyLimitMinutes: 600, concurrentSessionLimit: 1 },
-    storage: { snapshotLimitGiB: 5 },
-  },
-  {
-    id: "pro",
-    name: "Pro",
-    execution: { weeklyLimitMinutes: 1_800, concurrentSessionLimit: 3 },
-    storage: { snapshotLimitGiB: 20 },
-  },
-  {
-    id: "max",
-    name: "Max",
-    execution: { weeklyLimitMinutes: 7_200, concurrentSessionLimit: 12 },
-    storage: { snapshotLimitGiB: 80 },
-  },
-];
 
 export interface EnvironmentRecord extends Environment {
   provisioningError?: string;
@@ -142,9 +117,7 @@ interface UserRow extends QueryResultRow {
 
 interface EnvironmentRow extends QueryResultRow {
   id: string;
-  team_id: string;
-  created_by_user_id: string | null;
-  visibility: Environment["visibility"];
+  created_by_user_id: string;
   idle_pause_timeout_seconds: number;
   sandbox_memory_mib: number;
   workspace_backup_interval_seconds: number;
@@ -255,41 +228,6 @@ interface SessionRuntimeRow extends QueryResultRow {
   status: string;
 }
 
-interface TeamRow extends QueryResultRow {
-  id: string;
-  name: string;
-  slug: string;
-  color: string;
-  member_count: number;
-  plan_id: TeamPlanState["planId"];
-  plan_status: TeamPlanState["status"];
-  plan_quotas: Omit<TeamPlanState["quotas"], "weeklyExecution"> & {
-    weeklyExecution: Omit<
-      TeamPlanState["quotas"]["weeklyExecution"],
-      "resetsAt"
-    > & { resetsAt: string | number };
-  };
-  billing_account_id: string;
-  billing_status: Team["billingAccount"]["status"];
-  billing_cadence: Team["billingAccount"]["billingCadence"];
-  billing_email: string;
-  billing_period_starts_at: Date;
-  billing_period_ends_at: Date;
-  created_at: Date;
-}
-
-interface MembershipRow extends QueryResultRow {
-  id: string;
-  team_id: string;
-  user_id: string;
-  email: string;
-  name: string;
-  avatar_initials: string;
-  role: TeamMembership["role"];
-  status: TeamMembership["status"];
-  joined_at: Date;
-}
-
 // Shared with transaction-scoped Turn admission and session-scoped lifecycle
 // workers. The second advisory-lock key is hashtext(Environment.id).
 const ENVIRONMENT_LIFECYCLE_LOCK_NAMESPACE = 1_907_424_101;
@@ -329,7 +267,6 @@ export class SandpiStore {
   async getBootstrap(
     userId: string,
     deployment: SandpiDeploymentSummary,
-    requestedTeamId?: string,
     requestedEnvironmentId?: string,
     requestedSessionId?: string,
     preferNewSession = false,
@@ -341,59 +278,26 @@ export class SandpiStore {
     const viewer = viewerResult.rows[0];
     if (!viewer) throw notFound("user_not_found", "User not found.");
 
-    const teamsResult = await this.pool.query<TeamRow>(
-      `SELECT team.*, COUNT(all_members.id)::INTEGER AS member_count
-       FROM teams team
-       JOIN team_memberships viewer_membership
-         ON viewer_membership.team_id = team.id
-        AND viewer_membership.user_id = $1
-        AND viewer_membership.status = 'active'
-       LEFT JOIN team_memberships all_members
-         ON all_members.team_id = team.id AND all_members.status = 'active'
-       GROUP BY team.id
-       ORDER BY team.created_at, team.id`,
-      [userId],
-    );
-    const teams = teamsResult.rows.map(teamFromRow);
-    const selectedTeam =
-      teams.find((team) => team.id === requestedTeamId) ?? teams[0];
-    if (!selectedTeam) {
-      throw notFound("team_not_found", "The user does not belong to a Team.");
-    }
-
-    const membershipsResult = await this.pool.query<MembershipRow>(
-      `SELECT membership.*, user_account.id AS user_id, user_account.email,
-              user_account.name, user_account.avatar_initials
-       FROM team_memberships membership
-       JOIN users user_account ON user_account.id = membership.user_id
-       WHERE membership.team_id = ANY($1::TEXT[])
-       ORDER BY membership.joined_at, membership.id`,
-      [teams.map((team) => team.id)],
-    );
-    const teamMemberships = membershipsResult.rows.map(membershipFromRow);
     const environments = await this.listEnvironments(userId);
     const sessions = await this.listSessions(userId);
     const preferences = await this.getPreferences(userId);
-    const selectedEnvironments = environments.filter(
-      (environment) => environment.teamId === selectedTeam.id,
-    );
     const requestedSession = requestedSessionId
       ? sessions.find(
           (session) => session.id === requestedSessionId && !session.archived,
         )
       : undefined;
     const requestedSessionEnvironment = requestedSession
-      ? selectedEnvironments.find(
+      ? environments.find(
           (environment) => environment.id === requestedSession.environmentId,
         )
       : undefined;
     const requestedEnvironment = requestedEnvironmentId
-      ? selectedEnvironments.find(
+      ? environments.find(
           (environment) => environment.id === requestedEnvironmentId,
         )
       : undefined;
     const selectedEnvironment =
-      requestedSessionEnvironment ?? requestedEnvironment ?? selectedEnvironments[0];
+      requestedSessionEnvironment ?? requestedEnvironment ?? environments[0];
     const selectedSession = preferNewSession
       ? undefined
       : requestedSessionEnvironment
@@ -408,17 +312,10 @@ export class SandpiStore {
 
     return {
       viewer: userFromRow(viewer),
-      teams,
-      viewerMemberships: teamMemberships.filter(
-        (membership) => membership.user.id === userId,
-      ),
-      teamMemberships,
-      plans: SANDPI_PLANS,
       deployment,
       environments,
       sessions,
       preferences,
-      selectedTeamId: selectedTeam.id,
       selectedEnvironmentId: selectedEnvironment?.id ?? "",
       selectedSessionId: selectedSession?.id ?? "",
     };
@@ -427,15 +324,8 @@ export class SandpiStore {
   async listEnvironments(userId: string): Promise<EnvironmentRecord[]> {
     const result = await this.pool.query<EnvironmentRow>(
       `${ENVIRONMENT_SELECT}
-       JOIN team_memberships membership
-         ON membership.team_id = environment.team_id
-        AND membership.user_id = $1
-        AND membership.status = 'active'
        WHERE environment.status <> 'archived'
-         AND (
-           environment.visibility = 'team'
-           OR environment.created_by_user_id = $1
-         )
+         AND environment.created_by_user_id = $1
        ORDER BY environment.created_at, environment.id`,
       [userId],
     );
@@ -445,15 +335,8 @@ export class SandpiStore {
   async getEnvironment(userId: string, environmentId: string) {
     const result = await this.pool.query<EnvironmentRow>(
       `${ENVIRONMENT_SELECT}
-       JOIN team_memberships membership
-         ON membership.team_id = environment.team_id
-        AND membership.user_id = $1
-        AND membership.status = 'active'
        WHERE environment.id = $2 AND environment.status <> 'archived'
-         AND (
-           environment.visibility = 'team'
-           OR environment.created_by_user_id = $1
-         )`,
+         AND environment.created_by_user_id = $1`,
       [userId, environmentId],
     );
     const row = result.rows[0];
@@ -461,26 +344,11 @@ export class SandpiStore {
     return environmentFromRow(row);
   }
 
-  /**
-   * Management is narrower than Team visibility. A private Environment can be
-   * managed only by its creator; a Team Environment can also be managed by a
-   * Team owner or admin.
-   */
   async getManageableEnvironment(userId: string, environmentId: string) {
     const result = await this.pool.query<EnvironmentRow>(
       `${ENVIRONMENT_SELECT}
-       JOIN team_memberships membership
-         ON membership.team_id = environment.team_id
-        AND membership.user_id = $1
-        AND membership.status = 'active'
        WHERE environment.id = $2 AND environment.status <> 'archived'
-         AND (
-           environment.created_by_user_id = $1
-           OR (
-             environment.visibility = 'team'
-             AND membership.role IN ('owner', 'admin')
-           )
-         )`,
+         AND environment.created_by_user_id = $1`,
       [userId, environmentId],
     );
     const row = result.rows[0];
@@ -501,31 +369,23 @@ export class SandpiStore {
 
   async createEnvironmentMetadata(input: {
     userId: string;
-    teamId: string;
     name: string;
-    visibility: Environment["visibility"];
   }) {
-    const membership = await this.pool.query(
-      `SELECT 1 FROM team_memberships
-       WHERE team_id = $1 AND user_id = $2 AND status = 'active'`,
-      [input.teamId, input.userId],
-    );
-    if (!membership.rowCount) throw notFound("team_not_found", "Team not found.");
     const id = `env_${randomUUID()}`;
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
       await client.query(
         `INSERT INTO environments (
-           id, team_id, created_by_user_id, visibility, name, description, color, status,
+           id, created_by_user_id, name, description, color, status,
            revision, template_id, credential_revision, harness,
            harness_metadata, network_policy
          ) VALUES (
-           $1, $2, $3, $4, $5, '', '#151515', 'updating', 1, 'coding-agent', 0,
+           $1, $2, $3, '', '#151515', 'updating', 1, 'coding-agent', 0,
            'codex', '{"label":"Codex","status":"not-connected"}'::JSONB,
            '{"mode":"allow-all","domainExceptions":[]}'::JSONB
          )`,
-        [id, input.teamId, input.userId, input.visibility, input.name],
+        [id, input.userId, input.name],
       );
       await client.query(
         `INSERT INTO environment_runtime (
@@ -728,7 +588,6 @@ export class SandpiStore {
       name: string;
       description: string;
       color: string;
-      visibility: Environment["visibility"];
       idlePauseTimeoutSeconds: number;
       sandboxMemoryMiB: number;
       workspaceBackup: Pick<
@@ -754,11 +613,11 @@ export class SandpiStore {
       await client.query(
         `UPDATE environments
          SET name = $2, description = $3, color = $4,
-             visibility = $5, idle_pause_timeout_seconds = $6,
-             sandbox_memory_mib = $7,
-             workspace_backup_interval_seconds = $8,
-             workspace_backup_retention_count = $9,
-             network_policy = $10::JSONB,
+             idle_pause_timeout_seconds = $5,
+             sandbox_memory_mib = $6,
+             workspace_backup_interval_seconds = $7,
+             workspace_backup_retention_count = $8,
+             network_policy = $9::JSONB,
              revision = revision + 1
          WHERE id = $1`,
         [
@@ -766,7 +625,6 @@ export class SandpiStore {
           input.name,
           input.description,
           input.color,
-          input.visibility,
           input.idlePauseTimeoutSeconds,
           input.sandboxMemoryMiB,
           input.workspaceBackup.intervalSeconds,
@@ -869,18 +727,8 @@ export class SandpiStore {
       const authorized = await client.query(
         `SELECT environment.id
          FROM environments environment
-         JOIN team_memberships membership
-           ON membership.team_id = environment.team_id
-          AND membership.user_id = $1
-          AND membership.status = 'active'
          WHERE environment.id = $2
-           AND (
-             environment.created_by_user_id = $1
-             OR (
-               environment.visibility = 'team'
-               AND membership.role IN ('owner', 'admin')
-             )
-           )
+           AND environment.created_by_user_id = $1
            AND environment.status <> 'archived'
          FOR UPDATE`,
         [userId, environmentId],
@@ -1994,11 +1842,7 @@ export class SandpiStore {
   async listSessions(userId: string): Promise<CodingSession[]> {
     const result = await this.pool.query<SessionRow>(
       `${SESSION_SELECT}
-       WHERE membership.user_id = $1 AND membership.status = 'active'
-         AND (
-           environment.visibility = 'team'
-           OR environment.created_by_user_id = $1
-         )
+       WHERE environment.created_by_user_id = $1
        ORDER BY (pin.user_id IS NOT NULL) DESC, session.updated_at DESC`,
       [userId],
     );
@@ -2008,12 +1852,8 @@ export class SandpiStore {
   async getSession(userId: string, sessionId: string): Promise<CodingSession> {
     const result = await this.pool.query<SessionRow>(
       `${SESSION_SELECT}
-       WHERE membership.user_id = $1 AND membership.status = 'active'
-         AND session.id = $2
-         AND (
-           environment.visibility = 'team'
-           OR environment.created_by_user_id = $1
-         )`,
+       WHERE environment.created_by_user_id = $1
+         AND session.id = $2`,
       [userId, sessionId],
     );
     const row = result.rows[0];
@@ -2073,16 +1913,15 @@ export class SandpiStore {
       await client.query("BEGIN");
       await client.query(
         `INSERT INTO sessions (
-           id, team_id, environment_id, created_by_user_id, title, status,
+           id, environment_id, created_by_user_id, title, status,
            harness, harness_state, metadata, environment_revision,
            origin_kind, origin_label, source_session_id, source_native_item_id
          ) VALUES (
-           $1, $2, $3, $4, $5, 'provisioning', 'codex', $6::JSONB,
-           $7::JSONB, $8, $9, $10, $11, $12
+           $1, $2, $3, $4, 'provisioning', 'codex', $5::JSONB,
+           $6::JSONB, $7, $8, $9, $10, $11
          )`,
         [
           id,
-          input.environment.teamId,
           input.environment.id,
           input.userId,
           input.title,
@@ -2753,57 +2592,6 @@ export class SandpiStore {
     return this.getPreferences(userId);
   }
 
-  async updateTeamPlan(
-    userId: string,
-    teamId: string,
-    planId: "free" | "pro" | "max",
-  ) {
-    const actor = await this.pool.query<{ role: string }>(
-      `SELECT role FROM team_memberships
-       WHERE team_id = $1 AND user_id = $2 AND status = 'active'`,
-      [teamId, userId],
-    );
-    if (!actor.rows[0] || !["owner", "admin"].includes(actor.rows[0].role)) {
-      throw notFound("team_not_found", "Team not found.");
-    }
-    const plan = SANDPI_PLANS.find((candidate) => candidate.id === planId);
-    if (!plan) throw notFound("plan_not_found", "Plan not found.");
-    await this.pool.query(
-      `UPDATE teams
-       SET plan_id = $2,
-           plan_quotas = jsonb_set(
-             jsonb_set(
-               jsonb_set(plan_quotas, '{weeklyExecution,limit}', to_jsonb($3::INTEGER)),
-               '{concurrentSessions,limit}', to_jsonb($4::INTEGER)
-             ),
-             '{snapshotStorage,limit}', to_jsonb($5::INTEGER)
-           )
-       WHERE id = $1`,
-      [
-        teamId,
-        planId,
-        plan.execution.weeklyLimitMinutes,
-        plan.execution.concurrentSessionLimit,
-        plan.storage.snapshotLimitGiB,
-      ],
-    );
-    const result = await this.pool.query<TeamRow>(
-      `SELECT team.*, COUNT(member.id)::INTEGER AS member_count
-       FROM teams team
-       JOIN team_memberships viewer_membership
-         ON viewer_membership.team_id = team.id
-        AND viewer_membership.user_id = $2
-        AND viewer_membership.status = 'active'
-       LEFT JOIN team_memberships member
-         ON member.team_id = team.id AND member.status = 'active'
-       WHERE team.id = $1
-       GROUP BY team.id`,
-      [teamId, userId],
-    );
-    const row = result.rows[0];
-    if (!row) throw notFound("team_not_found", "Team not found.");
-    return teamFromRow(row);
-  }
 }
 
 const ENVIRONMENT_SELECT = `
@@ -2832,10 +2620,9 @@ const SESSION_SELECT = `
          owner.name AS owner_name,
          owner.avatar_initials AS owner_avatar_initials
   FROM sessions session
-  JOIN team_memberships membership ON membership.team_id = session.team_id
   JOIN environments environment ON environment.id = session.environment_id
   LEFT JOIN session_pins pin
-    ON pin.session_id = session.id AND pin.user_id = membership.user_id
+    ON pin.session_id = session.id AND pin.user_id = $1
   LEFT JOIN users owner ON owner.id = session.created_by_user_id
   LEFT JOIN session_runtime runtime ON runtime.session_id = session.id
 `;
@@ -2855,60 +2642,11 @@ function userFromRow(row: UserRow): SandpiUser {
   };
 }
 
-function teamFromRow(row: TeamRow): Team {
-  return {
-    id: row.id,
-    name: row.name,
-    slug: row.slug,
-    color: row.color,
-    memberCount: Number(row.member_count),
-    plan: {
-      planId: row.plan_id,
-      status: row.plan_status,
-      quotas: {
-        ...row.plan_quotas,
-        weeklyExecution: {
-          ...row.plan_quotas.weeklyExecution,
-          resetsAt:
-            parseUnixTimestamp(row.plan_quotas.weeklyExecution.resetsAt) ?? 0,
-        },
-      },
-    },
-    billingAccount: {
-      id: row.billing_account_id,
-      status: row.billing_status,
-      billingCadence: row.billing_cadence,
-      billingEmail: row.billing_email,
-      currentPeriodStartsAt: toUnixTimestamp(row.billing_period_starts_at),
-      currentPeriodEndsAt: toUnixTimestamp(row.billing_period_ends_at),
-    },
-    createdAt: toUnixTimestamp(row.created_at),
-  };
-}
-
-function membershipFromRow(row: MembershipRow): TeamMembership {
-  return {
-    id: row.id,
-    teamId: row.team_id,
-    user: {
-      id: row.user_id,
-      email: row.email,
-      name: row.name,
-      avatarInitials: row.avatar_initials,
-    },
-    role: row.role,
-    status: row.status,
-    joinedAt: toUnixTimestamp(row.joined_at),
-  };
-}
-
 function environmentFromRow(row: EnvironmentRow): EnvironmentRecord {
   const metadata = row.harness_metadata ?? {};
   return {
     id: row.id,
-    teamId: row.team_id,
-    ownerId: row.created_by_user_id ?? undefined,
-    visibility: row.visibility,
+    ownerId: row.created_by_user_id,
     idlePauseTimeoutSeconds: row.idle_pause_timeout_seconds,
     sandboxMemoryMiB: row.sandbox_memory_mib,
     workspaceBackup: {

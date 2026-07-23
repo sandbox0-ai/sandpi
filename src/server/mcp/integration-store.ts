@@ -308,15 +308,8 @@ export class EnvironmentMcpIntegrationStore {
        SELECT environment.id, $3, $4, $5, $6, $7, $8, $9, $10, $11,
               $12, $13, $14, $15, $16
        FROM environments environment
-       JOIN team_memberships membership
-         ON membership.team_id = environment.team_id
-        AND membership.user_id = $1
-        AND membership.status = 'active'
        WHERE environment.id = $2
-         AND (
-           environment.created_by_user_id = $1
-           OR (environment.visibility = 'team' AND membership.role IN ('owner', 'admin'))
-         )
+         AND environment.created_by_user_id = $1
          AND environment.status <> 'archived'
        ON CONFLICT (environment_id, server_name) DO UPDATE
        SET preset_id = EXCLUDED.preset_id,
@@ -401,16 +394,9 @@ export class EnvironmentMcpIntegrationStore {
            tool_policy_error = NULL,
            version = integration.version + 1
        FROM environments environment
-       JOIN team_memberships membership
-         ON membership.team_id = environment.team_id
-        AND membership.user_id = $1
-        AND membership.status = 'active'
        WHERE integration.environment_id = environment.id
          AND environment.id = $2
-         AND (
-           environment.created_by_user_id = $1
-           OR (environment.visibility = 'team' AND membership.role IN ('owner', 'admin'))
-         )
+         AND environment.created_by_user_id = $1
          AND environment.status <> 'archived'
          AND integration.server_name = $3
          AND integration.lifecycle_status <> 'deleting'
@@ -493,16 +479,9 @@ export class EnvironmentMcpIntegrationStore {
            last_error = CASE WHEN $7 THEN $8 ELSE last_error END,
            version = integration.version + 1
        FROM environments environment
-       JOIN team_memberships membership
-         ON membership.team_id = environment.team_id
-        AND membership.user_id = $1
-        AND membership.status = 'active'
        WHERE integration.environment_id = environment.id
          AND environment.id = $2
-         AND (
-           environment.created_by_user_id = $1
-           OR (environment.visibility = 'team' AND membership.role IN ('owner', 'admin'))
-         )
+         AND environment.created_by_user_id = $1
          AND environment.status <> 'archived'
          AND integration.server_name = $3
        RETURNING integration.*`,
@@ -777,18 +756,11 @@ export class EnvironmentMcpIntegrationStore {
            last_error = NULL,
            version = integration.version + 1
        FROM environments environment
-       JOIN team_memberships membership
-         ON membership.team_id = environment.team_id
-        AND membership.user_id = $1
-        AND membership.status = 'active'
        JOIN environment_runtime runtime
          ON runtime.environment_id = environment.id
        WHERE integration.environment_id = environment.id
          AND environment.id = $2
-         AND (
-           environment.created_by_user_id = $1
-           OR (environment.visibility = 'team' AND membership.role IN ('owner', 'admin'))
-         )
+         AND environment.created_by_user_id = $1
          AND environment.status <> 'archived'
          AND runtime.desired_state <> 'terminated'
          AND integration.server_name = $3
@@ -852,18 +824,11 @@ export class EnvironmentMcpIntegrationStore {
            last_error = NULL,
            version = integration.version + 1
        FROM environments environment
-       JOIN team_memberships membership
-         ON membership.team_id = environment.team_id
-        AND membership.user_id = $1
-        AND membership.status = 'active'
        JOIN environment_runtime runtime
          ON runtime.environment_id = environment.id
        WHERE integration.environment_id = environment.id
          AND environment.id = $2
-         AND (
-           environment.created_by_user_id = $1
-           OR (environment.visibility = 'team' AND membership.role IN ('owner', 'admin'))
-         )
+         AND environment.created_by_user_id = $1
          AND environment.status <> 'archived'
          AND runtime.desired_state <> 'terminated'
          AND integration.server_name = $3
@@ -917,16 +882,9 @@ export class EnvironmentMcpIntegrationStore {
            last_error = NULL,
            version = integration.version + 1
        FROM environments environment
-       JOIN team_memberships membership
-         ON membership.team_id = environment.team_id
-        AND membership.user_id = $1
-        AND membership.status = 'active'
        WHERE integration.environment_id = environment.id
          AND environment.id = $2
-         AND (
-           environment.created_by_user_id = $1
-           OR (environment.visibility = 'team' AND membership.role IN ('owner', 'admin'))
-         )
+         AND environment.created_by_user_id = $1
          AND environment.status <> 'archived'
          AND integration.server_name = $3
          AND integration.auth_mode IN ('bearer', 'header')
@@ -1004,16 +962,9 @@ export class EnvironmentMcpIntegrationStore {
            last_error = NULL,
            version = integration.version + 1
        FROM environments environment
-       JOIN team_memberships membership
-         ON membership.team_id = environment.team_id
-        AND membership.user_id = $1
-        AND membership.status = 'active'
        WHERE integration.environment_id = environment.id
          AND environment.id = $2
-         AND (
-           environment.created_by_user_id = $1
-           OR (environment.visibility = 'team' AND membership.role IN ('owner', 'admin'))
-         )
+         AND environment.created_by_user_id = $1
          AND environment.status <> 'archived'
          AND integration.server_name = $3
          AND integration.auth_mode IN ('bearer', 'header')
@@ -1135,18 +1086,11 @@ export class EnvironmentMcpIntegrationStore {
            last_error = NULL,
            version = integration.version + 1
        FROM environments environment
-       JOIN team_memberships membership
-         ON membership.team_id = environment.team_id
-        AND membership.user_id = $1
-        AND membership.status = 'active'
        JOIN environment_runtime runtime
          ON runtime.environment_id = environment.id
        WHERE integration.environment_id = environment.id
          AND environment.id = $2
-         AND (
-           environment.created_by_user_id = $1
-           OR (environment.visibility = 'team' AND membership.role IN ('owner', 'admin'))
-         )
+         AND environment.created_by_user_id = $1
          AND environment.status <> 'archived'
          AND integration.server_name = $3
          AND integration.auth_mode IN ('bearer', 'header')
@@ -1186,15 +1130,9 @@ export class EnvironmentMcpIntegrationStore {
   ) {
     const result = await this.pool.query<IntegrationRow>(
       `DELETE FROM environment_mcp_integrations integration
-       USING environments environment, team_memberships membership
+       USING environments environment
        WHERE integration.environment_id = environment.id
-         AND membership.team_id = environment.team_id
-         AND membership.user_id = $1
-         AND membership.status = 'active'
-         AND (
-           environment.created_by_user_id = $1
-           OR (environment.visibility = 'team' AND membership.role IN ('owner', 'admin'))
-         )
+         AND environment.created_by_user_id = $1
          AND environment.status <> 'archived'
          AND integration.environment_id = $2
          AND integration.server_name = $3
@@ -1361,18 +1299,11 @@ export class EnvironmentMcpIntegrationStore {
                last_error = NULL,
                version = integration.version + 1
            FROM environments environment
-           JOIN team_memberships membership
-             ON membership.team_id = environment.team_id
-            AND membership.user_id = $1
-            AND membership.status = 'active'
            JOIN environment_runtime runtime
              ON runtime.environment_id = environment.id
            WHERE integration.environment_id = environment.id
              AND environment.id = $2
-             AND (
-               environment.created_by_user_id = $1
-               OR (environment.visibility = 'team' AND membership.role IN ('owner', 'admin'))
-             )
+             AND environment.created_by_user_id = $1
              AND environment.status <> 'archived'
              AND runtime.desired_state <> 'terminated'
              AND integration.server_name = $4
@@ -2112,10 +2043,6 @@ export class EnvironmentMcpIntegrationStore {
            native_runtime_generation = $8,
            native_attempt_id = $9
        FROM environments environment
-       JOIN team_memberships membership
-         ON membership.team_id = environment.team_id
-        AND membership.user_id = $1
-        AND membership.status = 'active'
        JOIN environment_runtime runtime
          ON runtime.environment_id = environment.id
        JOIN environment_mcp_integrations integration
@@ -2123,10 +2050,7 @@ export class EnvironmentMcpIntegrationStore {
        WHERE flow.id = $3
          AND flow.environment_id = environment.id
          AND environment.id = $2
-         AND (
-           environment.created_by_user_id = $1
-           OR (environment.visibility = 'team' AND membership.role IN ('owner', 'admin'))
-         )
+         AND environment.created_by_user_id = $1
          AND environment.status <> 'archived'
          AND runtime.desired_state <> 'terminated'
          AND flow.status = 'starting'
@@ -2197,18 +2121,11 @@ export class EnvironmentMcpIntegrationStore {
        SET status = $4,
            error = CASE WHEN $5 THEN $6 ELSE error END
        FROM environments environment
-       JOIN team_memberships membership
-         ON membership.team_id = environment.team_id
-        AND membership.user_id = $1
-        AND membership.status = 'active'
        JOIN environment_mcp_integrations integration
          ON integration.environment_id = environment.id
        WHERE flow.environment_id = environment.id
          AND environment.id = $2
-         AND (
-           environment.created_by_user_id = $1
-           OR (environment.visibility = 'team' AND membership.role IN ('owner', 'admin'))
-         )
+         AND environment.created_by_user_id = $1
          AND environment.status <> 'archived'
          AND flow.id = $3
          AND flow.status = ANY($8::TEXT[])
@@ -2247,15 +2164,9 @@ export class EnvironmentMcpIntegrationStore {
   ) {
     const result = await this.pool.query<OAuthFlowRow>(
       `DELETE FROM environment_mcp_oauth_flows flow
-       USING environments environment, team_memberships membership
+       USING environments environment
        WHERE flow.environment_id = environment.id
-         AND membership.team_id = environment.team_id
-         AND membership.user_id = $1
-         AND membership.status = 'active'
-         AND (
-           environment.created_by_user_id = $1
-           OR (environment.visibility = 'team' AND membership.role IN ('owner', 'admin'))
-         )
+         AND environment.created_by_user_id = $1
          AND environment.status <> 'archived'
          AND flow.environment_id = $2
          AND flow.id = $3
@@ -2430,15 +2341,8 @@ export class EnvironmentMcpIntegrationStore {
     const result = await this.pool.query(
       `SELECT environment.id
        FROM environments environment
-       JOIN team_memberships membership
-         ON membership.team_id = environment.team_id
-        AND membership.user_id = $1
-        AND membership.status = 'active'
        WHERE environment.id = $2
-         AND (
-           environment.created_by_user_id = $1
-           OR (environment.visibility = 'team' AND membership.role IN ('owner', 'admin'))
-         )
+         AND environment.created_by_user_id = $1
          AND environment.status <> 'archived'`,
       [userId, environmentId],
     );

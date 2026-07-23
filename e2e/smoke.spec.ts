@@ -314,7 +314,7 @@ test("waits for native New Session models and scopes reasoning effort by model",
   );
 
   await page.goto(
-    `/?team=${encodeURIComponent(environment.teamId)}&environment=${encodeURIComponent(environment.id)}&new=1`,
+    `/?environment=${encodeURIComponent(environment.id)}&new=1`,
   );
   const modelPicker = page.getByRole("combobox", {
     name: `Select ${environment.codingAgent.label} model`,
@@ -583,7 +583,7 @@ test("refreshes the Codex account and live limits after device login", async ({
   );
 
   await page.goto(
-    `/?team=${encodeURIComponent(environment.teamId)}&environment=${encodeURIComponent(environment.id)}&new=1`,
+    `/?environment=${encodeURIComponent(environment.id)}&new=1`,
   );
   await page.getByRole("button", { name: "Connect Codex", exact: true }).click();
   const settingsDialog = page.getByRole("dialog", {
@@ -663,7 +663,7 @@ test("prefills native MCP definitions from the three shortcut groups", async ({
   );
 
   await page.goto(
-    `/?team=${encodeURIComponent(environment.teamId)}&environment=${encodeURIComponent(environment.id)}&new=1`,
+    `/?environment=${encodeURIComponent(environment.id)}&new=1`,
   );
   await page
     .getByRole("button", { name: `${environment.name} settings` })
@@ -842,7 +842,7 @@ test("configures remote MCP tools through Sandbox0 while delegating aggregators"
   );
 
   await page.goto(
-    `/?team=${encodeURIComponent(environment.teamId)}&environment=${encodeURIComponent(environment.id)}&new=1`,
+    `/?environment=${encodeURIComponent(environment.id)}&new=1`,
   );
   await page
     .getByRole("button", { name: `${environment.name} settings` })
@@ -932,7 +932,7 @@ test("configures Sandbox0 network modes through safe domain exceptions", async (
   );
 
   await page.goto(
-    `/?team=${encodeURIComponent(environment.teamId)}&environment=${encodeURIComponent(environment.id)}&new=1`,
+    `/?environment=${encodeURIComponent(environment.id)}&new=1`,
   );
   await page
     .getByRole("button", { name: `${environment.name} settings` })
@@ -1047,7 +1047,7 @@ test("requires an exact Environment name before permanent deletion", async ({
   );
 
   await page.goto(
-    `/?team=${encodeURIComponent(environment.teamId)}&environment=${encodeURIComponent(environment.id)}&new=1`,
+    `/?environment=${encodeURIComponent(environment.id)}&new=1`,
   );
   await page
     .getByRole("button", { name: `${environment.name} settings` })
@@ -1080,7 +1080,7 @@ test("requires an exact Environment name before permanent deletion", async ({
   }
 });
 
-test("serves shared Preferences and Team layouts", async ({ page }) => {
+test("serves the Preferences layout", async ({ page }) => {
   await page.goto("/preferences");
   await expect(page).toHaveURL(/\/preferences\/?$/);
   await expect(
@@ -1112,15 +1112,6 @@ test("serves shared Preferences and Team layouts", async ({ page }) => {
       }),
     ).toHaveCount(0);
   }
-
-  await page.goto("/team");
-  await expect(page).toHaveURL(/\/team\/?$/);
-  await expect(
-    page.getByRole("heading", { level: 1, name: "Sandpi", exact: true }),
-  ).toBeVisible();
-  await expect(
-    page.getByText("Sandpi control plane", { exact: true }),
-  ).toBeVisible();
 });
 
 test("keeps the Codex live event response open between tool updates", async ({
@@ -1140,7 +1131,7 @@ test("keeps the Codex live event response open between tool updates", async ({
   });
 
   await page.goto(
-    `/?team=${encodeURIComponent(environment.teamId)}&environment=${encodeURIComponent(environment.id)}&session=${encodeURIComponent(session.id)}`,
+    `/?environment=${encodeURIComponent(environment.id)}&session=${encodeURIComponent(session.id)}`,
   );
   await expect(page.locator("#conversation")).toBeVisible();
   await expect.poll(() => eventRequests).toBeGreaterThan(0);
@@ -1186,7 +1177,7 @@ test("shows a Sandbox0 credential failure instead of loading forever", async ({
   });
 
   await page.goto(
-    `/?team=${encodeURIComponent(environment.teamId)}&environment=${encodeURIComponent(environment.id)}&session=${encodeURIComponent(session.id)}`,
+    `/?environment=${encodeURIComponent(environment.id)}&session=${encodeURIComponent(session.id)}`,
   );
 
   await expect(page.getByRole("alert").getByText(message)).toBeVisible();
@@ -1237,7 +1228,7 @@ test("shows a fallback when the Codex EventSource handshake fails", async ({
   });
 
   await page.goto(
-    `/?team=${encodeURIComponent(environment.teamId)}&environment=${encodeURIComponent(environment.id)}&session=${encodeURIComponent(session.id)}`,
+    `/?environment=${encodeURIComponent(environment.id)}&session=${encodeURIComponent(session.id)}`,
   );
 
   await expect(
@@ -1367,7 +1358,7 @@ test("keeps an optimistic prompt ahead of native Activity without duplicating it
   );
 
   await page.goto(
-    `/?team=${encodeURIComponent(environment.teamId)}&environment=${encodeURIComponent(environment.id)}&session=${encodeURIComponent(session.id)}`,
+    `/?environment=${encodeURIComponent(environment.id)}&session=${encodeURIComponent(session.id)}`,
   );
   await emitControlledEvent(page, eventPath, "snapshot", snapshot);
   await expect(page.getByText("Loading conversation…")).toBeHidden();
@@ -1807,7 +1798,7 @@ test("keeps Codex Session Activity native", async ({
     });
   });
   await page.goto(
-    `/?team=${encodeURIComponent(environment.teamId)}&environment=${encodeURIComponent(environment.id)}&session=${encodeURIComponent(session.id)}`,
+    `/?environment=${encodeURIComponent(environment.id)}&session=${encodeURIComponent(session.id)}`,
   );
   await expect(page.getByText("The release is valid.")).toBeVisible();
   await expect.poll(() => auditRequests).toBe(0);
@@ -1924,13 +1915,11 @@ test("keeps Codex Session Activity native", async ({
   await expect.poll(() => {
     const url = new URL(page.url());
     return {
-      team: url.searchParams.get("team"),
       environment: url.searchParams.get("environment"),
       session: url.searchParams.get("session"),
       newSession: url.searchParams.get("new"),
     };
   }).toEqual({
-    team: environment.teamId,
     environment: environment.id,
     session: null,
     newSession: "1",
@@ -2146,7 +2135,7 @@ test("opens nested Agent file links and restores the selected file", async ({
   );
 
   await page.goto(
-    `/?team=${encodeURIComponent(environment.teamId)}&environment=${encodeURIComponent(environment.id)}&session=${encodeURIComponent(session.id)}`,
+    `/?environment=${encodeURIComponent(environment.id)}&session=${encodeURIComponent(session.id)}`,
   );
   await expect(page.getByText("Loading conversation…")).toBeHidden();
 
@@ -2294,7 +2283,7 @@ test("reconciles agent-created files while the native volume watch is unavailabl
   );
 
   await page.goto(
-    `/?team=${encodeURIComponent(environment.teamId)}&environment=${encodeURIComponent(environment.id)}&session=${encodeURIComponent(session.id)}`,
+    `/?environment=${encodeURIComponent(environment.id)}&session=${encodeURIComponent(session.id)}`,
   );
   await page.getByRole("button", { name: "Open inspector" }).click();
   await expect(page.locator(".ide-panel")).toBeVisible();
@@ -2386,7 +2375,7 @@ test("opens the Environment terminal from New Session and replays only the last 
   );
 
   await page.goto(
-    `/?team=${encodeURIComponent(environment.teamId)}&environment=${encodeURIComponent(environment.id)}&new=1`,
+    `/?environment=${encodeURIComponent(environment.id)}&new=1`,
   );
   await page.getByRole("button", { name: "Terminal" }).click();
   const terminal = page.getByRole("region", {
@@ -2456,7 +2445,7 @@ test("stops retrying a structured terminal failure until the user asks", async (
   );
 
   await page.goto(
-    `/?team=${encodeURIComponent(environment.teamId)}&environment=${encodeURIComponent(environment.id)}&new=1`,
+    `/?environment=${encodeURIComponent(environment.id)}&new=1`,
   );
   await page.getByRole("button", { name: "Terminal" }).click();
   const terminal = page.getByRole("region", {
@@ -2528,7 +2517,7 @@ test("does not answer historical terminal queries on the live PTY", async ({
   );
 
   await page.goto(
-    `/?team=${encodeURIComponent(environment.teamId)}&environment=${encodeURIComponent(environment.id)}&session=${encodeURIComponent(session.id)}`,
+    `/?environment=${encodeURIComponent(environment.id)}&session=${encodeURIComponent(session.id)}`,
   );
   await page.getByRole("button", { name: "Terminal" }).click();
   const terminal = page.getByRole("region", {
@@ -2639,7 +2628,7 @@ test("shows a matching skeleton while each Inspector tab loads", async ({
   });
 
   await page.goto(
-    `/?team=${encodeURIComponent(environment.teamId)}&environment=${encodeURIComponent(environment.id)}&session=${encodeURIComponent(session.id)}`,
+    `/?environment=${encodeURIComponent(environment.id)}&session=${encodeURIComponent(session.id)}`,
   );
   await page.getByRole("button", { name: "Open inspector" }).click();
   const tabs = page.getByRole("navigation", { name: "Inspector views" });
@@ -2934,7 +2923,7 @@ test("renders the dedicated live Web IDE with Git state and changed lines", asyn
   );
 
   await page.goto(
-    `/ide/?team=${encodeURIComponent(environment.teamId)}&environment=${encodeURIComponent(environment.id)}&new=1`,
+    `/ide/?environment=${encodeURIComponent(environment.id)}&new=1`,
   );
   await expect(
     page.getByRole("region", { name: "Sandpi Web IDE" }),
@@ -3056,7 +3045,7 @@ test("restores a new-Session deep link and keeps overlays usable in dark mode", 
     );
   });
 
-  await page.goto("/?team=team-default&environment=env-default&new=1");
+  await page.goto("/?environment=env-default&new=1");
   await expect(
     page.getByRole("heading", { name: "What should Codex work on?" }),
   ).toBeVisible();

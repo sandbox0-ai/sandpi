@@ -10,91 +10,11 @@ export type HarnessId = "codex" | "claude-code" | "opencode" | "pi";
 export type SessionStatus =
   "running" | "waiting" | "paused" | "completed" | "failed";
 
-export type TeamRole = "owner" | "admin" | "member";
-
-export type SandpiPlanId = "free" | "pro" | "max";
-
 export interface SandpiUser {
   id: string;
   name: string;
   email: string;
   avatarInitials: string;
-}
-
-export interface MeteredQuota {
-  used: number;
-  limit: number;
-  unit: "minute" | "session" | "gibibyte";
-}
-
-export interface WeeklyExecutionQuota extends MeteredQuota {
-  unit: "minute";
-  window: "weekly";
-  resetsAt: UnixTimestamp;
-}
-
-export interface SandpiPlan {
-  id: SandpiPlanId;
-  name: string;
-  execution: {
-    weeklyLimitMinutes: number;
-    concurrentSessionLimit: number;
-  };
-  storage: {
-    snapshotLimitGiB: number;
-  };
-}
-
-/**
- * Effective Team-wide Plan and quota projection. Limits are snapshotted so an
- * existing Team remains stable when the public Plan catalog changes.
- */
-export interface TeamPlanState {
-  planId: SandpiPlanId;
-  status: "active" | "pending" | "suspended";
-  quotas: {
-    weeklyExecution: WeeklyExecutionQuota;
-    concurrentSessions: MeteredQuota & { unit: "session" };
-    snapshotStorage: MeteredQuota & { unit: "gibibyte" };
-  };
-}
-
-export interface TeamMembership {
-  id: string;
-  teamId: string;
-  user: SandpiUser;
-  role: TeamRole;
-  status: "active" | "invited";
-  joinedAt: UnixTimestamp;
-}
-
-/**
- * Payment and invoice owner for the Team Plan.
- */
-export interface TeamBillingAccount {
-  id: string;
-  status: "public-beta" | "active" | "past-due" | "deployment-managed";
-  billingCadence: "monthly";
-  billingEmail: string;
-  currentPeriodStartsAt: UnixTimestamp;
-  currentPeriodEndsAt: UnixTimestamp;
-}
-
-/**
- * Team is Sandpi's tenant, resource-ownership, quota and billing boundary.
- * Every User must retain at least one Team Membership; signup creates a
- * one-member Team on the Free Plan.
- */
-export interface Team {
-  id: string;
-  name: string;
-  slug: string;
-  color: string;
-  /** Server-derived list summary, never the membership source of truth. */
-  memberCount: number;
-  plan: TeamPlanState;
-  billingAccount: TeamBillingAccount;
-  createdAt: UnixTimestamp;
 }
 
 /**
@@ -174,12 +94,8 @@ export interface EnvironmentWorkspaceBackup {
 
 export interface Environment {
   id: string;
-  /** Immutable Sandpi tenant ownership; never inferred from the Sandbox0 API key. */
-  teamId: string;
-  /** Creator retained for management authorization; Team visibility is independent. */
-  ownerId?: string;
-  /** Team is the default. Private Environments are visible only to their creator. */
-  visibility: "team" | "private";
+  /** Immutable user ownership; never inferred from the Sandbox0 API key. */
+  ownerId: string;
   /** Environment-wide idle timeout in seconds; zero disables automatic pause. */
   idlePauseTimeoutSeconds: number;
   /** Desired memory limit for the one shared Environment Sandbox, in MiB. */
@@ -427,7 +343,7 @@ export interface CodingSession<
 > {
   id: string;
   environmentId: string;
-  /** Immutable creator used for Team-visible ownership attribution. */
+  /** Immutable creator retained for audit and attribution. */
   owner: SandpiUser | null;
   title: string;
   status: SessionStatus;
@@ -448,17 +364,10 @@ export interface CodingSession<
 
 export interface SandpiBootstrap {
   viewer: SandpiUser;
-  teams: Team[];
-  /** Exactly one entry per Team available to the viewer. */
-  viewerMemberships: TeamMembership[];
-  /** Team-visible Memberships used by Team administration surfaces. */
-  teamMemberships: TeamMembership[];
-  plans: SandpiPlan[];
   deployment: SandpiDeploymentSummary;
   environments: Environment[];
   sessions: CodingSession[];
   preferences: SandpiPreferences;
-  selectedTeamId: string;
   selectedEnvironmentId: string;
   selectedSessionId: string;
 }

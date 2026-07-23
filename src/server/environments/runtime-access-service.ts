@@ -123,7 +123,7 @@ export class EnvironmentRuntimeAccessService {
         async (lockedStore) => {
           const scopedStore = lockedStore ?? this.store;
           // Re-read through the user-scoped store boundary after acquiring the
-          // exclusive lock. Deletion, membership, and runtime coordinates may
+          // exclusive lock. Deletion, ownership, and runtime coordinates may
           // all have changed since the failed shared admission.
           const current = await scopedStore.getEnvironmentRuntime(
             userId,

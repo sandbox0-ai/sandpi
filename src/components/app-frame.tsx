@@ -29,7 +29,7 @@ export function AppFrame({
 }
 
 /**
- * Stable Sidebar chrome shared by the workspace, Team settings and Preferences.
+ * Stable Sidebar chrome shared by the workspace and Preferences.
  * Callers own only the page-specific navigation body and header/footer actions.
  */
 export function AppSidebar({

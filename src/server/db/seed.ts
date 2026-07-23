@@ -1,9 +1,7 @@
 import type { Pool } from "pg";
 
 export interface CommunitySeedOptions {
-  now?: Date;
   admin?: Partial<CommunitySeed["admin"]>;
-  team?: Partial<CommunitySeed["team"]>;
   environment?: Partial<CommunitySeed["environment"]>;
 }
 
@@ -16,17 +14,6 @@ export interface CommunitySeed {
     identityProvider: string;
     identitySubject: string;
   };
-  team: {
-    id: string;
-    name: string;
-    slug: string;
-    color: string;
-    billingAccountId: string;
-    billingEmail: string;
-  };
-  membership: {
-    id: string;
-  };
   environment: {
     id: string;
     name: string;
@@ -34,9 +21,6 @@ export interface CommunitySeed {
     color: string;
     harness: string;
   };
-  periodStartsAt: Date;
-  periodEndsAt: Date;
-  weeklyQuotaResetsAt: Date;
 }
 
 export const COMMUNITY_DEFAULT_SEED = {
@@ -48,17 +32,6 @@ export const COMMUNITY_DEFAULT_SEED = {
     identityProvider: "builtin",
     identitySubject: "admin",
   },
-  team: {
-    id: "team-default",
-    name: "Sandpi",
-    slug: "sandpi",
-    color: "#315c4b",
-    billingAccountId: "billing-default",
-    billingEmail: "admin@sandpi.local",
-  },
-  membership: {
-    id: "membership-admin-default",
-  },
   environment: {
     id: "env-default",
     name: "Development",
@@ -68,44 +41,22 @@ export const COMMUNITY_DEFAULT_SEED = {
   },
 } as const;
 
-function addUtcMonths(value: Date, months: number): Date {
-  const result = new Date(value);
-  result.setUTCMonth(result.getUTCMonth() + months);
-  return result;
-}
-
-function addUtcDays(value: Date, days: number): Date {
-  const result = new Date(value);
-  result.setUTCDate(result.getUTCDate() + days);
-  return result;
-}
-
 export function buildCommunitySeed(
   options: CommunitySeedOptions = {},
 ): CommunitySeed {
-  const periodStartsAt = new Date(options.now ?? new Date());
-  if (Number.isNaN(periodStartsAt.getTime())) {
-    throw new Error("The community seed timestamp must be a valid Date.");
-  }
-
   return {
     admin: { ...COMMUNITY_DEFAULT_SEED.admin, ...options.admin },
-    team: { ...COMMUNITY_DEFAULT_SEED.team, ...options.team },
-    membership: { ...COMMUNITY_DEFAULT_SEED.membership },
     environment: {
       ...COMMUNITY_DEFAULT_SEED.environment,
       ...options.environment,
     },
-    periodStartsAt,
-    periodEndsAt: addUtcMonths(periodStartsAt, 1),
-    weeklyQuotaResetsAt: addUtcDays(periodStartsAt, 7),
   };
 }
 
 /**
- * Seeds the self-hosted identity and tenant without overwriting later user
- * edits. Each insert is independently idempotent so interrupted startup can
- * safely retry the whole seed transaction.
+ * Seeds the self-hosted administrator and their initial Environment without
+ * overwriting later user edits. Each insert is independently idempotent so an
+ * interrupted startup can safely retry the whole transaction.
  */
 export async function seedCommunityDefaults(
   pool: Pick<Pool, "connect">,
@@ -113,17 +64,6 @@ export async function seedCommunityDefaults(
 ): Promise<CommunitySeed> {
   const seed = buildCommunitySeed(options);
   const client = await pool.connect();
-  const planQuotas = {
-    weeklyExecution: {
-      used: 0,
-      limit: 600,
-      unit: "minute",
-      window: "weekly",
-      resetsAt: seed.weeklyQuotaResetsAt.toISOString(),
-    },
-    concurrentSessions: { used: 0, limit: 1, unit: "session" },
-    snapshotStorage: { used: 0, limit: 5, unit: "gibibyte" },
-  };
 
   try {
     await client.query("BEGIN");
@@ -145,46 +85,6 @@ export async function seedCommunityDefaults(
     );
     await client.query(
       `
-        INSERT INTO teams (
-          id, name, slug, color, billing_account_id, billing_status,
-          billing_email, billing_period_starts_at, billing_period_ends_at,
-          plan_id, plan_status, plan_quotas
-        ) VALUES (
-          $1, $2, $3, $4, $5, 'deployment-managed', $6, $7, $8,
-          'free', 'active', $9::JSONB
-        )
-        ON CONFLICT (id) DO NOTHING
-      `,
-      [
-        seed.team.id,
-        seed.team.name,
-        seed.team.slug,
-        seed.team.color,
-        seed.team.billingAccountId,
-        seed.team.billingEmail,
-        seed.periodStartsAt,
-        seed.periodEndsAt,
-        JSON.stringify(planQuotas),
-      ],
-    );
-    await client.query(
-      `
-        INSERT INTO team_memberships (
-          id, team_id, user_id, role, status, joined_at
-        ) VALUES (
-          $1, $2, $3, 'owner', 'active', $4
-        )
-        ON CONFLICT (id) DO NOTHING
-      `,
-      [
-        seed.membership.id,
-        seed.team.id,
-        seed.admin.id,
-        seed.periodStartsAt,
-      ],
-    );
-    await client.query(
-      `
         INSERT INTO user_preferences (user_id)
         VALUES ($1)
         ON CONFLICT (user_id) DO NOTHING
@@ -194,19 +94,18 @@ export async function seedCommunityDefaults(
     await client.query(
       `
         INSERT INTO environments (
-          id, team_id, created_by_user_id, name, description, color, status,
+          id, created_by_user_id, name, description, color, status,
           revision, template_id, rootfs_snapshot_id, workspace_volume_id,
           credential_revision, harness, harness_metadata, network_policy,
           metadata
         ) VALUES (
-          $1, $2, $3, $4, $5, $6, 'updating', 1, 'coding-agent', NULL, NULL, 0, $7,
-          $8::JSONB, $9::JSONB, $10::JSONB
+          $1, $2, $3, $4, $5, 'updating', 1, 'coding-agent', NULL, NULL, 0, $6,
+          $7::JSONB, $8::JSONB, $9::JSONB
         )
         ON CONFLICT (id) DO NOTHING
       `,
       [
         seed.environment.id,
-        seed.team.id,
         seed.admin.id,
         seed.environment.name,
         seed.environment.description,

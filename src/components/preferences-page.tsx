@@ -29,7 +29,7 @@ import {
   saveClientPreferences,
 } from "@/lib/client-preferences";
 import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
-import type { SandpiPreferences, SandpiUser, Team } from "@/lib/types";
+import type { SandpiPreferences, SandpiUser } from "@/lib/types";
 
 import styles from "./preferences-page.module.css";
 
@@ -38,7 +38,6 @@ type PreferenceTab = "general" | "appearance";
 interface PreferencesPageProps {
   initialPreferences: SandpiPreferences;
   viewer: SandpiUser;
-  team: Team;
 }
 
 const tabs: Array<{
@@ -53,7 +52,6 @@ const tabs: Array<{
 export function PreferencesPage({
   initialPreferences,
   viewer,
-  team,
 }: PreferencesPageProps) {
   const [activeTab, setActiveTab] = useState<PreferenceTab>("general");
   const [baseline, setBaseline] = useState(initialPreferences);
@@ -216,11 +214,11 @@ export function PreferencesPage({
         label={text("Preferences navigation", "偏好设置导航")}
         headerAction={
           <SidebarBackAction
-            href={`/?team=${encodeURIComponent(team.id)}`}
+            href="/"
             label={text("Back to workspace", "返回工作区")}
           />
         }
-        footer={<StaticSidebarAccount viewer={viewer} context={team.name} />}
+        footer={<StaticSidebarAccount viewer={viewer} context={viewer.email} />}
       >
         <div className={styles.sidebarHeading}>
           <span>{text("Settings", "设置")}</span>

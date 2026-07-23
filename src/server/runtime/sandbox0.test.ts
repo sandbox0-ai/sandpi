@@ -15,9 +15,7 @@ import {
 
 const environment: Environment = {
   id: "environment-test",
-  teamId: "team-test",
   ownerId: "user-test",
-  visibility: "team",
   idlePauseTimeoutSeconds: 30 * 60,
   sandboxMemoryMiB: 2 * 1024,
   workspaceBackup: { intervalSeconds: 0, retentionCount: 7 },
@@ -2135,7 +2133,7 @@ test("reports Sandbox0 deployment credential failures with operator guidance", a
       statusCode: 403,
       upstreamCode: "forbidden",
       code: "sandbox0_permission_denied",
-      message: /required team role and permissions/,
+      message: /required deployment role and permissions/,
     },
   ] as const;
 

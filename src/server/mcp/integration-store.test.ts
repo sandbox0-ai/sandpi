@@ -73,10 +73,12 @@ function oauthFlowRow(
 }
 
 test("bearer integration upsert persists only managed projection metadata", async () => {
+  let querySql = "";
   let queryValues: readonly unknown[] | undefined;
   const now = new Date("2026-07-20T00:00:00.000Z");
   const pool = {
-    async query(_sql: string, values?: readonly unknown[]) {
+    async query(sql: string, values?: readonly unknown[]) {
+      querySql = sql;
       queryValues = values;
       return {
         rowCount: 1,
@@ -132,6 +134,8 @@ test("bearer integration upsert persists only managed projection metadata", asyn
   assert.equal(integration.destinationDomain, "api.githubcopilot.com");
   assert.equal(integration.endpointFingerprint, SHA256);
   assert.equal(integration.credentialStatus, "configured");
+  assert.match(querySql, /environment\.created_by_user_id = \$1/);
+  assert.doesNotMatch(querySql, /membership|visibility|team_id/i);
   assert.deepEqual(toManagedMcpCredentialBinding(integration), {
     bindingRef: "binding_github",
     sourceRef: "source_github",

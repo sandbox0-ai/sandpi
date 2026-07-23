@@ -2765,7 +2765,7 @@ function translateSandbox0Error(error: unknown) {
       return new HttpError(
         403,
         "sandbox0_permission_denied",
-        "Sandbox0 denied the deployment API key. Check that it has the required team role and permissions.",
+        "Sandbox0 denied the deployment API key. Check that it has the required deployment role and permissions.",
       );
     }
     return new HttpError(

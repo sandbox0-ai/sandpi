@@ -799,21 +799,6 @@ pre,
   box-shadow: 0 14px 36px rgb(20 20 18 / 16%);
 }
 
-.account-menu-section-label {
-  padding: 5px 9px 6px;
-  color: var(--ink-faint);
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.065em;
-  text-transform: uppercase;
-}
-
-.account-team-list {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-
 .sidebar-account-menu a,
 .sidebar-account-menu button {
   display: flex;
@@ -830,107 +815,6 @@ pre,
   text-align: left;
   text-decoration: none;
   cursor: pointer;
-}
-
-.sidebar-account-menu .account-team-list button {
-  height: 43px;
-}
-
-.account-team-avatar {
-  display: inline-flex;
-  width: 25px;
-  height: 25px;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  border-radius: 6px;
-  color: #fff;
-  font-size: 10px;
-  font-weight: 720;
-}
-
-.account-team-copy {
-  display: flex;
-  min-width: 0;
-  flex: 1;
-  flex-direction: column;
-  gap: 1px;
-}
-
-.account-team-copy strong {
-  overflow: hidden;
-  color: var(--ink);
-  font-size: 11px;
-  font-weight: 650;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.account-team-copy small {
-  color: var(--ink-faint);
-  font-size: 9px;
-}
-
-.account-quota-summary {
-  margin: 6px 5px;
-  padding: 9px 10px;
-  border: 1px solid var(--line-soft);
-  border-radius: 7px;
-  background: var(--panel);
-}
-
-.account-quota-summary > div {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  color: var(--ink-soft);
-  font-size: 9.5px;
-}
-
-.account-quota-summary > div span {
-  display: inline-flex;
-  min-width: 0;
-  align-items: center;
-  gap: 5px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.account-quota-summary > div strong {
-  color: var(--ink);
-  font-size: 9.5px;
-}
-
-.account-quota-track {
-  display: block;
-  height: 4px;
-  margin-top: 7px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: var(--selected);
-}
-
-.account-quota-track i {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: var(--green);
-}
-
-.account-quota-summary > small {
-  display: block;
-  margin-top: 6px;
-  color: var(--ink-faint);
-  font-size: 8.5px;
-  line-height: 1.4;
-}
-
-.account-menu-separator {
-  height: 1px;
-  margin: 5px 4px;
-  background: var(--line-soft);
 }
 
 .sidebar-account-menu a:hover,

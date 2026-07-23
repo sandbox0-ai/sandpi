@@ -74,8 +74,6 @@ export type EnvironmentSettingsTab =
 interface EnvironmentSettingsProps {
   environment: Environment;
   initialTab?: EnvironmentSettingsTab;
-  teamName: string;
-  canChangeVisibility: boolean;
   language: OperationLanguage;
   timeZone: string;
   archivedSessions: CodingSession[];
@@ -203,8 +201,6 @@ function mergeCredentialProjection(
 export function EnvironmentSettings({
   environment,
   initialTab = "general",
-  teamName,
-  canChangeVisibility,
   language,
   timeZone,
   archivedSessions,
@@ -592,7 +588,6 @@ export function EnvironmentSettings({
             name: draft.name.trim(),
             description: draft.description,
             color: draft.color,
-            visibility: draft.visibility,
             idlePauseTimeoutSeconds: draft.idlePauseTimeoutSeconds,
             sandboxMemoryMiB: draft.sandboxMemoryMiB,
             workspaceBackup: {
@@ -683,7 +678,6 @@ export function EnvironmentSettings({
         name: current.name,
         description: current.description,
         color: current.color,
-        visibility: current.visibility,
         idlePauseTimeoutSeconds: current.idlePauseTimeoutSeconds,
         sandboxMemoryMiB: current.sandboxMemoryMiB,
         workspaceBackup: {
@@ -936,31 +930,7 @@ export function EnvironmentSettings({
                     }
                   />
                 </label>
-                <label className="full-field">
-                  Visibility
-                  <select
-                    name="environment-visibility"
-                    aria-label="Environment visibility"
-                    value={draft.visibility}
-                    disabled={!canChangeVisibility}
-                    onChange={(event) =>
-                      setDraft((current) => ({
-                        ...current,
-                        visibility: event.target.value as Environment["visibility"],
-                      }))
-                    }
-                  >
-                    <option value="team">Team · visible to {teamName}</option>
-                    <option value="private">Private · only visible to you</option>
-                  </select>
-                  <small>
-                    {canChangeVisibility
-                      ? "Only the creator can change visibility."
-                      : "Only the Environment creator can change visibility."}
-                  </small>
-                </label>
                 <div className="settings-card definition-card">
-                  <DefinitionRow label="Team" value={teamName} />
                   <DefinitionRow
                     label="Current revision"
                     value={`r${draft.revision}`}
@@ -1745,7 +1715,7 @@ export function EnvironmentSettings({
                             language,
                             timeZone,
                           )}
-                          . Separate from the Sandpi Team plan.
+                          . Reported directly by the connected Codex account.
                         </footer>
                       ) : null}
                     </section>

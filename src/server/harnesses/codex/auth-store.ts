@@ -117,15 +117,8 @@ export class CodexAuthStore {
           )
           SELECT $1, e.id, $2, 'provisioning', $4
           FROM environments e
-          JOIN team_memberships m
-            ON m.team_id = e.team_id
-           AND m.user_id = $2
-           AND m.status = 'active'
           WHERE e.id = $3 AND e.status <> 'archived'
-            AND (
-              e.created_by_user_id = $2
-              OR (e.visibility = 'team' AND m.role IN ('owner', 'admin'))
-            )
+            AND e.created_by_user_id = $2
           RETURNING *
         `,
         [id, input.userId, input.environmentId, input.expiresAt],
@@ -149,11 +142,7 @@ export class CodexAuthStore {
   async findActiveFlow(userId: string, environmentId: string) {
     const result = await this.pool.query<FlowRow>(
       `${authorizedFlowSelect()}
-       WHERE m.user_id = $1
-         AND (
-           e.created_by_user_id = $1
-           OR (e.visibility = 'team' AND m.role IN ('owner', 'admin'))
-         )
+       WHERE e.created_by_user_id = $1
          AND f.environment_id = $2
          AND f.status = ANY($3::TEXT[])
          AND f.expires_at > NOW()
@@ -167,11 +156,7 @@ export class CodexAuthStore {
   async findExpiredFlow(userId: string, environmentId: string) {
     const result = await this.pool.query<FlowRow>(
       `${authorizedFlowSelect()}
-       WHERE m.user_id = $1
-         AND (
-           e.created_by_user_id = $1
-           OR (e.visibility = 'team' AND m.role IN ('owner', 'admin'))
-         )
+       WHERE e.created_by_user_id = $1
          AND f.environment_id = $2
          AND f.status = ANY($3::TEXT[]) AND f.expires_at <= NOW()
        ORDER BY f.created_at DESC
@@ -194,11 +179,7 @@ export class CodexAuthStore {
   async getFlow(userId: string, environmentId: string, flowId: string) {
     const result = await this.pool.query<FlowRow>(
       `${authorizedFlowSelect()}
-       WHERE m.user_id = $1
-         AND (
-           e.created_by_user_id = $1
-           OR (e.visibility = 'team' AND m.role IN ('owner', 'admin'))
-         )
+       WHERE e.created_by_user_id = $1
          AND f.environment_id = $2 AND f.id = $3`,
       [userId, environmentId, flowId],
     );
@@ -382,12 +363,8 @@ export class CodexAuthStore {
       `SELECT c.*
        FROM harness_credentials c
        JOIN environments e ON e.id = c.environment_id
-       JOIN team_memberships m
-         ON m.team_id = e.team_id
-        AND m.user_id = $1
-        AND m.status = 'active'
        WHERE c.environment_id = $2 AND c.harness = 'codex'
-         AND (e.visibility = 'team' OR e.created_by_user_id = $1)
+         AND e.created_by_user_id = $1
          AND c.credential_slot = 'account'
          AND c.revoked_at IS NULL
        LIMIT 1`,
@@ -824,10 +801,7 @@ export function publicCodexDeviceAuthFlow(
 function authorizedFlowSelect() {
   return `SELECT f.*
           FROM codex_device_auth_flows f
-          JOIN environments e ON e.id = f.environment_id
-          JOIN team_memberships m
-            ON m.team_id = e.team_id
-           AND m.status = 'active'`;
+          JOIN environments e ON e.id = f.environment_id`;
 }
 
 function encryptedCredential(row: CredentialRow): EncryptedValue {

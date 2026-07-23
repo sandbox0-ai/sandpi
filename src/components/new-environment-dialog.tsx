@@ -5,7 +5,6 @@ import {
   Check,
   LoaderCircle,
   LockKeyhole,
-  UsersRound,
   X,
 } from "lucide-react";
 import {
@@ -24,8 +23,6 @@ import type { Environment } from "@/lib/types";
 import styles from "./new-environment-dialog.module.css";
 
 interface NewEnvironmentDialogProps {
-  teamId: string;
-  teamName: string;
   environments: Environment[];
   onCreated: (environment: Environment) => void;
   onClose: () => void;
@@ -36,8 +33,6 @@ function normalizedName(value: string) {
 }
 
 export function NewEnvironmentDialog({
-  teamId,
-  teamName,
   environments,
   onCreated,
   onClose,
@@ -51,8 +46,6 @@ export function NewEnvironmentDialog({
   const dialogRef = useRef<HTMLElement>(null);
 
   const [name, setName] = useState("");
-  const [visibility, setVisibility] =
-    useState<Environment["visibility"]>("team");
   const [nameError, setNameError] = useState("");
   const [submitError, setSubmitError] = useState("");
   const [creating, setCreating] = useState(false);
@@ -152,9 +145,7 @@ export function NewEnvironmentDialog({
         {
           method: "POST",
           body: JSON.stringify({
-            teamId,
             name: name.trim(),
-            visibility,
           }),
         },
       );
@@ -195,8 +186,8 @@ export function NewEnvironmentDialog({
               <span className={styles.kicker}>Create a reusable workspace</span>
               <h1 id={titleId}>New Environment</h1>
               <p id={descriptionId}>
-                Create a reusable workspace for {teamName}. Every new Session inherits its
-                agent harness and Team ownership.
+                Create a reusable workspace for your coding sessions. Every new
+                Session inherits its agent harness and runtime.
               </p>
             </div>
             <button
@@ -238,7 +229,7 @@ export function NewEnvironmentDialog({
                   }}
                 />
                 <span id={nameHintId} className={styles.fieldHint}>
-                  Use a short name your team will recognize.
+                  Use a short name that makes this workspace easy to recognize.
                 </span>
                 {nameError ? (
                   <span id={nameErrorId} className={styles.fieldError} role="alert">
@@ -254,47 +245,6 @@ export function NewEnvironmentDialog({
               </label>
 
             </fieldset>
-
-            <fieldset className={styles.fieldset} disabled={creating}>
-              <legend>Visibility</legend>
-              <div className={styles.visibilityOptions}>
-                <label className={styles.visibilityOption}>
-                  <input
-                    type="radio"
-                    name="visibility"
-                    value="team"
-                    checked={visibility === "team"}
-                    onChange={() => setVisibility("team")}
-                  />
-                  <UsersRound size={17} aria-hidden="true" />
-                  <span>
-                    <strong>Team</strong>
-                    <small>
-                      Every active member of {teamName} can open and use it.
-                    </small>
-                  </span>
-                </label>
-                <label className={styles.visibilityOption}>
-                  <input
-                    type="radio"
-                    name="visibility"
-                    value="private"
-                    checked={visibility === "private"}
-                    onChange={() => setVisibility("private")}
-                  />
-                  <LockKeyhole size={17} aria-hidden="true" />
-                  <span>
-                    <strong>Private</strong>
-                    <small>Only you can see and use this Environment.</small>
-                  </span>
-                </label>
-              </div>
-              <p className={styles.visibilityHelp}>
-                New Environments are Team-visible by default. Private Environments
-                carry a lock icon in the sidebar.
-              </p>
-            </fieldset>
-
             <fieldset className={styles.fieldset} disabled={creating}>
               <legend>Agent harness</legend>
               <label className={styles.agentOption} aria-describedby={agentHelpId}>

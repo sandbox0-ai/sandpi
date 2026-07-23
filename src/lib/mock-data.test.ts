@@ -8,15 +8,11 @@ import {
   mockEnvironmentMetrics,
   mockEnvironments,
   mockPreferences,
-  mockSandpiPlans,
   mockSessions,
-  mockTeamMemberships,
-  mockTeams,
 } from "./mock-data";
 
 test("binds the coding agent to an Environment and every derived Session", () => {
   const environment = createMockEnvironment({
-    teamId: "team-sandpi-labs",
     name: "Agent binding test",
   });
   const session = createMockSession(environment, {
@@ -25,9 +21,7 @@ test("binds the coding agent to an Environment and every derived Session", () =>
   });
 
   assert.equal(environment.codingAgent.harness, "codex");
-  assert.equal(environment.teamId, "team-sandpi-labs");
   assert.equal(environment.ownerId, session.owner?.id);
-  assert.equal(environment.visibility, "team");
   assert.equal(environment.idlePauseTimeoutSeconds, 30 * 60);
   assert.equal(environment.sandboxMemoryMiB, 2 * 1024);
   assert.deepEqual(environment.workspaceBackup, {
@@ -54,7 +48,6 @@ test("binds the coding agent to an Environment and every derived Session", () =>
 
 test("uses only a model exposed by the Environment harness mock", () => {
   const environment = createMockEnvironment({
-    teamId: "team-sandpi-labs",
     name: "Model selection test",
   });
   const selected = createMockSession(environment, {
@@ -72,45 +65,36 @@ test("uses only a model exposed by the Environment harness mock", () => {
   assert.equal(fallback.harnessState.modelId, "gpt-5.2-codex");
 });
 
-test("bootstraps one selected Team without exposing deployment credentials", () => {
-  const bootstrap = getMockBootstrap("team-side-projects");
+test("bootstraps one selected Environment without exposing deployment credentials", () => {
+  const bootstrap = getMockBootstrap("env-side-projects");
   const selectedEnvironment = bootstrap.environments.find(
     (environment) => environment.id === bootstrap.selectedEnvironmentId,
   );
 
-  assert.equal(bootstrap.selectedTeamId, "team-side-projects");
-  assert.equal(selectedEnvironment?.teamId, bootstrap.selectedTeamId);
+  assert.equal(selectedEnvironment?.id, "env-side-projects");
+  assert.equal(selectedEnvironment?.ownerId, bootstrap.viewer.id);
   assert.equal(bootstrap.deployment.identity.provider, "sandpi-auth0");
   assert.equal(bootstrap.deployment.runtime.configurationScope, "deployment");
   assert.equal("apiHost" in bootstrap.deployment.runtime, false);
   assert.equal("apiKey" in bootstrap.deployment.runtime, false);
-  assert.equal(mockTeams[0]?.billingAccount.billingCadence, "monthly");
-  assert.equal(mockTeams[0]?.plan.planId, "max");
-  assert.equal(bootstrap.teams.find((team) => team.id === bootstrap.selectedTeamId)?.plan.planId, "pro");
-  assert.deepEqual(
-    mockSandpiPlans.map((plan) => plan.id),
-    ["free", "pro", "max"],
-  );
-  assert.equal(bootstrap.viewerMemberships.length, 2);
-  assert.ok(
-    mockTeamMemberships.every(
-      (membership) => !("planAssignment" in membership),
-    ),
-  );
+  assert.equal("teams" in bootstrap, false);
+  assert.equal("viewerMemberships" in bootstrap, false);
+  assert.equal("teamMemberships" in bootstrap, false);
+  assert.equal("plans" in bootstrap, false);
 });
 
-test("marks private Environments and attributes Sessions to their owners", () => {
-  const privateEnvironment = mockEnvironments.find(
-    (environment) => environment.id === "env-personal",
+test("keeps every mock Environment user-owned", () => {
+  assert.ok(
+    mockEnvironments.every(
+      (environment) => environment.ownerId === "user-yan",
+    ),
   );
-  const teammateSession = mockSessions.find(
-    (session) => session.id === "session-sdk-release",
+  assert.ok(
+    mockEnvironments.every(
+      (environment) =>
+        !("teamId" in environment) && !("visibility" in environment),
+    ),
   );
-
-  assert.equal(privateEnvironment?.visibility, "private");
-  assert.equal(privateEnvironment?.ownerId, "user-yan");
-  assert.equal(teammateSession?.owner?.name, "Mira Chen");
-  assert.equal(teammateSession?.owner?.avatarInitials, "MC");
 });
 
 test("keeps every mock Session on its Environment revision", () => {

@@ -161,7 +161,7 @@ export const CODEX_MCP_PRESETS: readonly CodexMcpPreset[] = [
     category: "remote",
     name: "linear",
     title: "Linear",
-    description: "Work with issues, projects and team workflows.",
+    description: "Work with issues, projects and collaborative workflows.",
     transport: "streamable-http",
     url: "https://mcp.linear.app/mcp",
     connectionLabel: "OAuth / token",

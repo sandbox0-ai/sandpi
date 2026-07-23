@@ -3,17 +3,13 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
-  Check,
   CircleHelp,
-  CreditCard,
-  LockKeyhole,
   PanelLeftClose,
   Pin,
   Plus,
   Search,
   Settings,
   Settings2,
-  UsersRound,
   X,
 } from "lucide-react";
 
@@ -24,32 +20,23 @@ import {
 } from "@/components/sidebar-primitives";
 import { AppSidebar } from "@/components/app-frame";
 import { getOperationUiCopy, type OperationLanguage } from "@/lib/operation-ui";
-import { planForTeam, quotaPercent } from "@/lib/team";
 import { sessionStateMarker } from "@/lib/session-state-marker";
 import type {
   CodingSession,
   Environment,
-  SandpiPlan,
   SandpiUser,
-  Team,
-  TeamMembership,
 } from "@/lib/types";
 import { visibleSessionsForEnvironment } from "@/lib/session-list";
 
 interface SidebarProps {
   language: OperationLanguage;
   viewer: SandpiUser;
-  teams: Team[];
-  viewerMemberships: TeamMembership[];
-  plans: SandpiPlan[];
-  selectedTeamId: string;
   environments: Environment[];
   sessions: CodingSession[];
   selectedEnvironmentId: string;
   selectedSessionId: string;
   onSelectEnvironment: (environmentId: string) => void;
   onSelectSession: (sessionId: string) => void;
-  onSelectTeam: (teamId: string) => void;
   onNewEnvironment: () => void;
   onNewSession: (environmentId: string) => void;
   onEnvironmentSettings: (environmentId: string) => void;
@@ -94,17 +81,12 @@ function SessionStateIndicator({
 export function Sidebar({
   language,
   viewer,
-  teams,
-  viewerMemberships,
-  plans,
-  selectedTeamId,
   environments,
   sessions,
   selectedEnvironmentId,
   selectedSessionId,
   onSelectEnvironment,
   onSelectSession,
-  onSelectTeam,
   onNewEnvironment,
   onNewSession,
   onEnvironmentSettings,
@@ -116,12 +98,6 @@ export function Sidebar({
   onCloseMobile,
 }: SidebarProps) {
   const ui = getOperationUiCopy(language).sidebar;
-  const selectedTeam =
-    teams.find((team) => team.id === selectedTeamId) ?? teams[0];
-  const selectedMembership = viewerMemberships.find(
-    (membership) => membership.teamId === selectedTeam?.id,
-  );
-  const selectedPlan = selectedTeam ? planForTeam(plans, selectedTeam) : undefined;
   const unreadLabel = language === "zh-CN" ? "未读" : "Unread";
   const runningLabel = language === "zh-CN" ? "运行中" : "Running";
   const [sessionSearchOpen, setSessionSearchOpen] = useState(false);
@@ -186,7 +162,7 @@ export function Sidebar({
   ) {
     const menuItems = Array.from(
       event.currentTarget.querySelectorAll<HTMLElement>(
-        "[role='menuitem'], [role='menuitemradio']",
+        "[role='menuitem']",
       ),
     );
     const activeIndex = menuItems.indexOf(document.activeElement as HTMLElement);
@@ -230,7 +206,7 @@ export function Sidebar({
       >
         <SidebarAccountSummary
           viewer={viewer}
-          context={selectedTeam?.name ?? ui.noTeam}
+          context={viewer.email}
         />
       </button>
       {accountMenuOpen ? (
@@ -241,97 +217,8 @@ export function Sidebar({
           aria-label={ui.accountActions}
           onKeyDown={handleAccountMenuKeyDown}
         >
-          <div className="account-menu-section-label">{ui.switchTeam}</div>
-          <div className="account-team-list" role="group" aria-label={ui.teams}>
-            {teams.map((team) => {
-              const selected = team.id === selectedTeamId;
-              const plan = planForTeam(plans, team);
-              return (
-                <button
-                  type="button"
-                  role="menuitemradio"
-                  aria-checked={selected}
-                  key={team.id}
-                  onClick={() => {
-                    onSelectTeam(team.id);
-                    setAccountMenuOpen(false);
-                  }}
-                >
-                  <span
-                    className="account-team-avatar"
-                    style={{ backgroundColor: team.color }}
-                    aria-hidden="true"
-                  >
-                    {team.name.slice(0, 1)}
-                  </span>
-                  <span className="account-team-copy">
-                    <strong>{team.name}</strong>
-                    <small>
-                      {ui.members(team.memberCount)}
-                      {plan ? ` · ${plan.name}` : ""}
-                    </small>
-                  </span>
-                  {selected ? <Check size={14} aria-label={ui.currentTeam} /> : null}
-                </button>
-              );
-            })}
-          </div>
-          {selectedTeam && selectedMembership ? (
-            <div className="account-quota-summary">
-              <div>
-                <span>
-                  <CreditCard size={13} aria-hidden="true" />
-                  {selectedPlan?.name ?? selectedTeam.plan.planId}
-                </span>
-                <strong>
-                  {quotaPercent(
-                    selectedTeam.plan.quotas.weeklyExecution.used,
-                    selectedTeam.plan.quotas.weeklyExecution.limit,
-                  )}
-                  %
-                </strong>
-              </div>
-              <span className="account-quota-track" aria-hidden="true">
-                <i
-                  style={{
-                    width: `${quotaPercent(
-                      selectedTeam.plan.quotas.weeklyExecution.used,
-                      selectedTeam.plan.quotas.weeklyExecution.limit,
-                    )}%`,
-                  }}
-                />
-              </span>
-              <small>
-                {ui.weeklyExecution(
-                  Math.round(
-                    selectedTeam.plan.quotas.weeklyExecution.used /
-                      60,
-                  ),
-                  Math.round(
-                    selectedTeam.plan.quotas.weeklyExecution.limit /
-                      60,
-                  ),
-                )}
-              </small>
-            </div>
-          ) : null}
-          <div className="account-menu-separator" role="separator" />
-          {selectedTeam ? (
-            <Link
-              href={`/team?team=${encodeURIComponent(selectedTeam.id)}`}
-              role="menuitem"
-              onClick={() => setAccountMenuOpen(false)}
-            >
-              <UsersRound size={15} aria-hidden="true" />
-              {ui.teamSettings}
-            </Link>
-          ) : null}
           <Link
-            href={
-              selectedTeam
-                ? `/preferences?team=${encodeURIComponent(selectedTeam.id)}`
-                : "/preferences"
-            }
+            href="/preferences"
             role="menuitem"
             onClick={() => setAccountMenuOpen(false)}
           >
@@ -413,11 +300,7 @@ export function Sidebar({
                 environment.id,
               );
               const selected = environment.id === selectedEnvironmentId;
-              const canManage =
-                environment.ownerId === viewer.id ||
-                (environment.visibility === "team" &&
-                  (selectedMembership?.role === "owner" ||
-                    selectedMembership?.role === "admin"));
+              const canManage = environment.ownerId === viewer.id;
 
               return (
                 <section className="environment-group" key={environment.id}>
@@ -440,13 +323,6 @@ export function Sidebar({
                       <span className="environment-name">
                         {environment.name}
                       </span>
-                      {environment.visibility === "private" ? (
-                        <LockKeyhole
-                          className="environment-private-icon"
-                          size={11}
-                          aria-label="Private Environment"
-                        />
-                      ) : null}
                     </button>
                     <span className="environment-row-actions">
                       <button

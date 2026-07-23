@@ -72,9 +72,7 @@ export class EnvironmentService {
 
   async create(input: {
     userId: string;
-    teamId: string;
     name: string;
-    visibility: Environment["visibility"];
   }) {
     const environment = await this.store.createEnvironmentMetadata(input);
     // The logical Environment exists before its Workspace Volume is ready.
@@ -102,7 +100,6 @@ export class EnvironmentService {
       name: string;
       description: string;
       color: string;
-      visibility: Environment["visibility"];
       idlePauseTimeoutSeconds: number;
       sandboxMemoryMiB: number;
       workspaceBackup: Pick<
@@ -113,12 +110,6 @@ export class EnvironmentService {
     },
   ): Promise<Environment> {
     const current = await this.store.getManageableEnvironment(userId, environmentId);
-    if (current.visibility !== input.visibility && current.ownerId !== userId) {
-      throw conflict(
-        "environment_visibility_forbidden",
-        "Only the Environment creator can change its visibility.",
-      );
-    }
     const networkChanged =
       JSON.stringify(current.networkPolicy) !== JSON.stringify(input.networkPolicy);
     const idlePauseChanged =
@@ -143,12 +134,6 @@ export class EnvironmentService {
         userId,
         environmentId,
       );
-      if (locked.visibility !== input.visibility && locked.ownerId !== userId) {
-        throw conflict(
-          "environment_visibility_forbidden",
-          "Only the Environment creator can change its visibility.",
-        );
-      }
       const lockedNetworkChanged =
         JSON.stringify(locked.networkPolicy) !== JSON.stringify(input.networkPolicy);
       const lockedMemoryChanged =

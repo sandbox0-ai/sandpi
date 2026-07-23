@@ -358,7 +358,6 @@ export async function createSandpiServer(
     app.get("/preferences", async (_request, reply) =>
       reply.redirect("/preferences/", 308),
     );
-    app.get("/team", async (_request, reply) => reply.redirect("/team/", 308));
     app.get("/ide", async (_request, reply) => reply.redirect("/ide/", 308));
     await app.register(fastifyStatic, {
       root: config.webDir,
@@ -446,10 +445,10 @@ function registerAuthRoutes(
     const result = await oidcIdentity.completeLogin(
       new URL(request.url, config.publicUrl),
     );
-    // A first-time OIDC user receives a default Team and Environment in the
-    // identity transaction. Provision that Environment before the first Web
-    // bootstrap so every client observes the same ready/error state without a
-    // server restart. EnvironmentService coalesces concurrent reconciliations.
+    // A first-time OIDC user receives a default Environment in the identity
+    // transaction. Provision it before the first Web bootstrap so every client
+    // observes the same ready/error state without a server restart.
+    // EnvironmentService coalesces concurrent reconciliations.
     await environments.reconcilePending();
     reply.setCookie(
       SESSION_COOKIE,
@@ -497,7 +496,6 @@ function registerApiRoutes(
     data: await services.store.getBootstrap(
       request.principal.userId,
       deployment,
-      queryString(request, "team"),
       queryString(request, "environment"),
       queryString(request, "session"),
       queryString(request, "new") === "1",
@@ -511,9 +509,7 @@ function registerApiRoutes(
   app.post("/api/v1/environments", async (request, reply) => {
     const body = z
       .object({
-        teamId: z.string().min(1),
         name: z.string().trim().min(1).max(80),
-        visibility: z.enum(["team", "private"]).default("team"),
       })
       .parse(request.body);
     const environment = await services.environments.create({
@@ -530,7 +526,6 @@ function registerApiRoutes(
           name: z.string().trim().min(1).max(80),
           description: z.string().max(500),
           color: z.string().regex(/^#[0-9a-f]{6}$/i),
-          visibility: z.enum(["team", "private"]),
           idlePauseTimeoutSeconds: z
             .number()
             .int()
@@ -1514,21 +1509,6 @@ function registerApiRoutes(
       preferencesSchema.parse(request.body),
     ),
   }));
-  app.put<{ Params: { teamId: string } }>(
-    "/api/v1/teams/:teamId/plan",
-    async (request) => {
-      const body = z
-        .object({ planId: z.enum(["free", "pro", "max"]) })
-        .parse(request.body);
-      return {
-        data: await services.store.updateTeamPlan(
-          request.principal.userId,
-          request.params.teamId,
-          body.planId,
-        ),
-      };
-    },
-  );
 }
 
 async function streamHarnessEvents(

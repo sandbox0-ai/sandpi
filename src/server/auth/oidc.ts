@@ -229,7 +229,7 @@ async function upsertOidcUser(
       `,
       [userId, identity.email, identity.name, initials, identity.issuer, identity.subject],
     );
-    await createPersonalTeam(client, userId, identity.email, identity.name);
+    await createPersonalEnvironment(client, userId);
     await client.query("INSERT INTO user_preferences (user_id) VALUES ($1)", [userId]);
   }
   return {
@@ -241,75 +241,20 @@ async function upsertOidcUser(
   };
 }
 
-async function createPersonalTeam(
-  client: PoolClient,
-  userId: string,
-  email: string,
-  name: string,
-) {
-  const teamId = `team_${randomUUID()}`;
-  const now = new Date();
-  const monthEnd = new Date(now);
-  monthEnd.setUTCMonth(monthEnd.getUTCMonth() + 1);
-  const weekEnd = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1_000);
-  const planQuotas = {
-    weeklyExecution: {
-      used: 0,
-      limit: 600,
-      unit: "minute",
-      window: "weekly",
-      resetsAt: weekEnd.toISOString(),
-    },
-    concurrentSessions: { used: 0, limit: 1, unit: "session" },
-    snapshotStorage: { used: 0, limit: 5, unit: "gibibyte" },
-  };
-  await client.query(
-    `
-      INSERT INTO teams (
-        id, name, slug, color, billing_account_id, billing_status,
-        billing_email, billing_period_starts_at, billing_period_ends_at,
-        plan_id, plan_status, plan_quotas
-      ) VALUES (
-        $1, $2, $3, '#315c4b', $4, 'deployment-managed', $5, $6, $7,
-        'free', 'active', $8::JSONB
-      )
-    `,
-    [
-      teamId,
-      `${name}'s Team`,
-      `team-${teamId.slice(-12)}`,
-      `billing-${teamId}`,
-      email,
-      now,
-      monthEnd,
-      JSON.stringify(planQuotas),
-    ],
-  );
-  await client.query(
-    `
-      INSERT INTO team_memberships (
-        id, team_id, user_id, role, status
-      ) VALUES ($1, $2, $3, 'owner', 'active')
-    `,
-    [
-      `membership_${randomUUID()}`,
-      teamId,
-      userId,
-    ],
-  );
+async function createPersonalEnvironment(client: PoolClient, userId: string) {
   await client.query(
     `
       INSERT INTO environments (
-        id, team_id, created_by_user_id, name, description, color, status,
+        id, created_by_user_id, name, description, color, status,
         revision, template_id, harness, harness_metadata, network_policy
       ) VALUES (
-        $1, $2, $3, 'Development', '', '#315c4b', 'updating', 1,
+        $1, $2, 'Development', '', '#315c4b', 'updating', 1,
         'coding-agent', 'codex',
         '{"label":"Codex","status":"not-connected"}'::JSONB,
         '{"mode":"allow-all","domainExceptions":[]}'::JSONB
       )
     `,
-    [`env_${randomUUID()}`, teamId, userId],
+    [`env_${randomUUID()}`, userId],
   );
 }
 

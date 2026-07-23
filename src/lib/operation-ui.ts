@@ -52,14 +52,6 @@ const copy = {
       help: "Help & feedback",
       accountMenu: "Open account menu",
       accountActions: "Account actions",
-      switchTeam: "Switch team",
-      teams: "Available teams",
-      noTeam: "No team",
-      currentTeam: "Current team",
-      members: (count: number) => `${count} ${count === 1 ? "member" : "members"}`,
-      weeklyExecution: (usedHours: number, limitHours: number) =>
-        `${usedHours} of ${limitHours} execution hours this week`,
-      teamSettings: "Team settings",
     },
     inspector: {
       label: "Environment inspector",
@@ -131,14 +123,6 @@ const copy = {
       help: "帮助与反馈",
       accountMenu: "打开账户菜单",
       accountActions: "账户操作",
-      switchTeam: "切换团队",
-      teams: "可用团队",
-      noTeam: "无团队",
-      currentTeam: "当前团队",
-      members: (count: number) => `${count} 位成员`,
-      weeklyExecution: (usedHours: number, limitHours: number) =>
-        `本周已用 ${usedHours} / ${limitHours} 执行小时`,
-      teamSettings: "团队设置",
     },
     inspector: {
       label: "环境检查器",

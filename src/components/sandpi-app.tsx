@@ -34,7 +34,6 @@ import {
 } from "@/lib/local-ui-preferences";
 import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
 import { visibleSessionsForEnvironment } from "@/lib/session-list";
-import { environmentsForTeam, sessionsForTeam } from "@/lib/team";
 import { useLocalUiPreferences } from "@/lib/use-local-ui-preferences";
 import { userVisibleWorkspacePath } from "@/lib/workspace-path-policy";
 import type {
@@ -48,16 +47,16 @@ interface SandpiAppProps {
 }
 
 function replaceWorkspaceUrl(
-  teamId: string,
   environmentId: string,
   sessionId?: string,
 ) {
   const url = new URL(window.location.href);
   const previousEnvironmentId = url.searchParams.get("environment");
-  url.searchParams.set("team", teamId);
+  const previousPath = url.searchParams.get("path");
+  url.search = "";
   url.searchParams.set("environment", environmentId);
-  if (previousEnvironmentId !== environmentId) {
-    url.searchParams.delete("path");
+  if (previousEnvironmentId === environmentId && previousPath) {
+    url.searchParams.set("path", previousPath);
   }
   if (sessionId) {
     url.searchParams.set("session", sessionId);
@@ -69,13 +68,9 @@ function replaceWorkspaceUrl(
   window.history.replaceState(window.history.state, "", url);
 }
 
-function replaceTeamUrl(teamId: string) {
+function replaceEmptyWorkspaceUrl() {
   const url = new URL(window.location.href);
-  url.searchParams.set("team", teamId);
-  url.searchParams.delete("environment");
-  url.searchParams.delete("session");
-  url.searchParams.delete("new");
-  url.searchParams.delete("path");
+  url.search = "";
   window.history.replaceState(window.history.state, "", url);
 }
 
@@ -83,9 +78,6 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
   const [environments, setEnvironments] = useState(initialData.environments);
   const [sessions, setSessions] = useState(initialData.sessions);
   const [preferences, setPreferences] = useState(initialData.preferences);
-  const [selectedTeamId, setSelectedTeamId] = useState(
-    initialData.selectedTeamId,
-  );
   const [selectedEnvironmentId, setSelectedEnvironmentId] = useState(
     initialData.selectedEnvironmentId,
   );
@@ -187,56 +179,27 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
     };
   }, []);
 
-  const selectedTeam = useMemo(
-    () =>
-      initialData.teams.find((team) => team.id === selectedTeamId) ??
-      initialData.teams[0],
-    [initialData.teams, selectedTeamId],
-  );
-
-  const selectedTeamMembership = useMemo(
-    () =>
-      initialData.viewerMemberships.find(
-        (membership) => membership.teamId === selectedTeamId,
-      ),
-    [initialData.viewerMemberships, selectedTeamId],
-  );
-
   const canManageEnvironment = useCallback(
-    (environment: Environment) =>
-      environment.ownerId === initialData.viewer.id ||
-      (environment.visibility === "team" &&
-        (selectedTeamMembership?.role === "owner" ||
-          selectedTeamMembership?.role === "admin")),
-    [initialData.viewer.id, selectedTeamMembership?.role],
-  );
-
-  const teamEnvironments = useMemo(
-    () => environmentsForTeam(environments, selectedTeamId),
-    [environments, selectedTeamId],
-  );
-
-  const teamSessions = useMemo(
-    () => sessionsForTeam(sessions, environments, selectedTeamId),
-    [environments, selectedTeamId, sessions],
+    (environment: Environment) => environment.ownerId === initialData.viewer.id,
+    [initialData.viewer.id],
   );
 
   const selectedEnvironment = useMemo(
     () =>
-      teamEnvironments.find(
+      environments.find(
         (environment) => environment.id === selectedEnvironmentId,
-      ) ?? teamEnvironments[0],
-    [selectedEnvironmentId, teamEnvironments],
+      ) ?? environments[0],
+    [environments, selectedEnvironmentId],
   );
 
   const selectedSession = useMemo(
     () =>
-      teamSessions.find(
+      sessions.find(
         (session) =>
           session.id === selectedSessionId &&
           session.environmentId === selectedEnvironmentId,
       ),
-    [selectedEnvironmentId, selectedSessionId, teamSessions],
+    [selectedEnvironmentId, selectedSessionId, sessions],
   );
 
   const openWorkspacePath = useCallback(
@@ -372,10 +335,10 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
 
   const settingsEnvironment = useMemo(
     () =>
-      teamEnvironments.find(
+      environments.find(
         (environment) => environment.id === settingsTarget?.environmentId,
       ) ?? null,
-    [settingsTarget?.environmentId, teamEnvironments],
+    [environments, settingsTarget?.environmentId],
   );
 
   const openEnvironmentSettings = useCallback(
@@ -396,37 +359,9 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
     [canManageEnvironment, environments],
   );
 
-  const handleSelectTeam = useCallback(
-    (teamId: string) => {
-      const nextTeam = initialData.teams.find((team) => team.id === teamId);
-      if (!nextTeam || nextTeam.id === selectedTeamId) {
-        return;
-      }
-      const nextEnvironments = environmentsForTeam(environments, nextTeam.id);
-      const nextEnvironment = nextEnvironments[0];
-      const nextSession = nextEnvironment
-        ? visibleSessionsForEnvironment(sessions, nextEnvironment.id)[0]
-        : undefined;
-
-      setSelectedTeamId(nextTeam.id);
-      setSelectedEnvironmentId(nextEnvironment?.id ?? "");
-      setSelectedSessionId(nextSession?.id ?? "");
-      if (nextSession) void hydrateSession(nextSession.id);
-      setSettingsTarget(null);
-      setTerminalOpen(false);
-      setSidebarOpen(false);
-      if (nextEnvironment) {
-        replaceWorkspaceUrl(nextTeam.id, nextEnvironment.id, nextSession?.id);
-      } else {
-        replaceTeamUrl(nextTeam.id);
-      }
-    },
-    [environments, hydrateSession, initialData.teams, selectedTeamId, sessions],
-  );
-
   const handleSelectEnvironment = useCallback(
     (environmentId: string) => {
-      const environment = teamEnvironments.find(
+      const environment = environments.find(
         (item) => item.id === environmentId,
       );
       if (!environment) {
@@ -439,7 +374,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
       )[0];
       if (firstSession) {
         setSelectedSessionId(firstSession.id);
-        replaceWorkspaceUrl(selectedTeamId, environmentId, firstSession.id);
+        replaceWorkspaceUrl(environmentId, firstSession.id);
         void hydrateSession(firstSession.id);
         setSessions((current) =>
           current.map((session) =>
@@ -450,17 +385,17 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
         );
       } else {
         setSelectedSessionId("");
-        replaceWorkspaceUrl(selectedTeamId, environmentId);
+        replaceWorkspaceUrl(environmentId);
       }
       setSidebarOpen(false);
     },
-    [hydrateSession, selectedTeamId, sessions, teamEnvironments],
+    [environments, hydrateSession, sessions],
   );
 
   const handleNewSession = useCallback(
     (environmentId: string) => {
       if (
-        !teamEnvironments.some(
+        !environments.some(
           (environment) => environment.id === environmentId,
         )
       ) {
@@ -468,10 +403,10 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
       }
       setSelectedEnvironmentId(environmentId);
       setSelectedSessionId("");
-      replaceWorkspaceUrl(selectedTeamId, environmentId);
+      replaceWorkspaceUrl(environmentId);
       setSidebarOpen(false);
     },
-    [selectedTeamId, teamEnvironments],
+    [environments],
   );
 
   const handleToggleNavigation = useCallback(() => {
@@ -493,10 +428,10 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
       const environment = session
         ? environments.find((item) => item.id === session.environmentId)
         : undefined;
-      if (session && environment?.teamId === selectedTeamId) {
+      if (session && environment) {
         setSelectedSessionId(sessionId);
         setSelectedEnvironmentId(session.environmentId);
-        replaceWorkspaceUrl(selectedTeamId, session.environmentId, sessionId);
+        replaceWorkspaceUrl(session.environmentId, sessionId);
         void hydrateSession(sessionId);
         setSessions((current) =>
           current.map((item) =>
@@ -508,7 +443,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
       }
       setSidebarOpen(false);
     },
-    [environments, hydrateSession, selectedTeamId, sessions],
+    [environments, hydrateSession, sessions],
   );
 
   const handleEnvironmentChange = useCallback(
@@ -545,10 +480,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
       const remainingSessions = sessions.filter(
         (session) => session.environmentId !== environmentId,
       );
-      const nextEnvironment = environmentsForTeam(
-        remainingEnvironments,
-        selectedTeamId,
-      )[0];
+      const nextEnvironment = remainingEnvironments[0];
       const nextSession = nextEnvironment
         ? visibleSessionsForEnvironment(
             remainingSessions,
@@ -569,14 +501,10 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
         setSelectedEnvironmentId(nextEnvironment?.id ?? "");
         setSelectedSessionId(nextSession?.id ?? "");
         if (nextEnvironment) {
-          replaceWorkspaceUrl(
-            selectedTeamId,
-            nextEnvironment.id,
-            nextSession?.id,
-          );
+          replaceWorkspaceUrl(nextEnvironment.id, nextSession?.id);
           if (nextSession) void hydrateSession(nextSession.id);
         } else {
-          replaceTeamUrl(selectedTeamId);
+          replaceEmptyWorkspaceUrl();
         }
       }
     },
@@ -584,7 +512,6 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
       environments,
       hydrateSession,
       selectedEnvironmentId,
-      selectedTeamId,
       sessions,
     ],
   );
@@ -597,10 +524,10 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
       ]);
       setSelectedEnvironmentId(session.environmentId);
       setSelectedSessionId(session.id);
-      replaceWorkspaceUrl(selectedTeamId, session.environmentId, session.id);
+      replaceWorkspaceUrl(session.environmentId, session.id);
       setTerminalOpen(false);
     },
-    [selectedTeamId],
+    [],
   );
 
   const persistSessionMetadata = useCallback(
@@ -684,7 +611,6 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
             )[0];
             setSelectedSessionId(nextSession?.id ?? "");
             replaceWorkspaceUrl(
-              selectedTeamId,
               archivedSession.environmentId,
               nextSession?.id,
             );
@@ -694,7 +620,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
           console.error("Unable to archive Session", error);
         });
     },
-    [persistSessionMetadata, selectedSessionId, selectedTeamId, sessions],
+    [persistSessionMetadata, selectedSessionId, sessions],
   );
 
   const handleRestoreSession = useCallback(
@@ -709,16 +635,13 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
   );
 
   const handleEnvironmentCreated = useCallback((environment: Environment) => {
-    if (environment.teamId !== selectedTeamId) {
-      return;
-    }
     setEnvironments((current) => [...current, environment]);
     setSelectedEnvironmentId(environment.id);
     setSelectedSessionId("");
-    replaceWorkspaceUrl(selectedTeamId, environment.id);
+    replaceWorkspaceUrl(environment.id);
     setTerminalOpen(false);
     setNewEnvironmentOpen(false);
-  }, [selectedTeamId]);
+  }, []);
 
   const handleSessionChange = useCallback((nextSession: CodingSession) => {
     setSessions((current) =>
@@ -770,27 +693,18 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
     setTerminalMaximized(true);
   }, [terminalHeight, terminalMaximized, terminalRestoreHeight]);
 
-  if (!selectedTeam) {
-    return <div className="empty-app">No Team is available.</div>;
-  }
-
   const showInspector = inspectorOpen;
   const showTerminal = terminalOpen;
   const sidebar = (
     <Sidebar
       language={preferences.general.language}
       viewer={initialData.viewer}
-      teams={initialData.teams}
-      viewerMemberships={initialData.viewerMemberships}
-      plans={initialData.plans}
-      selectedTeamId={selectedTeam.id}
-      environments={teamEnvironments}
-      sessions={teamSessions}
+      environments={environments}
+      sessions={sessions}
       selectedEnvironmentId={selectedEnvironment?.id ?? ""}
       selectedSessionId={selectedSession?.id ?? ""}
       onSelectEnvironment={handleSelectEnvironment}
       onSelectSession={handleSelectSession}
-      onSelectTeam={handleSelectTeam}
       onNewEnvironment={() => setNewEnvironmentOpen(true)}
       onNewSession={handleNewSession}
       onEnvironmentSettings={(environmentId) => {
@@ -866,9 +780,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
         </section>
         {newEnvironmentOpen ? (
           <NewEnvironmentDialog
-            teamId={selectedTeam.id}
-            teamName={selectedTeam.name}
-            environments={teamEnvironments}
+            environments={environments}
             onCreated={handleEnvironmentCreated}
             onClose={() => setNewEnvironmentOpen(false)}
           />
@@ -977,11 +889,9 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
           key={settingsEnvironment.id}
           environment={settingsEnvironment}
           initialTab={settingsTarget?.initialTab}
-          teamName={selectedTeam.name}
-          canChangeVisibility={settingsEnvironment.ownerId === initialData.viewer.id}
           language={preferences.general.language}
           timeZone={preferences.general.timeZone}
-          archivedSessions={teamSessions
+          archivedSessions={sessions
             .filter(
               (session) =>
                 session.environmentId === settingsEnvironment.id &&
@@ -1001,9 +911,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
 
       {newEnvironmentOpen ? (
         <NewEnvironmentDialog
-          teamId={selectedTeam.id}
-          teamName={selectedTeam.name}
-          environments={teamEnvironments}
+          environments={environments}
           onCreated={handleEnvironmentCreated}
           onClose={() => setNewEnvironmentOpen(false)}
         />

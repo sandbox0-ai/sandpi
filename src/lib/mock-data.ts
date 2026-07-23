@@ -7,14 +7,10 @@ import type {
   Environment,
   EnvironmentMetrics,
   RuntimeMetricSeries,
-  SandpiPlan,
   SandpiDeploymentSummary,
   SandpiBootstrap,
   SandpiPreferences,
   SandpiUser,
-  Team,
-  TeamMembership,
-  TeamPlanState,
 } from "@/lib/types";
 
 function timestamp(value: string) {
@@ -75,201 +71,10 @@ export const mockDeployment: SandpiDeploymentSummary = {
   },
 };
 
-/** Mock catalog only. Production clients load effective Plan definitions from Sandpi. */
-export const mockSandpiPlans: SandpiPlan[] = [
-  {
-    id: "free",
-    name: "Free",
-    execution: {
-      weeklyLimitMinutes: 600,
-      concurrentSessionLimit: 1,
-    },
-    storage: { snapshotLimitGiB: 5 },
-  },
-  {
-    id: "pro",
-    name: "Pro",
-    execution: {
-      weeklyLimitMinutes: 1_800,
-      concurrentSessionLimit: 3,
-    },
-    storage: { snapshotLimitGiB: 20 },
-  },
-  {
-    id: "max",
-    name: "Max",
-    execution: {
-      weeklyLimitMinutes: 7_200,
-      concurrentSessionLimit: 12,
-    },
-    storage: { snapshotLimitGiB: 80 },
-  },
-];
-
-function mockTeamPlan(input: {
-  planId: TeamPlanState["planId"];
-  usedMinutes: number;
-  runningSessions: number;
-  snapshotStorageGiB: number;
-  resetsAt: UnixTimestamp;
-  status?: TeamPlanState["status"];
-}): TeamPlanState {
-  const plan = mockSandpiPlans.find((candidate) => candidate.id === input.planId);
-  if (!plan) {
-    throw new Error(`Mock Sandpi Plan ${input.planId} is not available.`);
-  }
-
-  return {
-    planId: input.planId,
-    status: input.status ?? "active",
-    quotas: {
-      weeklyExecution: {
-        used: input.usedMinutes,
-        limit: plan.execution.weeklyLimitMinutes,
-        unit: "minute",
-        window: "weekly",
-        resetsAt: input.resetsAt,
-      },
-      concurrentSessions: {
-        used: input.runningSessions,
-        limit: plan.execution.concurrentSessionLimit,
-        unit: "session",
-      },
-      snapshotStorage: {
-        used: input.snapshotStorageGiB,
-        limit: plan.storage.snapshotLimitGiB,
-        unit: "gibibyte",
-      },
-    },
-  };
-}
-
-export const mockTeams: Team[] = [
-  {
-    id: "team-sandpi-labs",
-    name: "Sandpi Labs",
-    slug: "sandpi-labs",
-    color: "#315c4b",
-    memberCount: 5,
-    plan: mockTeamPlan({
-      planId: "max",
-      usedMinutes: 4_750,
-      runningSessions: 4,
-      snapshotStorageGiB: 28.7,
-      resetsAt: timestamp("2026-07-20T00:00:00Z"),
-    }),
-    billingAccount: {
-      id: "billing-sandpi-labs",
-      status: "public-beta",
-      billingCadence: "monthly",
-      billingEmail: "billing@sandpi.dev",
-      currentPeriodStartsAt: timestamp("2026-07-01T00:00:00Z"),
-      currentPeriodEndsAt: timestamp("2026-08-01T00:00:00Z"),
-    },
-    createdAt: timestamp("2026-05-18T08:30:00Z"),
-  },
-  {
-    id: "team-side-projects",
-    name: "Side Projects",
-    slug: "side-projects",
-    color: "#6b5478",
-    memberCount: 1,
-    plan: mockTeamPlan({
-      planId: "pro",
-      usedMinutes: 410,
-      runningSessions: 1,
-      snapshotStorageGiB: 4.2,
-      resetsAt: timestamp("2026-07-15T00:00:00Z"),
-    }),
-    billingAccount: {
-      id: "billing-side-projects",
-      status: "public-beta",
-      billingCadence: "monthly",
-      billingEmail: "yan@sandpi.dev",
-      currentPeriodStartsAt: timestamp("2026-07-08T00:00:00Z"),
-      currentPeriodEndsAt: timestamp("2026-08-08T00:00:00Z"),
-    },
-    createdAt: timestamp("2026-06-03T12:15:00Z"),
-  },
-];
-
-export const mockTeamMemberships: TeamMembership[] = [
-  {
-    id: "member-yan-labs",
-    teamId: "team-sandpi-labs",
-    user: mockViewer,
-    role: "owner",
-    status: "active",
-    joinedAt: timestamp("2026-05-18T08:30:00Z"),
-  },
-  {
-    id: "member-mira-labs",
-    teamId: "team-sandpi-labs",
-    user: {
-      id: "user-mira",
-      name: "Mira Chen",
-      email: "mira@sandpi.dev",
-      avatarInitials: "MC",
-    },
-    role: "admin",
-    status: "active",
-    joinedAt: timestamp("2026-05-20T10:00:00Z"),
-  },
-  {
-    id: "member-leo-labs",
-    teamId: "team-sandpi-labs",
-    user: {
-      id: "user-leo",
-      name: "Leo Wang",
-      email: "leo@sandpi.dev",
-      avatarInitials: "LW",
-    },
-    role: "member",
-    status: "active",
-    joinedAt: timestamp("2026-06-02T09:20:00Z"),
-  },
-  {
-    id: "member-ada-labs",
-    teamId: "team-sandpi-labs",
-    user: {
-      id: "user-ada",
-      name: "Ada Lin",
-      email: "ada@sandpi.dev",
-      avatarInitials: "AL",
-    },
-    role: "member",
-    status: "active",
-    joinedAt: timestamp("2026-06-12T14:10:00Z"),
-  },
-  {
-    id: "member-noah-labs",
-    teamId: "team-sandpi-labs",
-    user: {
-      id: "user-noah",
-      name: "Noah Patel",
-      email: "noah@sandpi.dev",
-      avatarInitials: "NP",
-    },
-    role: "member",
-    status: "invited",
-    joinedAt: timestamp("2026-07-12T06:40:00Z"),
-  },
-  {
-    id: "member-yan-side-projects",
-    teamId: "team-side-projects",
-    user: mockViewer,
-    role: "owner",
-    status: "active",
-    joinedAt: timestamp("2026-06-03T12:15:00Z"),
-  },
-];
-
 export const mockEnvironments: Environment[] = [
   {
     id: "env-default",
-    teamId: "team-sandpi-labs",
     ownerId: mockViewer.id,
-    visibility: "team",
     idlePauseTimeoutSeconds: 30 * 60,
     sandboxMemoryMiB: ENVIRONMENT_SANDBOX_MEMORY_DEFAULT_MIB,
     workspaceBackup: { intervalSeconds: 0, retentionCount: 7 },
@@ -305,9 +110,7 @@ export const mockEnvironments: Environment[] = [
   },
   {
     id: "env-release",
-    teamId: "team-sandpi-labs",
-    ownerId: "user-mira",
-    visibility: "team",
+    ownerId: mockViewer.id,
     idlePauseTimeoutSeconds: 30 * 60,
     sandboxMemoryMiB: ENVIRONMENT_SANDBOX_MEMORY_DEFAULT_MIB,
     workspaceBackup: { intervalSeconds: 0, retentionCount: 7 },
@@ -338,9 +141,7 @@ export const mockEnvironments: Environment[] = [
   },
   {
     id: "env-side-projects",
-    teamId: "team-side-projects",
     ownerId: mockViewer.id,
-    visibility: "team",
     idlePauseTimeoutSeconds: 30 * 60,
     sandboxMemoryMiB: ENVIRONMENT_SANDBOX_MEMORY_DEFAULT_MIB,
     workspaceBackup: { intervalSeconds: 0, retentionCount: 7 },
@@ -371,14 +172,12 @@ export const mockEnvironments: Environment[] = [
   },
   {
     id: "env-personal",
-    teamId: "team-sandpi-labs",
     ownerId: mockViewer.id,
-    visibility: "private",
     idlePauseTimeoutSeconds: 0,
     sandboxMemoryMiB: ENVIRONMENT_SANDBOX_MEMORY_DEFAULT_MIB,
     workspaceBackup: { intervalSeconds: 0, retentionCount: 7 },
     name: "Personal scratchpad",
-    description: "A private workspace visible only to its owner.",
+    description: "A scratch workspace for personal experiments.",
     color: "#46627f",
     status: "ready",
     revision: 2,
@@ -531,7 +330,6 @@ function compactSession(
   status: CodexSession["status"],
   updatedAt: UnixTimestamp,
   unread: boolean,
-  ownerId = mockViewer.id,
 ): CodexSession {
   const environment = mockEnvironments.find(
     (candidate) => candidate.id === environmentId,
@@ -540,18 +338,11 @@ function compactSession(
   if (!environment) {
     throw new Error(`Environment ${environmentId} is not available.`);
   }
-  const owner = mockTeamMemberships.find(
-    (membership) => membership.user.id === ownerId,
-  )?.user;
-  if (!owner) {
-    throw new Error(`Session owner ${ownerId} is not available.`);
-  }
-
   return {
     ...primarySession,
     id,
     environmentId,
-    owner,
+    owner: mockViewer,
     title,
     status,
     unread,
@@ -586,7 +377,6 @@ export const mockSessions: CodexSession[] = [
     "paused",
     timestamp("2026-07-11T18:12:00+08:00"),
     false,
-    "user-leo",
   ),
   compactSession(
     "session-sdk-release",
@@ -595,7 +385,6 @@ export const mockSessions: CodexSession[] = [
     "completed",
     timestamp("2026-07-11T15:34:00+08:00"),
     true,
-    "user-mira",
   ),
   compactSession(
     "session-harmony-shell",
@@ -615,23 +404,13 @@ export const mockSessions: CodexSession[] = [
   ),
 ];
 
-export function getMockBootstrap(requestedTeamId?: string): SandpiBootstrap {
-  const viewerMemberships = mockTeamMemberships.filter(
-    (membership) => membership.user.id === mockViewer.id,
-  );
-  const viewerTeamIds = new Set(
-    viewerMemberships.map((membership) => membership.teamId),
-  );
-  const teams = mockTeams.filter((team) => viewerTeamIds.has(team.id));
-  const selectedTeam =
-    teams.find((team) => team.id === requestedTeamId) ?? teams[0];
-  if (!selectedTeam) {
-    // Signup creates a one-member Team on the Free Plan atomically, so production should
-    // never render an authenticated account without at least one Team Membership.
-    throw new Error("The mock viewer must belong to at least one Team.");
-  }
+export function getMockBootstrap(
+  requestedEnvironmentId?: string,
+): SandpiBootstrap {
   const selectedEnvironment =
-    mockEnvironments.find((environment) => environment.teamId === selectedTeam.id) ??
+    mockEnvironments.find(
+      (environment) => environment.id === requestedEnvironmentId,
+    ) ??
     mockEnvironments[0];
   const selectedSession = mockSessions.find(
     (session) => session.environmentId === selectedEnvironment.id && !session.archived,
@@ -639,17 +418,10 @@ export function getMockBootstrap(requestedTeamId?: string): SandpiBootstrap {
 
   return structuredClone({
     viewer: mockViewer,
-    teams,
-    viewerMemberships,
-    teamMemberships: mockTeamMemberships.filter((membership) =>
-      viewerTeamIds.has(membership.teamId),
-    ),
-    plans: mockSandpiPlans,
     deployment: mockDeployment,
     environments: mockEnvironments,
     sessions: mockSessions,
     preferences: mockPreferences,
-    selectedTeamId: selectedTeam.id,
     selectedEnvironmentId: selectedEnvironment.id,
     selectedSessionId: selectedSession?.id ?? "",
   });
@@ -692,21 +464,14 @@ export function createMockSession(
 }
 
 export function createMockEnvironment(input: {
-  teamId: string;
   name: string;
-  visibility?: Environment["visibility"];
 }): Environment {
   const idSuffix = randomToken(8);
-  if (!mockTeams.some((team) => team.id === input.teamId)) {
-    throw new Error(`Team ${input.teamId} is not available.`);
-  }
 
   return {
     ...structuredClone(mockEnvironments[0]),
     id: `env-${idSuffix}`,
-    teamId: input.teamId,
     ownerId: mockViewer.id,
-    visibility: input.visibility ?? "team",
     name: input.name,
     description: "A versioned coding environment ready for isolated sessions.",
     color: "#405f78",

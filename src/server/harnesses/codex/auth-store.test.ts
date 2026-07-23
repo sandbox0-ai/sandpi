@@ -12,6 +12,23 @@ import {
   type CodexDeviceAuthFlow,
 } from "./auth-store";
 
+test("authorizes Codex login flows through Environment ownership", async () => {
+  let query = "";
+  const store = new CodexAuthStore({
+    async query(sql: string) {
+      query = sql;
+      return { rows: [], rowCount: 0 };
+    },
+  } as unknown as Pool);
+
+  assert.equal(
+    await store.findActiveFlow("user-test", "environment-test"),
+    undefined,
+  );
+  assert.match(query, /e\.created_by_user_id = \$1/);
+  assert.doesNotMatch(query, /membership|visibility|team_id/i);
+});
+
 test("device login projection never exposes runtime state or protocol messages", () => {
   const now = new Date("2026-07-14T00:00:00.000Z");
   const flow: CodexDeviceAuthFlow = {

@@ -5,7 +5,6 @@ import { type ReactNode, useCallback, useEffect, useState } from "react";
 
 import { PreferencesPage } from "@/components/preferences-page";
 import { SandpiApp } from "@/components/sandpi-app";
-import { TeamSettingsPage } from "@/components/team-settings-page";
 import { WorkspaceIdePage } from "@/components/workspace-ide-page";
 import {
   ApiError,
@@ -26,7 +25,6 @@ type LoaderState =
 function requestedWorkspace() {
   const search = new URLSearchParams(window.location.search);
   return {
-    teamId: search.get("team") ?? undefined,
     environmentId: search.get("environment") ?? undefined,
     sessionId: search.get("session") ?? undefined,
     newSession: search.get("new") === "1",
@@ -35,7 +33,6 @@ function requestedWorkspace() {
 
 function bootstrapPath(workspace: ReturnType<typeof requestedWorkspace>) {
   const search = new URLSearchParams();
-  if (workspace.teamId) search.set("team", workspace.teamId);
   if (workspace.environmentId) {
     search.set("environment", workspace.environmentId);
   }
@@ -158,56 +155,12 @@ export function SandpiAppLoader() {
 export function PreferencesPageLoader() {
   return (
     <BootstrapBoundary>
-      {(bootstrap) => {
-        const team =
-          bootstrap.teams.find(
-            (candidate) => candidate.id === bootstrap.selectedTeamId,
-          ) ?? bootstrap.teams[0];
-        if (!team) {
-          throw new Error("The authenticated user does not belong to a Team.");
-        }
-        return (
-          <PreferencesPage
-            initialPreferences={bootstrap.preferences}
-            viewer={bootstrap.viewer}
-            team={team}
-          />
-        );
-      }}
-    </BootstrapBoundary>
-  );
-}
-
-export function TeamSettingsPageLoader() {
-  return (
-    <BootstrapBoundary>
-      {(bootstrap) => {
-        const team =
-          bootstrap.teams.find(
-            (candidate) => candidate.id === bootstrap.selectedTeamId,
-          ) ?? bootstrap.teams[0];
-        if (!team) {
-          throw new Error("The authenticated user does not belong to a Team.");
-        }
-        const memberships = bootstrap.teamMemberships.filter(
-          (membership) => membership.teamId === team.id,
-        );
-        const environmentCount = bootstrap.environments.filter(
-          (environment) => environment.teamId === team.id,
-        ).length;
-
-        return (
-          <TeamSettingsPage
-            team={team}
-            viewer={bootstrap.viewer}
-            memberships={memberships}
-            plans={bootstrap.plans}
-            environmentCount={environmentCount}
-            language={bootstrap.preferences.general.language}
-            timeZone={bootstrap.preferences.general.timeZone}
-          />
-        );
-      }}
+      {(bootstrap) => (
+        <PreferencesPage
+          initialPreferences={bootstrap.preferences}
+          viewer={bootstrap.viewer}
+        />
+      )}
     </BootstrapBoundary>
   );
 }

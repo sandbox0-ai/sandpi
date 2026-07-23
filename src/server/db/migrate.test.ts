@@ -68,6 +68,7 @@ test("migration history contains every durable Sandpi boundary", async () => {
       "0041_remove_environment_hard_ttl",
       "0042_environment_mcp_tool_policies",
       "0043_environment_workspace_backups",
+      "0044_user_owned_resources",
     ],
   );
 
@@ -301,6 +302,16 @@ test("migration history contains every durable Sandpi boundary", async () => {
     environmentMcpToolPoliciesSql,
     /tool_policy_mode = 'selected'[\s\S]+cardinality\(allowed_tools\) > 0/,
   );
+
+  const userOwnedResourcesSql = migrations[43]?.sql ?? "";
+  assert.match(
+    userOwnedResourcesSql,
+    /ALTER COLUMN created_by_user_id SET NOT NULL/,
+  );
+  assert.match(userOwnedResourcesSql, /DROP COLUMN visibility/);
+  assert.match(userOwnedResourcesSql, /DROP COLUMN team_id/);
+  assert.match(userOwnedResourcesSql, /DROP TABLE team_memberships/);
+  assert.match(userOwnedResourcesSql, /DROP TABLE teams/);
 
   const runtimeAuthoritySql = migrations[24]?.sql ?? "";
   assert.match(runtimeAuthoritySql, /decoder_attempt_id TEXT/);

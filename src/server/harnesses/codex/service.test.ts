@@ -43,9 +43,7 @@ const credentials = {
 
 const environment: Environment = {
   id: "environment-test",
-  teamId: "team-test",
   ownerId: "user-test",
-  visibility: "team",
   idlePauseTimeoutSeconds: 30 * 60,
   sandboxMemoryMiB: 2 * 1024,
   workspaceBackup: { intervalSeconds: 0, retentionCount: 7 },
