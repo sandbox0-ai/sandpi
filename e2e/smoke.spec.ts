@@ -1468,6 +1468,72 @@ test("keeps Codex Session Activity native", async ({
           codeModeTools: [],
           payloadTruncated: false,
         },
+        {
+          kind: "rolloutToolCall",
+          id: `rollout:${nativeTurnId}:custom:call-e2e-rollout-plan`,
+          turnId: nativeTurnId,
+          createdAt: startedAt + 2.2,
+          completedAt: startedAt + 2.3,
+          durationMs: 100,
+          status: "completed",
+          callId: "call-e2e-rollout-plan",
+          callType: "custom_tool_call",
+          name: "exec",
+          namespace: null,
+          nativeStatus: "completed",
+          callPayload: {
+            type: "custom_tool_call",
+            call_id: "call-e2e-rollout-plan",
+            name: "exec",
+            input:
+              'tools.update_plan({plan:[{step:"Inspect",status:"completed"}]});',
+          },
+          outputs: [],
+          codeModeTools: ["update_plan"],
+          payloadTruncated: false,
+        },
+        {
+          kind: "rolloutToolCall",
+          id: `rollout:${nativeTurnId}:custom:call-e2e-rollout-batch`,
+          turnId: nativeTurnId,
+          createdAt: startedAt + 3,
+          completedAt: startedAt + 3.3,
+          durationMs: 300,
+          status: "completed",
+          callId: "call-e2e-rollout-batch",
+          callType: "custom_tool_call",
+          name: "exec",
+          namespace: null,
+          nativeStatus: "completed",
+          callPayload: {
+            type: "custom_tool_call",
+            call_id: "call-e2e-rollout-batch",
+            name: "exec",
+            input: `const jobs = [
+  { args: { cmd: \`uname -a
+cat /proc/version\`, workdir: "/workspace" } },
+  { args: { cmd: \`id
+ps -o pid,ppid,comm\`, workdir: "/workspace" } },
+  { args: { cmd: \`findmnt -rn
+cat /proc/self/cgroup\`, workdir: "/workspace" } }
+];
+await Promise.all(jobs.map((job) => tools.exec_command(job.args)));`,
+          },
+          outputs: [
+            {
+              outputType: "custom_tool_call_output",
+              createdAt: startedAt + 3.3,
+              nativeStatus: null,
+              payload: {
+                type: "custom_tool_call_output",
+                call_id: "call-e2e-rollout-batch",
+                output: "Script completed",
+              },
+            },
+          ],
+          codeModeTools: ["exec_command"],
+          payloadTruncated: false,
+        },
       ],
     },
     thread: {
@@ -1675,10 +1741,13 @@ test("keeps Codex Session Activity native", async ({
   ).toHaveCount(0);
   await expect(
     activityView.locator(".codex-session-activity-intro"),
-  ).toContainText("3 actions · 5 native records");
+  ).toContainText("4 actions · 6 native records");
   await expect(
     activityView.locator(".codex-session-activity-turn > header"),
-  ).toContainText("3 actions · 5 records");
+  ).toContainText("4 actions · 6 records");
+  await expect(
+    activityView.getByText("update_plan", { exact: true }),
+  ).toHaveCount(0);
   const commandActivity = activityView
     .locator(".codex-compact-activity")
     .filter({ hasText: "git status --short" });
@@ -1695,6 +1764,27 @@ test("keeps Codex Session Activity native", async ({
   ).toHaveAttribute("tabindex", "0");
   await expect(commandActivity).toContainText("call-e2e-rollout-exec");
   await expect(commandActivity).toContainText("Script completed");
+  const batchCommandActivity = activityView
+    .locator(".codex-compact-activity")
+    .filter({ hasText: "uname -a" });
+  await expect(batchCommandActivity).toBeVisible();
+  await expect(
+    batchCommandActivity.locator(":scope > summary"),
+  ).toHaveAccessibleName(/Ran.*uname -a.*id.*\+1/);
+  await batchCommandActivity.locator(":scope > summary").click();
+  const batchCommands = batchCommandActivity.locator(
+    ".codex-rollout-command-list pre",
+  );
+  await expect(batchCommands).toHaveCount(3);
+  await expect(batchCommands.nth(0)).toHaveText(
+    "uname -a\ncat /proc/version",
+  );
+  await expect(batchCommands.nth(1)).toHaveText(
+    "id\nps -o pid,ppid,comm",
+  );
+  await expect(batchCommands.nth(2)).toHaveText(
+    "findmnt -rn\ncat /proc/self/cgroup",
+  );
   const mcpActivity = activityView
     .locator(".codex-native-tool")
     .filter({ hasText: "GitHub · get_release" });
@@ -1708,6 +1798,7 @@ test("keeps Codex Session Activity native", async ({
 
   await activityFilter.selectOption("external");
   await expect(commandActivity).toBeHidden();
+  await expect(batchCommandActivity).toBeHidden();
   await expect(mcpActivity).toBeVisible();
   await expect(activityView.getByText("sandpi v1.2.3")).toBeVisible();
   await expect.poll(() => auditRequests).toBe(0);
