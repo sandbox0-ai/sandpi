@@ -1,6 +1,6 @@
 {
-  "name": "Sandpi",
-  "description": "Sandpi OIDC web application",
+  "name": "SandPi Cloud",
+  "description": "Sandpi Cloud OIDC web application",
   "app_type": "regular_web",
   "callbacks": [
     "##SANDPI_PUBLIC_URL##/api/v1/auth/callback"

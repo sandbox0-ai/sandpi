@@ -39,10 +39,10 @@ test("Auth0 deployment manages only clients and cannot delete resources", async 
 
 test("Auth0 application matches Sandpi's standard OIDC contract", async () => {
   const client = await readJson<Auth0Client>(
-    "../../../auth0/tenant/clients/Sandpi.json",
+    "../../../auth0/tenant/clients/SandPi%20Cloud.json",
   );
 
-  assert.equal(client.name, "Sandpi");
+  assert.equal(client.name, "SandPi Cloud");
   assert.equal(client.app_type, "regular_web");
   assert.deepEqual(client.grant_types, ["authorization_code"]);
   assert.equal(client.is_first_party, true);

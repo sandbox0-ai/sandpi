@@ -453,10 +453,12 @@ include `openid`.
 
 ### Auth0 through CI
 
-The checked-in [`auth0/`](auth0/) directory declares Sandpi as a standard Auth0
-Regular Web Application. The `Sync Auth0 OIDC application` workflow validates
-the repository on pull requests and applies that declaration after it reaches
-`main`. It uses Auth0 Deploy CLI 8.35.0 and cannot delete tenant resources.
+The checked-in [`auth0/`](auth0/) directory declares `SandPi Cloud` as a
+standard Auth0 Regular Web Application. The `Sync Auth0 OIDC application`
+workflow validates the repository on pull requests and pushes. A manual
+workflow dispatch plans and applies the declaration through the protected
+`auth0` environment. It uses Auth0 Deploy CLI 8.35.0 and cannot delete tenant
+resources.
 
 Create a dedicated Auth0 Machine-to-Machine application for the workflow with
 only `read:clients`, `create:clients` and `update:clients` Management API
@@ -470,8 +472,8 @@ permissions. Configure a protected GitHub Environment named `auth0` with:
 | Secret | `AUTH0_DEPLOY_CLIENT_SECRET` | Deploy M2M client secret |
 
 The Deploy M2M application and the Sandpi login application are separate
-clients. After the first sync, copy the generated `Sandpi` application client
-ID and secret into the Sandpi deployment as
+clients. Copy the `SandPi Cloud` application client ID and secret into the
+Sandpi deployment as
 `SANDPI_OIDC_CLIENT_ID` and `SANDPI_OIDC_CLIENT_SECRET`; set
 `SANDPI_OIDC_ISSUER` to the issuer advertised by the Auth0 discovery document
 (this may use an Auth0 custom domain). Do not store either client secret in the
