@@ -1,0 +1,7 @@
+{
+  "AUTH0_ALLOW_DELETE": false,
+  "AUTH0_EXPORT_IDENTIFIERS": false,
+  "AUTH0_INCLUDED_ONLY": [
+    "clients"
+  ]
+}

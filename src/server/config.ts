@@ -17,6 +17,12 @@ const optionalDeploymentSecret = z
   )
   .optional();
 
+const oidcTokenEndpointAuthMethod = z.enum([
+  "client_secret_post",
+  "client_secret_basic",
+  "none",
+]);
+
 const environmentSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   DATABASE_URL: z
@@ -33,6 +39,8 @@ const environmentSchema = z.object({
   SANDPI_OIDC_ISSUER: optionalUrl,
   SANDPI_OIDC_CLIENT_ID: z.string().min(1).optional(),
   SANDPI_OIDC_CLIENT_SECRET: z.string().min(1).optional(),
+  SANDPI_OIDC_TOKEN_ENDPOINT_AUTH_METHOD:
+    oidcTokenEndpointAuthMethod.optional(),
   SANDPI_OIDC_SCOPES: z.string().default("openid profile email"),
   SANDBOX0_API_HOST: optionalUrl,
   SANDBOX0_API_KEY: z.string().min(1).optional(),
@@ -59,6 +67,9 @@ export interface SandpiConfig {
         issuer: URL;
         clientId: string;
         clientSecret?: string;
+        tokenEndpointAuthMethod: z.infer<
+          typeof oidcTokenEndpointAuthMethod
+        >;
         scopes: string;
       };
   secretKey?: string;
@@ -88,13 +99,39 @@ export function loadConfig(
     if (!value.SANDPI_SECRET_KEY) {
       throw new Error("SANDPI_SECRET_KEY is required when SANDPI_AUTH_MODE=oidc");
     }
+    const scopes = value.SANDPI_OIDC_SCOPES.trim().split(/\s+/);
+    if (!scopes.includes("openid")) {
+      throw new Error(
+        "SANDPI_OIDC_SCOPES must include openid when SANDPI_AUTH_MODE=oidc",
+      );
+    }
+    const tokenEndpointAuthMethod =
+      value.SANDPI_OIDC_TOKEN_ENDPOINT_AUTH_METHOD ??
+      (value.SANDPI_OIDC_CLIENT_SECRET ? "client_secret_post" : "none");
+    if (
+      tokenEndpointAuthMethod === "none" &&
+      value.SANDPI_OIDC_CLIENT_SECRET
+    ) {
+      throw new Error(
+        "SANDPI_OIDC_CLIENT_SECRET must be unset when SANDPI_OIDC_TOKEN_ENDPOINT_AUTH_METHOD=none",
+      );
+    }
+    if (
+      tokenEndpointAuthMethod !== "none" &&
+      !value.SANDPI_OIDC_CLIENT_SECRET
+    ) {
+      throw new Error(
+        `SANDPI_OIDC_CLIENT_SECRET is required when SANDPI_OIDC_TOKEN_ENDPOINT_AUTH_METHOD=${tokenEndpointAuthMethod}`,
+      );
+    }
     auth = {
       mode: "oidc",
       cookieSecret: value.SANDPI_COOKIE_SECRET,
       issuer: new URL(value.SANDPI_OIDC_ISSUER),
       clientId: value.SANDPI_OIDC_CLIENT_ID,
       clientSecret: value.SANDPI_OIDC_CLIENT_SECRET,
-      scopes: value.SANDPI_OIDC_SCOPES,
+      tokenEndpointAuthMethod,
+      scopes: scopes.join(" "),
     };
   } else {
     auth = { mode: "admin", cookieSecret: value.SANDPI_COOKIE_SECRET };

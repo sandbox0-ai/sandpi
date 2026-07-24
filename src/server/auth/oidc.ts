@@ -190,12 +190,33 @@ export class OidcIdentityService {
   }
 
   private getConfiguration() {
+    const clientAuthentication = oidcClientAuthentication(this.config);
     this.configuration ??= oidc.discovery(
       this.config.issuer,
       this.config.clientId,
-      this.config.clientSecret,
+      {
+        client_secret: this.config.clientSecret,
+        token_endpoint_auth_method: this.config.tokenEndpointAuthMethod,
+      },
+      clientAuthentication,
     );
     return this.configuration;
+  }
+}
+
+export function oidcClientAuthentication(
+  config: Pick<
+    Extract<SandpiConfig["auth"], { mode: "oidc" }>,
+    "clientSecret" | "tokenEndpointAuthMethod"
+  >,
+): oidc.ClientAuth {
+  switch (config.tokenEndpointAuthMethod) {
+    case "client_secret_post":
+      return oidc.ClientSecretPost(config.clientSecret);
+    case "client_secret_basic":
+      return oidc.ClientSecretBasic(config.clientSecret);
+    case "none":
+      return oidc.None();
   }
 }
 

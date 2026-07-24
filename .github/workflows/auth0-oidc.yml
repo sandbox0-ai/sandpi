@@ -1,0 +1,90 @@
+name: Sync Auth0 OIDC application
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/auth0-oidc.yml"
+      - "auth0/**"
+      - "src/server/auth/**"
+      - "src/server/config.ts"
+      - "src/server/config.test.ts"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/auth0-oidc.yml"
+      - "auth0/**"
+      - "src/server/auth/**"
+      - "src/server/config.ts"
+      - "src/server/config.test.ts"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run typecheck
+
+  sync:
+    if: github.event_name != 'pull_request'
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: auth0
+    concurrency:
+      group: auth0-oidc
+      cancel-in-progress: false
+    env:
+      AUTH0_DOMAIN: ${{ vars.AUTH0_DOMAIN }}
+      AUTH0_CLIENT_ID: ${{ secrets.AUTH0_DEPLOY_CLIENT_ID }}
+      AUTH0_CLIENT_SECRET: ${{ secrets.AUTH0_DEPLOY_CLIENT_SECRET }}
+      SANDPI_PUBLIC_URL: ${{ vars.SANDPI_PUBLIC_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Validate deployment inputs
+        run: |
+          node --input-type=module <<'NODE'
+          const required = [
+            "AUTH0_DOMAIN",
+            "AUTH0_CLIENT_ID",
+            "AUTH0_CLIENT_SECRET",
+            "SANDPI_PUBLIC_URL",
+          ];
+          for (const name of required) {
+            if (!process.env[name]) {
+              throw new Error(`${name} is required in the auth0 GitHub Environment.`);
+            }
+          }
+          if (
+            process.env.AUTH0_DOMAIN.includes("://") ||
+            !/^[a-z0-9.-]+$/i.test(process.env.AUTH0_DOMAIN)
+          ) {
+            throw new Error("AUTH0_DOMAIN must be a hostname without a scheme, port, or path.");
+          }
+          const publicUrl = new URL(process.env.SANDPI_PUBLIC_URL);
+          if (
+            !["http:", "https:"].includes(publicUrl.protocol) ||
+            publicUrl.origin !== process.env.SANDPI_PUBLIC_URL
+          ) {
+            throw new Error("SANDPI_PUBLIC_URL must be an HTTP(S) origin without a trailing slash, path, query, or fragment.");
+          }
+          NODE
+      - name: Plan and apply Auth0 client configuration
+        run: >-
+          npx --yes auth0-deploy-cli@8.35.0 import
+          --config_file auth0/config.json
+          --input_file auth0/tenant
+          --dry-run
+          --apply

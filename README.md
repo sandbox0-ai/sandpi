@@ -432,6 +432,7 @@ SANDPI_SECRET_KEY=<at-least-32-random-characters>
 SANDPI_OIDC_ISSUER=https://identity.example.com/
 SANDPI_OIDC_CLIENT_ID=sandpi
 SANDPI_OIDC_CLIENT_SECRET=replace-if-the-client-is-confidential
+SANDPI_OIDC_TOKEN_ENDPOINT_AUTH_METHOD=client_secret_post
 SANDPI_OIDC_SCOPES=openid profile email
 ```
 
@@ -444,6 +445,37 @@ ${SANDPI_PUBLIC_URL}/api/v1/auth/callback
 OIDC identifies a Sandpi user; it never authenticates Sandpi to Sandbox0. A
 private deployment may use any conforming OIDC provider. Sandpi Cloud supplies
 its hosted identity configuration through the same contract.
+
+`SANDPI_OIDC_TOKEN_ENDPOINT_AUTH_METHOD` accepts `client_secret_post`,
+`client_secret_basic` or `none`. It defaults to `client_secret_post` when a
+client secret is set and `none` otherwise. The configured OIDC scopes must
+include `openid`.
+
+### Auth0 through CI
+
+The checked-in [`auth0/`](auth0/) directory declares Sandpi as a standard Auth0
+Regular Web Application. The `Sync Auth0 OIDC application` workflow validates
+the repository on pull requests and applies that declaration after it reaches
+`main`. It uses Auth0 Deploy CLI 8.35.0 and cannot delete tenant resources.
+
+Create a dedicated Auth0 Machine-to-Machine application for the workflow with
+only `read:clients`, `create:clients` and `update:clients` Management API
+permissions. Configure a protected GitHub Environment named `auth0` with:
+
+| Kind | Name | Value |
+| --- | --- | --- |
+| Variable | `AUTH0_DOMAIN` | Auth0 tenant hostname, without `https://` |
+| Variable | `SANDPI_PUBLIC_URL` | Deployed Sandpi origin, without a trailing slash |
+| Secret | `AUTH0_DEPLOY_CLIENT_ID` | Deploy M2M client ID |
+| Secret | `AUTH0_DEPLOY_CLIENT_SECRET` | Deploy M2M client secret |
+
+The Deploy M2M application and the Sandpi login application are separate
+clients. After the first sync, copy the generated `Sandpi` application client
+ID and secret into the Sandpi deployment as
+`SANDPI_OIDC_CLIENT_ID` and `SANDPI_OIDC_CLIENT_SECRET`; set
+`SANDPI_OIDC_ISSUER` to the issuer advertised by the Auth0 discovery document
+(this may use an Auth0 custom domain). Do not store either client secret in the
+repository.
 
 ## Deployment configuration
 
@@ -460,7 +492,7 @@ Environment settings.
 | `SANDPI_AUTH_MODE` | `admin` | `admin` or `oidc` |
 | `SANDPI_COOKIE_SECRET` | none | Signed session cookie secret; required by OIDC |
 | `SANDPI_SECRET_KEY` | none | Server-side encryption key; required by OIDC and coding-agent credential storage |
-| `SANDPI_OIDC_*` | none | OIDC provider/client configuration |
+| `SANDPI_OIDC_*` | none | Standard OIDC provider, client and token-endpoint authentication configuration |
 | `SANDBOX0_API_HOST` | none | Operator-selected Sandbox0 API endpoint |
 | `SANDBOX0_API_KEY` | none | Operator-selected Sandbox0 deployment key |
 | `SANDPI_LOG_LEVEL` | `info` | Fastify/Pino log level |
