@@ -10,11 +10,27 @@ processes remain in Sandbox0 rather than this cluster.
 limited to application resources in that namespace. The GHCR pull secret is
 also bootstrapped by an operator and is intentionally not stored in Git.
 
+TLS is issued and renewed through a namespace-scoped Let's Encrypt `Issuer`.
+The shared cluster has cert-manager `v1.21.0` installed once from its official
+OCI Helm chart with the resource settings in `cert-manager-values.yaml`:
+
+```bash
+KUBECONFIG=/root/.kube/do-config helm upgrade --install cert-manager \
+  oci://quay.io/jetstack/charts/cert-manager \
+  --version v1.21.0 \
+  --namespace cert-manager \
+  --create-namespace \
+  --values deploy/kubernetes/cert-manager-values.yaml \
+  --wait \
+  --timeout 5m
+```
+
 Every push to `main` runs tests, builds an immutable
 `ghcr.io/sandbox0-ai/sandpi:<commit>` image, patches the two pre-created
 Kubernetes secrets, renders `app/` with that exact image, and waits for both
-rollouts. Pull requests run the same code and manifest validation without
-receiving deployment credentials.
+rollouts and the production TLS certificate. It then verifies HTTPS health and
+the HTTP-to-HTTPS redirect through the ingress address. Pull requests run the
+same code and manifest validation without receiving deployment credentials.
 
 Required repository variables:
 
@@ -36,7 +52,6 @@ Required repository secrets:
 - `SANDPI_POSTGRES_PASSWORD`
 - `SANDPI_SECRET_KEY`
 
-The initial ingress is intentionally HTTP-only. The existing cluster wildcard
-certificate covers `sandbox0.ai` and `*.sandbox0.ai`, not `sandpi.ai`. Add the
-`sandpi.ai` TLS certificate and ingress `tls` block only after its DNS points to
-the ingress address.
+The apex `sandpi.ai` DNS record must be an A record for the ingress address in
+`SANDPI_INGRESS_IP`. No AAAA record is published while the ingress has no IPv6
+address.

@@ -143,6 +143,8 @@ jobs:
           export KUBECONFIG="${kubeconfig_path}"
           kubectl auth can-i patch secret/sandpi-runtime --namespace sandpi | grep -Fx yes
           kubectl auth can-i patch secret/sandpi-postgres --namespace sandpi | grep -Fx yes
+          kubectl auth can-i create certificates.cert-manager.io --namespace sandpi | grep -Fx yes
+          kubectl auth can-i create issuers.cert-manager.io --namespace sandpi | grep -Fx yes
           if kubectl auth can-i create namespaces --quiet; then
             echo "The Sandpi deployer must not have cluster-scoped namespace permissions."
             exit 1
@@ -219,6 +221,16 @@ jobs:
             kubectl --namespace sandpi logs deployment/sandpi --all-containers --tail=200 || true
             exit 1
           fi
+          if ! kubectl --namespace sandpi wait \
+            --for=condition=Ready \
+            certificate/sandpi \
+            --timeout=8m; then
+            kubectl --namespace sandpi describe certificate/sandpi || true
+            kubectl --namespace sandpi get certificaterequests.cert-manager.io -o wide || true
+            kubectl --namespace sandpi get orders.acme.cert-manager.io -o wide || true
+            kubectl --namespace sandpi get challenges.acme.cert-manager.io -o wide || true
+            exit 1
+          fi
 
           deployed_image="$(
             kubectl --namespace sandpi get deployment sandpi \
@@ -235,9 +247,20 @@ jobs:
             --retry-delay 5 \
             --show-error \
             --silent \
-            --resolve "sandpi.ai:80:${SANDPI_INGRESS_IP}" \
-            http://sandpi.ai/health/ready |
+            --resolve "sandpi.ai:443:${SANDPI_INGRESS_IP}" \
+            https://sandpi.ai/health/ready |
             grep -F '"status":"ready"'
+
+          redirect_location="$(
+            curl \
+              --output /dev/null \
+              --show-error \
+              --silent \
+              --write-out '%{redirect_url}' \
+              --resolve "sandpi.ai:80:${SANDPI_INGRESS_IP}" \
+              http://sandpi.ai/health/ready
+          )"
+          test "${redirect_location}" = "https://sandpi.ai/health/ready"
       - name: Log out of GHCR
         if: always()
         run: docker logout ghcr.io

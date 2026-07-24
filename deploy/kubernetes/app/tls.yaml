@@ -1,0 +1,50 @@
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: letsencrypt
+  labels:
+    app.kubernetes.io/name: sandpi
+    app.kubernetes.io/part-of: sandpi
+spec:
+  acme:
+    privateKeySecretRef:
+      name: sandpi-letsencrypt-account
+    server: https://acme-v02.api.letsencrypt.org/directory
+    solvers:
+      - http01:
+          ingress:
+            ingressClassName: nginx
+            serviceType: ClusterIP
+            ingressTemplate:
+              metadata:
+                annotations:
+                  nginx.ingress.kubernetes.io/ssl-redirect: "false"
+            podTemplate:
+              spec:
+                resources:
+                  requests:
+                    cpu: 10m
+                    memory: 16Mi
+                  limits:
+                    cpu: 100m
+                    memory: 64Mi
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: sandpi
+  labels:
+    app.kubernetes.io/name: sandpi
+    app.kubernetes.io/part-of: sandpi
+spec:
+  dnsNames:
+    - sandpi.ai
+  issuerRef:
+    group: cert-manager.io
+    kind: Issuer
+    name: letsencrypt
+  privateKey:
+    algorithm: ECDSA
+    rotationPolicy: Always
+    size: 256
+  secretName: sandpi-tls

@@ -105,6 +105,35 @@ rules:
       - patch
       - update
       - watch
+  - apiGroups:
+      - cert-manager.io
+    resources:
+      - certificates
+      - issuers
+    verbs:
+      - create
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - cert-manager.io
+    resources:
+      - certificaterequests
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - acme.cert-manager.io
+    resources:
+      - challenges
+      - orders
+    verbs:
+      - get
+      - list
+      - watch
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

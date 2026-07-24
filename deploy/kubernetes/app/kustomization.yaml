@@ -4,4 +4,5 @@ namespace: sandpi
 resources:
   - postgres.yaml
   - sandpi.yaml
+  - tls.yaml
   - ingress.yaml

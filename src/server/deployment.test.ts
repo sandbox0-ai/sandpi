@@ -42,7 +42,7 @@ test("PostgreSQL uses retained DigitalOcean block storage", async () => {
   assert.match(manifest, /name: sandpi-postgres/);
 });
 
-test("the ingress preserves native streaming without claiming unrelated TLS", async () => {
+test("the ingress preserves streaming and terminates Sandpi TLS", async () => {
   const manifest = await deploymentFile("app/ingress.yaml");
 
   assert.match(manifest, /host: sandpi\.ai/);
@@ -54,8 +54,41 @@ test("the ingress preserves native streaming without claiming unrelated TLS", as
     manifest,
     /nginx\.ingress\.kubernetes\.io\/proxy-read-timeout: "3600"/,
   );
-  assert.doesNotMatch(manifest, /^\s+tls:/m);
+  assert.match(
+    manifest,
+    /tls:\n    - hosts:\n        - sandpi\.ai\n      secretName: sandpi-tls/,
+  );
+  assert.match(
+    manifest,
+    /nginx\.ingress\.kubernetes\.io\/ssl-redirect: "true"/,
+  );
   assert.doesNotMatch(manifest, /sandbox0-ai-wildcard-tls/);
+});
+
+test("the Sandpi certificate uses a namespaced production ACME issuer", async () => {
+  const manifest = await deploymentFile("app/tls.yaml");
+
+  assert.match(manifest, /kind: Issuer/);
+  assert.doesNotMatch(manifest, /kind: ClusterIssuer/);
+  assert.match(
+    manifest,
+    /server: https:\/\/acme-v02\.api\.letsencrypt\.org\/directory/,
+  );
+  assert.match(manifest, /ingressClassName: nginx/);
+  assert.match(manifest, /serviceType: ClusterIP/);
+  assert.match(manifest, /dnsNames:\n    - sandpi\.ai/);
+  assert.match(manifest, /algorithm: ECDSA/);
+  assert.match(manifest, /rotationPolicy: Always/);
+  assert.match(manifest, /secretName: sandpi-tls/);
+});
+
+test("the shared certificate controller has bounded bootstrap resources", async () => {
+  const values = await deploymentFile("cert-manager-values.yaml");
+
+  assert.match(values, /crds:\n  enabled: true/);
+  assert.match(values, /prometheus:\n  enabled: false/);
+  assert.equal(values.match(/cpu: 10m/g)?.length, 4);
+  assert.match(values, /memory: 16Mi/);
 });
 
 test("the CI identity cannot manage cluster-scoped or unrelated secrets", async () => {
@@ -64,6 +97,10 @@ test("the CI identity cannot manage cluster-scoped or unrelated secrets", async 
   assert.match(
     bootstrap,
     /resourceNames:\n      - sandpi-postgres\n      - sandpi-runtime\n    resources:\n      - secrets/,
+  );
+  assert.match(
+    bootstrap,
+    /apiGroups:\n      - cert-manager\.io\n    resources:\n      - certificates\n      - issuers/,
   );
   assert.doesNotMatch(bootstrap, /kind: ClusterRole/);
   assert.doesNotMatch(bootstrap, /resources:\n\s+- namespaces/);
@@ -82,4 +119,9 @@ test("the deploy workflow checks kubectl's native authorization result", async (
     /can-i patch secret\/sandpi-postgres[\s\S]*?\| grep -Fx yes/,
   );
   assert.doesNotMatch(workflow, /can-i .*\| grep -Fx true/);
+  assert.match(workflow, /--for=condition=Ready[\s\S]*certificate\/sandpi/);
+  assert.match(
+    workflow,
+    /--resolve "sandpi\.ai:443:\$\{SANDPI_INGRESS_IP\}"/,
+  );
 });
