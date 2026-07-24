@@ -25,8 +25,9 @@ Environment
 - A Sandpi Session stores product metadata and one opaque harness-native Session
   id. It owns no Sandbox, Volume, Terminal or transcript.
 - PostgreSQL stores scalar recovery state: native Session id, selected model,
-  history revision, active native Turn id and ambiguous delivery coordinates.
-  It never stores message, reasoning, tool-call, delta or JSON-RPC payloads.
+  history revision, active native Turn id, delivery runtime epoch, explicit
+  interrupt marker and automatic-recovery coordinates. It never stores message,
+  reasoning, tool-call, delta, recovery-prompt text or JSON-RPC payloads.
 - The Supervisor journal is a durable transport, not conversation storage. One
   Environment worker holds a cursor-resumable Sandbox0 event stream, consumes
   retained replay followed by live events, decodes the journal once and routes
@@ -49,9 +50,11 @@ Environment
 
 Codex uses `/workspace/.sandpi/harnesses/codex` as its persistent `CODEX_HOME`.
 This keeps all native Threads on the Environment Workspace Volume, so a Sandbox
-runtime or harness process restart can resume them without a Sandpi chat store.
-The Web IDE, file APIs, Git projection and file watcher reject the reserved
-`/workspace/.sandpi` subtree.
+runtime or harness process restart can reopen their persisted history without a
+Sandpi chat store. An in-flight Turn itself does not survive an app-server
+restart: Codex reports it as interrupted, and Sandpi may continue it with the
+controlled new-Turn flow below. The Web IDE, file APIs, Git projection and file
+watcher reject the reserved `/workspace/.sandpi` subtree.
 
 Workspace directory transport is deliberately shallow. The initial IDE
 snapshot lists only `/workspace`; every folder expansion requests that
@@ -141,16 +144,40 @@ projection.
 Environment recovery also schedules a delayed, non-blocking control-state
 repair. Its PostgreSQL query includes only non-archived Sessions still projected
 as running, active or pending, waits behind interactive Turn operations, and
-uses metadata-only `thread/read(includeTurns: false)` rather than
-`thread/resume`. It never loads replies or reconstructs rollout history. An idle
-or unloaded native Thread can clear abandoned pending delivery only when both
-the app-server epoch and Session runtime version still match. Fresh pending
-delivery receives a ten-minute distributed grace so another Sandpi replica
-cannot clear a Turn that is still being attached or submitted; the exact request
-from an ambiguous `turn/start` timeout can be repaired immediately after its
-interactive operation releases its lease. Active native Threads preserve the
-existing pending and active-Turn projection. Ordinary waiting Sessions and
-archived Sessions are never inspected by this repair.
+reads each candidate with `thread/read(includeTurns: true)`. Full Turns are
+required only on this exceptional path to distinguish a completed Turn, an
+explicit user interrupt and an interruption caused by replacement of the
+Sandbox runtime epoch. It does not reconstruct rollout history. An idle or
+unloaded native Thread can clear abandoned pending delivery only when both the
+app-server epoch and Session runtime version still match. Fresh pending delivery
+receives a ten-minute distributed grace so another Sandpi replica cannot clear a
+Turn that is still being attached or submitted; the exact request from an
+ambiguous `turn/start` timeout can be repaired immediately after its interactive
+operation releases its lease. Active native Threads preserve the existing
+pending and active-Turn projection. Ordinary waiting Sessions and archived
+Sessions are never inspected by this repair.
+
+If the projected Turn is `interrupted`, its recorded submission or active epoch
+differs from the current Sandbox runtime epoch, and no matching user interrupt
+was recorded, Sandpi atomically claims one automatic continuation. This is a
+new native Recovery Turn on the same Codex Thread, never a replay or resume of
+the interrupted `turn/start`. Its versioned server instruction tells Codex to
+inspect the persisted conversation, Workspace, Git and relevant external state
+before continuing, and to avoid repeating an external side effect it cannot
+prove incomplete. The instruction appears in the native Thread under a reserved
+`clientUserMessageId`; the UI renders that item as one compact recovery notice
+instead of pretending it was typed by the user. PostgreSQL stores only the
+instruction version, source Turn id, attempt count and delivery coordinates.
+
+The recovery claim is protected by the Environment epoch and Session-version
+compare-and-swap fences. A claimed but not yet submitted Recovery Turn is
+delivered after a Sandpi process restart. An ambiguously submitted Recovery Turn
+is redelivered only after its recorded Supervisor epoch has disappeared and a
+full native read confirms that its reserved client message is absent. Once Codex
+accepts the Recovery Turn, subsequent repair finds that native message or Turn
+and cannot create a duplicate. Sandpi permits at most one semantic automatic
+continuation for an interrupted Turn; if that Recovery Turn is also interrupted,
+the Session returns to waiting for explicit user direction.
 
 The background read holds the Environment lifecycle advisory lock only while it
 rechecks the native epoch and submits `thread/read`; it releases the lock before
@@ -159,24 +186,24 @@ so pause, delete and server shutdown cannot remain trapped behind a stalled
 Sandbox0 write. That response path is lifecycle-neutral, so a pause that wins
 after submission is never reversed by Session repair. Transient discovery,
 transport and native errors retry with capped backoff; an active exceptional
-Thread receives a slow metadata-only recheck so a lost completion event cannot
-pin the Environment indefinitely. A new exact timeout target or explicit
-unarchive repair wakes any longer pending grace timer.
+Thread receives a slow full-state recheck so a lost completion event cannot pin
+the Environment indefinitely. A new exact timeout target or explicit unarchive
+repair wakes any longer pending grace timer.
 
 Archiving is allowed only after the Session's native control projection is idle.
 The archive transaction uses the same Environment-runtime, Session-runtime,
 Session-metadata lock order as Turn admission. Archived Sessions can therefore
 be excluded both from background repair and from the idle-pause guard without
 pausing hidden work, and Turn admission rejects an archived Session until it is
-unarchived. Unarchive schedules metadata-only control repair, while explicitly
+unarchived. Unarchive schedules exceptional control repair, while explicitly
 opening an archived Session still reads that one conversation and can repair
 sufficiently old pending scalar state.
 
-Operations that require a loaded Thread, currently `turn/start` and
-`turn/interrupt`, attach only their target Session with
-`thread/resume`. Concurrent callers share one attachment per native Thread and
-app-server attempt; a new Supervisor Session, process attempt or Sandbox runtime
-generation invalidates that process-local attachment state.
+Operations that require a loaded Thread, currently user `turn/start`,
+automatic Recovery Turn delivery and `turn/interrupt`, attach only their target
+Session with `thread/resume`. Concurrent callers share one attachment per
+native Thread and app-server attempt; a new Supervisor Session, process attempt
+or Sandbox runtime generation invalidates that process-local attachment state.
 `thread/start` and `thread/fork` already return loaded Threads and mark their
 results attached without an extra resume. A failed attachment remains local to
 that Session and can be retried; it never delays Environment recovery or
@@ -312,6 +339,12 @@ stores neither in PostgreSQL. A successful native completion queues
 their next active Turn. Ordinary Environment network policy remains the
 sandbox egress boundary, but it is not composed with MCP-specific credentials
 or protocol rules.
+
+Environment app-server processes disable Codex Apps, plugin discovery and tool
+suggestion. Sandpi supports native Skills and direct MCP definitions, but it
+does not implement the host-side plugin installation approval contract. This
+keeps `request_plugin_install` out of Turns instead of allowing an unhandled
+approval request to leave a Turn waiting indefinitely.
 
 Local STDIO definitions remain inside the native harness trust boundary. Codex
 launches those processes in the Environment Sandbox, where they can access the

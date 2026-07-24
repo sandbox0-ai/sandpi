@@ -89,6 +89,11 @@ const TERMINAL_EVENT_RETENTION_BYTES = 4 * 1024 * 1024;
 const ENVIRONMENT_CODEX_HOME = "/workspace/.sandpi/harnesses/codex";
 const WORKSPACE_CODEX_LAYOUT_MARKER = `${ENVIRONMENT_CODEX_HOME}/.sandpi-layout-environment-v1`;
 const ENVIRONMENT_CODEX_AUTH_FILE = CODEX_ENVIRONMENT_CREDENTIAL_PATH;
+// Sandpi exposes native Skills and MCP servers, but it has no host surface for
+// Codex Apps or plugin-install approvals. Keep their discovery tools out of
+// Environment Turns so a request cannot wait forever on an unhandled approval.
+const ENVIRONMENT_CODEX_DISABLED_FEATURES =
+  "--disable apps --disable plugins --disable remote_plugin --disable tool_suggest";
 const MCP_OAUTH_CALLBACK_SERVICE_ID = "sandpi-codex-mcp-oauth";
 const MCP_OAUTH_CALLBACK_ROUTE_ID = "oauth-callback";
 const MCP_OAUTH_CALLBACK_RATE_LIMIT_RPS = 5;
@@ -429,7 +434,7 @@ export class Sandbox0Runtime implements RuntimeAdapter {
         command: [
           "/bin/sh",
           "-lc",
-          `install -d -m 700 ${ENVIRONMENT_CODEX_HOME} && rm -rf ${ENVIRONMENT_CODEX_HOME}/auth.json && ln -s ${ENVIRONMENT_CODEX_AUTH_FILE} ${ENVIRONMENT_CODEX_HOME}/auth.json && while [ ! -s ${ENVIRONMENT_CODEX_AUTH_FILE} ]; do sleep 0.2; done && exec codex app-server --stdio -c 'cli_auth_credentials_store="file"'`,
+          `install -d -m 700 ${ENVIRONMENT_CODEX_HOME} && rm -rf ${ENVIRONMENT_CODEX_HOME}/auth.json && ln -s ${ENVIRONMENT_CODEX_AUTH_FILE} ${ENVIRONMENT_CODEX_HOME}/auth.json && while [ ! -s ${ENVIRONMENT_CODEX_AUTH_FILE} ]; do sleep 0.2; done && exec codex app-server --stdio -c 'cli_auth_credentials_store="file"' ${ENVIRONMENT_CODEX_DISABLED_FEATURES}`,
         ],
         cwd: "/workspace",
         env: { HOME: "/workspace", CODEX_HOME: ENVIRONMENT_CODEX_HOME },

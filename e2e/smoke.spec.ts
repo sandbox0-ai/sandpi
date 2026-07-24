@@ -1131,6 +1131,108 @@ test("shows a fallback when the Codex EventSource handshake fails", async ({
   await expect(page.getByText("Loading conversation…")).toBeHidden();
 });
 
+test("interrupts a persisted running Session before its native snapshot arrives", async ({
+  page,
+  request,
+}) => {
+  const workspace = await activeWorkspace(request);
+  test.skip(!workspace, "An active Session is required for this check.");
+  if (!workspace) return;
+  const { environment, session } = workspace;
+  const sessionPath = `/api/v1/sessions/${session.id}`;
+  const eventPath = `${sessionPath}/events`;
+  const interruptPath = `${sessionPath}/turns/interrupt`;
+  let interruptBody: unknown;
+
+  await page.route(
+    (url) => url.pathname === "/api/v1/bootstrap",
+    async (route) => {
+      const response = await route.fetch();
+      const body = (await response.json()) as ApiEnvelope<SandpiBootstrap>;
+      body.data.sessions = body.data.sessions.map((candidate) =>
+        candidate.id === session.id
+          ? { ...candidate, status: "running" }
+          : candidate,
+      );
+      await route.fulfill({ response, json: body });
+    },
+  );
+  await page.route(
+    (url) => url.pathname === "/api/v1/sessions",
+    async (route) => {
+      const response = await route.fetch();
+      const body = (await response.json()) as ApiEnvelope<
+        SandpiBootstrap["sessions"]
+      >;
+      body.data = body.data.map((candidate) =>
+        candidate.id === session.id
+          ? { ...candidate, status: "running" }
+          : candidate,
+      );
+      await route.fulfill({ response, json: body });
+    },
+  );
+  await page.route(
+    (url) => url.pathname === sessionPath,
+    async (route) => {
+      await route.fulfill({
+        json: {
+          data: {
+            ...session,
+            status: "running",
+          },
+        },
+      });
+    },
+  );
+  await page.route(
+    (url) => url.pathname === eventPath,
+    async (route) => {
+      await route.fulfill({
+        status: 401,
+        contentType: "application/json",
+        body: JSON.stringify({
+          error: {
+            code: "authentication_required",
+            message: "Sign in required.",
+          },
+        }),
+      });
+    },
+  );
+  await page.route(
+    (url) => url.pathname === interruptPath,
+    async (route) => {
+      interruptBody = route.request().postDataJSON();
+      await route.fulfill({
+        status: 202,
+        json: {
+          data: {
+            turnId: "turn-from-durable-session-state",
+            status: "interrupting",
+          },
+        },
+      });
+    },
+  );
+
+  await page.goto(
+    `/?environment=${encodeURIComponent(environment.id)}&session=${encodeURIComponent(session.id)}`,
+  );
+
+  const interrupt = page.getByRole("button", {
+    name: /Interrupt running Codex turn|中断正在运行的 Codex Turn/,
+  });
+  await expect(interrupt).toBeEnabled();
+  const beforeHover = await interrupt.boundingBox();
+  await interrupt.hover();
+  const afterHover = await interrupt.boundingBox();
+  expect(beforeHover).not.toBeNull();
+  expect(afterHover).toEqual(beforeHover);
+  await interrupt.click();
+  await expect.poll(() => interruptBody).toEqual({});
+});
+
 test("keeps an optimistic prompt ahead of native Activity without duplicating it", async ({
   page,
   request,

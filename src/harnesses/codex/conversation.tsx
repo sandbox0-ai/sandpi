@@ -63,6 +63,10 @@ import {
 import { CodexSessionActivityView } from "@/harnesses/codex/session-activity-view";
 import { normalizeCodexRolloutActivityFeed } from "@/harnesses/codex/rollout-activity";
 import {
+  canInterruptCodexSession,
+  isCodexRuntimeRecoveryClientMessageId,
+} from "@/harnesses/codex/runtime-recovery";
+import {
   groupCodexTimelineByTurn,
   type CodexTurnTimelineGroup,
 } from "@/harnesses/codex/timeline";
@@ -291,6 +295,11 @@ export function CodexConversation({
   const runningTurnId = runningTurn?.turnId;
   const interruptibleTurnId = visibleTimeline.activeTurn?.turnId;
   const turnRunning = Boolean(runningTurnId || pendingTurn);
+  const canInterruptTurn = canInterruptCodexSession({
+    nativeActiveTurnId: interruptibleTurnId,
+    sessionRunning: session.status === "running",
+    localTurnPending: Boolean(pendingTurn),
+  });
   const nativeReady =
     Boolean(nativeSnapshot) && nativeStreamReady && !nativeHistoryError;
   // Sandpi deliberately stores no secondary chat transcript. Until the native
@@ -898,7 +907,7 @@ export function CodexConversation({
   }
 
   async function interruptActiveTurn() {
-    if (!interruptibleTurnId || interrupting) {
+    if (!canInterruptTurn || interrupting) {
       return;
     }
     setInterrupting(true);
@@ -908,7 +917,9 @@ export function CodexConversation({
         `/api/v1/sessions/${encodeURIComponent(session.id)}/turns/interrupt`,
         {
           method: "POST",
-          body: JSON.stringify({ turnId: interruptibleTurnId }),
+          body: JSON.stringify(
+            interruptibleTurnId ? { turnId: interruptibleTurnId } : {},
+          ),
         },
       );
       // Keep the stop state until the native active Turn disappears. Product
@@ -1044,6 +1055,21 @@ export function CodexConversation({
     }
 
     const message = entry;
+    if (
+      message.role === "user" &&
+      isCodexRuntimeRecoveryClientMessageId(message.clientId)
+    ) {
+      return (
+        <div
+          className="codex-runtime-recovery-notice"
+          key={message.id}
+          role="note"
+        >
+          <span aria-hidden="true" />
+          {ui.runtimeRecoveryNotice}
+        </div>
+      );
+    }
     return (
       <article
         className={`message message-${message.role}`}
@@ -1510,23 +1536,23 @@ export function CodexConversation({
                   <button
                     type="button"
                     className={`send-button is-running ${
-                      !interruptibleTurnId ? "is-starting" : ""
+                      !canInterruptTurn ? "is-starting" : ""
                     } ${interrupting ? "is-interrupting" : ""}`}
-                    disabled={interrupting || !interruptibleTurnId}
+                    disabled={interrupting || !canInterruptTurn}
                     aria-label={
                       interrupting
                         ? ui.interruptingTurn
-                        : interruptibleTurnId
+                        : canInterruptTurn
                           ? ui.interruptTurn
                           : ui.turnStarting
                     }
-                    aria-busy={interrupting || !interruptibleTurnId}
+                    aria-busy={interrupting || !canInterruptTurn}
                     title={
-                      interruptibleTurnId ? ui.interruptTurn : ui.turnStarting
+                      canInterruptTurn ? ui.interruptTurn : ui.turnStarting
                     }
                     onClick={() => void interruptActiveTurn()}
                   >
-                    {interrupting || !interruptibleTurnId ? (
+                    {interrupting || !canInterruptTurn ? (
                       <span className="activity-spinner" aria-hidden="true" />
                     ) : (
                       <Square size={10} fill="currentColor" aria-hidden="true" />

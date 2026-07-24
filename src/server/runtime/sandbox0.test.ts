@@ -1204,7 +1204,7 @@ test("repairs a disconnected Workspace portal for harness-neutral access", async
   assert.equal(lifecycleReads, 2);
 });
 
-test("starts one Environment-scoped Codex app-server with native state on the Volume", async () => {
+test("starts one Environment-scoped Codex app-server without unsupported plugin discovery", async () => {
   const writes: Array<{ path: string; content: string }> = [];
   const commands: Array<{ name: string; command?: string[] }> = [];
   const sessions: Array<{
@@ -1295,6 +1295,10 @@ test("starts one Environment-scoped Codex app-server with native state on the Vo
   assert.doesNotMatch(
     String((sessions[0]?.spec.command as string[] | undefined)?.at(-1)),
     /mcp_oauth_credentials_store="file"/,
+  );
+  assert.match(
+    String((sessions[0]?.spec.command as string[] | undefined)?.at(-1)),
+    /codex app-server --stdio[\s\S]+--disable apps[\s\S]+--disable plugins[\s\S]+--disable remote_plugin[\s\S]+--disable tool_suggest/,
   );
   assert.ok(
     commands.some(

@@ -11,6 +11,12 @@ import {
   type CodexServerNotification,
   type CodexThread,
 } from "@/harnesses/codex/types";
+import {
+  CODEX_RUNTIME_RECOVERY_CLIENT_ID_PREFIX,
+  CODEX_RUNTIME_RECOVERY_PROMPT_VERSION,
+  codexRuntimeRecoveryPrompt,
+  isCodexRuntimeRecoveryClientMessageId,
+} from "@/harnesses/codex/runtime-recovery";
 import type {
   CodexAccountPlanType,
   CodexAccountRateLimits,
@@ -70,6 +76,7 @@ const EXCEPTIONAL_SESSION_RETRY_BASE_MS = 1_000;
 const EXCEPTIONAL_SESSION_RETRY_MAX_MS = 30_000;
 const EXCEPTIONAL_SESSION_ACTIVE_RECHECK_MS = 30_000;
 const EXCEPTIONAL_SESSION_REQUEST_TIMEOUT_MS = 5_000;
+const AUTOMATIC_TURN_RECOVERY_MAX_ATTEMPTS = 1;
 const MAX_RPC_RESPONSES_PER_ENVIRONMENT = 512;
 const MAX_LIVE_NOTIFICATIONS_PER_SESSION = 1_000;
 const CODEX_ENVIRONMENT_CWD = "/workspace";
@@ -100,11 +107,7 @@ const TRANSCRIPT_NOTIFICATION_METHODS = new Set<string>(
   CODEX_TRANSCRIPT_NOTIFICATION_METHODS,
 );
 type CodexMcpAuthStatus =
-  | "unsupported"
-  | "notLoggedIn"
-  | "bearerToken"
-  | "oAuth"
-  | "unknown";
+  "unsupported" | "notLoggedIn" | "bearerToken" | "oAuth" | "unknown";
 
 interface ServiceLogger {
   debug(fields: object, message: string): void;
@@ -948,12 +951,21 @@ export class CodexService {
           input.sessionId,
         );
         await this.ensureNativeSessionAttached(environmentRuntime, turnRuntime);
-        await this.store.markTurnSubmitted(
+        const markedSubmitted = await this.store.markTurnSubmitted(
           input.sessionId,
           submission.requestId,
+          environmentRuntime.attemptId,
+          environmentRuntime.runtimeGeneration,
         );
+        if (!markedSubmitted) {
+          throw new HttpError(
+            409,
+            "codex_turn_changed",
+            "The Session changed before Codex input delivery.",
+          );
+        }
         turnDeliveryAttempted = true;
-        const response = await this.requestCodex(
+        const submitted = await this.requestCodexWithRuntime(
           sessionRuntime.environmentId,
           environmentRuntime,
           {
@@ -976,6 +988,7 @@ export class CodexService {
           input.sessionId,
           submission.stableInputId,
         );
+        const { response, runtime: submittedRuntime } = submitted;
         if (response.error) {
           throw new HttpError(
             502,
@@ -989,6 +1002,8 @@ export class CodexService {
             input.sessionId,
             submission.requestId,
             nativeTurnId,
+            submittedRuntime.attemptId,
+            submittedRuntime.runtimeGeneration,
           );
         }
         this.ensureEnvironmentWorker(sessionRuntime.environmentId);
@@ -1170,9 +1185,15 @@ export class CodexService {
       thread.path,
       signal,
     );
-    const activeNativeTurnId = thread.turns.find(
-      (turn) => turn.status === "inProgress",
-    )?.id;
+    const activeNativeTurnId = latestInProgressNativeTurn(thread)?.id;
+    const projectedTurn = nativeTurnForSessionProjection(
+      thread,
+      sessionRuntime,
+    );
+    const requiresExceptionalTurnResolution = Boolean(
+      sessionRuntime.recoverySourceNativeTurnId ||
+      projectedTurn?.turn.status === "interrupted",
+    );
     const nativeSettled = ["idle", "notLoaded", "systemError"].includes(
       thread.status.type,
     );
@@ -1197,19 +1218,32 @@ export class CodexService {
       sessionRuntime.activeNativeTurnId !== activeNativeTurnId ||
       pendingRecoveryEligible ||
       sessionRuntime.sessionStatus !== expectedSessionStatus;
-    const reconciled = await this.store.reconcileNativeSessionState({
-      sessionId,
-      nativeSessionId: sessionRuntime.nativeSessionId,
-      historyRevision: sessionRuntime.historyRevision,
-      runtimeVersion: sessionRuntime.version,
-      environmentId: responseRuntime.id,
-      environmentSupervisorSessionId: responseRuntime.supervisorSessionId,
-      environmentAttemptId: responseRuntime.attemptId,
-      environmentRuntimeGeneration: responseRuntime.runtimeGeneration,
-      activeNativeTurnId,
-      clearPendingWhenNativeIdle: nativeSettled,
-      clearPendingStartedBefore: pendingRecoveryCutoff,
-    });
+    let reconciled = false;
+    if (requiresExceptionalTurnResolution) {
+      this.scheduleExceptionalSessionReconciliation(responseRuntime, {
+        delayMs: 0,
+        pendingTurnRequests:
+          sessionRuntime.pendingTurnRequestId === undefined
+            ? undefined
+            : new Map([
+                [sessionRuntime.sessionId, sessionRuntime.pendingTurnRequestId],
+              ]),
+      });
+    } else {
+      reconciled = await this.store.reconcileNativeSessionState({
+        sessionId,
+        nativeSessionId: sessionRuntime.nativeSessionId,
+        historyRevision: sessionRuntime.historyRevision,
+        runtimeVersion: sessionRuntime.version,
+        environmentId: responseRuntime.id,
+        environmentSupervisorSessionId: responseRuntime.supervisorSessionId,
+        environmentAttemptId: responseRuntime.attemptId,
+        environmentRuntimeGeneration: responseRuntime.runtimeGeneration,
+        activeNativeTurnId,
+        clearPendingWhenNativeIdle: nativeSettled,
+        clearPendingStartedBefore: pendingRecoveryCutoff,
+      });
+    }
     if (reconciled && projectionChanged) {
       this.publishInvalidation(sessionId, "native-session-state-reconciled", {
         message: "Codex execution state was repaired from the native Thread.",
@@ -1333,21 +1367,26 @@ export class CodexService {
   async interruptActiveTurn(input: {
     userId: string;
     sessionId: string;
-    turnId: string;
+    turnId?: string;
   }) {
+    await this.requireNativeSessionRuntime(input.userId, input.sessionId);
+    const turnId = await this.store.requestTurnInterrupt(
+      input.sessionId,
+      input.turnId,
+    );
+    if (!turnId) {
+      throw new HttpError(
+        409,
+        "codex_turn_not_interruptible",
+        "The running Codex Turn has not exposed an interrupt target yet.",
+      );
+    }
     const sessionRuntime = await this.requireNativeSessionRuntime(
       input.userId,
       input.sessionId,
     );
-    if (
-      sessionRuntime.activeNativeTurnId &&
-      sessionRuntime.activeNativeTurnId !== input.turnId
-    ) {
-      throw new HttpError(
-        409,
-        "codex_turn_changed",
-        "The active native Turn changed before it could be interrupted.",
-      );
+    if (sessionRuntime.interruptRequestedNativeTurnId !== turnId) {
+      return { turnId, status: "interrupting" as const };
     }
     const releaseInteractiveOperation =
       this.retainInteractiveEnvironmentOperation(sessionRuntime.environmentId);
@@ -1356,6 +1395,19 @@ export class CodexService {
         input.userId,
         input.sessionId,
       );
+      if (
+        input.turnId !== turnId &&
+        nativeInterruptTargetBelongsToReplacedRuntime(
+          sessionRuntime,
+          turnId,
+          environmentRuntime,
+        )
+      ) {
+        this.scheduleExceptionalSessionReconciliation(environmentRuntime, {
+          delayMs: 0,
+        });
+        return { turnId, status: "interrupting" as const };
+      }
       await this.ensureNativeSessionAttached(
         environmentRuntime,
         sessionRuntime,
@@ -1368,7 +1420,7 @@ export class CodexService {
           id: rpcId("turn-interrupt", input.sessionId),
           params: {
             threadId: sessionRuntime.nativeSessionId,
-            turnId: input.turnId,
+            turnId,
           },
         },
         input.sessionId,
@@ -1380,7 +1432,7 @@ export class CodexService {
           rpcErrorMessage(response.error),
         );
       }
-      return { turnId: input.turnId, status: "interrupting" as const };
+      return { turnId, status: "interrupting" as const };
     } finally {
       releaseInteractiveOperation();
     }
@@ -1436,7 +1488,7 @@ export class CodexService {
 
   /**
    * Unarchiving can expose control state whose live event was missed while the
-   * Session was hidden. Queue metadata-only repair without loading its replies.
+   * Session was hidden. Queue a native repair that can also classify recovery.
    */
   async scheduleSessionControlStateRepair(sessionId: string) {
     try {
@@ -1988,7 +2040,12 @@ export class CodexService {
         pendingTurnRequestId !== undefined &&
         reconciliation.pendingTurnRequests.get(session.sessionId) ===
           pendingTurnRequestId;
-      if (session.pendingTurnPhase && !targetedPendingTurn) {
+      if (
+        session.pendingTurnPhase &&
+        !targetedPendingTurn &&
+        !session.activeNativeTurnId &&
+        !session.recoverySourceNativeTurnId
+      ) {
         // Process-local interactive leases do not cover another Sandpi
         // replica. Defer fresh DB delivery state unless this process owns the
         // exact turn/start request that already reached an ambiguous timeout.
@@ -2079,51 +2136,485 @@ export class CodexService {
     ) {
       return;
     }
+    const activeTurn = latestInProgressNativeTurn(thread);
+    if (thread.status.type === "active" || activeTurn) {
+      const pendingMatchesActive =
+        activeTurn &&
+        session.pendingTurnClientMessageId &&
+        nativeTurnForClientMessage(thread, session.pendingTurnClientMessageId)
+          ?.id === activeTurn.id;
+      const acceptanceNeedsRepair = Boolean(
+        activeTurn &&
+        pendingMatchesActive &&
+        session.pendingTurnRequestId &&
+        (session.pendingTurnPhase !== "accepted" ||
+          session.pendingTurnNativeTurnId !== activeTurn.id ||
+          session.activeNativeTurnId !== activeTurn.id ||
+          session.activeTurnAttemptId !== latestRuntime.attemptId ||
+          session.activeTurnRuntimeGeneration !==
+            latestRuntime.runtimeGeneration),
+      );
+      if (activeTurn && session.pendingTurnRequestId && acceptanceNeedsRepair) {
+        await this.store.markTurnAccepted(
+          session.sessionId,
+          session.pendingTurnRequestId,
+          activeTurn.id,
+          latestRuntime.attemptId,
+          latestRuntime.runtimeGeneration,
+        );
+      } else {
+        await this.store.reconcileNativeSessionState({
+          sessionId: session.sessionId,
+          nativeSessionId,
+          historyRevision: session.historyRevision,
+          runtimeVersion: session.version,
+          environmentId: latestRuntime.id,
+          environmentSupervisorSessionId: latestRuntime.supervisorSessionId,
+          environmentAttemptId: latestRuntime.attemptId,
+          environmentRuntimeGeneration: latestRuntime.runtimeGeneration,
+          activeNativeTurnId: activeTurn?.id ?? session.activeNativeTurnId,
+          requireUnarchived: true,
+        });
+      }
+      this.requestExceptionalSessionRerun(
+        reconciliation,
+        this.options.exceptionalSessionActiveRecheckMs ??
+          EXCEPTIONAL_SESSION_ACTIVE_RECHECK_MS,
+      );
+      return;
+    }
     if (!["idle", "notLoaded", "systemError"].includes(thread.status.type)) {
-      if (thread.status.type === "active") {
+      this.requestExceptionalSessionRetry(reconciliation);
+      return;
+    }
+
+    if (
+      thread.status.type === "systemError" &&
+      session.recoverySourceNativeTurnId
+    ) {
+      await this.settleExceptionalSession(
+        latestRuntime,
+        reconciliation,
+        session,
+        nativeSessionId,
+        true,
+        true,
+        "automatic_turn_recovery_native_unavailable",
+      );
+      return;
+    }
+
+    if (session.recoverySourceNativeTurnId) {
+      await this.reconcileClaimedTurnRecovery(
+        latestRuntime,
+        reconciliation,
+        session,
+        nativeSessionId,
+        thread,
+      );
+      return;
+    }
+
+    const projectedTurn = nativeTurnForSessionProjection(thread, session);
+    const runtimeInterrupted =
+      thread.status.type !== "systemError" &&
+      projectedTurn?.turn.status === "interrupted" &&
+      nativeTurnBelongsToReplacedRuntime(session, projectedTurn, latestRuntime);
+    if (
+      runtimeInterrupted &&
+      projectedTurn &&
+      session.interruptRequestedNativeTurnId !== projectedTurn.turn.id &&
+      session.recoveryAttemptCount < AUTOMATIC_TURN_RECOVERY_MAX_ATTEMPTS
+    ) {
+      const submission = runtimeRecoveryTurnSubmissionCoordinates(
+        session.sessionId,
+      );
+      const claimed = await this.store.claimInterruptedTurnRecovery({
+        sessionId: session.sessionId,
+        nativeSessionId,
+        historyRevision: session.historyRevision,
+        runtimeVersion: session.version,
+        environmentId: latestRuntime.id,
+        environmentSupervisorSessionId: latestRuntime.supervisorSessionId,
+        environmentAttemptId: latestRuntime.attemptId,
+        environmentRuntimeGeneration: latestRuntime.runtimeGeneration,
+        sourceNativeTurnId: projectedTurn.turn.id,
+        sourcePendingClientMessageId:
+          projectedTurn.matchedBy === "clientMessage"
+            ? session.pendingTurnClientMessageId
+            : undefined,
+        submission,
+        promptVersion: CODEX_RUNTIME_RECOVERY_PROMPT_VERSION,
+      });
+      if (!claimed) {
+        this.requestExceptionalSessionRetry(reconciliation);
+        return;
+      }
+      const claimedSession: StoredSessionRuntime = {
+        ...session,
+        activeNativeTurnId: undefined,
+        activeTurnAttemptId: undefined,
+        activeTurnRuntimeGeneration: undefined,
+        pendingTurnRequestId: submission.requestId,
+        pendingTurnClientMessageId: submission.clientMessageId,
+        pendingTurnStableInputId: submission.stableInputId,
+        pendingTurnPhase: "prepared",
+        pendingTurnNativeTurnId: undefined,
+        pendingTurnStartedAt: new Date(),
+        pendingTurnAttemptId: undefined,
+        pendingTurnRuntimeGeneration: undefined,
+        interruptRequestedNativeTurnId: undefined,
+        recoverySourceNativeTurnId: projectedTurn.turn.id,
+        recoveryPromptVersion: CODEX_RUNTIME_RECOVERY_PROMPT_VERSION,
+        recoveryAttemptCount: session.recoveryAttemptCount + 1,
+        runtimeErrorCode: undefined,
+        sessionStatus: "running",
+        version: session.version + 1,
+      };
+      await this.startClaimedTurnRecovery(
+        latestRuntime,
+        reconciliation,
+        claimedSession,
+      );
+      return;
+    }
+
+    const terminalProjection = Boolean(
+      projectedTurn && projectedTurn.turn.status !== "inProgress",
+    );
+    await this.settleExceptionalSession(
+      latestRuntime,
+      reconciliation,
+      session,
+      nativeSessionId,
+      targetedPendingTurn,
+      terminalProjection,
+    );
+  }
+
+  private async reconcileClaimedTurnRecovery(
+    runtime: StoredEnvironmentRuntime,
+    reconciliation: ExceptionalSessionReconciliation,
+    session: StoredSessionRuntime,
+    nativeSessionId: string,
+    thread: CodexThread,
+  ) {
+    if (
+      session.interruptRequestedNativeTurnId ===
+      session.recoverySourceNativeTurnId
+    ) {
+      await this.settleExceptionalSession(
+        runtime,
+        reconciliation,
+        session,
+        nativeSessionId,
+        true,
+        true,
+      );
+      return;
+    }
+    if (
+      !isCodexRuntimeRecoveryClientMessageId(session.pendingTurnClientMessageId)
+    ) {
+      this.requestExceptionalSessionRetry(reconciliation);
+      return;
+    }
+    if (thread.status.type === "notLoaded") {
+      await this.ensureNativeSessionAttached(runtime, {
+        ...session,
+        nativeSessionId,
+      });
+      this.requestExceptionalSessionRerun(reconciliation, 0);
+      return;
+    }
+    const recoveryTurn =
+      session.pendingTurnNativeTurnId &&
+      session.pendingTurnNativeTurnId !== session.recoverySourceNativeTurnId
+        ? thread.turns.find(
+            (turn) => turn.id === session.pendingTurnNativeTurnId,
+          )
+        : session.pendingTurnClientMessageId
+          ? nativeTurnForClientMessage(
+              thread,
+              session.pendingTurnClientMessageId,
+            )
+          : undefined;
+    if (recoveryTurn) {
+      if (recoveryTurn.status === "inProgress") {
+        if (session.pendingTurnRequestId) {
+          await this.store.markTurnAccepted(
+            session.sessionId,
+            session.pendingTurnRequestId,
+            recoveryTurn.id,
+            runtime.attemptId,
+            runtime.runtimeGeneration,
+          );
+        }
         this.requestExceptionalSessionRerun(
           reconciliation,
           this.options.exceptionalSessionActiveRecheckMs ??
             EXCEPTIONAL_SESSION_ACTIVE_RECHECK_MS,
         );
-      } else {
-        this.requestExceptionalSessionRetry(reconciliation);
+        return;
       }
+      await this.settleExceptionalSession(
+        runtime,
+        reconciliation,
+        session,
+        nativeSessionId,
+        true,
+        true,
+        recoveryTurn.status === "interrupted"
+          ? "automatic_turn_recovery_exhausted"
+          : undefined,
+      );
       return;
     }
+
+    if (
+      session.pendingTurnPhase === "prepared" &&
+      session.pendingTurnRequestId &&
+      session.pendingTurnClientMessageId &&
+      session.pendingTurnStableInputId
+    ) {
+      await this.startClaimedTurnRecovery(runtime, reconciliation, session);
+      return;
+    }
+
+    if (
+      session.pendingTurnPhase === "submitted" &&
+      session.pendingTurnRequestId
+    ) {
+      const submittedInCurrentEpoch =
+        session.pendingTurnAttemptId === runtime.attemptId &&
+        session.pendingTurnRuntimeGeneration === runtime.runtimeGeneration;
+      if (submittedInCurrentEpoch) {
+        const delayMs = exceptionalPendingTurnDelayMs(
+          session.pendingTurnStartedAt,
+          this.options.exceptionalPendingTurnGraceMs ??
+            EXCEPTIONAL_PENDING_TURN_GRACE_MS,
+        );
+        if (delayMs > 0) {
+          this.requestExceptionalSessionRerun(reconciliation, delayMs);
+          return;
+        }
+        await this.store.failInterruptedTurnRecovery(
+          session.sessionId,
+          session.pendingTurnRequestId,
+          "automatic_turn_recovery_timeout",
+        );
+        this.publishInvalidation(
+          session.sessionId,
+          "automatic-turn-recovery-failed",
+          {
+            message:
+              "Sandpi could not confirm that the automatic continuation started.",
+          },
+        );
+        return;
+      }
+      const prepared = await this.store.prepareInterruptedTurnRecoveryReplay({
+        sessionId: session.sessionId,
+        nativeSessionId,
+        runtimeVersion: session.version,
+        requestId: session.pendingTurnRequestId,
+        environmentAttemptId: runtime.attemptId,
+        environmentRuntimeGeneration: runtime.runtimeGeneration,
+      });
+      if (!prepared) {
+        this.requestExceptionalSessionRetry(reconciliation);
+        return;
+      }
+      await this.startClaimedTurnRecovery(runtime, reconciliation, {
+        ...session,
+        pendingTurnPhase: "prepared",
+        pendingTurnAttemptId: undefined,
+        pendingTurnRuntimeGeneration: undefined,
+        version: session.version + 1,
+      });
+      return;
+    }
+
+    this.requestExceptionalSessionRetry(reconciliation);
+  }
+
+  private async startClaimedTurnRecovery(
+    runtime: StoredEnvironmentRuntime,
+    reconciliation: ExceptionalSessionReconciliation,
+    session: StoredSessionRuntime,
+  ) {
+    if (
+      !session.nativeSessionId ||
+      !session.pendingTurnRequestId ||
+      !session.pendingTurnClientMessageId ||
+      !session.pendingTurnStableInputId ||
+      !session.recoverySourceNativeTurnId
+    ) {
+      this.requestExceptionalSessionRetry(reconciliation);
+      return;
+    }
+    try {
+      await this.ensureNativeSessionAttached(runtime, {
+        ...session,
+        nativeSessionId: session.nativeSessionId,
+      });
+      const deliveryRuntime = await this.store.environmentRuntime(runtime.id);
+      if (
+        environmentRuntimeEpoch(deliveryRuntime) !==
+          environmentRuntimeEpoch(runtime) ||
+        deliveryRuntime.desiredState !== "running" ||
+        deliveryRuntime.observedState !== "running"
+      ) {
+        this.handoffExceptionalSessionReconciliation(
+          deliveryRuntime,
+          reconciliation,
+        );
+        return;
+      }
+      const markedSubmitted = await this.store.markTurnSubmitted(
+        session.sessionId,
+        session.pendingTurnRequestId,
+        deliveryRuntime.attemptId,
+        deliveryRuntime.runtimeGeneration,
+      );
+      if (!markedSubmitted) {
+        this.requestExceptionalSessionRetry(reconciliation);
+        return;
+      }
+      const { response, runtime: submittedRuntime } =
+        await this.requestCodexWithRuntime(
+          session.environmentId,
+          deliveryRuntime,
+          {
+            method: "turn/start",
+            id: session.pendingTurnRequestId,
+            params: {
+              threadId: session.nativeSessionId,
+              clientUserMessageId: session.pendingTurnClientMessageId,
+              input: nativeCodexTurnInput(
+                codexRuntimeRecoveryPrompt(
+                  session.recoveryPromptVersion ??
+                    CODEX_RUNTIME_RECOVERY_PROMPT_VERSION,
+                ),
+                [],
+                [],
+              ),
+              ...(session.modelId ? { model: session.modelId } : {}),
+              ...(session.reasoningEffort
+                ? { effort: session.reasoningEffort }
+                : {}),
+            },
+          },
+          session.sessionId,
+          session.pendingTurnStableInputId,
+          false,
+        );
+      if (response.error) {
+        await this.store.failInterruptedTurnRecovery(
+          session.sessionId,
+          session.pendingTurnRequestId,
+          "automatic_turn_recovery_rejected",
+        );
+        this.publishInvalidation(
+          session.sessionId,
+          "automatic-turn-recovery-failed",
+          {
+            message: "Codex rejected the automatic continuation Turn.",
+          },
+        );
+        return;
+      }
+      const nativeTurnId = turnIdFromRpcResponse(response);
+      if (!nativeTurnId) {
+        this.requestExceptionalSessionRetry(reconciliation);
+        return;
+      }
+      await this.store.markTurnAccepted(
+        session.sessionId,
+        session.pendingTurnRequestId,
+        nativeTurnId,
+        submittedRuntime.attemptId,
+        submittedRuntime.runtimeGeneration,
+      );
+      this.ensureEnvironmentWorker(session.environmentId);
+      this.requestExceptionalSessionRerun(
+        reconciliation,
+        this.options.exceptionalSessionActiveRecheckMs ??
+          EXCEPTIONAL_SESSION_ACTIVE_RECHECK_MS,
+      );
+      this.publishInvalidation(
+        session.sessionId,
+        "automatic-turn-recovery-accepted",
+        {
+          message:
+            "Codex accepted Sandpi's automatic continuation after the Sandbox restart.",
+        },
+      );
+    } catch (error) {
+      this.requestExceptionalSessionRetry(reconciliation);
+      this.logger.warn(
+        {
+          environmentId: session.environmentId,
+          sessionId: session.sessionId,
+          error: errorMessage(error),
+        },
+        "Automatic Codex Turn recovery deferred",
+      );
+    }
+  }
+
+  private async settleExceptionalSession(
+    runtime: StoredEnvironmentRuntime,
+    reconciliation: ExceptionalSessionReconciliation,
+    session: StoredSessionRuntime,
+    nativeSessionId: string,
+    targetedPendingTurn: boolean,
+    terminalProjection: boolean,
+    recoveryErrorCode?: string,
+  ) {
     const projectionChanged =
       session.activeNativeTurnId !== undefined ||
       Boolean(session.pendingTurnPhase) ||
+      Boolean(session.interruptRequestedNativeTurnId) ||
+      Boolean(session.recoverySourceNativeTurnId) ||
       session.sessionStatus !== "waiting";
     const reconciled = await this.store.reconcileNativeSessionState({
       sessionId: session.sessionId,
       nativeSessionId,
       historyRevision: session.historyRevision,
       runtimeVersion: session.version,
-      environmentId: latestRuntime.id,
-      environmentSupervisorSessionId: latestRuntime.supervisorSessionId,
-      environmentAttemptId: latestRuntime.attemptId,
-      environmentRuntimeGeneration: latestRuntime.runtimeGeneration,
+      environmentId: runtime.id,
+      environmentSupervisorSessionId: runtime.supervisorSessionId,
+      environmentAttemptId: runtime.attemptId,
+      environmentRuntimeGeneration: runtime.runtimeGeneration,
       activeNativeTurnId: undefined,
       clearPendingWhenNativeIdle: true,
-      clearPendingRequestId: targetedPendingTurn
-        ? session.pendingTurnRequestId
-        : undefined,
-      clearPendingStartedBefore: targetedPendingTurn
-        ? undefined
-        : new Date(
-            Date.now() -
-              (this.options.exceptionalPendingTurnGraceMs ??
-                EXCEPTIONAL_PENDING_TURN_GRACE_MS),
-          ),
+      clearPendingRequestId:
+        terminalProjection || targetedPendingTurn
+          ? session.pendingTurnRequestId
+          : undefined,
+      clearPendingStartedBefore:
+        terminalProjection || targetedPendingTurn
+          ? undefined
+          : new Date(
+              Date.now() -
+                (this.options.exceptionalPendingTurnGraceMs ??
+                  EXCEPTIONAL_PENDING_TURN_GRACE_MS),
+            ),
+      clearRecoveryState: terminalProjection,
+      recoveryErrorCode,
       requireUnarchived: true,
     });
     if (reconciled && projectionChanged) {
       this.publishInvalidation(
         session.sessionId,
-        "native-session-state-reconciled",
+        recoveryErrorCode
+          ? "automatic-turn-recovery-failed"
+          : "native-session-state-reconciled",
         {
-          message: "Codex execution state was repaired from the native Thread.",
+          message: recoveryErrorCode
+            ? "The automatic continuation was interrupted again; the Session is waiting for you."
+            : "Codex execution state was repaired from the native Thread.",
         },
       );
     } else if (!reconciled) {
@@ -2160,7 +2651,7 @@ export class CodexService {
       id: rpcId("thread-reconcile", sessionId),
       params: {
         threadId: nativeSessionId,
-        includeTurns: false,
+        includeTurns: true,
       },
     };
     const locked = await this.advisoryLockStore().withEnvironmentLifecycleLock(
@@ -2471,8 +2962,7 @@ export class CodexService {
   private async requireNativeSessionRuntime(userId: string, sessionId: string) {
     const runtime = await this.store.getSessionRuntime(userId, sessionId);
     if (
-      runtime.runtimeErrorCode ===
-      WORKSPACE_RESTORE_UNAVAILABLE_SESSION_ERROR
+      runtime.runtimeErrorCode === WORKSPACE_RESTORE_UNAVAILABLE_SESSION_ERROR
     ) {
       throw new HttpError(
         409,
@@ -3767,6 +4257,120 @@ function turnSubmissionCoordinates(
     clientMessageId,
     stableInputId: `turn-input:${sessionId}:${randomUUID()}`,
   };
+}
+
+function runtimeRecoveryTurnSubmissionCoordinates(sessionId: string) {
+  return turnSubmissionCoordinates(
+    sessionId,
+    `${CODEX_RUNTIME_RECOVERY_CLIENT_ID_PREFIX}${sessionId}:${randomUUID()}`,
+  );
+}
+
+interface NativeTurnProjection {
+  turn: CodexThread["turns"][number];
+  matchedBy: "activeTurn" | "pendingTurn" | "clientMessage";
+}
+
+function nativeTurnForSessionProjection(
+  thread: CodexThread,
+  session: StoredSessionRuntime,
+): NativeTurnProjection | undefined {
+  if (session.activeNativeTurnId) {
+    const turn = thread.turns.find(
+      (candidate) => candidate.id === session.activeNativeTurnId,
+    );
+    if (turn) return { turn, matchedBy: "activeTurn" };
+  }
+  if (session.pendingTurnNativeTurnId) {
+    const turn = thread.turns.find(
+      (candidate) => candidate.id === session.pendingTurnNativeTurnId,
+    );
+    if (turn) return { turn, matchedBy: "pendingTurn" };
+  }
+  if (session.pendingTurnClientMessageId) {
+    const turn = nativeTurnForClientMessage(
+      thread,
+      session.pendingTurnClientMessageId,
+    );
+    if (turn) return { turn, matchedBy: "clientMessage" };
+  }
+  return undefined;
+}
+
+function nativeTurnForClientMessage(
+  thread: CodexThread,
+  clientMessageId: string,
+) {
+  return thread.turns.find((turn) =>
+    turn.items.some(
+      (item) =>
+        item.type === "userMessage" && item.clientId === clientMessageId,
+    ),
+  );
+}
+
+function latestInProgressNativeTurn(thread: CodexThread) {
+  return thread.turns.findLast((turn) => turn.status === "inProgress");
+}
+
+function nativeTurnBelongsToReplacedRuntime(
+  session: StoredSessionRuntime,
+  projection: NativeTurnProjection,
+  runtime: StoredEnvironmentRuntime,
+) {
+  const coordinates =
+    projection.matchedBy === "activeTurn"
+      ? {
+          attemptId: session.activeTurnAttemptId,
+          runtimeGeneration: session.activeTurnRuntimeGeneration,
+        }
+      : {
+          attemptId: session.pendingTurnAttemptId,
+          runtimeGeneration: session.pendingTurnRuntimeGeneration,
+        };
+  return (
+    coordinates.attemptId === undefined ||
+    coordinates.runtimeGeneration === undefined ||
+    coordinates.attemptId !== runtime.attemptId ||
+    coordinates.runtimeGeneration !== runtime.runtimeGeneration
+  );
+}
+
+function nativeInterruptTargetBelongsToReplacedRuntime(
+  session: StoredSessionRuntime,
+  nativeTurnId: string,
+  runtime: StoredEnvironmentRuntime,
+) {
+  if (
+    nativeTurnId === session.recoverySourceNativeTurnId &&
+    nativeTurnId !== session.activeNativeTurnId &&
+    nativeTurnId !== session.pendingTurnNativeTurnId
+  ) {
+    return true;
+  }
+  const coordinates =
+    nativeTurnId === session.activeNativeTurnId
+      ? {
+          attemptId: session.activeTurnAttemptId,
+          runtimeGeneration: session.activeTurnRuntimeGeneration,
+        }
+      : nativeTurnId === session.pendingTurnNativeTurnId
+        ? {
+            attemptId: session.pendingTurnAttemptId,
+            runtimeGeneration: session.pendingTurnRuntimeGeneration,
+          }
+        : undefined;
+  if (
+    !coordinates ||
+    (coordinates.attemptId === undefined &&
+      coordinates.runtimeGeneration === undefined)
+  ) {
+    return false;
+  }
+  return (
+    coordinates.attemptId !== runtime.attemptId ||
+    coordinates.runtimeGeneration !== runtime.runtimeGeneration
+  );
 }
 
 function rpcId(kind: string, sessionId: string) {

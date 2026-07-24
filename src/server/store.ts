@@ -44,12 +44,7 @@ export interface StoredEnvironmentRuntime extends EnvironmentRuntimeRecord {
   version: number;
   desiredState: "running" | "paused" | "terminated";
   observedState:
-    | "pending"
-    | "provisioning"
-    | "running"
-    | "paused"
-    | "terminated"
-    | "failed";
+    "pending" | "provisioning" | "running" | "paused" | "terminated" | "failed";
   provisioningError?: string;
   lifecyclePolicyVersion: number;
   lastTurnCompletedAt?: Date;
@@ -81,12 +76,20 @@ export interface StoredSessionRuntime {
   reasoningEffort?: string;
   historyRevision: number;
   activeNativeTurnId?: string;
+  activeTurnAttemptId?: string;
+  activeTurnRuntimeGeneration?: number;
   pendingTurnRequestId?: string;
   pendingTurnClientMessageId?: string;
   pendingTurnStableInputId?: string;
   pendingTurnPhase?: TurnSubmissionPhase;
   pendingTurnNativeTurnId?: string;
   pendingTurnStartedAt?: Date;
+  pendingTurnAttemptId?: string;
+  pendingTurnRuntimeGeneration?: number;
+  interruptRequestedNativeTurnId?: string;
+  recoverySourceNativeTurnId?: string;
+  recoveryPromptVersion?: number;
+  recoveryAttemptCount: number;
   runtimeErrorCode?: string;
   version: number;
   sessionStatus: CodingSession["status"] | "provisioning";
@@ -217,12 +220,20 @@ interface SessionRuntimeRow extends QueryResultRow {
   reasoning_effort: string | null;
   history_revision: string | number;
   active_native_turn_id: string | null;
+  active_turn_attempt_id: string | null;
+  active_turn_runtime_generation: string | number | null;
   pending_turn_request_id: string | null;
   pending_turn_client_message_id: string | null;
   pending_turn_stable_input_id: string | null;
   pending_turn_phase: TurnSubmissionPhase | null;
   pending_turn_native_turn_id: string | null;
   pending_turn_started_at: Date | null;
+  pending_turn_attempt_id: string | null;
+  pending_turn_runtime_generation: string | number | null;
+  interrupt_requested_native_turn_id: string | null;
+  recovery_source_native_turn_id: string | null;
+  recovery_prompt_version: string | number | null;
+  recovery_attempt_count: string | number;
   runtime_error_code: string | null;
   version: string | number;
   status: string;
@@ -365,10 +376,7 @@ export class SandpiStore {
     return environmentFromRow(row);
   }
 
-  async createEnvironmentMetadata(input: {
-    userId: string;
-    name: string;
-  }) {
+  async createEnvironmentMetadata(input: { userId: string; name: string }) {
     const id = `env_${randomUUID()}`;
     const client = await this.pool.connect();
     try {
@@ -685,7 +693,10 @@ export class SandpiStore {
   }
 
   async prepareEnvironmentDeletion(userId: string, environmentId: string) {
-    const environment = await this.getManageableEnvironment(userId, environmentId);
+    const environment = await this.getManageableEnvironment(
+      userId,
+      environmentId,
+    );
     if (environment.status === "updating") {
       throw conflict(
         "environment_provisioning_in_progress",
@@ -784,14 +795,14 @@ export class SandpiStore {
     );
     return result.rows.map((row) => ({
       startedAt: toUnixTimestamp(row.paused_at),
-      ...(row.resumed_at
-        ? { endedAt: toUnixTimestamp(row.resumed_at) }
-        : {}),
+      ...(row.resumed_at ? { endedAt: toUnixTimestamp(row.resumed_at) } : {}),
       reason: row.reason,
     }));
   }
 
-  async environmentRuntime(environmentId: string): Promise<StoredEnvironmentRuntime> {
+  async environmentRuntime(
+    environmentId: string,
+  ): Promise<StoredEnvironmentRuntime> {
     const result = await this.pool.query<EnvironmentRuntimeRow>(
       `${ENVIRONMENT_RUNTIME_SELECT} WHERE runtime.environment_id = $1`,
       [environmentId],
@@ -1328,7 +1339,9 @@ export class SandpiStore {
           "The Environment runtime changed while its Workspace was being restored.",
         );
       }
-      const volumeResult = await client.query<{ workspace_volume_id: string | null }>(
+      const volumeResult = await client.query<{
+        workspace_volume_id: string | null;
+      }>(
         "SELECT workspace_volume_id FROM environments WHERE id = $1 FOR UPDATE",
         [environmentId],
       );
@@ -1652,18 +1665,33 @@ export class SandpiStore {
           await client.query(
             `UPDATE session_runtime runtime
              SET active_native_turn_id = $3,
+                 active_turn_attempt_id = $4::TEXT,
+                 active_turn_runtime_generation = $5::BIGINT,
                  pending_turn_phase = CASE
                    WHEN pending_turn_phase IS NULL THEN NULL ELSE 'accepted'
                  END,
                  pending_turn_native_turn_id = CASE
                    WHEN pending_turn_phase IS NULL THEN NULL ELSE $3
                  END,
+                 pending_turn_attempt_id = CASE
+                   WHEN pending_turn_phase IS NULL THEN NULL ELSE $4::TEXT
+                 END,
+                 pending_turn_runtime_generation = CASE
+                   WHEN pending_turn_phase IS NULL THEN NULL ELSE $5::BIGINT
+                 END,
                  version = version + 1
              FROM sessions session
              WHERE runtime.session_id = session.id
                AND session.environment_id = $1
-               AND runtime.native_session_id = $2`,
-            [environmentId, transition.nativeSessionId, transition.nativeTurnId],
+               AND runtime.native_session_id = $2
+               AND runtime.recovery_source_native_turn_id IS DISTINCT FROM $3`,
+            [
+              environmentId,
+              transition.nativeSessionId,
+              transition.nativeTurnId,
+              attemptId ?? null,
+              runtimeGeneration,
+            ],
           );
           await client.query(
             `UPDATE sessions session
@@ -1679,19 +1707,37 @@ export class SandpiStore {
         await client.query(
           `UPDATE session_runtime runtime
            SET active_native_turn_id = NULL,
+               active_turn_attempt_id = NULL,
+               active_turn_runtime_generation = NULL,
                pending_turn_request_id = NULL,
                pending_turn_client_message_id = NULL,
                pending_turn_stable_input_id = NULL,
                pending_turn_phase = NULL,
                pending_turn_native_turn_id = NULL,
                pending_turn_started_at = NULL,
+               pending_turn_attempt_id = NULL,
+               pending_turn_runtime_generation = NULL,
+               interrupt_requested_native_turn_id = NULL,
+               recovery_source_native_turn_id = NULL,
+               recovery_prompt_version = NULL,
+               recovery_attempt_count = 0,
+               runtime_error_code = CASE
+                 WHEN runtime_error_code LIKE 'automatic_turn_recovery_%'
+                   THEN NULL
+                 ELSE runtime_error_code
+               END,
                version = version + 1
            FROM sessions session
            WHERE runtime.session_id = session.id
              AND session.environment_id = $1
              AND runtime.native_session_id = $2
-             AND (runtime.active_native_turn_id IS NULL
-                  OR runtime.active_native_turn_id = $3)`,
+             AND (
+               runtime.active_native_turn_id = $3
+               OR (
+                 runtime.active_native_turn_id IS NULL
+                 AND runtime.recovery_source_native_turn_id IS NULL
+               )
+             )`,
           [environmentId, transition.nativeSessionId, transition.nativeTurnId],
         );
         await client.query(
@@ -1919,10 +1965,10 @@ export class SandpiStore {
         await client.query("ROLLBACK");
         return false;
       }
-      await client.query(
-        `UPDATE sessions SET status = $2 WHERE id = $1`,
-        [sessionId, options.status ?? "waiting"],
-      );
+      await client.query(`UPDATE sessions SET status = $2 WHERE id = $1`, [
+        sessionId,
+        options.status ?? "waiting",
+      ]);
       await client.query("COMMIT");
       return true;
     } catch (error) {
@@ -1951,6 +1997,8 @@ export class SandpiStore {
     clearPendingWhenNativeIdle?: boolean;
     clearPendingRequestId?: string;
     clearPendingStartedBefore?: Date;
+    clearRecoveryState?: boolean;
+    recoveryErrorCode?: string;
     requireUnarchived?: boolean;
   }) {
     const client = await this.pool.connect();
@@ -2027,8 +2075,7 @@ export class SandpiStore {
       const activeNativeTurnId = input.activeNativeTurnId ?? null;
       const pendingRecoveryEligible =
         (input.clearPendingRequestId !== undefined &&
-          projection.pending_turn_request_id ===
-            input.clearPendingRequestId) ||
+          projection.pending_turn_request_id === input.clearPendingRequestId) ||
         (input.clearPendingStartedBefore !== undefined &&
           projection.pending_turn_started_at !== null &&
           projection.pending_turn_started_at.getTime() <=
@@ -2038,31 +2085,58 @@ export class SandpiStore {
         activeNativeTurnId === null &&
         projection.pending_turn_phase !== null &&
         pendingRecoveryEligible;
-      if (clearPending) {
+      const clearRecovery =
+        input.clearRecoveryState === true && activeNativeTurnId === null;
+      const clearControlState = clearPending || clearRecovery;
+      if (clearControlState) {
         await client.query(
           `UPDATE session_runtime
            SET active_native_turn_id = NULL,
+               active_turn_attempt_id = NULL,
+               active_turn_runtime_generation = NULL,
                pending_turn_request_id = NULL,
                pending_turn_client_message_id = NULL,
                pending_turn_stable_input_id = NULL,
                pending_turn_phase = NULL,
                pending_turn_native_turn_id = NULL,
                pending_turn_started_at = NULL,
+               pending_turn_attempt_id = NULL,
+               pending_turn_runtime_generation = NULL,
+               interrupt_requested_native_turn_id = NULL,
+               recovery_source_native_turn_id = NULL,
+               recovery_prompt_version = NULL,
+               recovery_attempt_count = 0,
+               runtime_error_code = CASE
+                 WHEN $3::BOOLEAN THEN $2::TEXT
+                 ELSE runtime_error_code
+               END,
                version = version + 1
            WHERE session_id = $1`,
-          [input.sessionId],
+          [input.sessionId, input.recoveryErrorCode ?? null, clearRecovery],
         );
       } else if (projection.active_native_turn_id !== activeNativeTurnId) {
         await client.query(
           `UPDATE session_runtime
-           SET active_native_turn_id = $2, version = version + 1
+           SET active_native_turn_id = $2::TEXT,
+               active_turn_attempt_id = CASE
+                 WHEN $2::TEXT IS NULL THEN NULL ELSE $3::TEXT
+               END,
+               active_turn_runtime_generation = CASE
+                 WHEN $2::TEXT IS NULL THEN NULL ELSE $4::BIGINT
+               END,
+               version = version + 1
            WHERE session_id = $1`,
-          [input.sessionId, activeNativeTurnId],
+          [
+            input.sessionId,
+            activeNativeTurnId,
+            input.environmentAttemptId ?? null,
+            input.environmentRuntimeGeneration,
+          ],
         );
       }
       const status =
         activeNativeTurnId ||
-        (!clearPending && projection.pending_turn_phase)
+        (!clearControlState && projection.pending_turn_phase)
           ? "running"
           : "waiting";
       await client.query(
@@ -2227,6 +2301,13 @@ export class SandpiStore {
                  pending_turn_stable_input_id = $6,
                  pending_turn_phase = 'prepared',
                  pending_turn_started_at = NOW(),
+                 pending_turn_attempt_id = NULL,
+                 pending_turn_runtime_generation = NULL,
+                 interrupt_requested_native_turn_id = NULL,
+                 recovery_source_native_turn_id = NULL,
+                 recovery_prompt_version = NULL,
+                 recovery_attempt_count = 0,
+                 runtime_error_code = NULL,
                  version = version + 1
              FROM sessions session
              WHERE runtime.session_id = $1 AND session.id = runtime.session_id
@@ -2276,31 +2357,329 @@ export class SandpiStore {
     }
   }
 
-  async markTurnSubmitted(sessionId: string, requestId: string) {
-    await this.pool.query(
+  async markTurnSubmitted(
+    sessionId: string,
+    requestId: string,
+    attemptId: string | undefined,
+    runtimeGeneration: number,
+  ) {
+    const result = await this.pool.query(
       `UPDATE session_runtime
-       SET pending_turn_phase = 'submitted', version = version + 1
+       SET pending_turn_phase = 'submitted',
+           pending_turn_attempt_id = $3,
+           pending_turn_runtime_generation = $4,
+           version = version + 1
        WHERE session_id = $1 AND pending_turn_request_id = $2
-         AND pending_turn_phase = 'prepared'`,
-      [sessionId, requestId],
+         AND pending_turn_phase = 'prepared'
+         AND interrupt_requested_native_turn_id IS NULL`,
+      [sessionId, requestId, attemptId ?? null, runtimeGeneration],
     );
+    return Boolean(result.rowCount);
   }
 
   async markTurnAccepted(
     sessionId: string,
     requestId: string,
     nativeTurnId: string,
+    attemptId: string | undefined,
+    runtimeGeneration: number,
   ) {
     await this.pool.query(
       `UPDATE session_runtime
        SET pending_turn_phase = 'accepted',
            pending_turn_native_turn_id = $3,
-           active_native_turn_id = COALESCE(active_native_turn_id, $3),
+           pending_turn_attempt_id = $4,
+           pending_turn_runtime_generation = $5,
+           active_native_turn_id = $3,
+           active_turn_attempt_id = $4,
+           active_turn_runtime_generation = $5,
            version = version + 1
        WHERE session_id = $1 AND pending_turn_request_id = $2
          AND pending_turn_phase IN ('prepared', 'submitted', 'accepted')`,
-      [sessionId, requestId, nativeTurnId],
+      [
+        sessionId,
+        requestId,
+        nativeTurnId,
+        attemptId ?? null,
+        runtimeGeneration,
+      ],
     );
+  }
+
+  /**
+   * Atomically chooses and marks the native Turn that an interrupt request
+   * should target. The browser's Turn id is advisory because its native
+   * snapshot can legitimately lag a newer accepted Turn.
+   */
+  async requestTurnInterrupt(
+    sessionId: string,
+    preferredNativeTurnId?: string,
+  ) {
+    const result = await this.pool.query<{ native_turn_id: string }>(
+      `WITH interrupt_target AS (
+         SELECT runtime.session_id,
+                CASE
+                  WHEN $2::TEXT IS NOT NULL
+                    AND (
+                      runtime.pending_turn_native_turn_id = $2::TEXT
+                      OR runtime.active_native_turn_id = $2::TEXT
+                      OR runtime.recovery_source_native_turn_id = $2::TEXT
+                    )
+                    THEN $2::TEXT
+                  ELSE COALESCE(
+                    runtime.pending_turn_native_turn_id,
+                    runtime.active_native_turn_id,
+                    runtime.recovery_source_native_turn_id
+                  )
+                END AS native_turn_id
+         FROM session_runtime runtime
+         JOIN sessions session ON session.id = runtime.session_id
+         WHERE runtime.session_id = $1
+           AND session.archived = FALSE
+           AND session.status = 'running'
+         FOR UPDATE OF runtime
+       )
+       UPDATE session_runtime runtime
+       SET interrupt_requested_native_turn_id = target.native_turn_id,
+           version = version + 1
+       FROM interrupt_target target
+       WHERE runtime.session_id = target.session_id
+         AND target.native_turn_id IS NOT NULL
+       RETURNING runtime.interrupt_requested_native_turn_id AS native_turn_id`,
+      [sessionId, preferredNativeTurnId ?? null],
+    );
+    return result.rows[0]?.native_turn_id;
+  }
+
+  /**
+   * Atomically replaces one runtime-interrupted native Turn projection with a
+   * server-defined recovery Turn delivery. The original prompt is never copied
+   * into PostgreSQL; the recovery prompt is derived from its stored version.
+   */
+  async claimInterruptedTurnRecovery(input: {
+    sessionId: string;
+    nativeSessionId: string;
+    historyRevision: number;
+    runtimeVersion: number;
+    environmentId: string;
+    environmentSupervisorSessionId?: string;
+    environmentAttemptId?: string;
+    environmentRuntimeGeneration: number;
+    sourceNativeTurnId: string;
+    sourcePendingClientMessageId?: string;
+    submission: TurnSubmissionCoordinates;
+    promptVersion: number;
+  }) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const environment = await client.query(
+        `SELECT environment_id
+         FROM environment_runtime
+         WHERE environment_id = $1
+           AND supervisor_session_id IS NOT DISTINCT FROM $2
+           AND attempt_id IS NOT DISTINCT FROM $3
+           AND runtime_generation = $4
+           AND desired_state = 'running'
+           AND observed_state = 'running'
+         FOR SHARE`,
+        [
+          input.environmentId,
+          input.environmentSupervisorSessionId ?? null,
+          input.environmentAttemptId ?? null,
+          input.environmentRuntimeGeneration,
+        ],
+      );
+      if (!environment.rowCount) {
+        await client.query("ROLLBACK");
+        return false;
+      }
+      const claimed = await client.query(
+        `UPDATE session_runtime runtime
+         SET active_native_turn_id = NULL,
+             active_turn_attempt_id = NULL,
+             active_turn_runtime_generation = NULL,
+             pending_turn_request_id = $10,
+             pending_turn_client_message_id = $11,
+             pending_turn_stable_input_id = $12,
+             pending_turn_phase = 'prepared',
+             pending_turn_native_turn_id = NULL,
+             pending_turn_started_at = NOW(),
+             pending_turn_attempt_id = NULL,
+             pending_turn_runtime_generation = NULL,
+             interrupt_requested_native_turn_id = NULL,
+             recovery_source_native_turn_id = $8,
+             recovery_prompt_version = $13,
+             recovery_attempt_count = recovery_attempt_count + 1,
+             runtime_error_code = NULL,
+             version = version + 1
+         FROM sessions session
+         WHERE runtime.session_id = $5 AND session.id = runtime.session_id
+           AND runtime.native_session_id = $6
+           AND runtime.history_revision = $7
+           AND runtime.version = $9
+           AND session.environment_id = $1
+           AND session.archived = FALSE
+           AND session.status <> 'failed'
+           AND EXISTS (
+             SELECT 1
+             FROM environment_runtime environment
+             WHERE environment.environment_id = $1
+               AND environment.supervisor_session_id IS NOT DISTINCT FROM $2
+               AND environment.attempt_id IS NOT DISTINCT FROM $3
+               AND environment.runtime_generation = $4
+               AND environment.desired_state = 'running'
+               AND environment.observed_state = 'running'
+           )
+           AND runtime.interrupt_requested_native_turn_id IS DISTINCT FROM $8
+           AND runtime.recovery_source_native_turn_id IS NULL
+           AND runtime.recovery_attempt_count = 0
+           AND (
+             (
+               runtime.active_native_turn_id = $8
+               AND (
+                 runtime.active_turn_attempt_id IS DISTINCT FROM $3
+                 OR runtime.active_turn_runtime_generation IS DISTINCT FROM $4
+               )
+             )
+             OR
+             (
+               (
+                 runtime.pending_turn_native_turn_id = $8
+                 OR (
+                   $14::TEXT IS NOT NULL
+                   AND runtime.pending_turn_client_message_id = $14
+                 )
+               )
+               AND (
+                 runtime.pending_turn_attempt_id IS DISTINCT FROM $3
+                 OR runtime.pending_turn_runtime_generation IS DISTINCT FROM $4
+               )
+             )
+           )
+         RETURNING runtime.session_id`,
+        [
+          input.environmentId,
+          input.environmentSupervisorSessionId ?? null,
+          input.environmentAttemptId ?? null,
+          input.environmentRuntimeGeneration,
+          input.sessionId,
+          input.nativeSessionId,
+          input.historyRevision,
+          input.sourceNativeTurnId,
+          input.runtimeVersion,
+          input.submission.requestId,
+          input.submission.clientMessageId,
+          input.submission.stableInputId,
+          input.promptVersion,
+          input.sourcePendingClientMessageId ?? null,
+        ],
+      );
+      if (!claimed.rowCount) {
+        await client.query("ROLLBACK");
+        return false;
+      }
+      await client.query(
+        `UPDATE sessions SET status = 'running'
+         WHERE id = $1 AND environment_id = $2`,
+        [input.sessionId, input.environmentId],
+      );
+      await client.query("COMMIT");
+      return true;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * A recovery prompt is server-defined and may be redelivered only after the
+   * Supervisor epoch that received its ambiguous submission has disappeared.
+   */
+  async prepareInterruptedTurnRecoveryReplay(input: {
+    sessionId: string;
+    nativeSessionId: string;
+    runtimeVersion: number;
+    requestId: string;
+    environmentAttemptId?: string;
+    environmentRuntimeGeneration: number;
+  }) {
+    const result = await this.pool.query(
+      `UPDATE session_runtime
+       SET pending_turn_phase = 'prepared',
+           pending_turn_attempt_id = NULL,
+           pending_turn_runtime_generation = NULL,
+           version = version + 1
+       WHERE session_id = $1 AND native_session_id = $2 AND version = $3
+         AND pending_turn_request_id = $4
+         AND pending_turn_phase = 'submitted'
+         AND recovery_source_native_turn_id IS NOT NULL
+         AND (
+           pending_turn_attempt_id IS DISTINCT FROM $5
+           OR pending_turn_runtime_generation IS DISTINCT FROM $6
+         )
+       RETURNING session_id`,
+      [
+        input.sessionId,
+        input.nativeSessionId,
+        input.runtimeVersion,
+        input.requestId,
+        input.environmentAttemptId ?? null,
+        input.environmentRuntimeGeneration,
+      ],
+    );
+    return Boolean(result.rowCount);
+  }
+
+  async failInterruptedTurnRecovery(
+    sessionId: string,
+    requestId: string,
+    errorCode: string,
+  ) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const failed = await client.query(
+        `UPDATE session_runtime
+         SET active_native_turn_id = NULL,
+             active_turn_attempt_id = NULL,
+             active_turn_runtime_generation = NULL,
+             pending_turn_request_id = NULL,
+             pending_turn_client_message_id = NULL,
+             pending_turn_stable_input_id = NULL,
+             pending_turn_phase = NULL,
+             pending_turn_native_turn_id = NULL,
+             pending_turn_started_at = NULL,
+             pending_turn_attempt_id = NULL,
+             pending_turn_runtime_generation = NULL,
+             interrupt_requested_native_turn_id = NULL,
+             recovery_source_native_turn_id = NULL,
+             recovery_prompt_version = NULL,
+             recovery_attempt_count = 0,
+             runtime_error_code = $3,
+             version = version + 1
+         WHERE session_id = $1 AND pending_turn_request_id = $2
+           AND recovery_source_native_turn_id IS NOT NULL
+         RETURNING session_id`,
+        [sessionId, requestId, errorCode],
+      );
+      if (failed.rowCount) {
+        await client.query(
+          `UPDATE sessions SET status = 'waiting'
+           WHERE id = $1 AND status <> 'failed'`,
+          [sessionId],
+        );
+      }
+      await client.query("COMMIT");
+      return Boolean(failed.rowCount);
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async abandonTurn(sessionId: string, requestId: string) {
@@ -2315,7 +2694,15 @@ export class SandpiStore {
              pending_turn_phase = NULL,
              pending_turn_native_turn_id = NULL,
              pending_turn_started_at = NULL,
+             pending_turn_attempt_id = NULL,
+             pending_turn_runtime_generation = NULL,
              active_native_turn_id = NULL,
+             active_turn_attempt_id = NULL,
+             active_turn_runtime_generation = NULL,
+             interrupt_requested_native_turn_id = NULL,
+             recovery_source_native_turn_id = NULL,
+             recovery_prompt_version = NULL,
+             recovery_attempt_count = 0,
              version = version + 1
          WHERE session_id = $1 AND pending_turn_request_id = $2
          RETURNING session_id`,
@@ -2441,11 +2828,7 @@ export class SandpiStore {
          SET title = COALESCE($2, title), archived = TRUE,
              unread = COALESCE($3, unread)
          WHERE id = $1`,
-        [
-          sessionId,
-          changes.title ?? null,
-          changes.unread ?? null,
-        ],
+        [sessionId, changes.title ?? null, changes.unread ?? null],
       );
       await this.setSessionPin(client, userId, sessionId, changes.pinned);
       await client.query("COMMIT");
@@ -2523,7 +2906,6 @@ export class SandpiStore {
     );
     return this.getPreferences(userId);
   }
-
 }
 
 const ENVIRONMENT_SELECT = `
@@ -2626,7 +3008,8 @@ function environmentFromRow(row: EnvironmentRow): EnvironmentRecord {
       harness: row.harness,
       label: typeof metadata.label === "string" ? metadata.label : "Codex",
       status: metadata.status === "connected" ? "connected" : "not-connected",
-      account: typeof metadata.account === "string" ? metadata.account : undefined,
+      account:
+        typeof metadata.account === "string" ? metadata.account : undefined,
       lastVerified: parseUnixTimestamp(metadata.lastVerified),
     },
     networkPolicy: row.network_policy,
@@ -2693,7 +3076,10 @@ function sessionFromRow(row: SessionRow): CodingSession {
     id: row.id,
     environmentId: row.environment_id,
     owner:
-      row.owner_id && row.owner_email && row.owner_name && row.owner_avatar_initials
+      row.owner_id &&
+      row.owner_email &&
+      row.owner_name &&
+      row.owner_avatar_initials
         ? {
             id: row.owner_id,
             email: row.owner_email,
@@ -2733,12 +3119,30 @@ function sessionRuntimeFromRow(row: SessionRuntimeRow): StoredSessionRuntime {
     reasoningEffort: row.reasoning_effort ?? undefined,
     historyRevision: Number(row.history_revision),
     activeNativeTurnId: row.active_native_turn_id ?? undefined,
+    activeTurnAttemptId: row.active_turn_attempt_id ?? undefined,
+    activeTurnRuntimeGeneration:
+      row.active_turn_runtime_generation == null
+        ? undefined
+        : Number(row.active_turn_runtime_generation),
     pendingTurnRequestId: row.pending_turn_request_id ?? undefined,
     pendingTurnClientMessageId: row.pending_turn_client_message_id ?? undefined,
     pendingTurnStableInputId: row.pending_turn_stable_input_id ?? undefined,
     pendingTurnPhase: row.pending_turn_phase ?? undefined,
     pendingTurnNativeTurnId: row.pending_turn_native_turn_id ?? undefined,
     pendingTurnStartedAt: row.pending_turn_started_at ?? undefined,
+    pendingTurnAttemptId: row.pending_turn_attempt_id ?? undefined,
+    pendingTurnRuntimeGeneration:
+      row.pending_turn_runtime_generation == null
+        ? undefined
+        : Number(row.pending_turn_runtime_generation),
+    interruptRequestedNativeTurnId:
+      row.interrupt_requested_native_turn_id ?? undefined,
+    recoverySourceNativeTurnId: row.recovery_source_native_turn_id ?? undefined,
+    recoveryPromptVersion:
+      row.recovery_prompt_version == null
+        ? undefined
+        : Number(row.recovery_prompt_version),
+    recoveryAttemptCount: Number(row.recovery_attempt_count ?? 0),
     runtimeErrorCode: row.runtime_error_code ?? undefined,
     version: Number(row.version),
     sessionStatus:

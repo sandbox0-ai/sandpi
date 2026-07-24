@@ -804,7 +804,9 @@ function registerApiRoutes(
     "/api/v1/sessions/:sessionId/turns/interrupt",
     async (request, reply) => {
       const body = z
-        .object({ turnId: z.string().trim().min(1).max(200) })
+        .object({
+          turnId: z.string().trim().min(1).max(200).optional(),
+        })
         .parse(request.body);
       const result = await services.codex.interruptActiveTurn({
         userId: request.principal.userId,

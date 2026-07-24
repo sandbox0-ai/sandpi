@@ -11,7 +11,10 @@ interface QueryCall {
 }
 
 function transactionalStore(
-  responder: (sql: string, values?: unknown[]) => {
+  responder: (
+    sql: string,
+    values?: unknown[],
+  ) => {
     rows?: unknown[];
     rowCount?: number;
   } = () => ({ rows: [], rowCount: 1 }),
@@ -110,6 +113,27 @@ test("commits one shared decoder cursor and routes scalar turn state by native t
     assert.match(call.sql, /runtime\.native_session_id = \$2/);
     assert.doesNotMatch(call.sql, /workspace|volume|snapshot/i);
   }
+  const completedTurnUpdate = routedUpdates.find((call) =>
+    call.sql.includes("pending_turn_request_id = NULL"),
+  );
+  assert.match(
+    completedTurnUpdate?.sql ?? "",
+    /active_native_turn_id IS NULL[\s\S]+recovery_source_native_turn_id IS NULL/,
+    "a late source-Turn completion must not erase a claimed recovery Turn",
+  );
+  const startedTurnUpdate = routedUpdates.find((call) =>
+    call.sql.includes("active_native_turn_id = $3"),
+  );
+  assert.match(
+    startedTurnUpdate?.sql ?? "",
+    /recovery_source_native_turn_id IS DISTINCT FROM \$3/,
+    "a late source-Turn start must not replace a claimed recovery Turn",
+  );
+  assert.match(
+    startedTurnUpdate?.sql ?? "",
+    /active_turn_runtime_generation = \$5::BIGINT/,
+  );
+  assert.match(startedTurnUpdate?.sql ?? "", /ELSE \$5::BIGINT/);
   assert.equal(
     fixture.calls.some((call) => call.sql.includes("session_turn_checkpoints")),
     false,
@@ -248,7 +272,10 @@ test("schedules a newly ready Sandbox from its Environment idle timeout", async 
   assert.match(runtimeInsert.sql, /environment\.idle_pause_timeout_seconds/);
   assert.match(runtimeInsert.sql, /idle_pause_timeout_seconds = 0 THEN NULL/);
   assert.match(runtimeInsert.sql, /INTERVAL '1 second'/);
-  assert.match(runtimeInsert.sql, /idle_pause_due_at = EXCLUDED\.idle_pause_due_at/);
+  assert.match(
+    runtimeInsert.sql,
+    /idle_pause_due_at = EXCLUDED\.idle_pause_due_at/,
+  );
 });
 
 test("records successful runtime access without promoting the Codex epoch", async () => {
@@ -284,9 +311,7 @@ test("records successful runtime access without promoting the Codex epoch", asyn
 
   await fixture.store.recordEnvironmentRuntimeAccess("environment-one");
 
-  const update = fixture.calls.find((call) =>
-    call.sql.includes("NOW() + ("),
-  );
+  const update = fixture.calls.find((call) => call.sql.includes("NOW() + ("));
   assert.ok(update);
   assert.match(update.sql, /desired_state = 'running'/);
   assert.match(update.sql, /observed_state = 'running'/);
@@ -320,7 +345,7 @@ test("a live connection heartbeat extends only an already-running Environment", 
   assert.deepEqual(update.values, ["environment-one"]);
 });
 
-  test("runtime access uses the Environment lifecycle advisory key in shared mode", async () => {
+test("runtime access uses the Environment lifecycle advisory key in shared mode", async () => {
   const fixture = transactionalStore((sql) => {
     if (sql.includes("pg_try_advisory_lock_shared")) {
       return { rows: [{ acquired: true }], rowCount: 1 };
@@ -442,7 +467,10 @@ test("grants a fresh idle window after Sandbox0 auto-resumes an Environment", as
     call.sql.includes("idle_pause_due_at = CASE"),
   );
   assert.ok(update);
-  assert.match(update.sql, /runtime\.observed_state <> 'running' OR \$5::BOOLEAN/);
+  assert.match(
+    update.sql,
+    /runtime\.observed_state <> 'running' OR \$5::BOOLEAN/,
+  );
   assert.match(update.sql, /GREATEST\(/);
   assert.match(update.sql, /idle_pause_timeout_seconds = 0 THEN NULL/);
   assert.deepEqual(update.values, [
@@ -520,11 +548,7 @@ test("projects Sandpi idle pauses that overlap a metrics window", async () => {
   assert.ok(query);
   assert.match(query.sql, /paused_at < \$3/);
   assert.match(query.sql, /resumed_at IS NULL OR resumed_at > \$2/);
-  assert.deepEqual(query.values, [
-    "environment-one",
-    startedAt,
-    endedAt,
-  ]);
+  assert.deepEqual(query.values, ["environment-one", startedAt, endedAt]);
 });
 
 test("native snapshot reconciliation uses a runtime-version compare-and-swap", async () => {
@@ -593,7 +617,12 @@ test("native snapshot reconciliation uses a runtime-version compare-and-swap", a
     call.sql.includes("SET active_native_turn_id"),
   );
   assert.ok(runtimeUpdate);
-  assert.deepEqual(runtimeUpdate.values, ["session-one", null]);
+  assert.deepEqual(runtimeUpdate.values, [
+    "session-one",
+    null,
+    "attempt-one",
+    3,
+  ]);
   const statusUpdate = fixture.calls.find((call) =>
     call.sql.includes("status IS DISTINCT FROM"),
   );
@@ -623,7 +652,9 @@ test("stale native snapshot reconciliation leaves Session state untouched", asyn
     false,
   );
   assert.equal(
-    fixture.calls.some((call) => call.sql.includes("SET active_native_turn_id")),
+    fixture.calls.some((call) =>
+      call.sql.includes("SET active_native_turn_id"),
+    ),
     false,
   );
   assert.equal(
@@ -681,7 +712,11 @@ test("background native reconciliation clears an idle stale Turn admission", asy
   assert.match(runtimeUpdate.sql, /pending_turn_phase = NULL/);
   assert.match(runtimeUpdate.sql, /pending_turn_native_turn_id = NULL/);
   assert.match(runtimeUpdate.sql, /pending_turn_started_at = NULL/);
-  assert.deepEqual(runtimeUpdate.values, ["session-one"]);
+  assert.match(
+    runtimeUpdate.sql,
+    /WHEN \$3::BOOLEAN THEN \$2[\s\S]+ELSE runtime_error_code/,
+  );
+  assert.deepEqual(runtimeUpdate.values, ["session-one", null, false]);
   const sessionLock = fixture.calls.find((call) =>
     call.sql.includes("SELECT id FROM sessions"),
   );
@@ -742,11 +777,72 @@ test("background native reconciliation preserves pending state for an active Tur
   const activeUpdate = fixture.calls.find((call) =>
     call.sql.includes("SET active_native_turn_id = $2"),
   );
-  assert.deepEqual(activeUpdate?.values, ["session-one", "turn-active"]);
+  assert.match(activeUpdate?.sql ?? "", /active_native_turn_id = \$2::TEXT/);
+  assert.match(activeUpdate?.sql ?? "", /ELSE \$3::TEXT/);
+  assert.match(activeUpdate?.sql ?? "", /ELSE \$4::BIGINT/);
+  assert.deepEqual(activeUpdate?.values, [
+    "session-one",
+    "turn-active",
+    "attempt-one",
+    3,
+  ]);
   const statusUpdate = fixture.calls.find((call) =>
     call.sql.includes("status IS DISTINCT FROM"),
   );
   assert.deepEqual(statusUpdate?.values, ["session-one", "running"]);
+});
+
+test("terminal recovery reconciliation clears only recovery-owned error state", async () => {
+  const fixture = transactionalStore((sql) => {
+    if (sql.includes("SELECT environment_id")) {
+      return { rows: [{ environment_id: "environment-one" }], rowCount: 1 };
+    }
+    if (sql.includes("SELECT runtime.active_native_turn_id")) {
+      return {
+        rows: [
+          {
+            active_native_turn_id: null,
+            pending_turn_request_id: "request-recovery",
+            pending_turn_phase: "accepted",
+            pending_turn_started_at: new Date("2026-07-15T00:00:00.000Z"),
+          },
+        ],
+        rowCount: 1,
+      };
+    }
+    return { rows: [], rowCount: 1 };
+  });
+
+  assert.equal(
+    await fixture.store.reconcileNativeSessionState({
+      sessionId: "session-one",
+      nativeSessionId: "thread-one",
+      historyRevision: 7,
+      runtimeVersion: 11,
+      environmentId: "environment-one",
+      environmentSupervisorSessionId: "supervisor-one",
+      environmentAttemptId: "attempt-one",
+      environmentRuntimeGeneration: 3,
+      clearRecoveryState: true,
+      recoveryErrorCode: "automatic_turn_recovery_exhausted",
+      requireUnarchived: true,
+    }),
+    true,
+  );
+
+  const runtimeUpdate = fixture.calls.find(
+    (call) =>
+      call.sql.includes("UPDATE session_runtime") &&
+      call.sql.includes("recovery_source_native_turn_id = NULL"),
+  );
+  assert.ok(runtimeUpdate);
+  assert.deepEqual(runtimeUpdate.values, [
+    "session-one",
+    "automatic_turn_recovery_exhausted",
+    true,
+  ]);
+  assert.match(runtimeUpdate.sql, /interrupt_requested_native_turn_id = NULL/);
+  assert.match(runtimeUpdate.sql, /recovery_attempt_count = 0/);
 });
 
 test("background native reconciliation cannot clear a fresh pending Turn", async () => {
@@ -994,11 +1090,7 @@ test("archives an idle Session only after locking its control projection", async
     call.sql.includes("archived = TRUE"),
   );
   assert.ok(archive);
-  assert.deepEqual(archive.values, [
-    "session-one",
-    null,
-    false,
-  ]);
+  assert.deepEqual(archive.values, ["session-one", null, false]);
   assert.equal(fixture.calls.at(-1)?.sql, "COMMIT");
 });
 
@@ -1073,6 +1165,219 @@ test("Turn admission takes the Environment lifecycle lock before becoming pendin
   );
 });
 
+test("Turn delivery records the Sandbox runtime epoch that received it", async () => {
+  const fixture = transactionalStore(() => ({ rows: [], rowCount: 1 }));
+
+  assert.equal(
+    await fixture.store.markTurnSubmitted(
+      "session-one",
+      "request-one",
+      "attempt-one",
+      3,
+    ),
+    true,
+  );
+  await fixture.store.markTurnAccepted(
+    "session-one",
+    "request-one",
+    "turn-one",
+    "attempt-one",
+    3,
+  );
+
+  const submitted = fixture.calls[0];
+  assert.match(submitted?.sql ?? "", /pending_turn_attempt_id = \$3/);
+  assert.match(submitted?.sql ?? "", /pending_turn_runtime_generation = \$4/);
+  assert.match(
+    submitted?.sql ?? "",
+    /interrupt_requested_native_turn_id IS NULL/,
+  );
+  assert.deepEqual(submitted?.values, [
+    "session-one",
+    "request-one",
+    "attempt-one",
+    3,
+  ]);
+
+  const accepted = fixture.calls[1];
+  assert.match(accepted?.sql ?? "", /active_native_turn_id = \$3/);
+  assert.doesNotMatch(accepted?.sql ?? "", /active_native_turn_id = COALESCE/);
+  assert.match(accepted?.sql ?? "", /active_turn_attempt_id = \$4/);
+  assert.match(accepted?.sql ?? "", /active_turn_runtime_generation = \$5/);
+  assert.deepEqual(accepted?.values, [
+    "session-one",
+    "request-one",
+    "turn-one",
+    "attempt-one",
+    3,
+  ]);
+});
+
+test("claims one interrupted Turn recovery behind Environment and Session CAS fences", async () => {
+  const fixture = transactionalStore((sql) => {
+    if (sql.includes("FROM environment_runtime")) {
+      return {
+        rows: [{ environment_id: "environment-one" }],
+        rowCount: 1,
+      };
+    }
+    if (
+      sql.includes("UPDATE session_runtime runtime") &&
+      sql.includes("recovery_source_native_turn_id")
+    ) {
+      return { rows: [{ session_id: "session-one" }], rowCount: 1 };
+    }
+    return { rows: [], rowCount: 1 };
+  });
+
+  assert.equal(
+    await fixture.store.claimInterruptedTurnRecovery({
+      sessionId: "session-one",
+      nativeSessionId: "thread-one",
+      historyRevision: 7,
+      runtimeVersion: 11,
+      environmentId: "environment-one",
+      environmentSupervisorSessionId: "supervisor-one",
+      environmentAttemptId: "attempt-current",
+      environmentRuntimeGeneration: 3,
+      sourceNativeTurnId: "turn-interrupted",
+      sourcePendingClientMessageId: "message-original",
+      submission: {
+        requestId: "request-recovery",
+        clientMessageId: "sandpi-runtime-recovery:session-one:test",
+        stableInputId: "input-recovery",
+      },
+      promptVersion: 1,
+    }),
+    true,
+  );
+
+  const environmentRead = fixture.calls.find((call) =>
+    call.sql.includes("FROM environment_runtime"),
+  );
+  assert.match(environmentRead?.sql ?? "", /FOR SHARE/);
+  assert.match(
+    environmentRead?.sql ?? "",
+    /attempt_id IS NOT DISTINCT FROM \$3/,
+  );
+  assert.deepEqual(environmentRead?.values, [
+    "environment-one",
+    "supervisor-one",
+    "attempt-current",
+    3,
+  ]);
+
+  const claim = fixture.calls.find(
+    (call) =>
+      call.sql.includes("UPDATE session_runtime runtime") &&
+      call.sql.includes("recovery_source_native_turn_id"),
+  );
+  assert.ok(claim);
+  assert.match(claim.sql, /runtime\.history_revision = \$7/);
+  assert.match(claim.sql, /runtime\.version = \$9/);
+  assert.match(
+    claim.sql,
+    /runtime\.interrupt_requested_native_turn_id IS DISTINCT FROM \$8/,
+  );
+  assert.match(claim.sql, /runtime\.recovery_attempt_count = 0/);
+  assert.match(
+    claim.sql,
+    /runtime\.active_turn_attempt_id IS DISTINCT FROM \$3/,
+  );
+  assert.match(
+    claim.sql,
+    /runtime\.pending_turn_runtime_generation IS DISTINCT FROM \$4/,
+  );
+  assert.match(
+    claim.sql,
+    /environment\.supervisor_session_id IS NOT DISTINCT FROM \$2/,
+  );
+  assert.deepEqual(claim.values, [
+    "environment-one",
+    "supervisor-one",
+    "attempt-current",
+    3,
+    "session-one",
+    "thread-one",
+    7,
+    "turn-interrupted",
+    11,
+    "request-recovery",
+    "sandpi-runtime-recovery:session-one:test",
+    "input-recovery",
+    1,
+    "message-original",
+  ]);
+  assert.equal(
+    claim.values?.some(
+      (value) =>
+        typeof value === "string" &&
+        value.includes("Inspect the persisted conversation"),
+    ),
+    false,
+    "PostgreSQL must not receive the recovery prompt",
+  );
+  assert.equal(fixture.calls.at(-1)?.sql, "COMMIT");
+});
+
+test("an interrupt target and recovery replay are both CAS guarded", async () => {
+  const fixture = transactionalStore((sql) => ({
+    rows: sql.includes("RETURNING")
+      ? [{ native_turn_id: "turn-one", session_id: "session-one" }]
+      : [],
+    rowCount: 1,
+  }));
+
+  assert.equal(
+    await fixture.store.requestTurnInterrupt("session-one", "turn-one"),
+    "turn-one",
+  );
+  assert.equal(
+    await fixture.store.prepareInterruptedTurnRecoveryReplay({
+      sessionId: "session-one",
+      nativeSessionId: "thread-one",
+      runtimeVersion: 12,
+      requestId: "request-recovery",
+      environmentAttemptId: "attempt-current",
+      environmentRuntimeGeneration: 4,
+    }),
+    true,
+  );
+
+  const interrupt = fixture.calls[0];
+  assert.match(
+    interrupt?.sql ?? "",
+    /interrupt_requested_native_turn_id = target\.native_turn_id/,
+  );
+  assert.match(interrupt?.sql ?? "", /session\.status = 'running'/);
+  assert.match(
+    interrupt?.sql ?? "",
+    /runtime\.pending_turn_native_turn_id = \$2::TEXT/,
+  );
+  assert.match(interrupt?.sql ?? "", /FOR UPDATE OF runtime/);
+  assert.deepEqual(interrupt?.values, ["session-one", "turn-one"]);
+
+  const replay = fixture.calls[1];
+  assert.match(replay?.sql ?? "", /pending_turn_phase = 'submitted'/);
+  assert.match(replay?.sql ?? "", /recovery_source_native_turn_id IS NOT NULL/);
+  assert.match(
+    replay?.sql ?? "",
+    /pending_turn_attempt_id IS DISTINCT FROM \$5/,
+  );
+  assert.match(
+    replay?.sql ?? "",
+    /pending_turn_runtime_generation IS DISTINCT FROM \$6/,
+  );
+  assert.deepEqual(replay?.values, [
+    "session-one",
+    "thread-one",
+    12,
+    "request-recovery",
+    "attempt-current",
+    4,
+  ]);
+});
+
 test("Turn admission rejects an archived Session before becoming pending", async () => {
   const fixture = transactionalStore((sql) => {
     if (sql.includes("SELECT environment_id FROM sessions")) {
@@ -1091,16 +1396,11 @@ test("Turn admission rejects an archived Session before becoming pending", async
   });
 
   await assert.rejects(
-    fixture.store.beginSessionTurn(
-      "user-one",
-      "session-one",
-      undefined,
-      {
-        requestId: "request-one",
-        clientMessageId: "message-one",
-        stableInputId: "input-one",
-      },
-    ),
+    fixture.store.beginSessionTurn("user-one", "session-one", undefined, {
+      requestId: "request-one",
+      clientMessageId: "message-one",
+      stableInputId: "input-one",
+    }),
     (error: unknown) =>
       error instanceof Error &&
       "code" in error &&
@@ -1132,10 +1432,7 @@ test("abandoning an obsolete Turn request does not overwrite Session status", as
   );
   assert.ok(runtimeUpdate);
   assert.match(runtimeUpdate.sql, /RETURNING session_id/);
-  assert.deepEqual(runtimeUpdate.values, [
-    "session-one",
-    "request-obsolete",
-  ]);
+  assert.deepEqual(runtimeUpdate.values, ["session-one", "request-obsolete"]);
 });
 
 test("Environment deletion marks the runtime terminated and retains cleanup coordinates", async () => {

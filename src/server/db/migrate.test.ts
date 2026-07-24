@@ -70,6 +70,7 @@ test("migration history contains every durable Sandpi boundary", async () => {
       "0043_environment_workspace_backups",
       "0044_user_owned_resources",
       "0045_codex_native_mcp",
+      "0046_codex_runtime_turn_recovery",
     ],
   );
 
@@ -328,6 +329,35 @@ test("migration history contains every durable Sandpi boundary", async () => {
   assert.match(
     runtimeAuthorityCommentsSql,
     /generation whose ephemeral credential was materialized/,
+  );
+
+  const runtimeTurnRecoverySql = migrations[45]?.sql ?? "";
+  assert.match(runtimeTurnRecoverySql, /active_turn_attempt_id TEXT/);
+  assert.match(
+    runtimeTurnRecoverySql,
+    /active_turn_runtime_generation BIGINT/,
+  );
+  assert.match(runtimeTurnRecoverySql, /pending_turn_attempt_id TEXT/);
+  assert.match(
+    runtimeTurnRecoverySql,
+    /pending_turn_runtime_generation BIGINT/,
+  );
+  assert.match(
+    runtimeTurnRecoverySql,
+    /interrupt_requested_native_turn_id TEXT/,
+  );
+  assert.match(
+    runtimeTurnRecoverySql,
+    /recovery_source_native_turn_id TEXT/,
+  );
+  assert.match(runtimeTurnRecoverySql, /recovery_prompt_version INTEGER/);
+  assert.match(
+    runtimeTurnRecoverySql,
+    /recovery_attempt_count INTEGER NOT NULL DEFAULT 0/,
+  );
+  assert.doesNotMatch(
+    runtimeTurnRecoverySql,
+    /prompt\s+(TEXT|JSONB)|message\s+(TEXT|JSONB)|input\s+JSONB|payload\s+JSONB/i,
   );
 
   const environmentNetworkPolicySql = migrations[26]?.sql ?? "";

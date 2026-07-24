@@ -68,15 +68,21 @@ Web today; iOS / Android / HarmonyOS later
   Thread lazily only when the Session starts or interrupts a Turn. Delayed
   best-effort repair considers only non-archived Sessions whose scalar control
   state is exceptionally still running, active or stale-pending. That repair
-  uses a metadata-only native read, never loads replies, and gives fresh pending
-  Turns a distributed grace. Repair is abortable, retries transient failures
-  with capped backoff, and slowly rechecks exceptional active state. Request
-  submission is serialized with Environment lifecycle transitions, but response
-  waiting is non-blocking and cannot wake an Environment that paused afterward.
-  A Session can be archived only once its control projection is idle, so hidden
-  Sessions neither receive background reads nor pin Environment idle pause.
-  Startup recovery is likewise limited to visible active or pending Session
-  control state; ordinary waiting and archived Sessions remain lazy.
+  loads full native Turns only on that exceptional path, gives fresh pending
+  Turns a distributed grace, and uses the recorded runtime epoch to distinguish
+  a replaced-Sandbox interruption from a user interrupt. For the former, Sandpi
+  claims at most one visible Recovery Turn on the same native Thread. The
+  versioned instruction makes Codex inspect persisted conversation, Workspace,
+  Git and external state before continuing; Sandpi never replays the original
+  prompt or stores either prompt in PostgreSQL. Repair is abortable, retries
+  transient failures with capped backoff, and slowly rechecks exceptional active
+  state. Request submission is serialized with Environment lifecycle
+  transitions, but response waiting is non-blocking and cannot wake an
+  Environment that paused afterward. A Session can be archived only once its
+  control projection is idle, so hidden Sessions neither receive background
+  reads nor pin Environment idle pause. Startup recovery is likewise limited to
+  visible active or pending Session control state; ordinary waiting and archived
+  Sessions remain lazy.
 - **Native harness boundary:** shared code owns Sandbox lifecycle, durable
   transport, files, terminal and metrics. Each harness owns its native Session
   Activity, message/tool rendering, approvals, slash commands and model list;
@@ -355,6 +361,9 @@ remains available when required.
 Sandpi does not maintain an MCP catalog, copy definitions into PostgreSQL,
 store MCP API keys or OAuth tokens, or apply a separate MCP tool policy.
 Authentication and tool behavior remain native to Codex and the MCP provider.
+Sandpi starts Environment Codex runtimes with Apps and plugin discovery
+disabled: direct native Skills and MCP definitions are supported, while the
+host-only plugin install approval flow is intentionally unavailable.
 For a remote Environment, Sandpi publishes a constrained, rate-limited
 Sandbox0 callback route so the browser can return to Codex's listener. The
 callback cannot auto-resume a paused Environment and no OAuth flow or token is
@@ -561,9 +570,11 @@ Sandbox0 implementation details.
   deleted and conflicted Git state across optional root or nested repositories.
   Workspace events refresh clean files automatically and turn external changes
   to dirty files into an explicit compare/reload/overwrite decision.
-- The OSS server currently expects one active server replica. PostgreSQL and
-  Supervisor replay make process restart recoverable, but multi-replica worker
-  leadership is not yet part of the supported deployment contract.
+- The OSS server currently expects one active server replica. PostgreSQL,
+  Supervisor replay and the fenced Recovery Turn claim make both Sandpi process
+  restart and interrupted Sandbox runtime continuation recoverable, but
+  multi-replica worker leadership is not yet part of the supported deployment
+  contract.
 - Sandpi has no local Plan, quota or billing projection. Provider usage remains
   a separate live, Environment-scoped projection.
 

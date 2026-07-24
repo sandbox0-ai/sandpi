@@ -1023,6 +1023,30 @@ pre,
   margin-bottom: 32px;
 }
 
+.codex-runtime-recovery-notice {
+  display: flex;
+  width: fit-content;
+  max-width: calc(100% - 80px);
+  align-items: center;
+  gap: 7px;
+  margin: -4px auto 28px;
+  padding: 5px 9px;
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--ink-faint);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.codex-runtime-recovery-notice > span {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--blue);
+}
+
 .message-user .message-body {
   grid-column: 2;
   width: fit-content;
@@ -3019,8 +3043,11 @@ code.codex-compact-activity-subject {
 }
 
 .send-button {
+  box-sizing: border-box;
+  flex: 0 0 30px;
   width: 30px;
   height: 30px;
+  padding: 0;
   border-radius: 8px;
   background: var(--ink);
   color: white;
@@ -3028,10 +3055,6 @@ code.codex-compact-activity-subject {
 
 .send-button:hover:not(:disabled) {
   background: #383733;
-}
-
-.send-button.is-running {
-  border-radius: 50%;
 }
 
 .send-button.is-running .activity-spinner {
