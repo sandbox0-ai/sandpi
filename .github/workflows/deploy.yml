@@ -27,7 +27,7 @@ jobs:
       - run: npm test
       - run: npm run typecheck
       - run: npm run build
-      - uses: azure/setup-kubectl@v4
+      - uses: azure/setup-kubectl@v5.1.0
         with:
           version: v1.35.1
       - name: Validate Kubernetes manifests
@@ -130,7 +130,7 @@ jobs:
             .
           docker push "${IMAGE}"
       - name: Set up kubectl
-        uses: azure/setup-kubectl@v4
+        uses: azure/setup-kubectl@v5.1.0
         with:
           version: v1.35.1
       - name: Configure namespace-scoped kubeconfig
@@ -141,8 +141,8 @@ jobs:
           chmod 600 "${kubeconfig_path}"
           echo "KUBECONFIG=${kubeconfig_path}" >> "${GITHUB_ENV}"
           export KUBECONFIG="${kubeconfig_path}"
-          kubectl auth can-i patch secret/sandpi-runtime --namespace sandpi | grep -Fx true
-          kubectl auth can-i patch secret/sandpi-postgres --namespace sandpi | grep -Fx true
+          kubectl auth can-i patch secret/sandpi-runtime --namespace sandpi | grep -Fx yes
+          kubectl auth can-i patch secret/sandpi-postgres --namespace sandpi | grep -Fx yes
           if kubectl auth can-i create namespaces --quiet; then
             echo "The Sandpi deployer must not have cluster-scoped namespace permissions."
             exit 1

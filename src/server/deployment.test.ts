@@ -2,11 +2,15 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-async function deploymentFile(relativePath: string): Promise<string> {
+async function repositoryFile(relativePath: string): Promise<string> {
   return readFile(
-    new URL(`../../deploy/kubernetes/${relativePath}`, import.meta.url),
+    new URL(`../../${relativePath}`, import.meta.url),
     "utf8",
   );
+}
+
+function deploymentFile(relativePath: string): Promise<string> {
+  return repositoryFile(`deploy/kubernetes/${relativePath}`);
 }
 
 test("the production workload keeps one hardened Sandpi worker", async () => {
@@ -60,4 +64,18 @@ test("the CI identity cannot manage cluster-scoped or unrelated secrets", async 
   assert.doesNotMatch(bootstrap, /kind: ClusterRole/);
   assert.doesNotMatch(bootstrap, /resources:\n\s+- namespaces/);
   assert.doesNotMatch(bootstrap, /\n\s+- delete\n/);
+});
+
+test("the deploy workflow checks kubectl's native authorization result", async () => {
+  const workflow = await repositoryFile(".github/workflows/deploy.yml");
+
+  assert.match(
+    workflow,
+    /can-i patch secret\/sandpi-runtime[\s\S]*?\| grep -Fx yes/,
+  );
+  assert.match(
+    workflow,
+    /can-i patch secret\/sandpi-postgres[\s\S]*?\| grep -Fx yes/,
+  );
+  assert.doesNotMatch(workflow, /can-i .*\| grep -Fx true/);
 });
