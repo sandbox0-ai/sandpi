@@ -13,6 +13,11 @@ Sandpi is licensed under Apache-2.0. Sandpi Cloud composes this public server
 with hosted identity, quota and commercial services instead of maintaining a
 separate product implementation.
 
+The hosted `sandpi.ai` deployment is built and rolled out to DigitalOcean
+Kubernetes by GitHub Actions. Its namespace-scoped deployment, retained
+PostgreSQL volume and ingress contract are documented in
+[`deploy/kubernetes`](deploy/kubernetes/README.md).
+
 ## Status
 
 This repository contains the runnable open-source Web application and Sandpi
