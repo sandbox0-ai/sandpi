@@ -33,6 +33,10 @@ test("PostgreSQL uses retained DigitalOcean block storage", async () => {
 
   assert.match(manifest, /kind: StatefulSet/);
   assert.match(manifest, /replicas: 1/);
+  assert.match(
+    manifest,
+    /requests:\n              cpu: 50m\n              memory: 256Mi/,
+  );
   assert.match(manifest, /storageClassName: do-block-storage-retain/);
   assert.match(manifest, /storage: 10Gi/);
   assert.match(manifest, /name: sandpi-postgres/);
