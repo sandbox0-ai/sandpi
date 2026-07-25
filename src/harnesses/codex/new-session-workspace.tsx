@@ -9,7 +9,7 @@ import {
   LoaderCircle,
   Menu,
   PanelLeftOpen,
-  Settings2,
+  PanelRight,
   Sparkles,
   SquareTerminal,
   X,
@@ -74,10 +74,11 @@ interface NewSessionWorkspaceProps {
   canManageEnvironment: boolean;
   onEnvironmentChange: (environment: Environment) => void;
   onCreated: (session: CodexSession) => void;
-  onOpenSettings: () => void;
   onOpenAgentHarnessSettings: () => void;
   onOpenEnvironmentSettings: (tab: EnvironmentSettingsTab) => void;
   onToggleSidebar: () => void;
+  inspectorOpen: boolean;
+  onToggleInspector: () => void;
   terminalOpen: boolean;
   onToggleTerminal: () => void;
 }
@@ -96,10 +97,11 @@ export function CodexNewSessionWorkspace({
   canManageEnvironment,
   onEnvironmentChange,
   onCreated,
-  onOpenSettings,
   onOpenAgentHarnessSettings,
   onOpenEnvironmentSettings,
   onToggleSidebar,
+  inspectorOpen,
+  onToggleInspector,
   terminalOpen,
   onToggleTerminal,
 }: NewSessionWorkspaceProps) {
@@ -564,16 +566,17 @@ export function CodexNewSessionWorkspace({
           >
             <SquareTerminal size={17} aria-hidden="true" />
           </button>
-          {canManageEnvironment ? (
-            <button
-              type="button"
-              className={styles.settingsButton}
-              aria-label={ui.environmentSettings(environment.name)}
-              onClick={onOpenSettings}
-            >
-              <Settings2 size={17} aria-hidden="true" />
-            </button>
-          ) : null}
+          <button
+            type="button"
+            className={`${styles.inspectorButton} ${
+              inspectorOpen ? styles.active : ""
+            }`}
+            aria-label={inspectorOpen ? ui.closeInspector : ui.openInspector}
+            aria-pressed={inspectorOpen}
+            onClick={onToggleInspector}
+          >
+            <PanelRight size={18} aria-hidden="true" />
+          </button>
         </div>
       </header>
 

@@ -76,7 +76,7 @@
 .desktopExpandButton,
 .mobileMenuButton,
 .terminalButton,
-.settingsButton {
+.inspectorButton {
   display: inline-flex;
   width: 32px;
   height: 32px;
@@ -106,12 +106,13 @@
 .desktopExpandButton:hover,
 .mobileMenuButton:hover,
 .terminalButton:hover:not(:disabled),
-.settingsButton:hover {
+.inspectorButton:hover {
   background: var(--hover);
   color: var(--ink);
 }
 
-.terminalButton.active {
+.terminalButton.active,
+.inspectorButton.active {
   background: var(--selected);
   color: var(--ink);
 }

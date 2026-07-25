@@ -13,10 +13,11 @@ interface NewSessionWorkspaceProps {
   canManageEnvironment: boolean;
   onEnvironmentChange: (environment: Environment) => void;
   onCreated: (session: CodingSession) => void;
-  onOpenSettings: () => void;
   onOpenAgentHarnessSettings: () => void;
   onOpenEnvironmentSettings: (tab: EnvironmentSettingsTab) => void;
   onToggleSidebar: () => void;
+  inspectorOpen: boolean;
+  onToggleInspector: () => void;
   terminalOpen: boolean;
   onToggleTerminal: () => void;
 }

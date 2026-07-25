@@ -300,6 +300,12 @@ the native text input, not a filesystem-shaped app/plugin `mention`. Future
 coding-agent harnesses reuse the same Workspace search contract and own their
 corresponding visible composer and native input mapping.
 
+Their page headers also share the Environment-owned Terminal and Inspector
+operations. New Session can inspect Files and Metrics without creating a native
+Thread; the Activity tab is added only when a selected Session supplies its
+harness-owned renderer. Environment settings remain a sidebar management
+action and do not replace these Workspace operations.
+
 ## Codex slash command boundary
 
 Slash completion is part of the Codex harness adapter, not the shared

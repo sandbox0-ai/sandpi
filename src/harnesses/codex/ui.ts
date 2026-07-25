@@ -311,8 +311,9 @@ const copy = {
       environmentFailed: "Environment provisioning failed",
       retryEnvironment: "Retry",
       retryingEnvironment: "Retrying…",
-      environmentSettings: (name: string) => `${name} settings`,
       terminal: "Terminal",
+      closeInspector: "Close inspector",
+      openInspector: "Open inspector",
       question: (agent: string) => `What should ${agent} work on?`,
       introduction: (environment: string) =>
         `The first instruction starts a new Codex thread in ${environment}'s shared Sandbox and Workspace.`,
@@ -647,8 +648,9 @@ const copy = {
       environmentFailed: "环境创建失败",
       retryEnvironment: "重试",
       retryingEnvironment: "正在重试…",
-      environmentSettings: (name: string) => `${name} 设置`,
       terminal: "终端",
+      closeInspector: "关闭检查器",
+      openInspector: "打开检查器",
       question: (agent: string) => `希望 ${agent} 做什么？`,
       introduction: (environment: string) =>
         `第一条指令会在 ${environment} 共享的 Sandbox 与工作区中启动新的 Codex Thread。`,

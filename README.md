@@ -112,6 +112,11 @@ Web today; iOS / Android / HarmonyOS later
   open/collapsed state, Inspector tab, Terminal height, metric range and
   activity filter controls without storing prompts, attachments or Workspace
   content.
+  New Session and active conversation headers expose the same Environment
+  workspace operations: Terminal and Inspector. Before a native Session
+  exists, Inspector offers Files and Metrics; harness-owned Session Activity
+  appears only after a Session is selected. Environment settings remain in the
+  sidebar instead of replacing a workspace operation.
   The Codex New Session and conversation composers also share one
   harness-owned attachment toolbar. `@` discovery uses the harness-neutral
   Environment Workspace search backed by Sandbox0. Matching Codex CLI file

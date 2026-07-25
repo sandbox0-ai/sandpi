@@ -22,7 +22,10 @@ import type {
   CodexTurn,
 } from "../src/harnesses/codex/types";
 import { PENDING_GUEST_PROMPT_STORAGE_KEY } from "../src/lib/auth-navigation";
-import { mockEnvironmentMetrics } from "../src/lib/mock-data";
+import {
+  getMockBootstrap,
+  mockEnvironmentMetrics,
+} from "../src/lib/mock-data";
 
 interface ControlledEventWindow extends Window {
   __sandpiEmitEvent?: (
@@ -574,6 +577,107 @@ test("waits for native New Session models and scopes reasoning effort by model",
     }),
   ).toHaveValue("medium");
   expect(browserErrors).toEqual([]);
+});
+
+test("keeps New Session header operations aligned with the conversation", async ({
+  page,
+}) => {
+  const bootstrap = getMockBootstrap();
+  const environment = bootstrap.environments[0]!;
+  bootstrap.sessions = [];
+  bootstrap.selectedEnvironmentId = environment.id;
+  bootstrap.selectedSessionId = "";
+
+  await page.route(
+    (url) => url.pathname === "/api/v1/bootstrap",
+    async (route) => {
+      await route.fulfill({ json: { data: bootstrap } });
+    },
+  );
+  await page.route(
+    `**/api/v1/environments/${encodeURIComponent(environment.id)}/harnesses/codex/models`,
+    async (route) => {
+      await route.fulfill({
+        json: {
+          data: {
+            data: [
+              {
+                id: "e2e-new-session-header-model",
+                displayName: "E2E New Session Header",
+                isDefault: true,
+              },
+            ],
+          },
+          meta: { availability: "available", source: "codex" },
+        },
+      });
+    },
+  );
+  await page.route(
+    `**/api/v1/environments/${encodeURIComponent(environment.id)}/ide`,
+    async (route) => {
+      await route.fulfill({
+        json: {
+          data: {
+            files: [],
+            git: { repositories: [] },
+            refreshedAt: Date.now() / 1_000,
+          },
+        },
+      });
+    },
+  );
+  await page.routeWebSocket(
+    (url) =>
+      url.pathname ===
+      `/api/v1/environments/${encodeURIComponent(environment.id)}/ide/events`,
+    (socket) => {
+      socket.send(JSON.stringify({ type: "ready", at: Date.now() / 1_000 }));
+    },
+  );
+
+  await page.goto(
+    `/?environment=${encodeURIComponent(environment.id)}&new=1`,
+  );
+  await expect(
+    page.getByRole("heading", { name: "What should Codex work on?" }),
+  ).toBeVisible();
+
+  const header = page.locator("#conversation > header");
+  await expect(
+    header.getByRole("button", { name: "Terminal" }),
+  ).toBeVisible();
+  const inspectorToggle = header.getByRole("button", {
+    name: "Open inspector",
+  });
+  await expect(inspectorToggle).toBeVisible();
+  await expect(
+    header.getByRole("button", { name: `${environment.name} settings` }),
+  ).toHaveCount(0);
+
+  await inspectorToggle.click();
+  const inspectorViews = page.getByRole("navigation", {
+    name: "Inspector views",
+  });
+  await expect(inspectorViews).toBeVisible();
+  await expect(
+    inspectorViews.getByRole("button", { name: "Files", exact: true }),
+  ).toHaveClass(/is-active/);
+  await expect(
+    inspectorViews.getByRole("button", { name: "Metrics", exact: true }),
+  ).toBeVisible();
+  await expect(
+    inspectorViews.getByRole("button", { name: "Activity", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    header.getByRole("button", { name: "Close inspector" }),
+  ).toHaveAttribute("aria-pressed", "true");
+
+  await header.getByRole("button", { name: "Close inspector" }).click();
+  await expect(inspectorViews).toBeHidden();
+  await expect(
+    header.getByRole("button", { name: "Open inspector" }),
+  ).toHaveAttribute("aria-pressed", "false");
 });
 
 test("refreshes the Codex account and live limits after device login", async ({
