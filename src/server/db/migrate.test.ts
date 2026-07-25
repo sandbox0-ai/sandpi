@@ -71,6 +71,7 @@ test("migration history contains every durable Sandpi boundary", async () => {
       "0044_user_owned_resources",
       "0045_codex_native_mcp",
       "0046_codex_runtime_turn_recovery",
+      "0047_environment_egress_credentials",
     ],
   );
 
@@ -652,5 +653,24 @@ test("migration history contains every durable Sandpi boundary", async () => {
   assert.match(
     codexNativeMcpSql,
     /environment_credential_bindings_codex_slot_check[\s\S]+credential_slot = 'account'[\s\S]+native_target_path = '\/dev\/shm\/sandpi-codex-auth\.json'/,
+  );
+
+  const environmentEgressCredentialsSql = migrations[46]?.sql ?? "";
+  assert.match(
+    environmentEgressCredentialsSql,
+    /CREATE TABLE environment_egress_credentials\b/,
+  );
+  assert.match(
+    environmentEgressCredentialsSql,
+    /environment_id TEXT NOT NULL REFERENCES environments\(id\) ON DELETE CASCADE/,
+  );
+  assert.match(environmentEgressCredentialsSql, /source_ref TEXT NOT NULL UNIQUE/);
+  assert.match(
+    environmentEgressCredentialsSql,
+    /status IN \('provisioning', 'active', 'error', 'deleting'\)/,
+  );
+  assert.doesNotMatch(
+    environmentEgressCredentialsSql,
+    /\b(?:secret|password|private_key|certificate|ciphertext)\s+(?:TEXT|BYTEA|JSONB)\b/i,
   );
 });

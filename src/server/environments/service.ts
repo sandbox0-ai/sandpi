@@ -17,6 +17,11 @@ export class EnvironmentService {
     userId: string,
     environmentId: string,
   ) => Promise<void> | void;
+  private afterRuntimeDelete?: (
+    userId: string,
+    environmentId: string,
+    store: SandpiStore,
+  ) => Promise<void> | void;
 
   constructor(
     private readonly store: SandpiStore,
@@ -28,6 +33,16 @@ export class EnvironmentService {
     handler: (userId: string, environmentId: string) => Promise<void> | void,
   ) {
     this.beforeDelete = handler;
+  }
+
+  setAfterRuntimeDelete(
+    handler: (
+      userId: string,
+      environmentId: string,
+      store: SandpiStore,
+    ) => Promise<void> | void,
+  ) {
+    this.afterRuntimeDelete = handler;
   }
 
   reconcilePending() {
@@ -143,9 +158,14 @@ export class EnvironmentService {
           // The Sandbox is owned by the Environment, so runtime edits apply to
           // the existing Sandbox instead of waiting for a future Session.
           if (lockedNetworkChanged) {
+            const credentials =
+              await scopedStore.listEnvironmentEgressCredentialsByEnvironmentId(
+                environmentId,
+              );
             await this.runtime.updateEnvironmentNetworkPolicy(
               runtime,
               input.networkPolicy,
+              credentials,
             );
           }
           if (lockedMemoryChanged) {
@@ -214,6 +234,11 @@ export class EnvironmentService {
       );
       try {
         await this.runtime.deleteEnvironmentResources(resources);
+        await this.afterRuntimeDelete?.(
+          userId,
+          environmentId,
+          scopedStore,
+        );
         await scopedStore.deleteEnvironmentMetadata(userId, environmentId);
         this.logger.info({ environmentId }, "Environment deleted");
       } catch (error) {
@@ -254,8 +279,13 @@ export class EnvironmentService {
     let resources: Parameters<RuntimeAdapter["deleteEnvironmentResources"]>[0] = {};
     try {
       const environment = await this.store.getEnvironmentById(environmentId);
+      const credentials =
+        await this.store.listEnvironmentEgressCredentialsByEnvironmentId(
+          environmentId,
+        );
       const provisioned = await this.runtime.provisionEnvironment({
         environment,
+        credentials,
         onResourcesAllocated: async (allocated) => {
           resources = { ...resources, ...allocated };
           await this.store.recordEnvironmentAllocation(environmentId, allocated);

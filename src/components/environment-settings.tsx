@@ -15,6 +15,7 @@ import {
   RefreshCw,
   RotateCcw,
   Settings2,
+  ShieldCheck,
   Sparkles,
   Trash2,
   TriangleAlert,
@@ -27,6 +28,7 @@ import {
   useState,
 } from "react";
 
+import { EnvironmentEgressCredentials } from "@/components/environment-egress-credentials";
 import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
 import { copyTextToClipboard } from "@/lib/clipboard";
 import { MAX_ENVIRONMENT_IDLE_PAUSE_TIMEOUT_SECONDS } from "@/lib/environment-lifecycle";
@@ -69,6 +71,7 @@ export type EnvironmentSettingsTab =
   | "credentials"
   | "skills"
   | "mcp"
+  | "egress-credentials"
   | "network";
 
 interface EnvironmentSettingsProps {
@@ -118,6 +121,7 @@ const tabs: Array<{
   { id: "credentials", label: "Agent harness", icon: KeyRound },
   { id: "skills", label: "Skills", icon: Sparkles },
   { id: "mcp", label: "MCP servers", icon: Cable },
+  { id: "egress-credentials", label: "Credentials", icon: ShieldCheck },
   { id: "network", label: "Network", icon: Network },
 ];
 
@@ -1843,6 +1847,19 @@ export function EnvironmentSettings({
               </SettingsSection>
             ) : null}
 
+            {activeTab === "egress-credentials" ? (
+              <SettingsSection
+                eyebrow="Environment runtime"
+                title="Credentials"
+                description="Attach write-only credentials to exact outbound destinations for every Session in this Environment's shared Sandbox."
+              >
+                <EnvironmentEgressCredentials
+                  environmentId={draft.id}
+                  environmentStatus={draft.status}
+                />
+              </SettingsSection>
+            ) : null}
+
             {activeTab === "network" ? (
               <SettingsSection
                 eyebrow="Environment runtime"
@@ -2056,6 +2073,8 @@ export function EnvironmentSettings({
               </>
             ) : pendingNetworkMode ? (
               <>Confirm or cancel the pending Network mode change.</>
+            ) : activeTab === "egress-credentials" ? (
+              <>Credential changes are applied immediately.</>
             ) : activeTab === "skills" || activeTab === "mcp" ? (
               <>{draft.codingAgent.label} changes are saved immediately.</>
             ) : activeTab === "network" ? (
@@ -2065,7 +2084,9 @@ export function EnvironmentSettings({
             )}
           </span>
           <div>
-            {activeTab === "skills" || activeTab === "mcp" ? (
+            {activeTab === "skills" ||
+            activeTab === "mcp" ||
+            activeTab === "egress-credentials" ? (
               <button type="button" className="button-primary" onClick={onClose}>
                 Done
               </button>

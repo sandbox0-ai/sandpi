@@ -14,6 +14,14 @@ import type {
   SandpiPreferences,
   SandpiUser,
 } from "@/lib/types";
+import type {
+  EnvironmentCredentialProjection,
+  EnvironmentCredentialResolverKind,
+  EnvironmentCredentialRule,
+  EnvironmentCredentialStatus,
+  EnvironmentEgressCredential,
+  EnvironmentEgressCredentialConfiguration,
+} from "@/lib/environment-credentials";
 import { parseUnixTimestamp, toUnixTimestamp } from "@/lib/time";
 import { conflict, HttpError, notFound } from "@/server/http-error";
 import {
@@ -30,6 +38,12 @@ import type {
 
 export interface EnvironmentRecord extends Environment {
   provisioningError?: string;
+}
+
+export interface StoredEnvironmentEgressCredential
+  extends EnvironmentEgressCredential {
+  /** Opaque Sandbox0 source name. This value is never returned to browsers. */
+  sourceRef: string;
 }
 
 export type TurnSubmissionPhase = "prepared" | "submitted" | "accepted";
@@ -144,6 +158,23 @@ interface EnvironmentRow extends QueryResultRow {
   workspace_backup_due_at: Date | null;
   workspace_backup_last_completed_at: Date | null;
   workspace_backup_error: string | null;
+}
+
+interface EnvironmentEgressCredentialRow extends QueryResultRow {
+  id: string;
+  environment_id: string;
+  display_name: string;
+  source_ref: string;
+  resolver_kind: EnvironmentCredentialResolverKind;
+  projection: EnvironmentCredentialProjection;
+  rule: EnvironmentCredentialRule;
+  enabled: boolean;
+  status: EnvironmentCredentialStatus;
+  source_version: string | number | null;
+  source_status: string | null;
+  last_error: string | null;
+  created_at: Date;
+  updated_at: Date;
 }
 
 interface SessionRow extends QueryResultRow {
@@ -374,6 +405,221 @@ export class SandpiStore {
     const row = result.rows[0];
     if (!row) throw notFound("environment_not_found", "Environment not found.");
     return environmentFromRow(row);
+  }
+
+  async listEnvironmentEgressCredentials(
+    userId: string,
+    environmentId: string,
+  ): Promise<StoredEnvironmentEgressCredential[]> {
+    await this.getManageableEnvironment(userId, environmentId);
+    return this.listEnvironmentEgressCredentialsByEnvironmentId(environmentId);
+  }
+
+  async listEnvironmentEgressCredentialsByEnvironmentId(
+    environmentId: string,
+  ): Promise<StoredEnvironmentEgressCredential[]> {
+    const result = await this.pool.query<EnvironmentEgressCredentialRow>(
+      `${ENVIRONMENT_EGRESS_CREDENTIAL_SELECT}
+       WHERE credential.environment_id = $1
+       ORDER BY credential.created_at, credential.id`,
+      [environmentId],
+    );
+    return result.rows.map(environmentEgressCredentialFromRow);
+  }
+
+  async getEnvironmentEgressCredential(
+    userId: string,
+    environmentId: string,
+    credentialId: string,
+  ): Promise<StoredEnvironmentEgressCredential> {
+    await this.getManageableEnvironment(userId, environmentId);
+    return this.getEnvironmentEgressCredentialById(
+      environmentId,
+      credentialId,
+    );
+  }
+
+  async getEnvironmentEgressCredentialById(
+    environmentId: string,
+    credentialId: string,
+  ): Promise<StoredEnvironmentEgressCredential> {
+    const result = await this.pool.query<EnvironmentEgressCredentialRow>(
+      `${ENVIRONMENT_EGRESS_CREDENTIAL_SELECT}
+       WHERE credential.environment_id = $1 AND credential.id = $2`,
+      [environmentId, credentialId],
+    );
+    const row = result.rows[0];
+    if (!row) {
+      throw notFound(
+        "environment_credential_not_found",
+        "Environment credential not found.",
+      );
+    }
+    return environmentEgressCredentialFromRow(row);
+  }
+
+  async createEnvironmentEgressCredential(
+    environmentId: string,
+    input: EnvironmentEgressCredentialConfiguration & {
+      id: string;
+      sourceRef: string;
+    },
+  ): Promise<StoredEnvironmentEgressCredential> {
+    try {
+      await this.pool.query(
+        `INSERT INTO environment_egress_credentials (
+           id, environment_id, display_name, source_ref, resolver_kind,
+           projection, rule, enabled, status
+         ) VALUES ($1, $2, $3, $4, $5, $6::JSONB, $7::JSONB, $8, 'provisioning')`,
+        [
+          input.id,
+          environmentId,
+          input.name,
+          input.sourceRef,
+          input.resolverKind,
+          JSON.stringify(input.projection),
+          JSON.stringify(input.rule),
+          input.enabled,
+        ],
+      );
+    } catch (error) {
+      if ((error as { code?: unknown }).code === "23505") {
+        throw conflict(
+          "environment_credential_name_conflict",
+          "An Environment credential already uses this name.",
+        );
+      }
+      throw error;
+    }
+    return this.getEnvironmentEgressCredentialById(environmentId, input.id);
+  }
+
+  async updateEnvironmentEgressCredentialConfiguration(
+    environmentId: string,
+    credentialId: string,
+    input: EnvironmentEgressCredentialConfiguration,
+  ): Promise<StoredEnvironmentEgressCredential> {
+    try {
+      const result = await this.pool.query(
+        `UPDATE environment_egress_credentials
+         SET display_name = $3, projection = $4::JSONB, rule = $5::JSONB,
+             enabled = $6, status = 'provisioning', last_error = NULL
+         WHERE environment_id = $1 AND id = $2 AND resolver_kind = $7`,
+        [
+          environmentId,
+          credentialId,
+          input.name,
+          JSON.stringify(input.projection),
+          JSON.stringify(input.rule),
+          input.enabled,
+          input.resolverKind,
+        ],
+      );
+      if (!result.rowCount) {
+        throw notFound(
+          "environment_credential_not_found",
+          "Environment credential not found.",
+        );
+      }
+    } catch (error) {
+      if ((error as { code?: unknown }).code === "23505") {
+        throw conflict(
+          "environment_credential_name_conflict",
+          "An Environment credential already uses this name.",
+        );
+      }
+      throw error;
+    }
+    return this.getEnvironmentEgressCredentialById(
+      environmentId,
+      credentialId,
+    );
+  }
+
+  async recordEnvironmentEgressCredentialSource(
+    environmentId: string,
+    credentialId: string,
+    metadata: { currentVersion?: number; status?: string },
+  ) {
+    const result = await this.pool.query(
+      `UPDATE environment_egress_credentials
+       SET source_version = $3, source_status = $4,
+           status = 'provisioning', last_error = NULL
+       WHERE environment_id = $1 AND id = $2`,
+      [
+        environmentId,
+        credentialId,
+        metadata.currentVersion ?? null,
+        metadata.status ?? null,
+      ],
+    );
+    if (!result.rowCount) {
+      throw notFound(
+        "environment_credential_not_found",
+        "Environment credential not found.",
+      );
+    }
+  }
+
+  async recordEnvironmentEgressCredentialStatus(
+    environmentId: string,
+    credentialId: string,
+    status: EnvironmentCredentialStatus,
+    error?: string,
+  ) {
+    const result = await this.pool.query(
+      `UPDATE environment_egress_credentials
+       SET status = $3, last_error = $4
+       WHERE environment_id = $1 AND id = $2`,
+      [environmentId, credentialId, status, error ?? null],
+    );
+    if (!result.rowCount) {
+      throw notFound(
+        "environment_credential_not_found",
+        "Environment credential not found.",
+      );
+    }
+  }
+
+  async recordEnvironmentEgressCredentialSourceMissing(
+    environmentId: string,
+    credentialId: string,
+    error: string,
+  ) {
+    const result = await this.pool.query(
+      `UPDATE environment_egress_credentials
+       SET source_version = NULL, source_status = NULL,
+           status = 'error', last_error = $3
+       WHERE environment_id = $1 AND id = $2`,
+      [environmentId, credentialId, error],
+    );
+    if (!result.rowCount) {
+      throw notFound(
+        "environment_credential_not_found",
+        "Environment credential not found.",
+      );
+    }
+  }
+
+  async deleteEnvironmentEgressCredentialRecord(
+    environmentId: string,
+    credentialId: string,
+  ) {
+    await this.pool.query(
+      `DELETE FROM environment_egress_credentials
+       WHERE environment_id = $1 AND id = $2`,
+      [environmentId, credentialId],
+    );
+  }
+
+  async environmentEgressCredentialReconciliationIds() {
+    const result = await this.pool.query<{ environment_id: string }>(
+      `SELECT DISTINCT environment_id
+       FROM environment_egress_credentials
+       WHERE status IN ('provisioning', 'error', 'deleting')
+       ORDER BY environment_id`,
+    );
+    return result.rows.map((row) => row.environment_id);
   }
 
   async createEnvironmentMetadata(input: { userId: string; name: string }) {
@@ -2925,6 +3171,16 @@ const ENVIRONMENT_RUNTIME_SELECT = `
   JOIN environments environment ON environment.id = runtime.environment_id
 `;
 
+const ENVIRONMENT_EGRESS_CREDENTIAL_SELECT = `
+  SELECT credential.id, credential.environment_id, credential.display_name,
+         credential.source_ref, credential.resolver_kind,
+         credential.projection, credential.rule, credential.enabled,
+         credential.status, credential.source_version,
+         credential.source_status, credential.last_error,
+         credential.created_at, credential.updated_at
+  FROM environment_egress_credentials credential
+`;
+
 const SESSION_SELECT = `
   SELECT session.*, runtime.native_session_id, runtime.model_id,
          runtime.reasoning_effort,
@@ -3014,6 +3270,29 @@ function environmentFromRow(row: EnvironmentRow): EnvironmentRecord {
     },
     networkPolicy: row.network_policy,
     provisioningError: row.provisioning_error ?? undefined,
+  };
+}
+
+function environmentEgressCredentialFromRow(
+  row: EnvironmentEgressCredentialRow,
+): StoredEnvironmentEgressCredential {
+  const currentVersion =
+    row.source_version === null ? undefined : Number(row.source_version);
+  return {
+    id: row.id,
+    environmentId: row.environment_id,
+    name: row.display_name,
+    sourceRef: row.source_ref,
+    resolverKind: row.resolver_kind,
+    projection: row.projection,
+    rule: row.rule,
+    enabled: row.enabled,
+    status: row.status,
+    ...(currentVersion ? { currentVersion } : {}),
+    ...(row.source_status ? { sourceStatus: row.source_status } : {}),
+    ...(row.last_error ? { error: row.last_error } : {}),
+    createdAt: toUnixTimestamp(row.created_at),
+    updatedAt: toUnixTimestamp(row.updated_at),
   };
 }
 

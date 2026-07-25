@@ -26,6 +26,10 @@ import type {
   WorkspaceIdeFile,
   WorkspaceLineChange,
 } from "@/lib/types";
+import type {
+  EnvironmentCredentialMaterial,
+  EnvironmentCredentialResolverKind,
+} from "@/lib/environment-credentials";
 import { toUnixTimestamp } from "@/lib/time";
 import {
   repositoryForWorkspacePath,
@@ -52,8 +56,10 @@ import {
   type EnvironmentRuntimeRecord,
   type ProvisionedEnvironment,
   type RecoveredCodexEnvironmentRuntime,
+  type RuntimeCredentialSourceMetadata,
   type RuntimeAdapter,
   type RuntimeCodexEventStreamHandle,
+  type RuntimeEnvironmentEgressCredential,
   type RuntimeMcpOAuthCallbackService,
   type RuntimeProvisionEnvironmentInput,
   type RuntimeTerminalHandle,
@@ -189,7 +195,10 @@ export class Sandbox0Runtime implements RuntimeAdapter {
             resources: {
               memory: `${input.environment.sandboxMemoryMiB}Mi`,
             },
-            network: toSandbox0NetworkPolicy(input.environment.networkPolicy),
+            network: toSandbox0NetworkPolicy(
+              input.environment.networkPolicy,
+              input.credentials,
+            ),
           },
         },
       );
@@ -255,11 +264,67 @@ export class Sandbox0Runtime implements RuntimeAdapter {
   async updateEnvironmentNetworkPolicy(
     runtime: EnvironmentRuntimeRecord,
     policy: Environment["networkPolicy"],
+    credentials: RuntimeEnvironmentEgressCredential[] = [],
   ) {
     await this.applyEnvironmentSandboxNetworkPolicy(
       runtime,
-      toSandbox0NetworkPolicy(policy),
+      toSandbox0NetworkPolicy(policy, credentials),
     );
+  }
+
+  async getEnvironmentCredentialSource(
+    sourceRef: string,
+  ): Promise<RuntimeCredentialSourceMetadata | undefined> {
+    try {
+      return runtimeCredentialSourceMetadata(
+        await this.client.credentialSources.get(sourceRef),
+      );
+    } catch (error) {
+      if (isMissingResource(error)) return undefined;
+      throw translateCredentialSourceControlError(error, "read");
+    }
+  }
+
+  async createEnvironmentCredentialSource(
+    sourceRef: string,
+    resolverKind: EnvironmentCredentialResolverKind,
+    material: EnvironmentCredentialMaterial,
+  ): Promise<RuntimeCredentialSourceMetadata> {
+    try {
+      return runtimeCredentialSourceMetadata(
+        await this.client.credentialSources.create(
+          credentialSourceWriteRequest(sourceRef, resolverKind, material),
+        ),
+      );
+    } catch (error) {
+      throw translateCredentialSourceWriteError(error);
+    }
+  }
+
+  async updateEnvironmentCredentialSource(
+    sourceRef: string,
+    resolverKind: EnvironmentCredentialResolverKind,
+    material: EnvironmentCredentialMaterial,
+  ): Promise<RuntimeCredentialSourceMetadata> {
+    try {
+      return runtimeCredentialSourceMetadata(
+        await this.client.credentialSources.update(
+          sourceRef,
+          credentialSourceWriteRequest(sourceRef, resolverKind, material),
+        ),
+      );
+    } catch (error) {
+      throw translateCredentialSourceWriteError(error);
+    }
+  }
+
+  async deleteEnvironmentCredentialSource(sourceRef: string): Promise<void> {
+    try {
+      await this.client.credentialSources.delete(sourceRef);
+    } catch (error) {
+      if (isMissingResource(error)) return;
+      throw translateCredentialSourceControlError(error, "delete");
+    }
   }
 
   async updateEnvironmentMemory(
@@ -2477,6 +2542,56 @@ function translateSandbox0Error(error: unknown) {
   return error;
 }
 
+function translateCredentialSourceWriteError(error: unknown) {
+  const translated = translateSandbox0Error(error);
+  if (
+    translated instanceof HttpError &&
+    [
+      "sandbox0_invalid_api_key",
+      "sandbox0_permission_denied",
+      "sandbox0_unavailable",
+    ].includes(translated.code)
+  ) {
+    return translated;
+  }
+  if (translated instanceof HttpError) {
+    return new HttpError(
+      translated.statusCode,
+      translated.code,
+      "Sandbox0 rejected the credential source material.",
+    );
+  }
+  return new HttpError(
+    502,
+    "sandbox0_credential_source_write_failed",
+    "Sandbox0 could not store the credential source material.",
+  );
+}
+
+function translateCredentialSourceControlError(
+  error: unknown,
+  operation: "read" | "delete",
+) {
+  const translated = translateSandbox0Error(error);
+  if (
+    translated instanceof HttpError &&
+    [
+      "sandbox0_invalid_api_key",
+      "sandbox0_permission_denied",
+      "sandbox0_unavailable",
+    ].includes(translated.code)
+  ) {
+    return translated;
+  }
+  return new HttpError(
+    translated instanceof HttpError ? translated.statusCode : 502,
+    `sandbox0_credential_source_${operation}_failed`,
+    operation === "read"
+      ? "Sandbox0 could not read the Environment credential source."
+      : "Sandbox0 could not delete the Environment credential source.",
+  );
+}
+
 async function retrySandbox0Transport<T>(
   operation: () => Promise<T>,
   signal?: AbortSignal,
@@ -2634,6 +2749,82 @@ function translateWorkspaceFileError(error: unknown) {
     );
   }
   return translateSandbox0Error(error);
+}
+
+type Sandbox0CredentialSourceWriteRequest = Parameters<
+  Client["credentialSources"]["create"]
+>[0];
+type Sandbox0CredentialSourceMetadata = Awaited<
+  ReturnType<Client["credentialSources"]["get"]>
+>;
+
+function credentialSourceWriteRequest(
+  sourceRef: string,
+  resolverKind: EnvironmentCredentialResolverKind,
+  material: EnvironmentCredentialMaterial,
+): Sandbox0CredentialSourceWriteRequest {
+  if (resolverKind !== material.type) {
+    throw new Error("Environment credential material does not match resolver kind.");
+  }
+  switch (material.type) {
+    case "static_headers":
+      return {
+        name: sourceRef,
+        resolverKind,
+        spec: { staticHeaders: { values: material.values } },
+      };
+    case "static_tls_client_certificate":
+      return {
+        name: sourceRef,
+        resolverKind,
+        spec: {
+          staticTLSClientCertificate: {
+            certificatePem: material.certificatePem,
+            privateKeyPem: material.privateKeyPem,
+            ...(material.caPem ? { caPem: material.caPem } : {}),
+          },
+        },
+      };
+    case "static_username_password":
+      return {
+        name: sourceRef,
+        resolverKind,
+        spec: {
+          staticUsernamePassword: {
+            username: material.username,
+            password: material.password,
+          },
+        },
+      };
+    case "static_ssh_private_key":
+      return {
+        name: sourceRef,
+        resolverKind,
+        spec: {
+          staticSSHPrivateKey: {
+            privateKeyPem: material.privateKeyPem,
+            ...(material.passphrase
+              ? { passphrase: material.passphrase }
+              : {}),
+          },
+        },
+      };
+  }
+}
+
+function runtimeCredentialSourceMetadata(
+  source: Sandbox0CredentialSourceMetadata,
+): RuntimeCredentialSourceMetadata {
+  return {
+    name: source.name,
+    resolverKind: source.resolverKind,
+    ...(source.currentVersion
+      ? { currentVersion: Number(source.currentVersion) }
+      : {}),
+    ...(source.status ? { status: source.status } : {}),
+    ...(source.createdAt instanceof Date ? { createdAt: source.createdAt } : {}),
+    ...(source.updatedAt instanceof Date ? { updatedAt: source.updatedAt } : {}),
+  };
 }
 
 function isMissingResource(error: unknown) {

@@ -3,15 +3,12 @@
 import { LoaderCircle, RotateCw } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useState } from "react";
 
+import { GuestSandpiApp } from "@/components/guest-sandpi-app";
 import { PreferencesPage } from "@/components/preferences-page";
 import { SandpiApp } from "@/components/sandpi-app";
 import { WorkspaceIdePage } from "@/components/workspace-ide-page";
-import {
-  ApiError,
-  type ApiEnvelope,
-  apiFetch,
-  apiUrl,
-} from "@/lib/api-client";
+import { ApiError, type ApiEnvelope, apiFetch } from "@/lib/api-client";
+import { authLoginUrl } from "@/lib/auth-navigation";
 import type { SandpiBootstrap } from "@/lib/types";
 
 import styles from "./bootstrap-loader.module.css";
@@ -19,6 +16,7 @@ import styles from "./bootstrap-loader.module.css";
 type LoaderState =
   | { status: "loading" }
   | { status: "redirecting" }
+  | { status: "unauthenticated"; loginUrl: string }
   | { status: "error"; message: string }
   | { status: "ready"; bootstrap: SandpiBootstrap };
 
@@ -42,22 +40,7 @@ function bootstrapPath(workspace: ReturnType<typeof requestedWorkspace>) {
   return `/api/v1/bootstrap${query ? `?${query}` : ""}`;
 }
 
-function loginUrl(error: ApiError) {
-  const returnTo = window.location.href;
-  if (error.loginUrl) {
-    const target = new URL(apiUrl(error.loginUrl), window.location.href);
-    if (!target.searchParams.has("return_to")) {
-      target.searchParams.set("return_to", returnTo);
-    }
-    return target.toString();
-  }
-
-  const target = new URL(apiUrl("/api/v1/auth/login"), window.location.href);
-  target.searchParams.set("return_to", returnTo);
-  return target.toString();
-}
-
-function useBootstrap() {
+function useBootstrap(allowUnauthenticated: boolean) {
   const [state, setState] = useState<LoaderState>({ status: "loading" });
   const [attempt, setAttempt] = useState(0);
 
@@ -81,8 +64,13 @@ function useBootstrap() {
           return;
         }
         if (error instanceof ApiError && error.status === 401) {
+          const target = authLoginUrl(window.location.href, error.loginUrl);
+          if (allowUnauthenticated) {
+            setState({ status: "unauthenticated", loginUrl: target });
+            return;
+          }
           setState({ status: "redirecting" });
-          window.location.replace(loginUrl(error));
+          window.location.replace(target);
           return;
         }
         setState({
@@ -97,20 +85,25 @@ function useBootstrap() {
 
     void load();
     return () => controller.abort();
-  }, [attempt]);
+  }, [allowUnauthenticated, attempt]);
 
   return { state, retry };
 }
 
 function BootstrapBoundary({
   children,
+  renderUnauthenticated,
 }: {
   children: (bootstrap: SandpiBootstrap) => ReactNode;
+  renderUnauthenticated?: (loginUrl: string) => ReactNode;
 }) {
-  const { state, retry } = useBootstrap();
+  const { state, retry } = useBootstrap(Boolean(renderUnauthenticated));
 
   if (state.status === "ready") {
     return children(state.bootstrap);
+  }
+  if (state.status === "unauthenticated" && renderUnauthenticated) {
+    return renderUnauthenticated(state.loginUrl);
   }
 
   return (
@@ -146,7 +139,11 @@ function BootstrapBoundary({
 
 export function SandpiAppLoader() {
   return (
-    <BootstrapBoundary>
+    <BootstrapBoundary
+      renderUnauthenticated={(loginUrl) => (
+        <GuestSandpiApp loginUrl={loginUrl} />
+      )}
+    >
       {(bootstrap) => <SandpiApp initialData={bootstrap} />}
     </BootstrapBoundary>
   );

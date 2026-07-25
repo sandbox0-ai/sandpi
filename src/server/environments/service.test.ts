@@ -35,6 +35,9 @@ test("pending Environment reconciliation is coalesced within one server", async 
     async getEnvironmentById(environmentId: string) {
       return { ...environment, id: environmentId };
     },
+    async listEnvironmentEgressCredentialsByEnvironmentId() {
+      return [];
+    },
     async recordEnvironmentAllocation() {},
     async markEnvironmentReady() {
       readyCalls += 1;
@@ -100,6 +103,9 @@ test("applies a changed network policy to the shared Environment Sandbox", async
           runtimeGeneration: 1,
         },
       };
+    },
+    async listEnvironmentEgressCredentialsByEnvironmentId() {
+      return [];
     },
     async updateEnvironment() {
       return { ...environment, networkPolicy: nextPolicy };
@@ -425,6 +431,9 @@ test("deletes Environment-owned resources before removing metadata", async () =>
   service.setBeforeDelete(() => {
     steps.push("workers");
   });
+  service.setAfterRuntimeDelete(() => {
+    steps.push("credential-sources");
+  });
 
   await service.delete("user-test", environment.id);
 
@@ -435,6 +444,7 @@ test("deletes Environment-owned resources before removing metadata", async () =>
     "lock",
     "prepare",
     "resources",
+    "credential-sources",
     "metadata",
     "logged",
   ]);

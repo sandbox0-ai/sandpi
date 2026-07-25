@@ -1,0 +1,68 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import {
+  PENDING_GUEST_PROMPT_STORAGE_KEY,
+  authLoginUrl,
+  consumePendingGuestPrompt,
+  newSessionAuthLoginUrl,
+  storePendingGuestPrompt,
+} from "./auth-navigation";
+
+function promptStorage(initial?: string) {
+  const values = new Map<string, string>();
+  if (initial !== undefined) {
+    values.set(PENDING_GUEST_PROMPT_STORAGE_KEY, initial);
+  }
+  return {
+    getItem(key: string) {
+      return values.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      values.set(key, value);
+    },
+    removeItem(key: string) {
+      values.delete(key);
+    },
+  };
+}
+
+test("builds login URLs that return to the current app location", () => {
+  assert.equal(
+    authLoginUrl(
+      "https://sandpi.ai/?environment=env-one",
+      "/api/v1/auth/login",
+    ),
+    "https://sandpi.ai/api/v1/auth/login?return_to=https%3A%2F%2Fsandpi.ai%2F%3Fenvironment%3Denv-one",
+  );
+  assert.equal(
+    authLoginUrl(
+      "https://sandpi.ai/",
+      "/api/v1/auth/login?return_to=%2Fpreferences%2F",
+    ),
+    "https://sandpi.ai/api/v1/auth/login?return_to=%2Fpreferences%2F",
+  );
+});
+
+test("guest messages return to an authenticated new Session", () => {
+  assert.equal(
+    newSessionAuthLoginUrl(
+      "https://sandpi.ai/api/v1/auth/login?return_to=https%3A%2F%2Fsandpi.ai%2F",
+      "https://sandpi.ai/?session=session-private",
+    ),
+    "https://sandpi.ai/api/v1/auth/login?return_to=https%3A%2F%2Fsandpi.ai%2F%3Fnew%3D1",
+  );
+});
+
+test("pending guest prompts are bounded and consumed once", () => {
+  const storage = promptStorage();
+  assert.equal(storePendingGuestPrompt(storage, "Inspect the workspace"), true);
+  assert.equal(consumePendingGuestPrompt(storage), "Inspect the workspace");
+  assert.equal(consumePendingGuestPrompt(storage), undefined);
+
+  assert.equal(storePendingGuestPrompt(storage, "   "), false);
+  assert.equal(consumePendingGuestPrompt(storage), undefined);
+
+  assert.equal(storePendingGuestPrompt(storage, "x".repeat(100_001)), true);
+  assert.equal(consumePendingGuestPrompt(storage)?.length, 100_000);
+});

@@ -82,7 +82,8 @@ async function readResponseBody(response: Response): Promise<unknown> {
 
 /**
  * Fetch JSON from the Sandpi server with browser credentials. Callers receive
- * structured errors so entry loaders can redirect an unauthenticated user.
+ * structured errors so each surface can decide whether to offer login in place
+ * or redirect an unauthenticated user.
  */
 export async function apiFetch<T>(
   path: string,

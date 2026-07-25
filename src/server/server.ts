@@ -36,6 +36,12 @@ import { loadConfig, type SandpiConfig } from "@/server/config";
 import { migrateDatabase } from "@/server/db/migrate";
 import { createDatabasePool } from "@/server/db/pool";
 import { seedCommunityDefaults } from "@/server/db/seed";
+import {
+  createEnvironmentEgressCredentialSchema,
+  environmentEgressCredentialConfigurationSchema,
+  rotateEnvironmentEgressCredentialSchema,
+} from "@/server/environment-credentials-schema";
+import { EnvironmentEgressCredentialService } from "@/server/environments/egress-credential-service";
 import { EnvironmentService } from "@/server/environments/service";
 import { EnvironmentLifecycleService } from "@/server/environments/lifecycle-service";
 import { EnvironmentRuntimeAccessService } from "@/server/environments/runtime-access-service";
@@ -172,6 +178,11 @@ export async function createSandpiServer(
   const runtimeAccess = new EnvironmentRuntimeAccessService(store, runtime);
   const codex = new CodexService(store, runtime, app.log, codexAuth);
   const environments = new EnvironmentService(store, runtime, app.log);
+  const egressCredentials = new EnvironmentEgressCredentialService(
+    store,
+    runtime,
+    app.log,
+  );
   lifecycle.setBeforePause(async (environmentId) => {
     await codex.flushEnvironmentCredentials(environmentId);
     codex.suspendEnvironmentWorker(environmentId);
@@ -189,6 +200,14 @@ export async function createSandpiServer(
     codex.suspendEnvironmentWorker(environmentId);
     await codexAuth.cancelEnvironmentDeviceLogin(userId, environmentId);
   });
+  environments.setAfterRuntimeDelete(
+    async (_userId, environmentId, scopedStore) => {
+      await egressCredentials.cleanupEnvironmentSources(
+        environmentId,
+        scopedStore,
+      );
+    },
+  );
   const oidcIdentity =
     config.auth.mode === "oidc" && secretBox
       ? new OidcIdentityService(pool, config.auth, config.publicUrl, secretBox)
@@ -252,6 +271,7 @@ export async function createSandpiServer(
     codex,
     codexAuth,
     environments,
+    egressCredentials,
     workspaceBackups,
   });
 
@@ -280,6 +300,7 @@ export async function createSandpiServer(
   });
 
   await environments.reconcilePending();
+  await egressCredentials.reconcilePending();
   await lifecycle.start();
   await workspaceBackups.start();
   await codexAuth.resumePending();
@@ -375,6 +396,7 @@ function registerApiRoutes(
     codex: CodexService;
     codexAuth: CodexEnvironmentAuthService;
     environments: EnvironmentService;
+    egressCredentials: EnvironmentEgressCredentialService;
     workspaceBackups: EnvironmentWorkspaceBackupService;
   },
 ) {
@@ -382,7 +404,8 @@ function registerApiRoutes(
   app.addHook("onSend", async (request, reply, payload) => {
     if (
       request.url.includes("/harnesses/codex/mcp") ||
-      request.url.includes("/workspace-backups")
+      request.url.includes("/workspace-backups") ||
+      request.url.includes("/egress-credentials")
     ) {
       reply.header("Cache-Control", "no-store");
     }
@@ -453,6 +476,59 @@ function registerApiRoutes(
           body,
         ),
       };
+    },
+  );
+  app.get<{ Params: { environmentId: string } }>(
+    "/api/v1/environments/:environmentId/egress-credentials",
+    async (request) => ({
+      data: await services.egressCredentials.list(
+        request.principal.userId,
+        request.params.environmentId,
+      ),
+    }),
+  );
+  app.post<{ Params: { environmentId: string } }>(
+    "/api/v1/environments/:environmentId/egress-credentials",
+    async (request, reply) => {
+      const credential = await services.egressCredentials.create(
+        request.principal.userId,
+        request.params.environmentId,
+        createEnvironmentEgressCredentialSchema.parse(request.body),
+      );
+      return reply.status(201).send({ data: credential });
+    },
+  );
+  app.put<{ Params: { environmentId: string; credentialId: string } }>(
+    "/api/v1/environments/:environmentId/egress-credentials/:credentialId",
+    async (request) => ({
+      data: await services.egressCredentials.update(
+        request.principal.userId,
+        request.params.environmentId,
+        request.params.credentialId,
+        environmentEgressCredentialConfigurationSchema.parse(request.body),
+      ),
+    }),
+  );
+  app.put<{ Params: { environmentId: string; credentialId: string } }>(
+    "/api/v1/environments/:environmentId/egress-credentials/:credentialId/material",
+    async (request) => ({
+      data: await services.egressCredentials.rotate(
+        request.principal.userId,
+        request.params.environmentId,
+        request.params.credentialId,
+        rotateEnvironmentEgressCredentialSchema.parse(request.body),
+      ),
+    }),
+  );
+  app.delete<{ Params: { environmentId: string; credentialId: string } }>(
+    "/api/v1/environments/:environmentId/egress-credentials/:credentialId",
+    async (request) => {
+      await services.egressCredentials.delete(
+        request.principal.userId,
+        request.params.environmentId,
+        request.params.credentialId,
+      );
+      return { data: { id: request.params.credentialId } };
     },
   );
   app.get<{ Params: { environmentId: string } }>(

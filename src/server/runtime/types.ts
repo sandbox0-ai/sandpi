@@ -7,6 +7,11 @@ import type {
   WorkspaceGitState,
   WorkspaceIdeFile,
 } from "@/lib/types";
+import type {
+  EnvironmentCredentialMaterial,
+  EnvironmentCredentialResolverKind,
+  EnvironmentEgressCredential,
+} from "@/lib/environment-credentials";
 import type { UnixTimestamp } from "@/lib/time";
 import type {
   CodexDecoderState,
@@ -62,10 +67,25 @@ export interface RuntimeWorkspaceBackupSnapshot {
 
 export interface RuntimeProvisionEnvironmentInput {
   environment: Environment;
+  credentials?: RuntimeEnvironmentEgressCredential[];
   /** Existing Volume is reused when reconciliation resumes after a crash. */
   onResourcesAllocated?: (
     resources: Partial<ProvisionedEnvironment>,
   ) => Promise<void>;
+}
+
+export interface RuntimeEnvironmentEgressCredential
+  extends EnvironmentEgressCredential {
+  sourceRef: string;
+}
+
+export interface RuntimeCredentialSourceMetadata {
+  name: string;
+  resolverKind: EnvironmentCredentialResolverKind;
+  currentVersion?: number;
+  status?: string;
+  createdAt?: Date;
+  updatedAt?: Date;
 }
 
 export interface RecoveredCodexEnvironmentRuntime {
@@ -98,7 +118,22 @@ export interface RuntimeAdapter {
   updateEnvironmentNetworkPolicy(
     runtime: EnvironmentRuntimeRecord,
     policy: NetworkPolicy,
+    credentials?: RuntimeEnvironmentEgressCredential[],
   ): Promise<void>;
+  getEnvironmentCredentialSource(
+    sourceRef: string,
+  ): Promise<RuntimeCredentialSourceMetadata | undefined>;
+  createEnvironmentCredentialSource(
+    sourceRef: string,
+    resolverKind: EnvironmentCredentialResolverKind,
+    material: EnvironmentCredentialMaterial,
+  ): Promise<RuntimeCredentialSourceMetadata>;
+  updateEnvironmentCredentialSource(
+    sourceRef: string,
+    resolverKind: EnvironmentCredentialResolverKind,
+    material: EnvironmentCredentialMaterial,
+  ): Promise<RuntimeCredentialSourceMetadata>;
+  deleteEnvironmentCredentialSource(sourceRef: string): Promise<void>;
   updateEnvironmentMemory(
     runtime: EnvironmentRuntimeRecord,
     memoryMiB: number,

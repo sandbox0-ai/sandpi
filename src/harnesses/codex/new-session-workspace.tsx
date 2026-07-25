@@ -48,6 +48,7 @@ import {
   type CodexModelOption,
 } from "@/harnesses/codex/models";
 import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
+import { consumePendingGuestPrompt } from "@/lib/auth-navigation";
 import {
   codingAgentComposerPreference,
   rememberCodingAgentComposerPreference,
@@ -116,6 +117,18 @@ export function CodexNewSessionWorkspace({
       promptRef.current?.focus(),
     );
     return () => window.cancelAnimationFrame(focusFrame);
+  }, []);
+
+  useEffect(() => {
+    try {
+      const pendingPrompt = consumePendingGuestPrompt(window.sessionStorage);
+      if (pendingPrompt) {
+        setPrompt((current) => current || pendingPrompt);
+      }
+    } catch {
+      // Restricted browser contexts can disable sessionStorage. The regular
+      // authenticated composer remains fully usable without the guest draft.
+    }
   }, []);
 
   useEffect(() => {

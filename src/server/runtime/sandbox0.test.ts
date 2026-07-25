@@ -4,6 +4,10 @@ import { zstdCompressSync } from "node:zlib";
 
 import { APIError } from "sandbox0";
 
+import type {
+  EnvironmentCredentialMaterial,
+  EnvironmentCredentialResolverKind,
+} from "@/lib/environment-credentials";
 import type { Environment } from "@/lib/types";
 import { createSandbox0FetchWithRetry, Sandbox0Runtime } from "./sandbox0";
 import {
@@ -173,6 +177,285 @@ test("creates one Workspace Volume when provisioning a new Environment", async (
     { workspaceVolumeId: "volume-new" },
     { sandboxId: "sandbox-new", workspaceVolumeId: "volume-new" },
   ]);
+});
+
+test("maps every supported Environment credential source without returning material", async () => {
+  const requests: unknown[] = [];
+  const runtime = runtimeWithClient({
+    credentialSources: {
+      async create(request: {
+        name: string;
+        resolverKind: EnvironmentCredentialResolverKind;
+      }) {
+        requests.push(request);
+        return {
+          name: request.name,
+          resolverKind: request.resolverKind,
+          currentVersion: 7n,
+          status: "ready",
+          createdAt: new Date("2026-07-25T00:00:00.000Z"),
+          updatedAt: new Date("2026-07-25T00:01:00.000Z"),
+        };
+      },
+    },
+  });
+  const cases: Array<{
+    sourceRef: string;
+    resolverKind: EnvironmentCredentialResolverKind;
+    material: EnvironmentCredentialMaterial;
+    expected: unknown;
+  }> = [
+    {
+      sourceRef: "sandpi-header",
+      resolverKind: "static_headers",
+      material: {
+        type: "static_headers",
+        values: { token: "github-token" },
+      },
+      expected: {
+        name: "sandpi-header",
+        resolverKind: "static_headers",
+        spec: { staticHeaders: { values: { token: "github-token" } } },
+      },
+    },
+    {
+      sourceRef: "sandpi-mtls",
+      resolverKind: "static_tls_client_certificate",
+      material: {
+        type: "static_tls_client_certificate",
+        certificatePem: "certificate",
+        privateKeyPem: "private-key",
+        caPem: "ca",
+      },
+      expected: {
+        name: "sandpi-mtls",
+        resolverKind: "static_tls_client_certificate",
+        spec: {
+          staticTLSClientCertificate: {
+            certificatePem: "certificate",
+            privateKeyPem: "private-key",
+            caPem: "ca",
+          },
+        },
+      },
+    },
+    {
+      sourceRef: "sandpi-password",
+      resolverKind: "static_username_password",
+      material: {
+        type: "static_username_password",
+        username: "redis-user",
+        password: "redis-password",
+      },
+      expected: {
+        name: "sandpi-password",
+        resolverKind: "static_username_password",
+        spec: {
+          staticUsernamePassword: {
+            username: "redis-user",
+            password: "redis-password",
+          },
+        },
+      },
+    },
+    {
+      sourceRef: "sandpi-ssh",
+      resolverKind: "static_ssh_private_key",
+      material: {
+        type: "static_ssh_private_key",
+        privateKeyPem: "ssh-private-key",
+        passphrase: "ssh-passphrase",
+      },
+      expected: {
+        name: "sandpi-ssh",
+        resolverKind: "static_ssh_private_key",
+        spec: {
+          staticSSHPrivateKey: {
+            privateKeyPem: "ssh-private-key",
+            passphrase: "ssh-passphrase",
+          },
+        },
+      },
+    },
+  ];
+
+  for (const credentialCase of cases) {
+    const metadata = await runtime.createEnvironmentCredentialSource(
+      credentialCase.sourceRef,
+      credentialCase.resolverKind,
+      credentialCase.material,
+    );
+    assert.deepEqual(metadata, {
+      name: credentialCase.sourceRef,
+      resolverKind: credentialCase.resolverKind,
+      currentVersion: 7,
+      status: "ready",
+      createdAt: new Date("2026-07-25T00:00:00.000Z"),
+      updatedAt: new Date("2026-07-25T00:01:00.000Z"),
+    });
+  }
+
+  assert.deepEqual(
+    requests,
+    cases.map((credentialCase) => credentialCase.expected),
+  );
+});
+
+test("looks up known Environment credential sources and treats missing sources idempotently", async () => {
+  const operations: string[] = [];
+  const missing = () =>
+    new APIError({
+      statusCode: 404,
+      code: "not_found",
+      message: "credential source not found",
+    });
+  const runtime = runtimeWithClient({
+    credentialSources: {
+      async get(sourceRef: string) {
+        operations.push(`get:${sourceRef}`);
+        if (sourceRef === "missing") throw missing();
+        return {
+          name: sourceRef,
+          resolverKind: "static_headers",
+          currentVersion: 3,
+          status: "ready",
+        };
+      },
+      async update(sourceRef: string, request: unknown) {
+        operations.push(`update:${sourceRef}`);
+        assert.deepEqual(request, {
+          name: sourceRef,
+          resolverKind: "static_headers",
+          spec: { staticHeaders: { values: { token: "next" } } },
+        });
+        return {
+          name: sourceRef,
+          resolverKind: "static_headers",
+          currentVersion: 4,
+          status: "ready",
+        };
+      },
+      async delete(sourceRef: string) {
+        operations.push(`delete:${sourceRef}`);
+        if (sourceRef === "missing") throw missing();
+      },
+    },
+  });
+
+  assert.deepEqual(await runtime.getEnvironmentCredentialSource("known"), {
+    name: "known",
+    resolverKind: "static_headers",
+    currentVersion: 3,
+    status: "ready",
+  });
+  assert.equal(
+    await runtime.getEnvironmentCredentialSource("missing"),
+    undefined,
+  );
+  assert.deepEqual(
+    await runtime.updateEnvironmentCredentialSource(
+      "known",
+      "static_headers",
+      { type: "static_headers", values: { token: "next" } },
+    ),
+    {
+      name: "known",
+      resolverKind: "static_headers",
+      currentVersion: 4,
+      status: "ready",
+    },
+  );
+  await runtime.deleteEnvironmentCredentialSource("missing");
+
+  assert.deepEqual(operations, [
+    "get:known",
+    "get:missing",
+    "update:known",
+    "delete:missing",
+  ]);
+});
+
+test("does not expose secret-bearing Sandbox0 credential write errors", async () => {
+  const runtime = runtimeWithClient({
+    credentialSources: {
+      async create() {
+        throw new APIError({
+          statusCode: 400,
+          code: "invalid_credential_source",
+          message: "invalid token super-secret-value",
+        });
+      },
+    },
+  });
+
+  await assert.rejects(
+    runtime.createEnvironmentCredentialSource(
+      "sandpi-secret",
+      "static_headers",
+      {
+        type: "static_headers",
+        values: { token: "super-secret-value" },
+      },
+    ),
+    (error: unknown) => {
+      assert.equal(
+        (error as { code?: string }).code,
+        "sandbox0_invalid_credential_source",
+      );
+      assert.equal(
+        (error as Error).message,
+        "Sandbox0 rejected the credential source material.",
+      );
+      assert.equal(
+        JSON.stringify(error).includes("super-secret-value"),
+        false,
+      );
+      return true;
+    },
+  );
+});
+
+test("does not expose server-only credential source refs in control errors", async () => {
+  const sourceRef = "sandpi-private-source-ref";
+  const failure = () =>
+    new APIError({
+      statusCode: 500,
+      code: "credential_source_failed",
+      message: `failed to access ${sourceRef}`,
+    });
+  const runtime = runtimeWithClient({
+    credentialSources: {
+      async get() {
+        throw failure();
+      },
+      async delete() {
+        throw failure();
+      },
+    },
+  });
+
+  await assert.rejects(
+    runtime.getEnvironmentCredentialSource(sourceRef),
+    (error: unknown) => {
+      assert.equal(
+        (error as Error).message,
+        "Sandbox0 could not read the Environment credential source.",
+      );
+      assert.equal((error as Error).message.includes(sourceRef), false);
+      return true;
+    },
+  );
+  await assert.rejects(
+    runtime.deleteEnvironmentCredentialSource(sourceRef),
+    (error: unknown) => {
+      assert.equal(
+        (error as Error).message,
+        "Sandbox0 could not delete the Environment credential source.",
+      );
+      assert.equal((error as Error).message.includes(sourceRef), false);
+      return true;
+    },
+  );
 });
 
 test("disables Environment TTLs and executes Sandpi-owned pause", async () => {

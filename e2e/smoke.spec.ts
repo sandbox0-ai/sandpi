@@ -20,6 +20,7 @@ import type {
   CodexThreadItem,
   CodexTurn,
 } from "../src/harnesses/codex/types";
+import { PENDING_GUEST_PROMPT_STORAGE_KEY } from "../src/lib/auth-navigation";
 import { mockEnvironmentMetrics } from "../src/lib/mock-data";
 
 interface ControlledEventWindow extends Window {
@@ -128,31 +129,149 @@ async function readyEnvironment(request: APIRequestContext) {
   );
 }
 
-test("loads the live workspace and Environment credential surface", async ({
+async function serveAnonymousBootstrap(page: Page) {
+  await page.route(
+    (url) => url.pathname === "/api/v1/bootstrap",
+    async (route) => {
+      await route.fulfill({
+        status: 401,
+        contentType: "application/json",
+        body: JSON.stringify({
+          error: {
+            code: "authentication_required",
+            message: "Sign in required.",
+            loginUrl: "/api/v1/auth/login",
+          },
+        }),
+      });
+    },
+  );
+}
+
+async function captureLoginNavigation(page: Page) {
+  let requestUrl: string | undefined;
+  await page.route(
+    (url) => url.pathname === "/api/v1/auth/login",
+    async (route) => {
+      requestUrl = route.request().url();
+      await route.fulfill({
+        status: 200,
+        contentType: "text/html",
+        body: "<!doctype html><title>Identity provider</title>",
+      });
+    },
+  );
+  return () => requestUrl;
+}
+
+test("keeps anonymous visitors on the app home until they send a message", async ({
   page,
 }) => {
+  await serveAnonymousBootstrap(page);
+  const loginRequestUrl = await captureLoginNavigation(page);
+
+  await page.goto("/");
+  const appUrl = page.url();
+  await expect(
+    page.getByRole("heading", { name: "What should Codex work on?" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Log in or sign up" }),
+  ).toBeVisible();
+  expect(new URL(page.url()).pathname).toBe("/");
+  expect(loginRequestUrl()).toBeUndefined();
+
+  const composer = page.getByPlaceholder("Ask Codex to work on something…");
+  await composer.fill("Inspect this repository before changing anything");
+  expect(loginRequestUrl()).toBeUndefined();
+
+  await page
+    .getByRole("button", { name: "Send message and continue" })
+    .click();
+  await expect.poll(loginRequestUrl).toBeTruthy();
+
+  const loginRequest = new URL(loginRequestUrl()!);
+  expect(loginRequest.pathname).toBe("/api/v1/auth/login");
+  expect(loginRequest.searchParams.get("return_to")).toBe(
+    new URL("/?new=1", appUrl).toString(),
+  );
+  expect(
+    await page.evaluate(
+      (key) => window.sessionStorage.getItem(key),
+      PENDING_GUEST_PROMPT_STORAGE_KEY,
+    ),
+  ).toBe("Inspect this repository before changing anything");
+});
+
+test("starts login from the anonymous account action", async ({ page }) => {
+  await serveAnonymousBootstrap(page);
+  const loginRequestUrl = await captureLoginNavigation(page);
+
+  await page.goto("/");
+  const appUrl = page.url();
+  await page.getByRole("button", { name: "Log in or sign up" }).click();
+  await expect.poll(loginRequestUrl).toBeTruthy();
+  expect(new URL(loginRequestUrl()!).searchParams.get("return_to")).toBe(appUrl);
+});
+
+test("restores a guest message on the authenticated new Session page", async ({
+  page,
+  request,
+}) => {
+  const response = await request.get("/api/v1/bootstrap");
+  expect(response.ok()).toBeTruthy();
+  const bootstrap = (await response.json()) as ApiEnvelope<SandpiBootstrap>;
+  const environment = bootstrap.data.environments[0];
+  test.skip(!environment, "An Environment is required for this check.");
+  if (!environment) return;
+
+  const pendingPrompt = "Keep this task after authentication";
+  await page.addInitScript(
+    ({ key, prompt }) => window.sessionStorage.setItem(key, prompt),
+    {
+      key: PENDING_GUEST_PROMPT_STORAGE_KEY,
+      prompt: pendingPrompt,
+    },
+  );
+  await page.goto(
+    `/?environment=${encodeURIComponent(environment.id)}&new=1`,
+  );
+
+  await expect(
+    page.locator('textarea[name="new-session-instruction"]'),
+  ).toHaveValue(pendingPrompt);
+  expect(
+    await page.evaluate(
+      (key) => window.sessionStorage.getItem(key),
+      PENDING_GUEST_PROMPT_STORAGE_KEY,
+    ),
+  ).toBeNull();
+});
+
+test("loads the live workspace and Environment credential surface", async ({
+  page,
+  request,
+}) => {
+  const environment = await readyEnvironment(request);
+  test.skip(!environment, "A ready Environment is required.");
+  if (!environment) return;
   const browserErrors: string[] = [];
   page.on("console", (message) => {
     if (message.type() === "error") browserErrors.push(message.text());
   });
   page.on("pageerror", (error) => browserErrors.push(error.message));
 
-  await page.goto("/");
-  const newSessionHeading = page.getByRole("heading", {
-    name: "What should Codex work on?",
-  });
-  if (!(await newSessionHeading.isVisible())) {
-    await page
-      .getByRole("button", { name: "New session in Development" })
-      .click();
-  }
-  await expect(newSessionHeading).toBeVisible();
+  await page.goto(
+    `/?environment=${encodeURIComponent(environment.id)}&new=1`,
+  );
   await expect(
-    page.getByText("Development", { exact: true }).first(),
+    page.locator('textarea[name="new-session-instruction"]'),
   ).toBeVisible();
 
   await page
-    .getByRole("button", { name: "Development settings" })
+    .locator(".environment-row")
+    .filter({ hasText: environment.name })
+    .locator(".environment-row-actions button")
     .last()
     .click();
   await page.getByRole("button", { name: "Agent harness" }).click();
@@ -183,6 +302,14 @@ test("loads the live workspace and Environment credential surface", async ({
   ).toBeVisible();
   await expect(
     page.getByRole("button", { name: /^(Connect|Re-authenticate) Codex$/ }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Credentials", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "Credentials", exact: true }),
+  ).toBeVisible();
+  await expect(page.locator(".environment-credentials-panel")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Add credential", exact: true }),
   ).toBeVisible();
   expect(browserErrors).toEqual([]);
 });

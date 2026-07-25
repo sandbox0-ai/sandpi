@@ -4785,7 +4785,8 @@ code.codex-compact-activity-subject {
 }
 
 .codex-skill-row,
-.codex-mcp-row {
+.codex-mcp-row,
+.environment-credential-row {
   display: grid;
   min-height: 72px;
   grid-template-columns: 32px minmax(0, 1fr) auto;
@@ -4796,7 +4797,8 @@ code.codex-compact-activity-subject {
 }
 
 .codex-skill-row:last-child,
-.codex-mcp-row:last-child {
+.codex-mcp-row:last-child,
+.environment-credential-row:last-child {
   border-bottom: 0;
 }
 
@@ -5011,6 +5013,183 @@ code.codex-compact-activity-subject {
 
 .codex-extension-skeleton:last-child {
   border-bottom: 0;
+}
+
+.environment-credentials-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.environment-credential-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.environment-credential-actions .icon-button {
+  width: 28px;
+  height: 28px;
+}
+
+.environment-credential-delete {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-faint);
+  cursor: pointer;
+}
+
+.environment-credential-delete:hover:not(:disabled),
+.environment-credential-delete.is-confirming {
+  border-color: var(--red);
+  background: var(--red-soft);
+  color: var(--red);
+}
+
+.environment-credential-delete:disabled,
+.environment-credential-actions .toggle:disabled {
+  cursor: default;
+  opacity: 0.42;
+}
+
+.environment-credential-status.is-active {
+  border-color: var(--green);
+  background: var(--green-soft);
+  color: var(--green);
+}
+
+.environment-credential-status.is-disabled {
+  border-color: var(--line);
+  background: var(--panel);
+  color: var(--ink-faint);
+}
+
+.environment-credential-status.is-provisioning,
+.environment-credential-status.is-deleting {
+  border-color: var(--amber);
+  background: var(--amber-soft);
+  color: var(--amber);
+}
+
+.environment-credential-status.is-error {
+  border-color: var(--red);
+  background: var(--red-soft);
+  color: var(--red);
+}
+
+.codex-extension-main > p.environment-credential-row-error {
+  color: var(--red);
+  white-space: normal;
+}
+
+.environment-credential-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+  padding: 15px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--sidebar);
+}
+
+.environment-credential-editor > header,
+.environment-credential-editor > footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.environment-credential-editor > header > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.environment-credential-editor > header span {
+  color: var(--ink-faint);
+  font-size: 8.5px;
+  font-weight: 680;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.environment-credential-editor > header strong {
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 670;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.environment-credential-editor > footer {
+  justify-content: flex-end;
+  padding-top: 2px;
+}
+
+.environment-credential-editor > footer button {
+  min-height: 32px;
+}
+
+.environment-credential-editor-note {
+  margin: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: 7px;
+  background: var(--panel);
+  color: var(--ink-soft);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.environment-credential-pem-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.environment-credential-pem-grid textarea {
+  min-height: 96px;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 10px;
+}
+
+.environment-credential-destination-grid {
+  grid-template-columns: minmax(0, 0.75fr) minmax(0, 0.75fr) minmax(0, 1.5fr);
+}
+
+.environment-credential-locations {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 0;
+  border: 0;
+}
+
+.environment-credential-locations legend {
+  margin-bottom: 7px;
+  color: var(--ink-soft);
+  font-size: 11px;
+  font-weight: 590;
+}
+
+.environment-credential-locations label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink-soft);
+  font-size: 10.5px;
+}
+
+.environment-credential-locations input {
+  accent-color: var(--green);
 }
 
 .codex-extension-skeleton > span,
@@ -6225,7 +6404,8 @@ code.codex-compact-activity-subject {
   .field-grid.two-columns,
   .workspace-backup-fields,
   .workspace-backup-status,
-  .network-mode-grid {
+  .network-mode-grid,
+  .environment-credential-destination-grid {
     grid-template-columns: 1fr;
   }
 
@@ -6252,6 +6432,19 @@ code.codex-compact-activity-subject {
   .credential-actions {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .environment-credential-row {
+    grid-template-columns: 32px minmax(0, 1fr);
+  }
+
+  .environment-credential-actions {
+    grid-column: 2;
+    justify-content: flex-end;
+  }
+
+  .environment-credential-editor {
+    padding: 12px;
   }
 
   .codex-account-identity {

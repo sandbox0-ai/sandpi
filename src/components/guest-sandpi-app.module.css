@@ -1,0 +1,24 @@
+.sidebarEmpty {
+  max-width: 190px;
+  margin: 2px 8px;
+  color: var(--ink-faint);
+  font-size: 10.5px;
+  line-height: 1.55;
+}
+
+.signInAvatar {
+  background: var(--panel-strong);
+  color: var(--ink-soft);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.loginOnSend {
+  color: var(--ink-faint);
+  font-size: 9.5px;
+}
+
+@media (max-width: 520px) {
+  .loginOnSend {
+    display: none;
+  }
+}

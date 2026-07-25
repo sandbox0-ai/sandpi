@@ -163,13 +163,16 @@ Web today; iOS / Android / HarmonyOS later
   deployment API key or a direct Sandbox0 endpoint.
 - **Environment grouping:** an Environment owns one Sandbox, one mounted
   Workspace Volume, one harness process, official harness authentication,
-  template and network policy. Product Sessions are lightweight references to
-  native harness Sessions inside that runtime and cannot switch harnesses.
-  Network-policy edits are applied to that running Environment Sandbox rather
-  than deferred to a future product Session. The settings surface follows
-  Sandbox0's two native fallback modes: `block-all` adds domain allow
-  exceptions, while `allow-all` adds domain deny exceptions. Sandpi submits
-  those exceptions as native `trafficRules`.
+  egress credentials, template and network policy. Product Sessions are
+  lightweight references to native harness Sessions inside that runtime and
+  cannot switch harnesses. Network-policy and egress-credential edits are
+  composed into one complete desired Sandbox0 policy and applied to the running
+  Environment Sandbox rather than deferred to a future product Session. The
+  settings surface follows Sandbox0's two native fallback modes: `block-all`
+  adds domain allow exceptions, while `allow-all` adds domain deny exceptions.
+  Enabled credential destinations receive matching credential rules and, in
+  `block-all`, paired allow rules. An ordinary Network settings save therefore
+  cannot clear existing credential bindings.
 - **Native activity boundary:** the current Session's Inspector exposes
   **Activity** as a harness-native execution record; each harness supplies its
   own renderer instead of a normalized shared event model. Codex attributes
@@ -212,9 +215,10 @@ Web today; iOS / Android / HarmonyOS later
 - **Explicit deletion:** Environment settings require the persisted Environment
   name before permanent deletion. Sandpi serializes deletion with Turn admission,
   stops retained harness and login workers, deletes the Sandbox, Workspace Volume
-  and owned rootfs snapshot, then transactionally removes every active or archived
-  Session, credential and Environment row. Failed external cleanup retains its
-  resource coordinates so the operation can be retried safely.
+  and owned rootfs snapshot, deletes its known Sandbox0 egress credential sources,
+  then transactionally removes every active or archived Session, credential and
+  Environment row. Failed external cleanup retains its resource coordinates so
+  the operation can be retried safely.
 - **User-owned Environments:** every Environment belongs to exactly one user.
   Only that user can list, use, configure or delete it. OIDC users receive
   independent default Environments on first login; Sandpi has no shared tenant,
@@ -223,11 +227,15 @@ Web today; iOS / Android / HarmonyOS later
   creator's Environment and shares that Environment runtime. Pinning is stored
   for the owning user and persists across clients without becoming native
   harness state.
-- **Credential boundary:** provider authentication belongs to an Environment
-  and is encrypted in PostgreSQL. The Environment runtime materializes
-  plaintext only in `/dev/shm`; its persistent Codex home contains a link, so
-  the Workspace Volume does not contain the credential while native rollouts in
-  `/workspace/.sandpi/harnesses/codex` survives runtime recovery.
+- **Credential boundaries:** coding-agent provider authentication belongs to an
+  Environment and is encrypted in PostgreSQL. The Environment runtime
+  materializes plaintext only in `/dev/shm`; its persistent Codex home contains
+  a link, so the Workspace Volume does not contain the credential while native
+  rollouts in `/workspace/.sandpi/harnesses/codex` survive runtime recovery.
+  Outbound-service credentials use a separate boundary: Sandbox0 owns their
+  write-only source material, while Sandpi stores only Environment ownership,
+  destination/projection rules and observed source version. The browser never
+  receives a source reference or stored secret.
 - **Native branching:** Session fork, Turn fork, edit and delete use Codex
   `thread/fork` (or `thread/start` at the empty-history boundary). They never
   copy or restore the shared Workspace. Edit/delete switch the product Session
@@ -247,6 +255,7 @@ first.
 ```text
 Environment
   coding-agent template + network policy + encrypted Codex Credential Source
+  + write-only Sandbox0 egress credential sources and bindings
   + Sandbox + mounted Workspace Volume + native harness process
        |
        +-- Session A: native thread A
@@ -274,7 +283,9 @@ reload the harness-native snapshot.
 
 - Node.js 24 and npm 11
 - PostgreSQL 15 or newer
-- A Sandbox0 deployment and deployment API key
+- A Sandbox0 deployment and deployment API key with Sandbox/Volume access and
+  `credentialsource:read`, `credentialsource:write` and
+  `credentialsource:delete`
 - A Sandbox0 `coding-agent` template; Sandpi mounts each Environment's
   Workspace Volume at `/workspace`
 - Docker Engine with Compose v2 for the container workflow
@@ -378,6 +389,32 @@ ordinary sandbox egress.
 Local STDIO servers run beside Codex with access to the Environment Workspace.
 Treat their command and package as trusted code.
 
+### Configure Environment credentials
+
+Open **Environment Settings → Credentials** to attach outbound credentials to
+the Environment's shared Sandbox. This is separate from **Agent harness**,
+which continues to select and authenticate the coding agent used by the
+Environment.
+
+The list intentionally resembles Skills: it shows only credentials owned by
+the current Environment, their destination, status and an enable switch.
+Sandpi supports HTTP-header and request-placeholder injection, mTLS client
+certificates, username/password protocols and SSH proxy keys. Every credential
+requires explicit domains, TCP ports, protocol and failure behavior. Disabled
+credentials remain stored but are removed from the Sandbox policy.
+
+Secret material is accepted only while creating or replacing a credential and
+is sent directly to Sandbox0. Sandpi PostgreSQL stores no token, password,
+certificate or private key, and the API never returns Sandbox0 source names.
+Sandpi also never lists deployment-wide credential sources: it authorizes the
+Environment owner first, then reads or mutates only a server-generated source
+reference already attached to that Environment. Deletion removes the binding
+before deleting the source; startup reconciliation repairs only known
+Environment records.
+
+See [Environment egress credentials](docs/architecture/environment-egress-credentials.md)
+for the ownership, lifecycle and network-composition invariants.
+
 
 If PostgreSQL already runs locally, set `DATABASE_URL` to that instance and
 skip the Compose command. The database user must be allowed to create and alter
@@ -450,6 +487,14 @@ ${SANDPI_PUBLIC_URL}/api/v1/auth/callback
 OIDC identifies a Sandpi user; it never authenticates Sandpi to Sandbox0. A
 private deployment may use any conforming OIDC provider. Sandpi Cloud supplies
 its hosted identity configuration through the same contract.
+
+The workspace root remains an App-shaped anonymous landing surface. It does not
+load or expose Environment or Session data, and it does not redirect on page
+load. Login starts only after an explicit protected action, such as sending the
+guest composer message or choosing **Log in or sign up** in the lower-left
+account area. A submitted guest draft is kept in same-tab session storage and
+restored on the authenticated new-Session page. Direct visits to protected
+surfaces such as Preferences and the Web IDE still start OIDC immediately.
 
 `SANDPI_OIDC_TOKEN_ENDPOINT_AUTH_METHOD` accepts `client_secret_post`,
 `client_secret_basic` or `none`. It defaults to `client_secret_post` when a
