@@ -8,6 +8,7 @@ import {
   Copy,
   Files,
   GitFork,
+  ListTree,
   LoaderCircle,
   Menu,
   PanelLeftOpen,
@@ -1742,7 +1743,9 @@ export function CodexConversation({
           <div className="conversation-header-actions">
             <button
               type="button"
-              className={`header-action-button ${terminalOpen ? "is-active" : ""}`}
+              className={`header-action-button conversation-desktop-header-action ${
+                terminalOpen ? "is-active" : ""
+              }`}
               aria-label={ui.terminal}
               aria-pressed={terminalOpen}
               title={ui.terminal}
@@ -1753,11 +1756,37 @@ export function CodexConversation({
             </button>
             <button
               type="button"
-              className={`icon-button ${inspectorOpen ? "is-active" : ""}`}
+              className={`icon-button conversation-desktop-header-action ${
+                inspectorOpen ? "is-active" : ""
+              }`}
               aria-label={inspectorOpen ? ui.closeInspector : ui.openInspector}
               onClick={onToggleInspector}
             >
-              <PanelRight size={18} />
+              <PanelRight size={18} aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              className={`icon-button conversation-mobile-inspector-action ${
+                inspectorOpen && inspectorTab === "files" ? "is-active" : ""
+              }`}
+              aria-label={ui.openFiles}
+              aria-pressed={inspectorOpen && inspectorTab === "files"}
+              title={ui.openFiles}
+              onClick={() => onOpenInspector("files")}
+            >
+              <Files size={17} aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              className={`icon-button conversation-mobile-inspector-action ${
+                inspectorOpen && inspectorTab === "activity" ? "is-active" : ""
+              }`}
+              aria-label={ui.openSessionActivity}
+              aria-pressed={inspectorOpen && inspectorTab === "activity"}
+              title={ui.openSessionActivity}
+              onClick={() => onOpenInspector("activity")}
+            >
+              <ListTree size={17} aria-hidden="true" />
             </button>
           </div>
         </header>

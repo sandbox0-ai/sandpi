@@ -949,6 +949,10 @@ pre,
   gap: 3px;
 }
 
+.conversation-mobile-inspector-action {
+  display: none;
+}
+
 .header-action-button {
   display: inline-flex;
   height: 30px;
@@ -6545,6 +6549,14 @@ code.codex-compact-activity-subject {
     padding-left: 10px;
   }
 
+  .conversation-desktop-header-action {
+    display: none;
+  }
+
+  .conversation-mobile-inspector-action {
+    display: inline-flex;
+  }
+
   .conversation-pane {
     grid-column: 1;
   }
@@ -6563,13 +6575,6 @@ code.codex-compact-activity-subject {
   .conversation-header {
     gap: 6px;
     padding-right: 8px;
-  }
-
-  .conversation-header-actions .header-action-button {
-    display: inline-flex;
-    width: 32px;
-    justify-content: center;
-    padding: 0;
   }
 
   .conversation-breadcrumb {
