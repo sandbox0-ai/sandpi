@@ -16,6 +16,7 @@ import type {
 } from "../src/lib/types";
 import type {
   CodexEventEnvelope,
+  CodexFileUpdateChange,
   CodexNativeSnapshot,
   CodexThread,
   CodexThreadItem,
@@ -2110,6 +2111,24 @@ test("keeps an optimistic prompt ahead of native Activity without duplicating it
     exitCode: null,
     durationMs: null,
   };
+  const liveFileChanges: CodexFileUpdateChange[] = [
+    {
+      path: "/workspace/app/page.tsx",
+      kind: { type: "update", move_path: null },
+      diff: "-old page\n+new page",
+    },
+    {
+      path: "/workspace/app/theme.css",
+      kind: { type: "add" },
+      diff: "+body {}",
+    },
+  ];
+  const completedFileChange: CodexThreadItem = {
+    type: "fileChange",
+    id: "native-files-e2e-order",
+    changes: liveFileChanges,
+    status: "completed",
+  };
   let sequence = 1;
   const envelope = (
     notification: CodexEventEnvelope["notification"],
@@ -2156,6 +2175,39 @@ test("keeps an optimistic prompt ahead of native Activity without duplicating it
     eventPath,
     "notification",
     envelope({
+      method: "item/fileChange/patchUpdated",
+      params: {
+        threadId: nativeThreadId,
+        turnId: nativeTurnId,
+        itemId: completedFileChange.id,
+        changes: liveFileChanges,
+      },
+    }),
+  );
+  const activityDetails = activityRow.locator(":scope > details");
+  await expect(activityDetails).toHaveAttribute("open", "");
+  await expect(activityDetails).toContainText("Editing 2 files");
+  await expect(activityDetails).toContainText("app/page.tsx");
+  await expect(activityDetails).toContainText("app/theme.css");
+  await emitControlledEvent(
+    page,
+    eventPath,
+    "notification",
+    envelope({
+      method: "item/completed",
+      params: {
+        threadId: nativeThreadId,
+        turnId: nativeTurnId,
+        item: completedFileChange,
+        completedAtMs: now * 1_000 + 150,
+      },
+    }),
+  );
+  await emitControlledEvent(
+    page,
+    eventPath,
+    "notification",
+    envelope({
       method: "item/started",
       params: {
         threadId: nativeThreadId,
@@ -2165,7 +2217,6 @@ test("keeps an optimistic prompt ahead of native Activity without duplicating it
       },
     }),
   );
-  const activityDetails = activityRow.locator(":scope > details");
   await expect(activityDetails).toHaveAttribute("open", "");
   await expect(activityDetails).toContainText("rg --files");
   await expect(activityDetails).toContainText("app/page.tsx");
@@ -2190,7 +2241,12 @@ test("keeps an optimistic prompt ahead of native Activity without duplicating it
   };
   const completedTurn: CodexTurn = {
     ...runningTurn,
-    items: [nativeUserMessage, completedCommand, finalMessage],
+    items: [
+      nativeUserMessage,
+      completedFileChange,
+      completedCommand,
+      finalMessage,
+    ],
     status: "completed",
     completedAt: now + 1,
     durationMs: 1_000,

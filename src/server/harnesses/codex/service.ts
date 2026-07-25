@@ -97,6 +97,8 @@ const CODEX_MCP_SERVER_NAME = /^[A-Za-z0-9_-]{1,64}$/;
 const CODEX_MCP_OAUTH_TIMEOUT_SECONDS = 5 * 60;
 const MAX_CODEX_RATE_LIMIT_BUCKETS = 16;
 const MAX_CODEX_RATE_LIMIT_RESET_CREDITS = 1_000_000;
+const CODEX_APPLY_PATCH_STREAMING_CONFIG =
+  "features.apply_patch_streaming_events";
 const CODEX_AGENT_THREAD_PAGE_LIMIT = 100;
 const MAX_CODEX_AGENT_THREADS = 1_000;
 const CODEX_ACCOUNT_PLAN_TYPES = new Set<CodexAccountPlanType>([
@@ -4220,9 +4222,12 @@ function threadConfiguration(input: {
 }) {
   return {
     ...(input.modelId ? { model: input.modelId } : {}),
-    ...(input.reasoningEffort
-      ? { config: { model_reasoning_effort: input.reasoningEffort } }
-      : {}),
+    config: {
+      [CODEX_APPLY_PATCH_STREAMING_CONFIG]: true,
+      ...(input.reasoningEffort
+        ? { model_reasoning_effort: input.reasoningEffort }
+        : {}),
+    },
     ...nativeCollaborationMode(
       input.collaborationMode,
       input.modelId,

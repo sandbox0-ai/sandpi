@@ -2123,6 +2123,7 @@ test("starts the first Turn on a newly created loaded Thread without resume", as
       ({ message }) => message.method === "turn/start",
     )?.message.params as Record<string, unknown> | undefined;
     assert.deepEqual(threadStart?.config, {
+      "features.apply_patch_streaming_events": true,
       model_reasoning_effort: "high",
     });
     assert.equal(turnStart?.effort, "high");
@@ -4879,6 +4880,7 @@ test("lazily attaches only the native Session that starts a Turn", async () => {
     assert.equal(resumeParams?.threadId, "thread-one");
     assert.equal(resumeParams?.model, "gpt-next");
     assert.deepEqual(resumeParams?.config, {
+      "features.apply_patch_streaming_events": true,
       model_reasoning_effort: "high",
     });
     assert.equal("excludeTurns" in (resumeParams ?? {}), false);
@@ -5769,6 +5771,52 @@ test("publishes a running tool before Codex completes it", async () => {
   }
 });
 
+test("publishes an incremental file edit before Codex starts the completed item", async () => {
+  const context = fixture();
+  try {
+    context.service.ensureWorker("session-one");
+    context.enqueue([
+      {
+        method: "item/fileChange/patchUpdated",
+        params: {
+          threadId: "thread-one",
+          turnId: "turn-file-live",
+          itemId: "file-tool-live",
+          changes: [
+            {
+              path: "/workspace/app/page.tsx",
+              kind: { type: "update", move_path: null },
+              diff: "-old\n+new",
+            },
+          ],
+        },
+      },
+    ]);
+
+    await eventually(
+      () => context.service.listLiveNotifications("session-one").length === 1,
+      "incremental file edit notification was not published",
+    );
+    const notifications = context.service
+      .listLiveNotifications("session-one")
+      .flatMap((update) =>
+        update.kind === "notification" ? [update.event.notification] : [],
+      );
+    assert.deepEqual(
+      notifications.map((notification) => notification.method),
+      ["item/fileChange/patchUpdated"],
+    );
+    assert.equal(
+      notifications.some(
+        (notification) => notification.method === "item/started",
+      ),
+      false,
+    );
+  } finally {
+    await context.close();
+  }
+});
+
 test("reconnects the Supervisor stream from the committed cursor", async () => {
   const context = fixture();
   try {
@@ -5876,6 +5924,12 @@ test("forks a product Session only through Codex thread/fork", async () => {
         .length,
       1,
     );
+    const forkParams = context.writes.find(
+      (write) => write.message.method === "thread/fork",
+    )?.message.params as Record<string, unknown> | undefined;
+    assert.deepEqual(forkParams?.config, {
+      "features.apply_patch_streaming_events": true,
+    });
     await context.service.startTurn({
       userId: "user",
       sessionId: childId,
