@@ -2,11 +2,8 @@ import type { SandpiUser } from "@/lib/types";
 
 export function SandpiBrandLockup() {
   return (
-    <div className="brand-lockup" aria-label="Sandpi">
-      <span className="brand-mark" aria-hidden="true">
-        <span />
-        <span />
-      </span>
+    <div className="brand-lockup" aria-label="Sandpi" translate="no">
+      <span className="brand-mark" aria-hidden="true" />
       <span>sandpi</span>
     </div>
   );

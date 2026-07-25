@@ -1,6 +1,24 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <rect width="32" height="32" rx="7" fill="#171716"/>
-  <path d="M8 8.5h16v11.75h-6.1L13 25v-4.75H8z" fill="none" stroke="#fff" stroke-width="2" stroke-linejoin="round"/>
-  <rect x="12" y="13" width="2" height="2" rx=".5" fill="#fff"/>
-  <rect x="18" y="13" width="2" height="2" rx=".5" fill="#fff"/>
+  <style>
+    .mark {
+      fill: #171716;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      .mark {
+        fill: #f7f6f2;
+      }
+    }
+  </style>
+  <defs>
+    <mask id="sandpi-mark" maskUnits="userSpaceOnUse">
+      <path
+        d="M8 3h16c3.3 0 6 2.7 6 6v11c0 3.3-2.7 6-6 6h-4l-7 5v-5H8c-3.3 0-6-2.7-6-6V9c0-3.3 2.7-6 6-6z"
+        fill="#fff"
+      />
+      <rect x="9.5" y="11.5" width="3" height="5" rx="1.5" fill="#000" />
+      <rect x="19.5" y="11.5" width="3" height="5" rx="1.5" fill="#000" />
+    </mask>
+  </defs>
+  <rect class="mark" width="32" height="32" mask="url(#sandpi-mark)" />
 </svg>
