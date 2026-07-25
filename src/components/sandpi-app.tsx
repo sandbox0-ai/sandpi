@@ -669,6 +669,11 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
 
   const handleInspectorOpenChange = useCallback((open: boolean) => {
     setInspectorOpen(open);
+    if (!open) {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("path");
+      window.history.replaceState(window.history.state, "", url);
+    }
     updateLocalUiPreferences((current) => ({
       ...current,
       workspace: { ...current.workspace, inspectorOpen: open },

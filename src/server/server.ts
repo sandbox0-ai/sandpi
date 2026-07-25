@@ -114,6 +114,16 @@ const codexComposerUploadSchema = z.object({
     .default("application/octet-stream"),
   dataBase64: z.string().min(1).max(MAX_CODEX_COMPOSER_UPLOAD_BASE64_LENGTH),
 });
+const codexRateLimitResetSchema = z
+  .object({
+    idempotencyKey: z
+      .string()
+      .trim()
+      .min(16)
+      .max(128)
+      .refine((value) => !/[\u0000\r\n]/.test(value)),
+  })
+  .strict();
 export interface SandpiServerOptions {
   config?: SandpiConfig;
   pool?: Pool;
@@ -649,6 +659,19 @@ function registerApiRoutes(
         request.params.environmentId,
       ),
     }),
+  );
+  app.put<{ Params: { environmentId: string }; Body: unknown }>(
+    "/api/v1/environments/:environmentId/harnesses/codex/rate-limits/reset",
+    async (request) => {
+      const body = codexRateLimitResetSchema.parse(request.body);
+      return {
+        data: await services.codex.consumeAccountRateLimitResetCredit({
+          userId: request.principal.userId,
+          environmentId: request.params.environmentId,
+          idempotencyKey: body.idempotencyKey,
+        }),
+      };
+    },
   );
   app.get<{ Params: { environmentId: string } }>(
     "/api/v1/environments/:environmentId/harnesses/codex/models",

@@ -9,7 +9,6 @@ export type CodexSlashCommandName =
   | "compact"
   | "copy"
   | "diff"
-  | "fast"
   | "fork"
   | "goal"
   | "init"
@@ -24,7 +23,6 @@ export type CodexSlashCommandName =
   | "rename"
   | "review"
   | "skills"
-  | "status"
   | "subagents"
   | "usage";
 
@@ -49,7 +47,8 @@ const BOTH_CONTEXTS: readonly CodexSlashCommandContext[] = [
  * Browser commands belong to the Codex harness and map to either a native
  * app-server operation or an existing Sandpi product surface. Terminal-only
  * commands are intentionally absent. In particular, Sandpi does not expose
- * `/resume`, `/side`, or its `/btw` alias.
+ * `/resume`, `/side`, its `/btw` alias, `/fast`, or `/status`. Fast is a
+ * composer control, while the browser already presents Session status.
  */
 export const CODEX_SLASH_COMMANDS: readonly CodexSlashCommand[] = [
   {
@@ -174,15 +173,6 @@ export const CODEX_SLASH_COMMANDS: readonly CodexSlashCommand[] = [
     },
   },
   {
-    name: "fast",
-    contexts: BOTH_CONTEXTS,
-    argumentMode: "none",
-    description: {
-      en: "Toggle the native Fast tier for the selected model",
-      "zh-CN": "切换所选模型的原生 Fast tier",
-    },
-  },
-  {
     name: "mention",
     contexts: BOTH_CONTEXTS,
     argumentMode: "none",
@@ -279,15 +269,6 @@ export const CODEX_SLASH_COMMANDS: readonly CodexSlashCommand[] = [
     description: {
       en: "Open the Codex account connection",
       "zh-CN": "打开 Codex 账户连接设置",
-    },
-  },
-  {
-    name: "status",
-    contexts: BOTH_CONTEXTS,
-    argumentMode: "none",
-    description: {
-      en: "Show the current Environment and Session status",
-      "zh-CN": "显示当前环境与 Session 状态",
     },
   },
 ];

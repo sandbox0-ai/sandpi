@@ -56,8 +56,23 @@ export interface CodexRateLimitSnapshot {
   reached: boolean;
 }
 
+export interface CodexRateLimitResetCredits {
+  availableCount: number;
+}
+
+export type CodexRateLimitResetOutcome =
+  | "reset"
+  | "nothingToReset"
+  | "noCredit"
+  | "alreadyRedeemed";
+
+export interface CodexRateLimitResetResult {
+  outcome: CodexRateLimitResetOutcome;
+}
+
 export interface CodexAccountRateLimits {
   limits: CodexRateLimitSnapshot[];
+  resetCredits?: CodexRateLimitResetCredits;
   fetchedAt: UnixTimestamp;
 }
 

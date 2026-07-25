@@ -8,13 +8,15 @@ import {
   parseCodexSlashInvocation,
 } from "./slash-commands";
 
-test("never exposes resume or side-thread commands in Sandpi", () => {
+test("omits commands represented by Sandpi navigation or composer controls", () => {
   const names = new Set<string>(
     CODEX_SLASH_COMMANDS.map((command) => command.name),
   );
   assert.equal(names.has("resume"), false);
   assert.equal(names.has("side"), false);
   assert.equal(names.has("btw"), false);
+  assert.equal(names.has("fast"), false);
+  assert.equal(names.has("status"), false);
 });
 
 test("filters commands by Sandpi composer context and query", () => {
@@ -35,16 +37,18 @@ test("filters commands by Sandpi composer context and query", () => {
 });
 
 test("hides unsafe native mutations while a Turn is running", () => {
-  const runningNames = codexSlashMenuCommands(
-    "/",
-    "session",
-    true,
-  ).map((command) => command.name);
-  assert.equal(runningNames.includes("fork"), false);
-  assert.equal(runningNames.includes("compact"), false);
-  assert.equal(runningNames.includes("review"), false);
-  assert.equal(runningNames.includes("new"), true);
-  assert.equal(runningNames.includes("status"), true);
+  const runningNames = new Set<string>(
+    codexSlashMenuCommands(
+      "/",
+      "session",
+      true,
+    ).map((command) => command.name),
+  );
+  assert.equal(runningNames.has("fork"), false);
+  assert.equal(runningNames.has("compact"), false);
+  assert.equal(runningNames.has("review"), false);
+  assert.equal(runningNames.has("new"), true);
+  assert.equal(runningNames.has("status"), false);
 });
 
 test("parses arguments and rejects unavailable or unknown commands", () => {
@@ -73,11 +77,11 @@ test("completes argument commands without executing them", () => {
   const rename = CODEX_SLASH_COMMANDS.find(
     (command) => command.name === "rename",
   );
-  const status = CODEX_SLASH_COMMANDS.find(
-    (command) => command.name === "status",
+  const model = CODEX_SLASH_COMMANDS.find(
+    (command) => command.name === "model",
   );
   assert.ok(rename);
-  assert.ok(status);
+  assert.ok(model);
   assert.equal(codexSlashCommandCompletion(rename), "/rename ");
-  assert.equal(codexSlashCommandCompletion(status), "/status");
+  assert.equal(codexSlashCommandCompletion(model), "/model");
 });

@@ -1626,6 +1626,17 @@ test("reads bounded native Codex account rate limits", async () => {
               spendControlReached: true,
             },
           },
+          rateLimitResetCredits: {
+            availableCount: 2,
+            credits: [
+              {
+                id: "opaque-credit",
+                status: "available",
+                resetType: "codexRateLimits",
+                grantedAt: 1_799_000_000,
+              },
+            ],
+          },
         },
       };
     },
@@ -1638,6 +1649,7 @@ test("reads bounded native Codex account rate limits", async () => {
     );
 
     assert.equal(typeof usage.fetchedAt, "number");
+    assert.deepEqual(usage.resetCredits, { availableCount: 2 });
     assert.deepEqual(usage.limits, [
       {
         id: "codex",
@@ -1669,6 +1681,101 @@ test("reads bounded native Codex account rate limits", async () => {
       ({ message }) => message.method === "account/rateLimits/read",
     )?.message;
     assert.deepEqual(request?.params, {});
+  } finally {
+    await context.close();
+  }
+});
+
+test("consumes a native Codex account rate-limit reset credit", async () => {
+  const context = fixture({
+    onRequest(message) {
+      if (
+        message.method !== "account/rateLimitResetCredit/consume"
+      ) {
+        return undefined;
+      }
+      return {
+        id: message.id,
+        result: { outcome: "reset" },
+      };
+    },
+  });
+
+  try {
+    assert.deepEqual(
+      await context.service.consumeAccountRateLimitResetCredit({
+        userId: "user",
+        environmentId: environment.id,
+        idempotencyKey: "338b8bbf-fbab-4394-a1f9-6fda7eeadc52",
+      }),
+      { outcome: "reset" },
+    );
+    const request = context.writes.find(
+      ({ message }) =>
+        message.method === "account/rateLimitResetCredit/consume",
+    )?.message;
+    assert.deepEqual(request?.params, {
+      idempotencyKey: "338b8bbf-fbab-4394-a1f9-6fda7eeadc52",
+    });
+  } finally {
+    await context.close();
+  }
+});
+
+test("preserves an unavailable native reset-credit capability", async () => {
+  const context = fixture({
+    onRequest(message) {
+      if (message.method !== "account/rateLimits/read") return undefined;
+      return {
+        id: message.id,
+        result: {
+          rateLimits: {},
+          rateLimitResetCredits: { availableCount: 0 },
+        },
+      };
+    },
+  });
+
+  try {
+    const usage = await context.service.accountRateLimitsForEnvironment(
+      "user",
+      environment.id,
+    );
+    assert.deepEqual(usage.limits, []);
+    assert.deepEqual(usage.resetCredits, { availableCount: 0 });
+    assert.equal(typeof usage.fetchedAt, "number");
+  } finally {
+    await context.close();
+  }
+});
+
+test("rejects an unknown Codex account rate-limit reset outcome", async () => {
+  const context = fixture({
+    onRequest(message) {
+      if (
+        message.method !== "account/rateLimitResetCredit/consume"
+      ) {
+        return undefined;
+      }
+      return {
+        id: message.id,
+        result: { outcome: "provider-private-state" },
+      };
+    },
+  });
+
+  try {
+    await assert.rejects(
+      context.service.consumeAccountRateLimitResetCredit({
+        userId: "user",
+        environmentId: environment.id,
+        idempotencyKey: "338b8bbf-fbab-4394-a1f9-6fda7eeadc52",
+      }),
+      (error: unknown) =>
+        error instanceof HttpError &&
+        error.statusCode === 502 &&
+        error.code === "codex_account_rate_limit_reset_failed",
+    );
   } finally {
     await context.close();
   }

@@ -915,30 +915,6 @@ export function CodexConversation({
       openModelPicker();
       return;
     }
-    if (command.name === "fast") {
-      if (!selectedModel.fastServiceTier) {
-        setCommandNotice({
-          tone: "error",
-          message:
-            language === "zh-CN"
-              ? "所选模型没有通过 Codex 提供 Fast tier。"
-              : "Codex does not report a Fast tier for the selected model.",
-        });
-        return;
-      }
-      setFastMode((enabled) => !enabled);
-      setCommandNotice({
-        tone: "info",
-        message: fastMode
-          ? language === "zh-CN"
-            ? "Fast mode 已关闭。"
-            : "Fast mode is off."
-          : language === "zh-CN"
-            ? "Fast mode 已开启。"
-            : "Fast mode is on.",
-      });
-      return;
-    }
     if (command.name === "mention") {
       setMentionOpenRequest((request) => request + 1);
       return;
@@ -965,23 +941,6 @@ export function CodexConversation({
     }
     if (command.name === "usage" || command.name === "logout") {
       onOpenEnvironmentSettings("credentials");
-      return;
-    }
-    if (command.name === "status") {
-      setCommandNotice({
-        tone: "info",
-        message: [
-          environment.name,
-          session.title,
-          ui.status(session.status),
-          selectedModel.displayName,
-          selectedReasoningEffort
-            ? codexReasoningEffortLabel(selectedReasoningEffort)
-            : undefined,
-        ]
-          .filter(Boolean)
-          .join(" · "),
-      });
       return;
     }
     if (command.name === "copy") {
@@ -1916,27 +1875,6 @@ export function CodexConversation({
                 </button>
               </div>
             ) : null}
-            {fastMode && selectedModel.fastServiceTier ? (
-              <div className="codex-composer-mode" role="status">
-                <span>
-                  <strong>Fast mode</strong>
-                  {" · "}
-                  {selectedModel.fastServiceTier.description}
-                </span>
-                <button
-                  type="button"
-                  aria-label={
-                    language === "zh-CN" ? "关闭 Fast mode" : "Turn off Fast mode"
-                  }
-                  onClick={() => {
-                    setFastMode(false);
-                    setCommandNotice(null);
-                  }}
-                >
-                  <X size={12} aria-hidden="true" />
-                </button>
-              </div>
-            ) : null}
             <CodexComposerLocalImages
               language={language}
               localImages={localImages}
@@ -2021,6 +1959,12 @@ export function CodexConversation({
               selectedReasoningEffort={selectedReasoningEffort}
               onModelChange={selectModel}
               onReasoningEffortChange={selectReasoningEffort}
+              fastEnabled={fastMode}
+              fastDisabled={sending}
+              onFastEnabledChange={(enabled) => {
+                setFastMode(enabled);
+                setCommandNotice(null);
+              }}
               modelSelectRef={modelSelectRef}
               mentionOpenRequest={mentionOpenRequest}
               status={{

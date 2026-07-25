@@ -62,6 +62,9 @@ interface CodexComposerToolbarProps {
   selectedReasoningEffort: string;
   onModelChange: (modelId: string) => void;
   onReasoningEffortChange: (effort: string) => void;
+  fastEnabled: boolean;
+  fastDisabled: boolean;
+  onFastEnabledChange: (enabled: boolean) => void;
   modelSelectRef?: RefObject<HTMLSelectElement | null>;
   mentionOpenRequest?: number;
   status: CodexComposerStatus;
@@ -87,6 +90,7 @@ const composerCopy = {
     boundToEnvironment: "Bound to this Environment",
     selectModel: (agent: string) => `Select ${agent} model`,
     selectReasoning: (model: string) => `Select reasoning effort for ${model}`,
+    fastMode: (name: string) => `${name} mode`,
   },
   "zh-CN": {
     uploadFiles: "上传文件",
@@ -106,6 +110,7 @@ const composerCopy = {
     boundToEnvironment: "绑定到此环境",
     selectModel: (agent: string) => `选择 ${agent} 模型`,
     selectReasoning: (model: string) => `选择 ${model} 的推理深度`,
+    fastMode: (name: string) => `${name} 模式`,
   },
 } as const;
 
@@ -184,6 +189,9 @@ export function CodexComposerToolbar({
   selectedReasoningEffort,
   onModelChange,
   onReasoningEffortChange,
+  fastEnabled,
+  fastDisabled,
+  onFastEnabledChange,
   modelSelectRef,
   mentionOpenRequest,
   status,
@@ -551,6 +559,20 @@ export function CodexComposerToolbar({
               </select>
               <ChevronDown size={12} aria-hidden="true" />
             </label>
+          ) : null}
+          {selectedModel?.fastServiceTier ? (
+            <button
+              type="button"
+              className="composer-fast-toggle"
+              data-testid="codex-fast-toggle"
+              aria-label={copy.fastMode(selectedModel.fastServiceTier.name)}
+              aria-pressed={fastEnabled}
+              title={selectedModel.fastServiceTier.description}
+              disabled={fastDisabled}
+              onClick={() => onFastEnabledChange(!fastEnabled)}
+            >
+              {selectedModel.fastServiceTier.name}
+            </button>
           ) : null}
         </span>
       </div>

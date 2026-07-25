@@ -45,8 +45,10 @@ import type {
   CodexAccountPlanType,
   CodexAccountRateLimits,
   CodexAccountSummary,
+  CodexRateLimitResetResult,
   CodexRateLimitWindow,
 } from "@/harnesses/codex/environment-tools";
+import { createId } from "@/lib/id";
 import {
   NETWORK_DOMAIN_INPUT_ERROR,
   normalizeNetworkDomain,
@@ -250,12 +252,18 @@ export function EnvironmentSettings({
     useState<CodexAccountRateLimits | null>(null);
   const [codexUsageLoading, setCodexUsageLoading] = useState(false);
   const [codexUsageError, setCodexUsageError] = useState("");
+  const [codexUsageResetConfirming, setCodexUsageResetConfirming] =
+    useState(false);
+  const [codexUsageResetBusy, setCodexUsageResetBusy] = useState(false);
+  const [codexUsageResetMessage, setCodexUsageResetMessage] = useState("");
+  const [codexUsageResetError, setCodexUsageResetError] = useState("");
   const [codexEnvironmentRefreshError, setCodexEnvironmentRefreshError] =
     useState("");
   const [codexAccountReload, setCodexAccountReload] = useState(0);
   const drawerRef = useRef<HTMLElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const dangerZoneRef = useRef<HTMLDivElement>(null);
+  const codexUsageResetIdempotencyKeyRef = useRef<string | null>(null);
   const codexAuthFlowId = codexAuthFlow?.id;
   const codexAuthFlowStatus = codexAuthFlow?.status;
   const blocksByDefault = draft.networkPolicy.mode === "block-all";
@@ -335,6 +343,14 @@ export function EnvironmentSettings({
     });
     return () => window.cancelAnimationFrame(frame);
   }, [deleteConfirming]);
+
+  useEffect(() => {
+    setCodexUsageResetConfirming(false);
+    setCodexUsageResetBusy(false);
+    setCodexUsageResetMessage("");
+    setCodexUsageResetError("");
+    codexUsageResetIdempotencyKeyRef.current = null;
+  }, [environment.id]);
 
   useEffect(() => {
     if (activeTab !== "credentials") return;
@@ -549,6 +565,46 @@ export function EnvironmentSettings({
           ? error.message
           : "Could not cancel Codex authentication.",
       );
+    }
+  }
+
+  async function resetCodexUsageLimits() {
+    if (codexUsageResetBusy || !codexUsageResetConfirming) return;
+    const idempotencyKey =
+      codexUsageResetIdempotencyKeyRef.current ??
+      createId("codex-usage-reset", 24);
+    codexUsageResetIdempotencyKeyRef.current = idempotencyKey;
+    setCodexUsageResetBusy(true);
+    setCodexUsageResetError("");
+    setCodexUsageResetMessage("");
+    try {
+      const response = await apiFetch<
+        ApiEnvelope<CodexRateLimitResetResult>
+      >(
+        `/api/v1/environments/${encodeURIComponent(environment.id)}/harnesses/codex/rate-limits/reset`,
+        {
+          method: "PUT",
+          body: JSON.stringify({ idempotencyKey }),
+        },
+      );
+      const messages: Record<CodexRateLimitResetResult["outcome"], string> = {
+        reset: "Codex usage limits were reset.",
+        nothingToReset: "No current usage window was eligible for reset.",
+        noCredit: "No Codex reset credit is available.",
+        alreadyRedeemed: "This usage reset was already applied.",
+      };
+      setCodexUsageResetMessage(messages[response.data.outcome]);
+      setCodexUsageResetConfirming(false);
+      codexUsageResetIdempotencyKeyRef.current = null;
+      setCodexAccountReload((current) => current + 1);
+    } catch (error) {
+      setCodexUsageResetError(
+        error instanceof Error
+          ? error.message
+          : "Codex usage limits could not be reset.",
+      );
+    } finally {
+      setCodexUsageResetBusy(false);
     }
   }
 
@@ -794,6 +850,8 @@ export function EnvironmentSettings({
     codexRateLimits?.limits.find((limit) => limit.planType)?.planType;
   const displayedCodexLastVerified =
     codexAccount?.lastVerified ?? draft.codingAgent.lastVerified;
+  const codexUsageResetCreditCount =
+    codexRateLimits?.resetCredits?.availableCount;
 
   return (
     <div
@@ -1574,23 +1632,122 @@ export function EnvironmentSettings({
                             Codex usage limits
                           </strong>
                         </div>
-                        <button
-                          type="button"
-                          className="icon-button"
-                          aria-label="Refresh Codex usage"
-                          title="Refresh Codex usage"
-                          disabled={codexUsageLoading}
-                          onClick={() =>
-                            setCodexAccountReload((current) => current + 1)
-                          }
-                        >
-                          <RefreshCw
-                            className={codexUsageLoading ? "is-spinning" : ""}
-                            size={14}
-                            aria-hidden="true"
-                          />
-                        </button>
+                        <div className="codex-usage-actions">
+                          {codexUsageResetCreditCount !== undefined ? (
+                            <button
+                              type="button"
+                              className="text-action-button"
+                              aria-label={`Reset Codex usage (${codexUsageResetCreditCount} reset ${
+                                codexUsageResetCreditCount === 1
+                                  ? "credit"
+                                  : "credits"
+                              } available)`}
+                              title={
+                                codexUsageResetCreditCount > 0
+                                  ? "Use one Codex reset credit"
+                                  : "No Codex reset credits are available"
+                              }
+                              disabled={
+                                codexUsageLoading ||
+                                codexUsageResetBusy ||
+                                codexUsageResetCreditCount === 0
+                              }
+                              onClick={() => {
+                                codexUsageResetIdempotencyKeyRef.current =
+                                  createId("codex-usage-reset", 24);
+                                setCodexUsageResetError("");
+                                setCodexUsageResetMessage("");
+                                setCodexUsageResetConfirming(true);
+                              }}
+                            >
+                              <RotateCcw size={12} aria-hidden="true" />
+                              Reset · {codexUsageResetCreditCount}
+                            </button>
+                          ) : null}
+                          <button
+                            type="button"
+                            className="icon-button"
+                            aria-label="Refresh Codex usage"
+                            title="Refresh Codex usage"
+                            disabled={
+                              codexUsageLoading || codexUsageResetBusy
+                            }
+                            onClick={() =>
+                              setCodexAccountReload((current) => current + 1)
+                            }
+                          >
+                            <RefreshCw
+                              className={
+                                codexUsageLoading ? "is-spinning" : ""
+                              }
+                              size={14}
+                              aria-hidden="true"
+                            />
+                          </button>
+                        </div>
                       </header>
+
+                      {codexUsageResetConfirming ? (
+                        <div
+                          className="codex-usage-reset-confirmation"
+                          role="group"
+                          aria-labelledby="codex-usage-reset-title"
+                        >
+                          <div>
+                            <strong id="codex-usage-reset-title">
+                              Reset Codex usage limits?
+                            </strong>
+                            <p>
+                              This consumes one native Codex reset credit and
+                              resets every currently eligible usage window.
+                            </p>
+                          </div>
+                          <div>
+                            <button
+                              type="button"
+                              className="text-action-button"
+                              disabled={codexUsageResetBusy}
+                              onClick={() => {
+                                setCodexUsageResetConfirming(false);
+                                setCodexUsageResetError("");
+                                codexUsageResetIdempotencyKeyRef.current = null;
+                              }}
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="button"
+                              className="secondary-action-button"
+                              disabled={codexUsageResetBusy}
+                              onClick={() => void resetCodexUsageLimits()}
+                            >
+                              {codexUsageResetBusy ? (
+                                <span
+                                  className="activity-spinner"
+                                  aria-hidden="true"
+                                />
+                              ) : (
+                                <RotateCcw size={12} aria-hidden="true" />
+                              )}
+                              Use reset credit
+                            </button>
+                          </div>
+                          {codexUsageResetError ? (
+                            <p
+                              className="codex-usage-reset-error"
+                              role="alert"
+                            >
+                              {codexUsageResetError}
+                            </p>
+                          ) : null}
+                        </div>
+                      ) : null}
+
+                      {codexUsageResetMessage ? (
+                        <p className="codex-usage-reset-notice" role="status">
+                          {codexUsageResetMessage}
+                        </p>
+                      ) : null}
 
                       {codexUsageLoading && !codexRateLimits ? (
                         <p className="codex-usage-state" role="status">

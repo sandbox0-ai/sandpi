@@ -31,6 +31,29 @@ interface ControlledEventWindow extends Window {
   ) => boolean;
 }
 
+function useEnglishUi(bootstrap: SandpiBootstrap) {
+  bootstrap.preferences = {
+    ...bootstrap.preferences,
+    general: {
+      ...bootstrap.preferences.general,
+      language: "en",
+    },
+  };
+}
+
+test.beforeEach(async ({ page }) => {
+  await page.route("**/api/v1/bootstrap**", async (route) => {
+    const response = await route.fetch();
+    if (!response.ok()) {
+      await route.fulfill({ response });
+      return;
+    }
+    const body = (await response.json()) as ApiEnvelope<SandpiBootstrap>;
+    useEnglishUi(body.data);
+    await route.fulfill({ response, json: body });
+  });
+});
+
 async function installControlledEventSource(page: Page) {
   await page.addInitScript(() => {
     class ControlledEventSource extends EventTarget {
@@ -452,32 +475,32 @@ test("waits for native New Session models and scopes reasoning effort by model",
     `/?environment=${encodeURIComponent(environment.id)}&new=1`,
   );
   const modelPicker = page.getByRole("combobox", {
-    name: `Select ${environment.codingAgent.label} model`,
+    name: /Select Codex model|选择 Codex 模型/,
   });
   await expect(modelPicker).toBeDisabled();
-  await expect(modelPicker).toContainText(
-    `Starting ${environment.codingAgent.label}…`,
-  );
+  await expect(modelPicker.locator("option")).toHaveCount(1);
   await expect(
     page.getByRole("status").filter({
-      hasText: `Starting ${environment.codingAgent.label}…`,
+      hasText: /Starting Codex|正在启动 Codex/,
     }),
   ).toBeVisible();
-  await expect(modelPicker.locator("option")).not.toContainText(
-    `${environment.codingAgent.label} default`,
-  );
+  await expect(modelPicker.locator("option")).not.toContainText(/default|默认/);
 
   releaseCatalog();
   await expect(modelPicker).toBeEnabled();
   await expect(modelPicker).toHaveValue("e2e-codex-fast");
   const fastEffortPicker = page.getByRole("combobox", {
-    name: "Select reasoning effort for E2E Codex Fast",
+    name: /Select reasoning effort for E2E Codex Fast|选择 E2E Codex Fast 的推理深度/,
   });
   await expect(fastEffortPicker).toHaveValue("high");
   await expect(fastEffortPicker.locator("option")).toHaveText(["Low", "High"]);
+  const fastToggle = page.getByTestId("codex-fast-toggle");
+  await expect(fastToggle).toHaveAttribute("aria-pressed", "false");
+  await fastToggle.click();
+  await expect(fastToggle).toHaveAttribute("aria-pressed", "true");
 
-  const newSessionComposer = page.getByPlaceholder(
-    `Ask ${environment.codingAgent.label} to work on something…`,
+  const newSessionComposer = page.locator(
+    'textarea[name="new-session-instruction"]',
   );
   await newSessionComposer.fill("Verify native model settings.");
 
@@ -497,8 +520,14 @@ test("waits for native New Session models and scopes reasoning effort by model",
       mimeType: "application/pdf",
       dataBase64: Buffer.from("%PDF-e2e-test").toString("base64"),
     });
-  await page.getByRole("button", { name: "Mention a Workspace file" }).click();
-  await page.getByPlaceholder("Search /workspace").fill("README");
+  await page
+    .getByRole("button", {
+      name: /Mention a Workspace file|引用工作区文件/,
+    })
+    .click();
+  await page
+    .getByPlaceholder(/Search \/workspace|搜索 \/workspace/)
+    .fill("README");
   await page.getByRole("option").filter({ hasText: "README.md" }).click();
   await expect(newSessionComposer).toHaveValue(
     "Verify native model settings. " +
@@ -506,8 +535,9 @@ test("waits for native New Session models and scopes reasoning effort by model",
   );
 
   await modelPicker.selectOption("e2e-codex-deep");
+  await expect(fastToggle).toBeHidden();
   const deepEffortPicker = page.getByRole("combobox", {
-    name: "Select reasoning effort for E2E Codex Deep",
+    name: /Select reasoning effort for E2E Codex Deep|选择 E2E Codex Deep 的推理深度/,
   });
   await expect(deepEffortPicker).toHaveValue("max");
   await expect(deepEffortPicker.locator("option")).toHaveText([
@@ -517,13 +547,10 @@ test("waits for native New Session models and scopes reasoning effort by model",
   await deepEffortPicker.selectOption("medium");
   await modelPicker.selectOption("e2e-codex-fast");
   await expect(fastEffortPicker).toHaveValue("high");
+  await expect(fastToggle).toHaveAttribute("aria-pressed", "false");
   await modelPicker.selectOption("e2e-codex-deep");
   await expect(deepEffortPicker).toHaveValue("medium");
-  await page
-    .getByRole("button", {
-      name: "Send instruction and start Session",
-    })
-    .click();
+  await page.locator(".composer-shell .send-button").click();
   await expect
     .poll(() => createSessionBody)
     .toMatchObject({
@@ -536,12 +563,13 @@ test("waits for native New Session models and scopes reasoning effort by model",
       localImages: [],
     });
   expect(createSessionBody).not.toHaveProperty("references");
+  expect(createSessionBody).not.toHaveProperty("serviceTier");
   await page.reload();
   await expect(modelPicker).toBeEnabled();
   await expect(modelPicker).toHaveValue("e2e-codex-deep");
   await expect(
     page.getByRole("combobox", {
-      name: "Select reasoning effort for E2E Codex Deep",
+      name: /Select reasoning effort for E2E Codex Deep|选择 E2E Codex Deep 的推理深度/,
     }),
   ).toHaveValue("medium");
   expect(browserErrors).toEqual([]);
@@ -578,10 +606,14 @@ test("refreshes the Codex account and live limits after device login", async ({
   let loginStarted = false;
   let loginCompleted = false;
   let completedEnvironmentRefreshes = 0;
+  let usageReset = false;
+  let usageResetBody: Record<string, unknown> | undefined;
+  let usageResetMethod: string | undefined;
 
   await page.route("**/api/v1/bootstrap**", async (route) => {
     const response = await route.fetch();
     const body = (await response.json()) as ApiEnvelope<SandpiBootstrap>;
+    useEnglishUi(body.data);
     body.data.environments = body.data.environments.map((candidate) =>
       candidate.id === environment.id ? disconnectedEnvironment : candidate,
     );
@@ -693,13 +725,16 @@ test("refreshes the Codex account and live limits after device login", async ({
         body: JSON.stringify({
           data: {
             fetchedAt: 1_800_000_100,
+            resetCredits: {
+              availableCount: usageReset ? 0 : 1,
+            },
             limits: [
               {
                 id: "codex",
                 name: "Codex",
                 planType: "pro",
                 primary: {
-                  usedPercent: 42,
+                  usedPercent: usageReset ? 0 : 42,
                   windowDurationMins: 300,
                   resetsAt: 1_800_010_000,
                 },
@@ -716,11 +751,31 @@ test("refreshes the Codex account and live limits after device login", async ({
       });
     },
   );
+  await page.route(
+    `**/api/v1/environments/${encodeURIComponent(environment.id)}/harnesses/codex/rate-limits/reset`,
+    async (route) => {
+      usageResetMethod = route.request().method();
+      usageResetBody = route.request().postDataJSON() as Record<
+        string,
+        unknown
+      >;
+      usageReset = true;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          data: { outcome: "reset" },
+        }),
+      });
+    },
+  );
 
   await page.goto(
     `/?environment=${encodeURIComponent(environment.id)}&new=1`,
   );
-  await page.getByRole("button", { name: "Connect Codex", exact: true }).click();
+  await page
+    .getByRole("button", { name: /Connect Codex|连接 Codex/, exact: true })
+    .click();
   const settingsDialog = page.getByRole("dialog", {
     name: `${environment.name} settings`,
   });
@@ -746,6 +801,33 @@ test("refreshes the Codex account and live limits after device login", async ({
   ).toHaveAttribute("aria-valuenow", "42");
   await expect(settingsDialog.getByText("58% remaining")).toBeVisible();
   await expect(settingsDialog.getByText("95% remaining")).toBeVisible();
+  const resetUsageButton = settingsDialog.getByRole("button", {
+    name: "Reset Codex usage (1 reset credit available)",
+  });
+  await resetUsageButton.click();
+  await expect(
+    settingsDialog.getByText("Reset Codex usage limits?"),
+  ).toBeVisible();
+  await settingsDialog
+    .getByRole("button", { name: "Use reset credit" })
+    .click();
+  await expect
+    .poll(() => usageResetBody?.idempotencyKey)
+    .toMatch(/^codex-usage-reset-[a-z0-9]{24}$/);
+  expect(usageResetMethod).toBe("PUT");
+  await expect(
+    settingsDialog.getByText("Codex usage limits were reset."),
+  ).toBeVisible();
+  await expect(
+    settingsDialog.getByRole("progressbar", {
+      name: "Codex 5-hour window",
+    }),
+  ).toHaveAttribute("aria-valuenow", "0");
+  await expect(
+    settingsDialog.getByRole("button", {
+      name: "Reset Codex usage (0 reset credits available)",
+    }),
+  ).toBeDisabled();
   await expect(
     settingsDialog.getByRole("button", { name: "Re-authenticate Codex" }),
   ).toBeVisible();
@@ -920,6 +1002,7 @@ test("configures Sandbox0 network modes through safe domain exceptions", async (
   await page.route("**/api/v1/bootstrap**", async (route) => {
     const response = await route.fetch();
     const body = (await response.json()) as ApiEnvelope<SandpiBootstrap>;
+    useEnglishUi(body.data);
     const routedEnvironment = body.data.environments.find(
       (candidate) => candidate.id === environment.id,
     );
@@ -1284,6 +1367,7 @@ test("interrupts a persisted running Session before its native snapshot arrives"
     async (route) => {
       const response = await route.fetch();
       const body = (await response.json()) as ApiEnvelope<SandpiBootstrap>;
+      useEnglishUi(body.data);
       body.data.sessions = body.data.sessions.map((candidate) =>
         candidate.id === session.id
           ? { ...candidate, status: "running" }
@@ -1368,7 +1452,7 @@ test("interrupts a persisted running Session before its native snapshot arrives"
   await expect.poll(() => interruptBody).toEqual({});
 });
 
-test("deduplicates native models and sends Plan mode from the new Session slash command", async ({
+test("deduplicates native models and sends Plan plus composer Fast mode", async ({
   page,
   request,
 }) => {
@@ -1460,21 +1544,24 @@ test("deduplicates native models and sends Plan mode from the new Session slash 
   await composer.press("Enter");
   await expect(page.locator(".codex-composer-mode")).toBeVisible();
   await expect(composer).toHaveValue("");
-  await composer.fill("/fast");
-  await composer.press("Enter");
-  await expect(page.locator(".codex-composer-mode")).toHaveCount(2);
-  await expect(composer).toHaveValue("");
+  const fastToggle = page.getByTestId("codex-fast-toggle");
+  await expect(fastToggle).toHaveAttribute("aria-pressed", "false");
+  await fastToggle.click();
+  await expect(fastToggle).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".codex-composer-mode")).toHaveCount(1);
 
   await composer.fill("Design the persistence change");
   await page.locator(".composer-shell .send-button").click();
-  await expect.poll(() => createBody).toMatchObject({
-    environmentId: environment.id,
-    prompt: "Design the persistence change",
-    modelId: "e2e-plan-model",
-    reasoningEffort: "high",
-    collaborationMode: "plan",
-    serviceTier: "e2e-native-priority",
-  });
+  await expect
+    .poll(() => createBody)
+    .toMatchObject({
+      environmentId: environment.id,
+      prompt: "Design the persistence change",
+      modelId: "e2e-plan-model",
+      reasoningEffort: "high",
+      collaborationMode: "plan",
+      serviceTier: "e2e-native-priority",
+    });
 });
 
 test("maps Codex slash commands to Sandpi new and fork Session flows", async ({
@@ -1585,6 +1672,8 @@ test("maps Codex slash commands to Sandpi new and fork Session flows", async ({
   await expect(menu).not.toContainText("/resume");
   await expect(menu).not.toContainText("/side");
   await expect(menu).not.toContainText("/btw");
+  await expect(menu).not.toContainText("/fast");
+  await expect(menu).not.toContainText("/status");
 
   await composer.fill("/new");
   await composer.press("Enter");
@@ -2312,9 +2401,8 @@ await Promise.all(jobs.map((job) => tools.exec_command(job.args)));`,
   await expect(commandActivity).not.toContainText("call-e2e-rollout-exec");
   await commandActivity.locator(":scope > summary").click();
   await expect(commandActivity).toContainText("1 update");
-  await commandActivity.locator(".codex-native-tool-details > summary").click();
   await expect(
-    commandActivity.locator(".codex-native-tool-details pre").first(),
+    commandActivity.locator(".codex-native-tool-details.is-inline pre").first(),
   ).toHaveAttribute("tabindex", "0");
   await expect(commandActivity).toContainText("call-e2e-rollout-exec");
   await expect(commandActivity).toContainText("Script completed");
@@ -2347,7 +2435,9 @@ await Promise.all(jobs.map((job) => tools.exec_command(job.args)));`,
     /Called.*GitHub.*get_release.*External/,
   );
   await mcpActivity.locator(":scope > summary").click();
-  await mcpActivity.locator(".codex-native-tool-details > summary").click();
+  await expect(
+    mcpActivity.locator(".codex-native-tool-details.is-inline pre").first(),
+  ).toHaveAttribute("tabindex", "0");
   await expect(mcpActivity).toContainText('"repo": "sandpi"');
 
   await activityFilter.selectOption("external");
@@ -2386,17 +2476,17 @@ await Promise.all(jobs.map((job) => tools.exec_command(job.args)));`,
     page.getByRole("heading", { name: "What should Codex work on?" }),
   ).toBeVisible();
   await expect.poll(() => {
-    const url = new URL(page.url());
-    return {
-      environment: url.searchParams.get("environment"),
-      session: url.searchParams.get("session"),
-      newSession: url.searchParams.get("new"),
-    };
+      const url = new URL(page.url());
+      return {
+        environment: url.searchParams.get("environment"),
+        session: url.searchParams.get("session"),
+        newSession: url.searchParams.get("new"),
+      };
   }).toEqual({
-    environment: environment.id,
-    session: null,
-    newSession: "1",
-  });
+      environment: environment.id,
+      session: null,
+      newSession: "1",
+    });
   await expect(
     page.getByRole("dialog", { name: `${environment.name} settings` }),
   ).toHaveCount(0);
@@ -2684,6 +2774,24 @@ test("opens nested Agent file links and restores the selected file", async ({
       .getByRole("complementary", { name: "Workspace files" })
       .locator(`button[title="${pagePath}"]`),
   ).toHaveAttribute("aria-current", "page");
+
+  await page
+    .getByRole("complementary", { name: "Inspector" })
+    .getByRole("button", { name: "Close inspector" })
+    .click();
+  await expect(
+    page.getByRole("navigation", { name: "Inspector views" }),
+  ).toBeHidden();
+  await expect
+    .poll(() => new URL(page.url()).searchParams.has("path"))
+    .toBe(false);
+
+  await page.reload();
+  await expect(page.getByText("Loading conversation…")).toBeHidden();
+  await expect(page.getByRole("button", { name: "Open inspector" })).toBeVisible();
+  await expect(
+    page.getByRole("navigation", { name: "Inspector views" }),
+  ).toBeHidden();
   expect(browserErrors).toEqual([]);
 });
 
@@ -3097,7 +3205,7 @@ test("shows a matching skeleton while each Inspector tab loads", async ({
       });
       return;
     }
-    await route.continue();
+    await route.fallback();
   });
 
   await page.goto(

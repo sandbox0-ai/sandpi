@@ -30,6 +30,8 @@ import type {
   CodexMcpOAuthLogin,
   CodexMcpServer,
   CodexMcpTransport,
+  CodexRateLimitResetOutcome,
+  CodexRateLimitResetResult,
   CodexRateLimitSnapshot,
   CodexRateLimitWindow,
   CodexSkillDependency,
@@ -93,6 +95,7 @@ const CODEX_ROLLOUT_READ_TIMEOUT_MS = 30_000;
 const CODEX_MCP_SERVER_NAME = /^[A-Za-z0-9_-]{1,64}$/;
 const CODEX_MCP_OAUTH_TIMEOUT_SECONDS = 5 * 60;
 const MAX_CODEX_RATE_LIMIT_BUCKETS = 16;
+const MAX_CODEX_RATE_LIMIT_RESET_CREDITS = 1_000_000;
 const CODEX_ACCOUNT_PLAN_TYPES = new Set<CodexAccountPlanType>([
   "free",
   "go",
@@ -107,6 +110,13 @@ const CODEX_ACCOUNT_PLAN_TYPES = new Set<CodexAccountPlanType>([
   "edu",
   "unknown",
 ]);
+const CODEX_RATE_LIMIT_RESET_OUTCOMES =
+  new Set<CodexRateLimitResetOutcome>([
+    "reset",
+    "nothingToReset",
+    "noCredit",
+    "alreadyRedeemed",
+  ]);
 const TRANSCRIPT_NOTIFICATION_METHODS = new Set<string>(
   CODEX_TRANSCRIPT_NOTIFICATION_METHODS,
 );
@@ -677,6 +687,40 @@ export class CodexService {
       "Codex could not read account usage.",
     );
     return codexAccountRateLimits(result);
+  }
+
+  async consumeAccountRateLimitResetCredit(input: {
+    userId: string;
+    environmentId: string;
+    idempotencyKey: string;
+  }): Promise<CodexRateLimitResetResult> {
+    const runtime = await this.environmentRuntimeForEnvironment(
+      input.userId,
+      input.environmentId,
+    );
+    const response = await this.requestCodex(input.environmentId, runtime, {
+      method: "account/rateLimitResetCredit/consume",
+      id: rpcId("account-rate-limit-reset", input.environmentId),
+      params: { idempotencyKey: input.idempotencyKey },
+    });
+    const result = requireSafeRpcResult(
+      response,
+      "codex_account_rate_limit_reset_failed",
+      "Codex could not reset account usage.",
+    );
+    const outcome = boundedProviderString(result.outcome, 64);
+    if (
+      !outcome ||
+      !CODEX_RATE_LIMIT_RESET_OUTCOMES.has(
+        outcome as CodexRateLimitResetOutcome,
+      )
+    ) {
+      throw invalidCodexResponse(
+        "codex_account_rate_limit_reset_failed",
+        "Codex returned an invalid account usage reset result.",
+      );
+    }
+    return { outcome: outcome as CodexRateLimitResetOutcome };
   }
 
   async setEnvironmentSkillEnabled(input: {
@@ -4121,10 +4165,23 @@ function codexAccountRateLimits(
     limits.unshift(main);
   }
 
+  const resetCredits = codexRateLimitResetCredits(
+    result.rateLimitResetCredits,
+  );
   return {
     limits: limits.slice(0, MAX_CODEX_RATE_LIMIT_BUCKETS),
+    ...(resetCredits ? { resetCredits } : {}),
     fetchedAt: toUnixTimestamp(new Date()),
   };
+}
+
+function codexRateLimitResetCredits(value: unknown) {
+  const credits = objectRecord(value);
+  const availableCount = normalizedNonNegativeInteger(
+    credits?.availableCount,
+    MAX_CODEX_RATE_LIMIT_RESET_CREDITS,
+  );
+  return availableCount === undefined ? undefined : { availableCount };
 }
 
 function codexRateLimitSnapshot(
@@ -4253,6 +4310,15 @@ function normalizedPositiveInteger(value: unknown, maximum: number) {
     value > 0 &&
     value <= maximum
     ? Math.round(value)
+    : undefined;
+}
+
+function normalizedNonNegativeInteger(value: unknown, maximum: number) {
+  return typeof value === "number" &&
+    Number.isInteger(value) &&
+    value >= 0 &&
+    value <= maximum
+    ? value
     : undefined;
 }
 

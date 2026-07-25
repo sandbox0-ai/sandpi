@@ -130,8 +130,10 @@ Web today; iOS / Android / HarmonyOS later
   `/goal` call the native Codex app-server. Inline review displays the native
   wrapper result without exposing its private reviewer Turn as an interrupted
   user Turn. `/plan` submits Codex's native Plan collaboration mode, and
-  `/fast` uses the selected model's live service-tier metadata rather than a
-  model allowlist. Sandpi never
+  the input toolbar exposes a Fast switch only when the selected model's live
+  metadata reports a Fast service tier. `/fast` and `/status` are omitted
+  because Fast is a visible composer control and Session status is already
+  visible in the browser. Sandpi never
   forwards an unknown slash command as ordinary agent text. Terminal-only
   commands are absent, and `/resume`, `/side` and `/btw` are deliberately not
   registered because Sandpi already owns Session selection and does not expose
@@ -370,7 +372,11 @@ Once connected, the same page shows the stored non-secret ChatGPT account
 metadata and reads current usage windows through Codex
 `account/rateLimits/read`. Rate-limit percentages and reset times are live
 provider state: Sandpi bounds them before returning them to the browser and
-does not persist them or mix them with a Sandpi-owned billing model.
+does not persist them or mix them with a Sandpi-owned billing model. When Codex
+reports an available native reset credit, the Usage card can redeem it through
+`account/rateLimitResetCredit/consume`. The browser confirms the irreversible
+credit consumption, reuses one idempotency key for retries, and then refetches
+the provider-owned windows.
 
 For local development only, an existing native Codex login can be imported
 without copying it through the browser:

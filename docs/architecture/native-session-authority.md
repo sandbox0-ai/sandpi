@@ -311,8 +311,7 @@ already exists:
 - `/ide`, `/agent` and `/subagents` open the Workspace or native Activity
   Inspector. `/logout` opens the Codex account connection so the user retains
   the existing confirmation and reconnect flow.
-- `/copy` copies the latest assistant message, and `/status` shows a transient
-  composer-local summary instead of adding a timeline event.
+- `/copy` copies the latest assistant message.
 - `/compact` calls `thread/compact/start`; `/review` calls inline
   `review/start` with either the native `uncommittedChanges` target or a custom
   target. Their ordinary native Turn/item notifications remain authoritative.
@@ -322,17 +321,20 @@ already exists:
   the wrapper remains the Session control Turn and owns the visible result,
   while the private delegate is omitted from conversation and interruption
   state. The raw native snapshot is not rewritten or persisted separately.
-- `/goal` reads, sets or clears native `thread/goal/*` state. `/fast` sends the
-  service-tier id returned by the selected model's live `model/list` entry and
-  is unavailable when Codex reports no Fast tier for that model.
+- `/goal` reads, sets or clears native `thread/goal/*` state. Fast is a
+  first-class composer switch that sends the service-tier id returned by the
+  selected model's live `model/list` entry and is absent when Codex reports no
+  Fast tier for that model.
 - `/plan` sends the selected live model and effort through Codex's native Plan
   collaboration-mode settings. `/init` submits the harness-owned repository
   instruction for creating or improving `AGENTS.md`.
 
 `/resume` is intentionally absent because Sandpi's sidebar and URL own product
 Session selection. `/side` and `/btw` are absent because Sandpi has no
-side-thread composer. TUI process, terminal styling, local-login and debug
-commands are likewise omitted rather than emulated or forwarded. Commands for
+side-thread composer. `/fast` is absent because the composer owns that switch,
+and `/status` is absent because the browser already presents the relevant
+state. TUI process, terminal styling, local-login and debug commands are
+likewise omitted rather than emulated or forwarded. Commands for
 Apps, plugins, hooks, memories, experimental flags, feedback and permanent
 deletion stay absent until Sandpi has a faithful product surface and lifecycle
 contract for them. A native mutation is hidden and rejected while the current
