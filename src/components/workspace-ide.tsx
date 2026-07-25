@@ -8,9 +8,12 @@ import {
   CircleAlert,
   ExternalLink,
   File,
+  FileAudio,
   FileCode2,
+  FileImage,
   FileJson,
   FileText,
+  FileVideo,
   Folder,
   FolderOpen,
   GitBranch,
@@ -21,6 +24,7 @@ import {
   X,
 } from "lucide-react";
 import dynamic from "next/dynamic";
+import Image from "next/image";
 import {
   useCallback,
   useEffect,
@@ -52,6 +56,7 @@ import {
   workspaceFileParentDirectories,
   WORKSPACE_ROOT,
 } from "@/lib/workspace-path-policy";
+import { workspacePreviewKindForName } from "@/lib/workspace-file-preview";
 import type {
   CodingSession,
   Environment,
@@ -124,6 +129,11 @@ const copy = {
     back: "Back to Session",
     backEnvironment: "Back to Environment",
     binary: "Binary files cannot be rendered as text.",
+    previewOnly: "Read-only preview",
+    previewUnavailable: "Your browser cannot preview this media format.",
+    downloadPreview: "Download file",
+    previewLabel: (kind: string, name: string) =>
+      `${kind === "pdf" ? "PDF" : `${kind[0]?.toUpperCase()}${kind.slice(1)}`} preview: ${name}`,
     deletedFile: "Deleted files are read-only. Restore them from Git before editing.",
     managedFile: "Sandpi-managed files are read-only in the Web IDE.",
     save: "Save file (⌘/Ctrl+S)",
@@ -161,6 +171,10 @@ const copy = {
     back: "返回 Session",
     backEnvironment: "返回 Environment",
     binary: "二进制文件无法按文本显示。",
+    previewOnly: "只读预览",
+    previewUnavailable: "当前浏览器无法预览此媒体格式。",
+    downloadPreview: "下载文件",
+    previewLabel: (kind: string, name: string) => `${name} ${kind}预览`,
     deletedFile: "已删除文件为只读；请先通过 Git 恢复后再编辑。",
     managedFile: "Sandpi 管理的文件在 Web IDE 中为只读。",
     save: "保存文件（⌘/Ctrl+S）",
@@ -241,6 +255,11 @@ function workspaceTreeFromListings(
 
 function fileIcon(fileName: string, folder = false, open = false) {
   if (folder) return open ? <FolderOpen size={14} /> : <Folder size={14} />;
+  const previewKind = workspacePreviewKindForName(fileName);
+  if (previewKind === "audio") return <FileAudio size={14} />;
+  if (previewKind === "image") return <FileImage size={14} />;
+  if (previewKind === "video") return <FileVideo size={14} />;
+  if (previewKind === "pdf") return <FileText size={14} />;
   if (fileName.endsWith(".json")) return <FileJson size={14} />;
   if (fileName.endsWith(".md") || fileName.endsWith(".mdx")) {
     return <FileText size={14} />;
@@ -273,6 +292,35 @@ function languageLabel(fileName: string) {
       toml: "TOML",
       sql: "SQL",
     }[extension ?? ""] ?? "Plain text"
+  );
+}
+
+function workspaceFileTypeLabel(file: WorkspaceIdeFile) {
+  if (!file.preview) return languageLabel(file.name);
+  return (
+    {
+      "application/pdf": "PDF",
+      "audio/aac": "AAC audio",
+      "audio/aiff": "AIFF audio",
+      "audio/flac": "FLAC audio",
+      "audio/midi": "MIDI audio",
+      "audio/mp4": "MPEG-4 audio",
+      "audio/mpeg": "MP3 audio",
+      "audio/ogg": "Ogg audio",
+      "audio/wav": "WAV audio",
+      "audio/webm": "WebM audio",
+      "image/avif": "AVIF image",
+      "image/bmp": "BMP image",
+      "image/gif": "GIF image",
+      "image/jpeg": "JPEG image",
+      "image/png": "PNG image",
+      "image/webp": "WebP image",
+      "image/x-icon": "Icon image",
+      "video/mp4": "MPEG-4 video",
+      "video/ogg": "Ogg video",
+      "video/quicktime": "QuickTime video",
+      "video/webm": "WebM video",
+    }[file.preview.mimeType] ?? `${file.preview.kind} preview`
   );
 }
 
@@ -320,9 +368,12 @@ function statusCode(change: WorkspaceGitFileChange) {
 }
 
 function decodeBase64(content: string) {
+  return new TextDecoder().decode(decodeBase64Bytes(content));
+}
+
+function decodeBase64Bytes(content: string) {
   const raw = window.atob(content);
-  const bytes = Uint8Array.from(raw, (character) => character.charCodeAt(0));
-  return new TextDecoder().decode(bytes);
+  return Uint8Array.from(raw, (character) => character.charCodeAt(0));
 }
 
 function encodeBase64(content: string, bom?: "utf8") {
@@ -339,6 +390,93 @@ function encodeBase64(content: string, bom?: "utf8") {
     binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
   }
   return window.btoa(binary);
+}
+
+function useWorkspacePreviewUrl(file: WorkspaceIdeFile) {
+  const [source, setSource] = useState<string>();
+  const mimeType = file.preview?.mimeType;
+
+  useEffect(() => {
+    if (!mimeType) return;
+    const objectUrl = URL.createObjectURL(
+      new Blob([decodeBase64Bytes(file.content)], { type: mimeType }),
+    );
+    setSource(objectUrl);
+    return () => URL.revokeObjectURL(objectUrl);
+  }, [file.content, mimeType]);
+
+  return source;
+}
+
+function WorkspaceFileMediaPreview({
+  file,
+  language,
+}: {
+  file: WorkspaceIdeFile;
+  language: OperationLanguage;
+}) {
+  const source = useWorkspacePreviewUrl(file);
+  const preview = file.preview;
+  if (!preview) return null;
+  const ui = copy[language];
+  const label = ui.previewLabel(preview.kind, file.name);
+  if (!source) {
+    return (
+      <div className={styles.loading} role="status">
+        <RefreshCw size={17} /> {ui.loading}
+      </div>
+    );
+  }
+
+  if (preview.kind === "image") {
+    return (
+      <div className={`${styles.filePreview} ${styles.imagePreview}`}>
+        <Image
+          src={source}
+          alt={label}
+          fill
+          sizes="100vw"
+          unoptimized
+          className={styles.previewImage}
+        />
+      </div>
+    );
+  }
+  if (preview.kind === "audio") {
+    return (
+      <div className={`${styles.filePreview} ${styles.audioPreview}`}>
+        <div className={styles.audioIdentity}>
+          <FileAudio size={30} aria-hidden="true" />
+          <strong>{file.name}</strong>
+          <span>{workspaceFileTypeLabel(file)}</span>
+        </div>
+        <audio aria-label={label} controls preload="metadata" src={source}>
+          {ui.previewUnavailable}
+        </audio>
+      </div>
+    );
+  }
+  if (preview.kind === "video") {
+    return (
+      <div className={`${styles.filePreview} ${styles.videoPreview}`}>
+        <video aria-label={label} controls preload="metadata" src={source}>
+          {ui.previewUnavailable}
+        </video>
+      </div>
+    );
+  }
+  return (
+    <div className={`${styles.filePreview} ${styles.pdfPreview}`}>
+      <object aria-label={label} data={source} type={preview.mimeType}>
+        <p>
+          {ui.previewUnavailable}{" "}
+          <a href={source} download={file.name}>
+            {ui.downloadPreview}
+          </a>
+        </p>
+      </object>
+    </div>
+  );
 }
 
 export function workspaceIdeHref(
@@ -1509,6 +1647,8 @@ export function WorkspaceIde({
                     <span className={styles.saveState}>
                       <Check size={10} /> {ui.saved}
                     </span>
+                  ) : selectedFile?.preview ? (
+                    <span className={styles.saveState}>{ui.previewOnly}</span>
                   ) : null}
                   <button
                     type="button"
@@ -1553,19 +1693,23 @@ export function WorkspaceIde({
                     <CircleAlert size={13} /> {document.error}
                   </div>
                 ) : null}
-                {selectedFile?.readOnlyReason ? (
+                {selectedFile?.readOnlyReason &&
+                selectedFile.readOnlyReason !== "binary" ? (
                   <div className={styles.readOnlyNotice}>
                     {selectedFile.readOnlyReason === "deleted"
                       ? ui.deletedFile
-                      : selectedFile.readOnlyReason === "sandpi-managed"
-                        ? ui.managedFile
-                        : ui.binary}
+                      : ui.managedFile}
                   </div>
                 ) : null}
                 {document?.loading && !selectedFile ? (
                   <div className={styles.loading} role="status">
                     <RefreshCw size={17} /> {ui.loading}
                   </div>
+                ) : selectedFile?.preview ? (
+                  <WorkspaceFileMediaPreview
+                    file={selectedFile}
+                    language={language}
+                  />
                 ) : selectedFile?.kind === "binary" ? (
                   <div className={styles.loading}>{ui.binary}</div>
                 ) : selectedFile ? (
@@ -1635,7 +1779,7 @@ export function WorkspaceIde({
         <span className={styles.statusSpacer} />
         {selectedFile ? (
           <span>
-            {languageLabel(selectedFile.name)}
+            {workspaceFileTypeLabel(selectedFile)}
             {selectedFile.size ? ` · ${selectedFile.size}` : ""}
             {selectedFile.modifiedAt
               ? ` · ${formatUnixTimestamp(

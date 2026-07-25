@@ -15,6 +15,7 @@ import {
   normalizeWorkspacePath,
   WORKSPACE_INTERNAL_ROOT,
 } from "@/lib/workspace-path-policy";
+import { matchesPreviewableFileSignature } from "@/lib/workspace-file-preview";
 import { HttpError } from "@/server/http-error";
 
 export const CODEX_COMPOSER_UPLOAD_ROOT =
@@ -95,7 +96,7 @@ export function codexComposerUpload(input: {
   const nativeLocalImage = isNativeLocalImage(mimeType);
   if (
     nativeLocalImage &&
-    !matchesNativeImageSignature(mimeType, Buffer.from(input.content))
+    !matchesPreviewableFileSignature(mimeType, input.content)
   ) {
     throw invalidUpload(
       "The uploaded image does not match its declared file type.",
@@ -129,25 +130,6 @@ function isNativeLocalImage(mimeType: string) {
     "image/png",
     "image/webp",
   ]).has(mimeType.toLowerCase());
-}
-
-function matchesNativeImageSignature(mimeType: string, bytes: Buffer) {
-  if (mimeType === "image/png") {
-    return bytes
-      .subarray(0, 8)
-      .equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
-  }
-  if (mimeType === "image/jpeg") {
-    return bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
-  }
-  if (mimeType === "image/gif") {
-    const signature = bytes.subarray(0, 6).toString("ascii");
-    return signature === "GIF87a" || signature === "GIF89a";
-  }
-  return (
-    bytes.subarray(0, 4).toString("ascii") === "RIFF" &&
-    bytes.subarray(8, 12).toString("ascii") === "WEBP"
-  );
 }
 
 function invalidReference(message: string) {

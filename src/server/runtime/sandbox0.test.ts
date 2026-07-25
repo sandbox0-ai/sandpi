@@ -2679,6 +2679,54 @@ test("opens Sandpi-managed Workspace files as read-only", async () => {
   assert.equal(writes, 0);
 });
 
+test("returns verified media metadata instead of treating ASCII containers as text", async () => {
+  const filePath = "/workspace/demo.pdf";
+  const content = Buffer.from("%PDF-1.7\n", "ascii");
+  const runtime = runtimeWithClient({
+    sandboxes: {
+      sandbox(sandboxId: string) {
+        assert.equal(sandboxId, "sandbox-environment");
+        return {
+          async cmd(name: string) {
+            assert.equal(name, "find-git-repositories");
+            return { exitCode: 0, stderr: "", stdout: "" };
+          },
+          async statFile(candidatePath: string) {
+            assert.equal(candidatePath, filePath);
+            return {
+              type: "file",
+              size: content.byteLength,
+              modTime: new Date("2026-07-21T00:00:00.000Z"),
+              isLink: false,
+            };
+          },
+          async readFile(candidatePath: string) {
+            assert.equal(candidatePath, filePath);
+            return content;
+          },
+        };
+      },
+    },
+  });
+  const coordinates: EnvironmentRuntimeRecord = {
+    id: environment.id,
+    sandboxId: environment.sandboxId,
+    workspaceVolumeId: environment.workspaceVolumeId,
+    runtimeGeneration: 1,
+    decoder: { supervisorCursor: 0, tailBase64: "", runtimeGeneration: 1 },
+  };
+
+  const file = await runtime.readWorkspaceIdeFile(coordinates, filePath);
+
+  assert.equal(file.kind, "binary");
+  assert.equal(file.editable, false);
+  assert.equal(file.readOnlyReason, "binary");
+  assert.deepEqual(file.preview, {
+    kind: "pdf",
+    mimeType: "application/pdf",
+  });
+});
+
 test("writes composer uploads only below the protected Workspace upload root", async () => {
   const uploadPath = "/workspace/.sandpi/uploads/upload-1/requirements.pdf";
   const directories: string[] = [];

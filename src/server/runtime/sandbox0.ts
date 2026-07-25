@@ -43,6 +43,7 @@ import {
   WORKSPACE_INTERNAL_ROOT,
   WORKSPACE_ROOT,
 } from "@/lib/workspace-path-policy";
+import { detectWorkspaceFilePreview } from "@/lib/workspace-file-preview";
 import { HttpError } from "@/server/http-error";
 import {
   isCodexComposerUploadPath,
@@ -1472,9 +1473,12 @@ export class Sandbox0Runtime implements RuntimeAdapter {
         "Files larger than 5 MiB cannot be opened in the Web IDE.",
       );
     }
-    const text = isUtf8(content)
-      ? Buffer.from(content).toString("utf8")
-      : undefined;
+    const name = path.posix.basename(filePath);
+    const preview = detectWorkspaceFilePreview(name, content);
+    const text =
+      preview === undefined && isUtf8(content)
+        ? Buffer.from(content).toString("utf8")
+        : undefined;
     const lineCount =
       text === undefined
         ? 0
@@ -1533,11 +1537,12 @@ export class Sandbox0Runtime implements RuntimeAdapter {
 
     return {
       path: filePath,
-      name: path.posix.basename(filePath),
+      name,
       revision: workspaceFileRevision(content),
       encoding: "base64",
       content: Buffer.from(content).toString("base64"),
       kind: text === undefined ? "binary" : "text",
+      preview,
       bom: hasUtf8Bom(content) ? "utf8" : undefined,
       editable:
         text !== undefined &&

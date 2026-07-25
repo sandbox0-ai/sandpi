@@ -3815,6 +3815,175 @@ test("renders the dedicated live Web IDE with Git state and changed lines", asyn
   expect(browserErrors).toEqual([]);
 });
 
+test("renders verified image, audio, video and PDF Workspace previews", async ({
+  page,
+}) => {
+  const bootstrap = getMockBootstrap();
+  const environment = bootstrap.environments[0]!;
+  bootstrap.selectedEnvironmentId = environment.id;
+  bootstrap.selectedSessionId = "";
+  useEnglishUi(bootstrap);
+
+  await page.route(
+    (url) => url.pathname === "/api/v1/bootstrap",
+    async (route) => {
+      await route.fulfill({ json: { data: bootstrap } });
+    },
+  );
+
+  const now = Date.now() / 1_000;
+  const previewFiles: WorkspaceIdeFile[] = [
+    {
+      path: "/workspace/pixel.png",
+      name: "pixel.png",
+      revision: `sha256:${"1".repeat(43)}`,
+      encoding: "base64",
+      content:
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+      kind: "binary",
+      preview: { kind: "image", mimeType: "image/png" },
+      editable: false,
+      readOnlyReason: "binary",
+      size: "68 B",
+      modifiedAt: now,
+      lineChanges: [],
+    },
+    {
+      path: "/workspace/tone.wav",
+      name: "tone.wav",
+      revision: `sha256:${"2".repeat(43)}`,
+      encoding: "base64",
+      content: Buffer.concat([
+        Buffer.from("RIFF"),
+        Buffer.alloc(4),
+        Buffer.from("WAVE"),
+      ]).toString("base64"),
+      kind: "binary",
+      preview: { kind: "audio", mimeType: "audio/wav" },
+      editable: false,
+      readOnlyReason: "binary",
+      size: "12 B",
+      modifiedAt: now,
+      lineChanges: [],
+    },
+    {
+      path: "/workspace/demo.webm",
+      name: "demo.webm",
+      revision: `sha256:${"3".repeat(43)}`,
+      encoding: "base64",
+      content: Buffer.concat([
+        Buffer.from([0x1a, 0x45, 0xdf, 0xa3]),
+        Buffer.from("webm"),
+      ]).toString("base64"),
+      kind: "binary",
+      preview: { kind: "video", mimeType: "video/webm" },
+      editable: false,
+      readOnlyReason: "binary",
+      size: "8 B",
+      modifiedAt: now,
+      lineChanges: [],
+    },
+    {
+      path: "/workspace/guide.pdf",
+      name: "guide.pdf",
+      revision: `sha256:${"4".repeat(43)}`,
+      encoding: "base64",
+      content: Buffer.from("%PDF-1.7\n", "ascii").toString("base64"),
+      kind: "binary",
+      preview: { kind: "pdf", mimeType: "application/pdf" },
+      editable: false,
+      readOnlyReason: "binary",
+      size: "9 B",
+      modifiedAt: now,
+      lineChanges: [],
+    },
+  ];
+  const filesByPath = new Map(
+    previewFiles.map((file) => [file.path, file] as const),
+  );
+  const snapshot: WorkspaceIdeSnapshot = {
+    refreshedAt: now,
+    files: [
+      {
+        id: "workspace",
+        name: "workspace",
+        path: "/workspace",
+        kind: "folder",
+        children: previewFiles.map((file) => ({
+          id: file.name,
+          name: file.name,
+          path: file.path,
+          kind: "file",
+          size: file.size,
+          modifiedAt: file.modifiedAt,
+        })),
+      },
+    ],
+    git: { repositories: [] },
+  };
+
+  await page.route("**/api/v1/environments/**/ide/file?*", async (route) => {
+    const filePath = new URL(route.request().url()).searchParams.get("path");
+    const file = filePath ? filesByPath.get(filePath) : undefined;
+    if (!file) {
+      await route.fulfill({
+        status: 404,
+        json: {
+          error: {
+            code: "workspace_file_not_found",
+            message: "File not found.",
+          },
+        },
+      });
+      return;
+    }
+    await route.fulfill({ json: { data: file } });
+  });
+  await page.route("**/api/v1/environments/**/ide", async (route) => {
+    await route.fulfill({ json: { data: snapshot } });
+  });
+  await page.routeWebSocket(
+    (url) =>
+      url.pathname ===
+      `/api/v1/environments/${encodeURIComponent(environment.id)}/ide/events`,
+    (socket) => {
+      socket.send(JSON.stringify({ type: "ready", at: now }));
+    },
+  );
+
+  await page.goto(
+    `/ide/?environment=${encodeURIComponent(environment.id)}&new=1`,
+  );
+
+  await page.locator('button[title="/workspace/pixel.png"]').click();
+  await expect(
+    page.getByAltText("Image preview: pixel.png"),
+  ).toBeVisible();
+  await expect(page.getByText("PNG image", { exact: false })).toBeVisible();
+
+  await page.locator('button[title="/workspace/tone.wav"]').click();
+  await expect(
+    page.locator('audio[aria-label="Audio preview: tone.wav"]'),
+  ).toBeVisible();
+
+  await page.locator('button[title="/workspace/demo.webm"]').click();
+  await expect(
+    page.locator('video[aria-label="Video preview: demo.webm"]'),
+  ).toBeVisible();
+
+  await page.locator('button[title="/workspace/guide.pdf"]').click();
+  await expect(
+    page.locator('object[aria-label="PDF preview: guide.pdf"]'),
+  ).toBeVisible();
+  await expect(page.getByText("Read-only preview", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("Binary files cannot be rendered as text."),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: /Save file/ }),
+  ).toBeDisabled();
+});
+
 test("restores a new-Session deep link and keeps overlays usable in dark mode", async ({
   page,
 }) => {

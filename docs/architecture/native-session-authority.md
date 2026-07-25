@@ -53,8 +53,9 @@ This keeps all native Threads on the Environment Workspace Volume, so a Sandbox
 runtime or harness process restart can reopen their persisted history without a
 Sandpi chat store. An in-flight Turn itself does not survive an app-server
 restart: Codex reports it as interrupted, and Sandpi may continue it with the
-controlled new-Turn flow below. The Web IDE, file APIs, Git projection and file
-watcher reject the reserved `/workspace/.sandpi` subtree.
+controlled new-Turn flow below. The Web IDE and file APIs expose the reserved
+`/workspace/.sandpi` subtree as readable, Sandpi-managed state while keeping it
+read-only and outside the Git projection.
 
 Workspace directory transport is deliberately shallow. The initial IDE
 snapshot lists only `/workspace`; every folder expansion requests that
@@ -63,6 +64,12 @@ invalidates loaded pages but never causes the server to eagerly enumerate the
 whole Workspace. While a native volume watch is connecting or unavailable, the
 client reconciles only the shallow pages it already loaded; this keeps live
 agent-created files visible without reverting to eager recursive traversal.
+Each file open is one bounded Sandbox0 read. UTF-8 content enters the text
+editor; signature-verified image, audio, video and PDF containers receive a
+read-only browser preview. Sandpi does not infer a preview MIME type from the
+filename alone. The 5 MiB bound also applies to media because Sandbox0 does not
+currently expose a ranged file read or streaming URL; browser codec support is
+therefore the remaining format-specific playback boundary.
 
 The Environment credential source is encrypted in PostgreSQL and materialized
 at `/dev/shm/sandpi-codex-auth.json`. Persistent `CODEX_HOME/auth.json` is only a

@@ -1,3 +1,4 @@
+import { matchesPreviewableFileSignature } from "@/lib/workspace-file-preview";
 import { HttpError } from "@/server/http-error";
 import {
   codexComposerLocalImage,
@@ -46,7 +47,7 @@ export function nativeCodexTurnInput(
     if (bytes.byteLength === 0 || bytes.byteLength > MAX_CODEX_INPUT_IMAGE_BYTES) {
       throw invalidImage(`${image.name} exceeds the per-image size limit.`);
     }
-    if (!matchesImageSignature(image.mimeType, bytes)) {
+    if (!matchesPreviewableFileSignature(image.mimeType, bytes)) {
       throw invalidImage(`${image.name} does not match its declared image type.`);
     }
     totalBytes += bytes.byteLength;
@@ -73,23 +74,6 @@ function isCanonicalBase64(value: string) {
     return false;
   }
   return Buffer.from(value, "base64").toString("base64") === value;
-}
-
-function matchesImageSignature(mimeType: EncodedCodexInputImage["mimeType"], bytes: Buffer) {
-  if (mimeType === "image/png") {
-    return bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
-  }
-  if (mimeType === "image/jpeg") {
-    return bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
-  }
-  if (mimeType === "image/gif") {
-    const signature = bytes.subarray(0, 6).toString("ascii");
-    return signature === "GIF87a" || signature === "GIF89a";
-  }
-  return (
-    bytes.subarray(0, 4).toString("ascii") === "RIFF" &&
-    bytes.subarray(8, 12).toString("ascii") === "WEBP"
-  );
 }
 
 function invalidImage(message: string) {

@@ -234,6 +234,12 @@ export interface WorkspaceLineChange {
   placement?: "before" | "after";
 }
 
+export interface WorkspaceIdeFilePreview {
+  kind: "audio" | "image" | "pdf" | "video";
+  /** Server-verified media type; clients must not infer it from the filename. */
+  mimeType: string;
+}
+
 export interface WorkspaceIdeFile {
   path: string;
   name: string;
@@ -242,6 +248,8 @@ export interface WorkspaceIdeFile {
   encoding: "base64";
   content: string;
   kind: "binary" | "text";
+  /** Read-only browser preview for a recognized binary document or media file. */
+  preview?: WorkspaceIdeFilePreview;
   bom?: "utf8";
   editable: boolean;
   readOnlyReason?: "binary" | "deleted" | "sandpi-managed";

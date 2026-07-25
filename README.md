@@ -186,10 +186,13 @@ Web today; iOS / Android / HarmonyOS later
   zero or more Git working trees beneath the visible tree, parses porcelain v2
   per repository, and projects zero-context staged and working-tree diffs onto
   current line numbers. Sandpi never creates or chooses a repository for the
-  user or agent. Text
-  saves carry the revision that was opened; stale writes return a conflict
-  instead of silently replacing a newer file. The browser never receives the
-  deployment API key or a direct Sandbox0 endpoint.
+  user or agent. Every regular UTF-8 file remains editable as text, with Monaco
+  language highlighting for common code and configuration formats. Verified
+  image, audio and video containers plus PDF open as read-only browser previews;
+  the server derives their MIME type from the file signature rather than
+  trusting an extension. Text saves carry the revision that was opened; stale
+  writes return a conflict instead of silently replacing a newer file. The
+  browser never receives the deployment API key or a direct Sandbox0 endpoint.
 - **Environment grouping:** an Environment owns one Sandbox, one mounted
   Workspace Volume, one harness process, official harness authentication,
   egress credentials, template and network policy. Product Sessions are
@@ -698,12 +701,18 @@ Sandbox0 implementation details.
   present, keeping arrow-key escape sequences usable in `vi` compatible mode
   without overriding an Environment's editor configuration.
   A bounded 4 MiB retained tail protects recovery when an older bookmark
-  expires. Web IDE reads and writes are confined to regular UTF-8 files under
-  `/workspace` with a 5 MiB limit; `.git`, symbolic links and binary files are
-  read-only. Its single file tree includes staged, unstaged, untracked, renamed,
-  deleted and conflicted Git state across optional root or nested repositories.
-  Workspace events refresh clean files automatically and turn external changes
-  to dirty files into an explicit compare/reload/overwrite decision.
+  expires. Web IDE opens regular files under `/workspace` up to 5 MiB. UTF-8
+  files are editable; PNG, JPEG, GIF, WebP, AVIF, BMP and ICO images, MP3, WAV,
+  Ogg/Opus, FLAC, AAC, AIFF, MIDI and MPEG-4/WebM audio, MP4, WebM, Ogg and
+  QuickTime video, and PDF are signature-verified read-only previews. Actual
+  playback still depends on browser codec support. Larger media is not fetched
+  or streamed because the current Sandbox0 File API exposes neither ranged
+  reads nor a streaming URL. `.git`, symbolic links and unsupported binary
+  files remain read-only. The single file tree includes staged, unstaged,
+  untracked, renamed, deleted and conflicted Git state across optional root or
+  nested repositories. Workspace events refresh clean files automatically and
+  turn external changes to dirty files into an explicit
+  compare/reload/overwrite decision.
 - The OSS server currently expects one active server replica. PostgreSQL,
   Supervisor replay and the fenced Recovery Turn claim make both Sandpi process
   restart and interrupted Sandbox runtime continuation recoverable, but
