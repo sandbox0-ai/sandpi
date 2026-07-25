@@ -1058,6 +1058,35 @@ function registerApiRoutes(
     },
   );
   app.get<{ Params: { sessionId: string } }>(
+    "/api/v1/sessions/:sessionId/agents",
+    async (request) => ({
+      data: await services.codex.listSessionAgentThreads({
+        userId: request.principal.userId,
+        sessionId: request.params.sessionId,
+      }),
+    }),
+  );
+  app.get<{
+    Params: { sessionId: string; nativeThreadId: string };
+  }>(
+    "/api/v1/sessions/:sessionId/agents/:nativeThreadId",
+    async (request) => {
+      const nativeThreadId = z
+        .string()
+        .trim()
+        .min(1)
+        .max(200)
+        .parse(request.params.nativeThreadId);
+      return {
+        data: await services.codex.readSessionAgentThread({
+          userId: request.principal.userId,
+          sessionId: request.params.sessionId,
+          nativeThreadId,
+        }),
+      };
+    },
+  );
+  app.get<{ Params: { sessionId: string } }>(
     "/api/v1/sessions/:sessionId/events",
     async (request, reply) => {
       await services.store.getSession(

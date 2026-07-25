@@ -1597,6 +1597,103 @@ test("starts one Environment-scoped Codex app-server without unsupported plugin 
   );
 });
 
+test("replaces a live Codex app-server attempt after its credential binding changes", async () => {
+  const operations: string[] = [];
+  const previous = {
+    id: "supervisor-environment",
+    attempt: { id: "attempt-old" },
+    runtimeGeneration: 3,
+  };
+  const replacement = {
+    id: "supervisor-environment",
+    attempt: { id: "attempt-new" },
+    runtimeGeneration: 3,
+  };
+  const sandbox = {
+    async listFiles(path: string) {
+      assert.equal(path, "/workspace");
+      operations.push("workspace");
+      return [];
+    },
+    async mkdir() {
+      operations.push("credential-mkdir");
+    },
+    async writeFile(path: string, content: Uint8Array) {
+      assert.equal(path, "/dev/shm/sandpi-codex-auth.json");
+      assert.equal(
+        Buffer.from(content).toString("utf8"),
+        '{"tokens":{"access_token":"replacement"}}',
+      );
+      operations.push("credential-write");
+    },
+    async cmd() {
+      operations.push("command");
+      return { exitCode: 0 };
+    },
+    async getSession(sessionId: string) {
+      assert.equal(sessionId, previous.id);
+      operations.push("supervisor-read");
+      return previous;
+    },
+    async createSession() {
+      assert.fail("a replacement credential must reuse the Supervisor Session");
+    },
+    async createSessionAttempt(sessionId: string, replaceCurrent: boolean) {
+      assert.equal(sessionId, previous.id);
+      assert.equal(replaceCurrent, true);
+      operations.push("supervisor-replace");
+      return replacement;
+    },
+  };
+  const runtime = runtimeWithClient({
+    sandboxes: {
+      sandbox(sandboxId: string) {
+        assert.equal(sandboxId, "sandbox-environment");
+        return sandbox;
+      },
+      async get() {
+        return {
+          status: "running",
+          paused: false,
+          runtimeGeneration: 3,
+        };
+      },
+    },
+  });
+  const coordinates: EnvironmentRuntimeRecord = {
+    id: environment.id,
+    sandboxId: environment.sandboxId,
+    workspaceVolumeId: environment.workspaceVolumeId,
+    supervisorSessionId: previous.id,
+    attemptId: previous.attempt.id,
+    runtimeGeneration: 3,
+    decoder: {
+      supervisorCursor: 40,
+      tailBase64: "",
+      attemptId: previous.attempt.id,
+      runtimeGeneration: 3,
+    },
+  };
+
+  assert.deepEqual(
+    await runtime.ensureCodexEnvironmentRuntime(
+      coordinates,
+      '{"tokens":{"access_token":"replacement"}}',
+      { replaceSupervisorAttempt: true },
+    ),
+    {
+      supervisorSessionId: replacement.id,
+      attemptId: replacement.attempt.id,
+      runtimeGeneration: 3,
+      sandboxRestarted: false,
+    },
+  );
+  assert.ok(
+    operations.indexOf("credential-write") <
+      operations.indexOf("supervisor-replace"),
+  );
+});
+
 test("retries safe Sandbox0 reads after transient transport failures", async () => {
   let calls = 0;
   const fetchWithRetry = createSandbox0FetchWithRetry(async () => {

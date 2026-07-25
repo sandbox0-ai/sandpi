@@ -17,6 +17,7 @@ import type {
 import type {
   CodexEventEnvelope,
   CodexNativeSnapshot,
+  CodexThread,
   CodexThreadItem,
   CodexTurn,
 } from "../src/harnesses/codex/types";
@@ -1649,6 +1650,74 @@ test("maps Codex slash commands to Sandpi new and fork Session flows", async ({
       });
     },
   );
+  const agentThread: CodexThread = {
+    id: "thread-e2e-subagent",
+    parentThreadId: nativeThreadId,
+    agentNickname: "Scout",
+    agentRole: "explorer",
+    preview: "Inspect the native Agent flow",
+    createdAt: now + 1,
+    updatedAt: now + 2,
+    status: { type: "idle" },
+    turns: [
+      {
+        id: "turn-e2e-subagent",
+        itemsView: "full",
+        status: "completed",
+        error: null,
+        startedAt: now + 1,
+        completedAt: now + 2,
+        durationMs: 1_000,
+        items: [
+          {
+            type: "userMessage",
+            id: "item-e2e-subagent-prompt",
+            clientId: null,
+            content: [
+              {
+                type: "text",
+                text: "Inspect the native Agent flow",
+                text_elements: [],
+              },
+            ],
+          },
+          {
+            type: "agentMessage",
+            id: "item-e2e-subagent-answer",
+            text: "Sub-agent result from its own native Thread.",
+            phase: "final_answer",
+            memoryCitation: null,
+          },
+        ],
+      },
+    ],
+  };
+  await page.route(
+    `**/api/v1/sessions/${encodeURIComponent(session.id)}/agents**`,
+    async (route) => {
+      const path = new URL(route.request().url()).pathname;
+      if (path.endsWith("/agents")) {
+        await route.fulfill({
+          json: {
+            data: {
+              root: snapshot.thread,
+              descendants: [{ ...agentThread, turns: [] }],
+            },
+          },
+        });
+        return;
+      }
+      const requestedThreadId = decodeURIComponent(path.split("/").at(-1)!);
+      await route.fulfill({
+        json: {
+          data:
+            requestedThreadId === agentThread.id
+              ? agentThread
+              : snapshot.thread,
+        },
+      });
+    },
+  );
 
   const sourceUrl =
     `/?environment=${encodeURIComponent(environment.id)}` +
@@ -1674,6 +1743,44 @@ test("maps Codex slash commands to Sandpi new and fork Session flows", async ({
   await expect(menu).not.toContainText("/btw");
   await expect(menu).not.toContainText("/fast");
   await expect(menu).not.toContainText("/status");
+
+  await composer.fill("/agent");
+  await composer.press("Enter");
+  const agentDialog = page.getByRole("dialog", { name: "Agent Threads" });
+  await expect(agentDialog).toBeVisible();
+  await expect
+    .poll(() => new URL(page.url()).searchParams.get("agents"))
+    .toBe("1");
+  await expect(
+    page.getByRole("complementary", { name: "Inspector" }),
+  ).toBeHidden();
+  await agentDialog.getByRole("button", { name: /Scout/ }).click();
+  await expect
+    .poll(() => new URL(page.url()).searchParams.get("agent"))
+    .toBe(agentThread.id);
+  await expect(
+    agentDialog.getByText("Sub-agent result from its own native Thread."),
+  ).toBeVisible();
+  await page.reload();
+  await emitControlledEvent(page, eventPath, "snapshot", snapshot);
+  await expect(agentDialog).toBeVisible();
+  await expect(
+    agentDialog.getByText("Sub-agent result from its own native Thread."),
+  ).toBeVisible();
+  await agentDialog
+    .getByRole("button", { name: "Close Agent Threads" })
+    .click();
+  await expect
+    .poll(() => new URL(page.url()).searchParams.get("agents"))
+    .toBeNull();
+  expect(new URL(page.url()).searchParams.get("agent")).toBeNull();
+
+  await composer.fill("/subagents");
+  await composer.press("Enter");
+  await expect(agentDialog).toBeVisible();
+  await agentDialog
+    .getByRole("button", { name: "Close Agent Threads" })
+    .click();
 
   await composer.fill("/new");
   await composer.press("Enter");

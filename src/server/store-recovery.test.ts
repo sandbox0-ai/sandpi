@@ -216,6 +216,9 @@ test("projects Sandbox and Supervisor coordinates from Environment runtime", asy
           runtime_generation: "3",
           decoder_attempt_id: "attempt-decoder",
           decoder_runtime_generation: "4",
+          credential_revision: "2",
+          bound_credential_revision: "1",
+          credential_binding_status: "stale",
           desired_state: "running",
           observed_state: "running",
           provisioning_error: null,
@@ -239,6 +242,7 @@ test("projects Sandbox and Supervisor coordinates from Environment runtime", asy
     terminalSessionId: "terminal-one",
     attemptId: "attempt-one",
     runtimeGeneration: 3,
+    codexCredentialBindingCurrent: false,
     decoder: {
       supervisorCursor: 12,
       tailBase64: "tail",

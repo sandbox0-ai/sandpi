@@ -55,6 +55,11 @@ export interface TurnSubmissionCoordinates {
 }
 
 export interface StoredEnvironmentRuntime extends EnvironmentRuntimeRecord {
+  /**
+   * Derived from the active Environment credential revision and its Sandbox
+   * materialization binding. It is not a second copy of credential state.
+   */
+  codexCredentialBindingCurrent?: boolean;
   version: number;
   desiredState: "running" | "paused" | "terminated";
   observedState:
@@ -225,6 +230,9 @@ interface EnvironmentRuntimeRow extends QueryResultRow {
   lifecycle_error: string | null;
   paused_at: Date | null;
   version: string | number;
+  credential_revision?: string | number;
+  bound_credential_revision?: string | number | null;
+  credential_binding_status?: "active" | "stale" | "revoked" | null;
 }
 
 interface EnvironmentPauseIntervalRow extends QueryResultRow {
@@ -3166,9 +3174,16 @@ const ENVIRONMENT_SELECT = `
 `;
 
 const ENVIRONMENT_RUNTIME_SELECT = `
-  SELECT runtime.*, environment.workspace_volume_id
+  SELECT runtime.*, environment.workspace_volume_id,
+         environment.credential_revision,
+         credential_binding.source_revision AS bound_credential_revision,
+         credential_binding.status AS credential_binding_status
   FROM environment_runtime runtime
   JOIN environments environment ON environment.id = runtime.environment_id
+  LEFT JOIN environment_credential_bindings credential_binding
+    ON credential_binding.environment_id = runtime.environment_id
+   AND credential_binding.harness = 'codex'
+   AND credential_binding.credential_slot = 'account'
 `;
 
 const ENVIRONMENT_EGRESS_CREDENTIAL_SELECT = `
@@ -3312,6 +3327,8 @@ function environmentWorkspaceBackupFromRow(
 function environmentRuntimeFromRow(
   row: EnvironmentRuntimeRow,
 ): StoredEnvironmentRuntime {
+  const hasCredentialBindingProjection =
+    row.credential_revision !== undefined;
   return {
     id: row.environment_id,
     sandboxId: row.sandbox_id!,
@@ -3320,6 +3337,16 @@ function environmentRuntimeFromRow(
     terminalSessionId: row.terminal_session_id ?? undefined,
     attemptId: row.attempt_id ?? undefined,
     runtimeGeneration: Number(row.runtime_generation),
+    ...(hasCredentialBindingProjection
+      ? {
+          codexCredentialBindingCurrent:
+            row.credential_binding_status === "active" &&
+            row.bound_credential_revision !== null &&
+            row.bound_credential_revision !== undefined &&
+            Number(row.bound_credential_revision) ===
+              Number(row.credential_revision),
+        }
+      : {}),
     decoder: {
       supervisorCursor: Number(row.supervisor_cursor),
       tailBase64: row.stdout_tail,

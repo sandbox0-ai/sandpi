@@ -2,6 +2,31 @@ import type { OperationLanguage } from "@/lib/operation-ui";
 
 export type CodexSlashCommandContext = "new-session" | "session";
 
+/**
+ * Stable browser intents decouple Codex command spelling from Sandpi UI
+ * execution. Aliases such as `/agent` and `/subagents` intentionally share an
+ * intent, while the menu can continue mirroring the Codex TUI vocabulary.
+ */
+export type CodexCommandIntent =
+  | "agents.open"
+  | "codex.compact"
+  | "codex.goal"
+  | "codex.init"
+  | "codex.review"
+  | "composer.mention"
+  | "composer.model"
+  | "composer.plan"
+  | "environment.credentials"
+  | "environment.mcp"
+  | "environment.network"
+  | "environment.skills"
+  | "response.copy"
+  | "session.archive"
+  | "session.fork"
+  | "session.new"
+  | "session.rename"
+  | "workspace.open";
+
 export type CodexSlashCommandName =
   | "agent"
   | "archive"
@@ -31,6 +56,7 @@ export const CODEX_INIT_COMMAND_PROMPT =
 
 export interface CodexSlashCommand {
   name: CodexSlashCommandName;
+  intent: CodexCommandIntent;
   contexts: readonly CodexSlashCommandContext[];
   argumentMode: "none" | "optional" | "required";
   unavailableWhileTurnRunning?: boolean;
@@ -53,6 +79,7 @@ const BOTH_CONTEXTS: readonly CodexSlashCommandContext[] = [
 export const CODEX_SLASH_COMMANDS: readonly CodexSlashCommand[] = [
   {
     name: "new",
+    intent: "session.new",
     contexts: ["session"],
     argumentMode: "none",
     description: {
@@ -62,6 +89,7 @@ export const CODEX_SLASH_COMMANDS: readonly CodexSlashCommand[] = [
   },
   {
     name: "fork",
+    intent: "session.fork",
     contexts: ["session"],
     argumentMode: "none",
     unavailableWhileTurnRunning: true,
@@ -72,6 +100,7 @@ export const CODEX_SLASH_COMMANDS: readonly CodexSlashCommand[] = [
   },
   {
     name: "clear",
+    intent: "session.new",
     contexts: ["session"],
     argumentMode: "none",
     description: {
@@ -81,6 +110,7 @@ export const CODEX_SLASH_COMMANDS: readonly CodexSlashCommand[] = [
   },
   {
     name: "compact",
+    intent: "codex.compact",
     contexts: ["session"],
     argumentMode: "none",
     unavailableWhileTurnRunning: true,
@@ -91,6 +121,7 @@ export const CODEX_SLASH_COMMANDS: readonly CodexSlashCommand[] = [
   },
   {
     name: "review",
+    intent: "codex.review",
     contexts: ["session"],
     argumentMode: "optional",
     unavailableWhileTurnRunning: true,
@@ -105,6 +136,7 @@ export const CODEX_SLASH_COMMANDS: readonly CodexSlashCommand[] = [
   },
   {
     name: "plan",
+    intent: "composer.plan",
     contexts: BOTH_CONTEXTS,
     argumentMode: "optional",
     unavailableWhileTurnRunning: true,
@@ -119,6 +151,7 @@ export const CODEX_SLASH_COMMANDS: readonly CodexSlashCommand[] = [
   },
   {
     name: "goal",
+    intent: "codex.goal",
     contexts: ["session"],
     argumentMode: "optional",
     description: {
@@ -132,6 +165,7 @@ export const CODEX_SLASH_COMMANDS: readonly CodexSlashCommand[] = [
   },
   {
     name: "rename",
+    intent: "session.rename",
     contexts: ["session"],
     argumentMode: "required",
     description: {
@@ -145,6 +179,7 @@ export const CODEX_SLASH_COMMANDS: readonly CodexSlashCommand[] = [
   },
   {
     name: "archive",
+    intent: "session.archive",
     contexts: ["session"],
     argumentMode: "none",
     unavailableWhileTurnRunning: true,
@@ -155,6 +190,7 @@ export const CODEX_SLASH_COMMANDS: readonly CodexSlashCommand[] = [
   },
   {
     name: "init",
+    intent: "codex.init",
     contexts: BOTH_CONTEXTS,
     argumentMode: "none",
     unavailableWhileTurnRunning: true,
@@ -165,6 +201,7 @@ export const CODEX_SLASH_COMMANDS: readonly CodexSlashCommand[] = [
   },
   {
     name: "model",
+    intent: "composer.model",
     contexts: BOTH_CONTEXTS,
     argumentMode: "none",
     description: {
@@ -174,6 +211,7 @@ export const CODEX_SLASH_COMMANDS: readonly CodexSlashCommand[] = [
   },
   {
     name: "mention",
+    intent: "composer.mention",
     contexts: BOTH_CONTEXTS,
     argumentMode: "none",
     description: {
@@ -183,6 +221,7 @@ export const CODEX_SLASH_COMMANDS: readonly CodexSlashCommand[] = [
   },
   {
     name: "diff",
+    intent: "workspace.open",
     contexts: ["session"],
     argumentMode: "none",
     description: {
@@ -192,6 +231,7 @@ export const CODEX_SLASH_COMMANDS: readonly CodexSlashCommand[] = [
   },
   {
     name: "ide",
+    intent: "workspace.open",
     contexts: ["session"],
     argumentMode: "none",
     description: {
@@ -201,24 +241,27 @@ export const CODEX_SLASH_COMMANDS: readonly CodexSlashCommand[] = [
   },
   {
     name: "agent",
+    intent: "agents.open",
     contexts: ["session"],
     argumentMode: "none",
     description: {
-      en: "Open native Codex agent activity",
-      "zh-CN": "打开 Codex 原生 agent activity",
+      en: "Switch or inspect native Codex agent threads",
+      "zh-CN": "切换或查看 Codex 原生 Agent Threads",
     },
   },
   {
     name: "subagents",
+    intent: "agents.open",
     contexts: ["session"],
     argumentMode: "none",
     description: {
-      en: "Open native Codex sub-agent activity",
-      "zh-CN": "打开 Codex 原生 sub-agent activity",
+      en: "Switch or inspect native Codex agent threads",
+      "zh-CN": "切换或查看 Codex 原生 Agent Threads",
     },
   },
   {
     name: "copy",
+    intent: "response.copy",
     contexts: ["session"],
     argumentMode: "none",
     description: {
@@ -228,6 +271,7 @@ export const CODEX_SLASH_COMMANDS: readonly CodexSlashCommand[] = [
   },
   {
     name: "skills",
+    intent: "environment.skills",
     contexts: BOTH_CONTEXTS,
     argumentMode: "none",
     description: {
@@ -237,6 +281,7 @@ export const CODEX_SLASH_COMMANDS: readonly CodexSlashCommand[] = [
   },
   {
     name: "mcp",
+    intent: "environment.mcp",
     contexts: BOTH_CONTEXTS,
     argumentMode: "none",
     description: {
@@ -246,6 +291,7 @@ export const CODEX_SLASH_COMMANDS: readonly CodexSlashCommand[] = [
   },
   {
     name: "permissions",
+    intent: "environment.network",
     contexts: BOTH_CONTEXTS,
     argumentMode: "none",
     description: {
@@ -255,6 +301,7 @@ export const CODEX_SLASH_COMMANDS: readonly CodexSlashCommand[] = [
   },
   {
     name: "usage",
+    intent: "environment.credentials",
     contexts: BOTH_CONTEXTS,
     argumentMode: "none",
     description: {
@@ -264,6 +311,7 @@ export const CODEX_SLASH_COMMANDS: readonly CodexSlashCommand[] = [
   },
   {
     name: "logout",
+    intent: "environment.credentials",
     contexts: BOTH_CONTEXTS,
     argumentMode: "none",
     description: {

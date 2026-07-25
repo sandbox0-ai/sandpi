@@ -19,6 +19,22 @@ test("omits commands represented by Sandpi navigation or composer controls", () 
   assert.equal(names.has("status"), false);
 });
 
+test("maps Codex agent command spellings to the native Agent Threads intent", () => {
+  const agentCommands = CODEX_SLASH_COMMANDS.filter(
+    (command) => command.intent === "agents.open",
+  );
+  assert.deepEqual(
+    agentCommands.map((command) => command.name),
+    ["agent", "subagents"],
+  );
+  assert.equal(
+    agentCommands.every(
+      (command) => !command.description.en.toLowerCase().includes("activity"),
+    ),
+    true,
+  );
+});
+
 test("filters commands by Sandpi composer context and query", () => {
   assert.deepEqual(
     codexSlashMenuCommands("/fo", "session").map((command) => command.name),

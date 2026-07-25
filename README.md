@@ -120,12 +120,16 @@ Web today; iOS / Android / HarmonyOS later
   user text. The bounded runtime scan excludes hidden,
   internal and dependency directories and does not maintain a persistent file
   index or require a running coding-agent app-server.
-  Both Codex composers expose a harness-owned slash menu. Commands map to real
+  Both Codex composers expose a harness-owned slash menu. One registry maps
+  Codex command spellings to stable browser intents, so aliases and GUI
+  execution cannot drift into separate dispatch paths. Commands map to real
   browser product actions: `/new` and `/clear` open New Session, `/fork`
   creates and selects a child product Session, and `/skills`, `/mcp`,
   `/permissions`, `/usage`, `/model`, `/mention` and `/diff` open their existing
-  Sandpi surfaces. `/agent`, `/subagents` and `/ide` route to the Activity or
-  Workspace Inspector, while `/logout` opens the Codex account connection
+  Sandpi surfaces. `/agent` and its Codex compatibility spelling `/subagents`
+  open a dedicated native Agent Threads tree and transcript viewer; this is
+  separate from Session Activity. `/ide` opens the Workspace Inspector, while
+  `/logout` opens the Codex account connection
   instead of logging out without confirmation. `/compact`, `/review` and
   `/goal` call the native Codex app-server. Inline review displays the native
   wrapper result without exposing its private reviewer Turn as an interrupted
@@ -368,6 +372,12 @@ Source; the Environment records one Sandbox-scoped materialization binding.
 The page keeps polling the native login flow and refreshes the Environment as
 soon as Codex reports completion.
 
+Re-authentication creates a new Credential Source revision. Before any further
+native account or Session request, Sandpi replaces the Environment's live
+app-server attempt, initializes that process with the new native credential,
+and only then marks the Sandbox binding active. Account metadata and live usage
+therefore cannot come from different ChatGPT identities.
+
 Once connected, the same page shows the stored non-secret ChatGPT account
 metadata and reads current usage windows through Codex
 `account/rateLimits/read`. Rate-limit percentages and reset times are live
@@ -608,6 +618,13 @@ treated as able to export its provider credential.
 If Workspace or Supervisor repair pauses the Sandbox after an early credential
 write, Sandpi re-materializes the credential in Sandbox0's final runtime
 generation before initializing app-server.
+
+A changed Environment credential revision also replaces an otherwise healthy
+app-server attempt. Codex account identity is process-local; overwriting the
+ephemeral file is not considered a completed account switch. The credential
+binding remains stale until the replacement process answers native
+initialization, so warm-path requests cannot continue through the previous
+account.
 
 Sandpi never sends this credential to Sandbox0's deployment API as an API key;
 the Sandbox0 host and key remain independent deployment-level server secrets.

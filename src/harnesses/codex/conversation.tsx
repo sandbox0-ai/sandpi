@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import {
   Fragment,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -70,6 +71,7 @@ import {
   CodexTurnResult,
 } from "@/harnesses/codex/activity";
 import { CodexSessionActivityView } from "@/harnesses/codex/session-activity-view";
+import { CodexAgentThreadsDialog } from "@/harnesses/codex/agent-threads-dialog";
 import { normalizeCodexRolloutActivityFeed } from "@/harnesses/codex/rollout-activity";
 import {
   canInterruptCodexSession,
@@ -268,6 +270,10 @@ export function CodexConversation({
   const [nativeHistoryWaitLong, setNativeHistoryWaitLong] = useState(false);
   const [activityClock, setActivityClock] = useState(() => Date.now());
   const [pendingTurn, setPendingTurn] = useState<PendingCodexTurn | null>(null);
+  const [agentThreadsOpen, setAgentThreadsOpen] = useState(false);
+  const [selectedAgentThreadId, setSelectedAgentThreadId] = useState<
+    string | undefined
+  >();
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const modelSelectRef = useRef<HTMLSelectElement>(null);
   const scrollbarHideTimerRef = useRef<number | null>(null);
@@ -359,6 +365,44 @@ export function CodexConversation({
     following: followingLatest,
   } = useConversationAutoScroll({ resetKey: session.id });
 
+  const updateAgentThreadsUrl = useCallback(
+    (open: boolean, threadId?: string) => {
+      const url = new URL(window.location.href);
+      if (open) {
+        url.searchParams.set("agents", "1");
+        if (threadId) {
+          url.searchParams.set("agent", threadId);
+        } else {
+          url.searchParams.delete("agent");
+        }
+      } else {
+        url.searchParams.delete("agents");
+        url.searchParams.delete("agent");
+      }
+      window.history.replaceState(window.history.state, "", url);
+    },
+    [],
+  );
+
+  const openAgentThreads = useCallback(() => {
+    setAgentThreadsOpen(true);
+    updateAgentThreadsUrl(true, selectedAgentThreadId);
+  }, [selectedAgentThreadId, updateAgentThreadsUrl]);
+
+  const closeAgentThreads = useCallback(() => {
+    setAgentThreadsOpen(false);
+    setSelectedAgentThreadId(undefined);
+    updateAgentThreadsUrl(false);
+  }, [updateAgentThreadsUrl]);
+
+  const selectAgentThread = useCallback(
+    (threadId?: string) => {
+      setSelectedAgentThreadId(threadId);
+      updateAgentThreadsUrl(true, threadId);
+    },
+    [updateAgentThreadsUrl],
+  );
+
   useEffect(() => {
     sessionRef.current = session;
   }, [session]);
@@ -388,6 +432,14 @@ export function CodexConversation({
     setInterrupting(false);
     setForkingMessageId(null);
     setModelCatalogUnavailable("");
+    const agentThreadUrl = new URL(window.location.href);
+    const requestedAgentThread =
+      agentThreadUrl.searchParams.get("agent")?.trim() || undefined;
+    setSelectedAgentThreadId(requestedAgentThread);
+    setAgentThreadsOpen(
+      agentThreadUrl.searchParams.get("agents") === "1" ||
+        Boolean(requestedAgentThread),
+    );
     setNativeSnapshot(null);
     setLiveNotifications([]);
     setNativeStreamReady(false);
@@ -907,43 +959,43 @@ export function CodexConversation({
     clearComposerDraft();
     setCommandNotice(null);
 
-    if (command.name === "new" || command.name === "clear") {
+    if (command.intent === "session.new") {
       onNewSession();
       return;
     }
-    if (command.name === "model") {
+    if (command.intent === "composer.model") {
       openModelPicker();
       return;
     }
-    if (command.name === "mention") {
+    if (command.intent === "composer.mention") {
       setMentionOpenRequest((request) => request + 1);
       return;
     }
-    if (command.name === "diff" || command.name === "ide") {
+    if (command.intent === "workspace.open") {
       onOpenInspector("files");
       return;
     }
-    if (command.name === "agent" || command.name === "subagents") {
-      onOpenInspector("activity");
+    if (command.intent === "agents.open") {
+      openAgentThreads();
       return;
     }
-    if (command.name === "skills") {
+    if (command.intent === "environment.skills") {
       onOpenEnvironmentSettings("skills");
       return;
     }
-    if (command.name === "mcp") {
+    if (command.intent === "environment.mcp") {
       onOpenEnvironmentSettings("mcp");
       return;
     }
-    if (command.name === "permissions") {
+    if (command.intent === "environment.network") {
       onOpenEnvironmentSettings("network");
       return;
     }
-    if (command.name === "usage" || command.name === "logout") {
+    if (command.intent === "environment.credentials") {
       onOpenEnvironmentSettings("credentials");
       return;
     }
-    if (command.name === "copy") {
+    if (command.intent === "response.copy") {
       const latest = [...visibleTimeline.entries]
         .reverse()
         .find(
@@ -972,7 +1024,7 @@ export function CodexConversation({
       });
       return;
     }
-    if (command.name === "plan") {
+    if (command.intent === "composer.plan") {
       setPlanMode(true);
       if (argumentsValue) {
         await submitMessage({
@@ -992,7 +1044,7 @@ export function CodexConversation({
       }
       return;
     }
-    if (command.name === "init") {
+    if (command.intent === "codex.init") {
       await submitMessage({
         content: CODEX_INIT_COMMAND_PROMPT,
         bypassSlash: true,
@@ -1007,7 +1059,7 @@ export function CodexConversation({
     setSending(true);
     setAttachmentError("");
     try {
-      if (command.name === "goal") {
+      if (command.intent === "codex.goal") {
         const clear = argumentsValue.toLowerCase() === "clear";
         const response = await apiFetch<ApiEnvelope<CodexGoalProjection>>(
           `/api/v1/sessions/${encodeURIComponent(session.id)}/goal`,
@@ -1042,7 +1094,7 @@ export function CodexConversation({
         });
         return;
       }
-      if (command.name === "fork") {
+      if (command.intent === "session.fork") {
         const response = await apiFetch<ApiEnvelope<CodexSession>>(
           `/api/v1/sessions/${encodeURIComponent(session.id)}/fork`,
           { method: "POST", body: JSON.stringify({}) },
@@ -1050,7 +1102,7 @@ export function CodexConversation({
         onDerivedSessionCreated(response.data);
         return;
       }
-      if (command.name === "compact") {
+      if (command.intent === "codex.compact") {
         await apiFetch<ApiEnvelope<{ accepted: boolean }>>(
           `/api/v1/sessions/${encodeURIComponent(session.id)}/compact`,
           { method: "POST", body: JSON.stringify({}) },
@@ -1065,7 +1117,7 @@ export function CodexConversation({
         });
         return;
       }
-      if (command.name === "review") {
+      if (command.intent === "codex.review") {
         await apiFetch<ApiEnvelope<{ nativeTurnId: string }>>(
           `/api/v1/sessions/${encodeURIComponent(session.id)}/review`,
           {
@@ -1085,7 +1137,7 @@ export function CodexConversation({
         });
         return;
       }
-      if (command.name === "rename") {
+      if (command.intent === "session.rename") {
         const response = await apiFetch<ApiEnvelope<CodexSession>>(
           `/api/v1/sessions/${encodeURIComponent(session.id)}/metadata`,
           {
@@ -1103,7 +1155,7 @@ export function CodexConversation({
         });
         return;
       }
-      if (command.name === "archive") {
+      if (command.intent === "session.archive") {
         const response = await apiFetch<ApiEnvelope<CodexSession>>(
           `/api/v1/sessions/${encodeURIComponent(session.id)}/metadata`,
           {
@@ -2034,6 +2086,26 @@ export function CodexConversation({
           </p>
         </div>
       </section>
+      {agentThreadsOpen ? (
+        <CodexAgentThreadsDialog
+          language={language}
+          timeZone={timeZone}
+          sessionId={session.id}
+          sessionTitle={session.title}
+          harnessLabel={session.harnessLabel}
+          selectedThreadId={selectedAgentThreadId}
+          onSelectedThreadChange={selectAgentThread}
+          onOpenWorkspacePath={(path) => {
+            closeAgentThreads();
+            onOpenWorkspacePath(path);
+          }}
+          onOpenFiles={() => {
+            closeAgentThreads();
+            onOpenInspector("files");
+          }}
+          onClose={closeAgentThreads}
+        />
+      ) : null}
       {inspectorOpen ? (
         <Inspector
           language={language}

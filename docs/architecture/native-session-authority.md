@@ -77,6 +77,15 @@ pauses the Sandbox, Sandpi materializes it again in the final Sandbox0 runtime
 generation before admitting protocol initialization; `/dev/shm` never survives
 that native lifecycle transition.
 
+Credential bindings fence process-local Codex identity as well as file
+materialization. Re-authentication creates a new source revision and marks the
+existing Sandbox binding stale. A warm app-server cannot pass native admission
+while that binding is stale: recovery writes the new ephemeral credential,
+replaces the Supervisor attempt, initializes the replacement app-server, and
+only then publishes the new binding as active. This prevents stored account
+metadata from advancing while usage and Turns still run through the previous
+ChatGPT account.
+
 ## Runtime authority and cold access
 
 Sandbox0 is the authority for the live Sandbox lifecycle, Supervisor attempt
@@ -297,7 +306,12 @@ Slash completion is part of the Codex harness adapter, not the shared
 conversation dispatcher. The New Session and active Session composers use one
 Codex registry and parser, support pointer plus Up/Down/Tab/Enter/Escape
 interaction, and reject unknown commands locally instead of sending them to the
-model as user text.
+model as user text. Each registry entry also names a stable browser intent.
+Dispatch switches on that intent rather than command text, so Codex aliases
+such as `/agent` and `/subagents` share one implementation. The Codex TUI is the
+behavioral reference for command meaning, while app-server remains the data and
+mutation authority; terminal-only presentation commands are not copied into
+the browser.
 
 Commands preserve Sandpi product ownership where a browser-native surface
 already exists:
@@ -308,9 +322,10 @@ already exists:
 - `/rename` and `/archive` update product Session metadata.
 - `/model`, `/mention`, `/diff`, `/skills`, `/mcp`, `/permissions` and `/usage`
   open the corresponding composer, Inspector or Environment settings surface.
-- `/ide`, `/agent` and `/subagents` open the Workspace or native Activity
-  Inspector. `/logout` opens the Codex account connection so the user retains
-  the existing confirmation and reconnect flow.
+- `/ide` opens the Workspace Inspector. `/agent` and `/subagents` open the
+  dedicated native Agent Threads picker described below. `/logout` opens the
+  Codex account connection so the user retains the existing confirmation and
+  reconnect flow.
 - `/copy` copies the latest assistant message.
 - `/compact` calls `thread/compact/start`; `/review` calls inline
   `review/start` with either the native `uncommittedChanges` target or a custom
@@ -328,6 +343,34 @@ already exists:
 - `/plan` sends the selected live model and effort through Codex's native Plan
   collaboration-mode settings. `/init` submits the harness-owned repository
   instruction for creating or improving `AGENTS.md`.
+
+### Native Agent Threads
+
+Session Activity is a parent-Thread execution and audit feed; it is not the
+Codex Agent picker. Sandpi initializes app-server with
+`capabilities.experimentalApi`, then `/agent` and `/subagents` use
+`thread/list(ancestorThreadId)` to page the persisted spawn tree at any depth.
+This preserves completed descendants across Sandpi, app-server and Sandbox
+restarts. Selecting a row calls `thread/read(includeTurns: true)` and projects
+that native child transcript with the same Codex message, tool and Turn
+renderers used by the main conversation. A child that has not materialized
+history yet falls back to metadata-only display.
+
+The server re-reads the ancestor tree before accepting a child Thread id, so a
+caller cannot use the endpoint to inspect an unrelated Thread in the same
+Environment. Child metadata and transcripts are never copied into PostgreSQL
+or converted into product Sessions. The browser records the open picker as
+`agents=1` and a selected child as `agent={threadId}` so refresh restores the
+same GUI state. Closing the picker removes both parameters.
+
+Codex app-server does not expose the TUI slash catalog as a runtime capability.
+Sandpi therefore keeps an explicit, reviewed command registry instead of
+pretending to discover it dynamically. Future command maintenance should
+compare the pinned Codex TUI source with that registry, map browser-relevant
+commands to an existing or new intent, and deliberately exclude TUI-only
+commands. Native protocol types should continue moving toward output generated
+by the Environment's pinned `codex app-server generate-ts` version rather than
+adding parallel Sandpi protocol models.
 
 `/resume` is intentionally absent because Sandpi's sidebar and URL own product
 Session selection. `/side` and `/btw` are absent because Sandpi has no

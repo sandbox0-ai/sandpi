@@ -95,6 +95,15 @@ export interface RecoveredCodexEnvironmentRuntime {
   sandboxRestarted: boolean;
 }
 
+export interface EnsureCodexEnvironmentRuntimeOptions {
+  /**
+   * Replaces a live app-server attempt after an Environment credential source
+   * changes. Codex loads account identity into process-local state, so writing
+   * a new auth.json alone cannot switch an already-running process.
+   */
+  replaceSupervisorAttempt?: boolean;
+}
+
 export interface RuntimeMetricWindow {
   startedAt: Date;
   endedAt: Date;
@@ -172,6 +181,7 @@ export interface RuntimeAdapter {
   ensureCodexEnvironmentRuntime(
     runtime: EnvironmentRuntimeRecord,
     authJson: string,
+    options?: EnsureCodexEnvironmentRuntimeOptions,
   ): Promise<RecoveredCodexEnvironmentRuntime>;
   provisionCodexAuth(
     environment: Environment,

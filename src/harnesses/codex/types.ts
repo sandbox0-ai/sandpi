@@ -227,13 +227,29 @@ export interface CodexThread {
   id: string;
   sessionId?: string;
   forkedFromId?: string | null;
+  /** Native parent relation for AgentControl-spawned sub-agent Threads. */
+  parentThreadId?: string | null;
   preview?: string;
+  ephemeral?: boolean;
+  modelProvider?: string;
   /** Native rollout path exposed by app-server for this stored Thread. */
   path?: string | null;
+  cwd?: string;
+  source?: unknown;
+  canAcceptDirectInput?: boolean | null;
+  agentNickname?: string | null;
+  agentRole?: string | null;
+  name?: string | null;
   createdAt?: number;
   updatedAt?: number;
   status: CodexThreadStatus;
   turns: CodexTurn[];
+}
+
+/** Native root plus every persisted AgentControl descendant in one Session tree. */
+export interface CodexAgentThreads {
+  root: CodexThread;
+  descendants: CodexThread[];
 }
 
 export type CodexServerNotification =

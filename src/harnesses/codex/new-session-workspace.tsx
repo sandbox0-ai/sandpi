@@ -317,31 +317,31 @@ export function CodexNewSessionWorkspace({
     clearComposerPrompt();
     setCommandNotice(null);
     setError("");
-    if (command.name === "model") {
+    if (command.intent === "composer.model") {
       openModelPicker();
       return;
     }
-    if (command.name === "mention") {
+    if (command.intent === "composer.mention") {
       setMentionOpenRequest((request) => request + 1);
       return;
     }
-    if (command.name === "skills") {
+    if (command.intent === "environment.skills") {
       onOpenEnvironmentSettings("skills");
       return;
     }
-    if (command.name === "mcp") {
+    if (command.intent === "environment.mcp") {
       onOpenEnvironmentSettings("mcp");
       return;
     }
-    if (command.name === "permissions") {
+    if (command.intent === "environment.network") {
       onOpenEnvironmentSettings("network");
       return;
     }
-    if (command.name === "usage" || command.name === "logout") {
+    if (command.intent === "environment.credentials") {
       onOpenEnvironmentSettings("credentials");
       return;
     }
-    if (command.name === "plan") {
+    if (command.intent === "composer.plan") {
       setPlanMode(true);
       if (argumentsValue) {
         await createSession({
@@ -361,7 +361,7 @@ export function CodexNewSessionWorkspace({
       }
       return;
     }
-    if (command.name === "init") {
+    if (command.intent === "codex.init") {
       await createSession({
         instruction: CODEX_INIT_COMMAND_PROMPT,
         bypassSlash: true,

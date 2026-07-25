@@ -190,6 +190,7 @@ interface Fixture {
   exceptionalCandidateQueryCount(): number;
   lifecycleLockActive(): boolean;
   runtimeRecoveryCount(): number;
+  runtimeRecoveryReplacements(): boolean[];
   environmentRuntime(): StoredEnvironmentRuntime;
   reconciledEnvironmentEpochs(): Array<{
     supervisorSessionId?: string;
@@ -200,6 +201,7 @@ interface Fixture {
     desiredState: StoredEnvironmentRuntime["desiredState"];
     observedState: StoredEnvironmentRuntime["observedState"];
   }): void;
+  setCredentialBindingCurrent(current: boolean): void;
   recoverRuntimeAs(input: {
     supervisorSessionId?: string;
     attemptId: string;
@@ -383,6 +385,7 @@ function fixture(
     terminalSessionId: undefined,
     attemptId: "attempt-environment-test",
     runtimeGeneration: 1,
+    codexCredentialBindingCurrent: true,
     decoder: {
       supervisorCursor: 0,
       tailBase64: "",
@@ -413,6 +416,7 @@ function fixture(
   let exceptionalCandidateQueries = 0;
   let lifecycleLockDepth = 0;
   let runtimeRecoveries = 0;
+  const runtimeRecoveryReplacements: boolean[] = [];
   const environmentRecoveryErrors = [
     ...(input.environmentRecoveryErrors ?? []),
   ];
@@ -1274,8 +1278,15 @@ function fixture(
 
   const runtime = {
     mode: "sandbox0",
-    async ensureCodexEnvironmentRuntime() {
+    async ensureCodexEnvironmentRuntime(
+      _runtime: StoredEnvironmentRuntime,
+      _authJson: string,
+      options?: { replaceSupervisorAttempt?: boolean },
+    ) {
       runtimeRecoveries += 1;
+      runtimeRecoveryReplacements.push(
+        options?.replaceSupervisorAttempt === true,
+      );
       const recoveryError = environmentRecoveryErrors.shift();
       if (recoveryError) throw recoveryError;
       if (input.environmentRecoveryDelay) {
@@ -1428,6 +1439,7 @@ function fixture(
     exceptionalCandidateQueryCount: () => exceptionalCandidateQueries,
     lifecycleLockActive: () => lifecycleLockDepth > 0,
     runtimeRecoveryCount: () => runtimeRecoveries,
+    runtimeRecoveryReplacements: () => [...runtimeRecoveryReplacements],
     environmentRuntime: () => environmentRuntime,
     reconciledEnvironmentEpochs: () => [...reconciledEnvironmentEpochs],
     setRuntimeState: ({ desiredState, observedState }) => {
@@ -1435,6 +1447,13 @@ function fixture(
         ...environmentRuntime,
         desiredState,
         observedState,
+        version: environmentRuntime.version + 1,
+      };
+    },
+    setCredentialBindingCurrent: (current) => {
+      environmentRuntime = {
+        ...environmentRuntime,
+        codexCredentialBindingCurrent: current,
         version: environmentRuntime.version + 1,
       };
     },
@@ -1543,6 +1562,15 @@ test("uses one Environment app-server for multiple native Sessions", async () =>
         .length,
       1,
     );
+    assert.deepEqual(
+      context.writes.find(
+        (write) => write.message.method === "initialize",
+      )?.message.params,
+      {
+        clientInfo: { name: "sandpi", title: "Sandpi", version: "0.1.0" },
+        capabilities: { experimentalApi: true },
+      },
+    );
     assert.equal(
       context.writes.filter((write) => write.message.method === "model/list")
         .length,
@@ -1552,6 +1580,253 @@ test("uses one Environment app-server for multiple native Sessions", async () =>
       context.writes.filter((write) => write.message.method === "thread/resume")
         .length,
       0,
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("restarts a warm app-server before publishing a replacement account credential", async () => {
+  let credentialRevision = 1;
+  const credentialEvents: string[] = [];
+  const currentCredential = () => ({
+    sourceId: `credential-${credentialRevision}`,
+    revision: credentialRevision,
+    authJson: `{"revision":${credentialRevision}}`,
+  });
+  const replacementCredentials = {
+    async credentialForEnvironment() {
+      return currentCredential();
+    },
+    async credentialForEnvironmentRuntime() {
+      return currentCredential();
+    },
+    async markCredentialMaterialized(
+      _environmentId: string,
+      credential: { revision: number },
+    ) {
+      credentialEvents.push(`materialized-${credential.revision}`);
+    },
+    async syncCredentialFromRuntime() {
+      return undefined;
+    },
+  } satisfies CodexCredentialProvider;
+  const context = fixture({
+    credentials: replacementCredentials,
+    onRequest(message) {
+      if (message.method === "initialize") {
+        credentialEvents.push(`initialized-${credentialRevision}`);
+      }
+      return undefined;
+    },
+  });
+  try {
+    await context.service.listModels("user", "session-one");
+    assert.deepEqual(context.runtimeRecoveryReplacements(), [false]);
+
+    credentialRevision = 2;
+    context.setCredentialBindingCurrent(false);
+    context.replaceAuthoritativeRuntime({
+      supervisorSessionId: environment.supervisorSessionId,
+      attemptId: "attempt-environment-credential-two",
+      runtimeGeneration: 1,
+    });
+
+    await context.service.accountRateLimitsForEnvironment(
+      "user",
+      environment.id,
+    );
+
+    assert.equal(context.runtimeRecoveryCount(), 2);
+    assert.deepEqual(context.runtimeRecoveryReplacements(), [false, true]);
+    assert.equal(
+      context.environmentRuntime().attemptId,
+      "attempt-environment-credential-two",
+    );
+    assert.deepEqual(credentialEvents, [
+      "initialized-1",
+      "materialized-1",
+      "initialized-2",
+      "materialized-2",
+    ]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("lists persisted native Agent descendants across paginated tree pages", async () => {
+  const context = fixture({
+    onRequest(message) {
+      if (message.method !== "thread/list") return undefined;
+      const params = message.params as {
+        ancestorThreadId?: string;
+        cursor?: string;
+        limit?: number;
+      };
+      assert.equal(params.ancestorThreadId, "thread-one");
+      assert.equal(params.limit, 100);
+      return params.cursor
+        ? {
+            id: message.id,
+            result: {
+              data: [
+                {
+                  id: "agent-child",
+                  parentThreadId: "thread-one",
+                  status: { type: "idle" },
+                  turns: [],
+                },
+              ],
+              nextCursor: null,
+            },
+          }
+        : {
+            id: message.id,
+            result: {
+              data: [
+                {
+                  id: "agent-grandchild",
+                  parentThreadId: "agent-child",
+                  agentNickname: "Scout",
+                  agentRole: "explorer",
+                  status: { type: "notLoaded" },
+                  turns: [],
+                },
+              ],
+              nextCursor: "agent-page-two",
+            },
+          };
+    },
+  });
+  try {
+    const tree = await context.service.listSessionAgentThreads({
+      userId: "user",
+      sessionId: "session-one",
+    });
+
+    assert.equal(tree.root.id, "thread-one");
+    assert.deepEqual(
+      tree.descendants.map((thread) => ({
+        id: thread.id,
+        parentThreadId: thread.parentThreadId,
+      })),
+      [
+        {
+          id: "agent-grandchild",
+          parentThreadId: "agent-child",
+        },
+        {
+          id: "agent-child",
+          parentThreadId: "thread-one",
+        },
+      ],
+    );
+    assert.deepEqual(
+      context.writes
+        .filter(({ message }) => message.method === "thread/list")
+        .map(({ message }) => message.params),
+      [
+        { ancestorThreadId: "thread-one", limit: 100 },
+        {
+          ancestorThreadId: "thread-one",
+          limit: 100,
+          cursor: "agent-page-two",
+        },
+      ],
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("reads only a native Agent Thread owned by the Session tree", async () => {
+  const context = fixture({
+    onRequest(message) {
+      if (message.method === "thread/list") {
+        return {
+          id: message.id,
+          result: {
+            data: [
+              {
+                id: "agent-child",
+                parentThreadId: "thread-one",
+                status: { type: "idle" },
+                turns: [],
+              },
+            ],
+            nextCursor: null,
+          },
+        };
+      }
+      if (
+        message.method === "thread/read" &&
+        (message.params as { threadId?: string }).threadId === "agent-child"
+      ) {
+        return {
+          id: message.id,
+          result: {
+            thread: {
+              id: "agent-child",
+              parentThreadId: "thread-one",
+              agentNickname: "Scout",
+              status: { type: "idle" },
+              turns: [completedTurn("agent-turn")],
+            },
+          },
+        };
+      }
+      return undefined;
+    },
+  });
+  try {
+    const thread = await context.service.readSessionAgentThread({
+      userId: "user",
+      sessionId: "session-one",
+      nativeThreadId: "agent-child",
+    });
+    assert.equal(thread.id, "agent-child");
+    assert.equal(thread.agentNickname, "Scout");
+    assert.deepEqual(
+      context.writes.find(
+        ({ message }) =>
+          message.method === "thread/read" &&
+          (message.params as { threadId?: string }).threadId === "agent-child",
+      )?.message.params,
+      { threadId: "agent-child", includeTurns: true },
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("rejects a same-Environment Thread outside the native Agent tree", async () => {
+  const context = fixture({
+    onRequest(message) {
+      if (message.method !== "thread/list") return undefined;
+      return {
+        id: message.id,
+        result: { data: [], nextCursor: null },
+      };
+    },
+  });
+  try {
+    await assert.rejects(
+      context.service.readSessionAgentThread({
+        userId: "user",
+        sessionId: "session-one",
+        nativeThreadId: "thread-two",
+      }),
+      (error: unknown) =>
+        error instanceof HttpError &&
+        error.code === "codex_agent_thread_not_found",
+    );
+    assert.equal(
+      context.writes.some(
+        ({ message }) =>
+          message.method === "thread/read" &&
+          (message.params as { threadId?: string }).threadId === "thread-two",
+      ),
+      false,
     );
   } finally {
     await context.close();

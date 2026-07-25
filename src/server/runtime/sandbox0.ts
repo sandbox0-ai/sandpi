@@ -52,6 +52,7 @@ import { toSandbox0NetworkPolicy } from "./network-policy";
 import {
   CODEX_ENVIRONMENT_CREDENTIAL_PATH,
   CODEX_MCP_OAUTH_CALLBACK_BASE_PATH,
+  type EnsureCodexEnvironmentRuntimeOptions,
   type CodexAuthRuntime,
   type EnvironmentRuntimeRecord,
   type ProvisionedEnvironment,
@@ -696,6 +697,7 @@ export class Sandbox0Runtime implements RuntimeAdapter {
   async ensureCodexEnvironmentRuntime(
     runtime: EnvironmentRuntimeRecord,
     authJson: string,
+    options: EnsureCodexEnvironmentRuntimeOptions = {},
   ): Promise<RecoveredCodexEnvironmentRuntime> {
     let sandboxRestarted = false;
     try {
@@ -772,6 +774,48 @@ export class Sandbox0Runtime implements RuntimeAdapter {
         sandbox,
         `sandpi-codex-environment-${runtime.id}`,
       );
+
+      if (options.replaceSupervisorAttempt && hasLiveAttempt(supervisor)) {
+        const previousAttemptId = supervisor.attempt!.id;
+        try {
+          supervisor = await sandbox.createSessionAttempt(supervisor.id, true);
+        } catch (error) {
+          // A concurrent recovery can replace the same attempt first. Accept
+          // only an observed live successor; an unchanged attempt means the
+          // credential switch has not crossed the process boundary.
+          if (!(error instanceof APIError) || error.statusCode !== 409) {
+            throw error;
+          }
+          const raced = await sandbox.getSession(supervisor.id);
+          if (
+            !hasLiveAttempt(raced) ||
+            raced.attempt?.id === previousAttemptId
+          ) {
+            throw error;
+          }
+          supervisor = raced;
+        }
+        if (
+          !hasLiveAttempt(supervisor) ||
+          supervisor.attempt?.id === previousAttemptId
+        ) {
+          supervisor = await waitForNewAttempt(
+            sandbox,
+            supervisor.id,
+            previousAttemptId,
+          );
+        }
+        if (
+          !hasLiveAttempt(supervisor) ||
+          supervisor.attempt?.id === previousAttemptId
+        ) {
+          throw new HttpError(
+            502,
+            "supervisor_credential_switch_failed",
+            "Codex app-server did not restart with the current Environment credential.",
+          );
+        }
+      }
 
       if (!hasLiveAttempt(supervisor)) {
         try {

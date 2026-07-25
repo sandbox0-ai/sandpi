@@ -10,6 +10,7 @@ import {
 } from "@/harnesses/codex/inline-review";
 import {
   CODEX_TRANSCRIPT_NOTIFICATION_METHODS,
+  type CodexAgentThreads,
   type CodexEventEnvelope,
   type CodexNativeSnapshot,
   type CodexServerNotification,
@@ -96,6 +97,8 @@ const CODEX_MCP_SERVER_NAME = /^[A-Za-z0-9_-]{1,64}$/;
 const CODEX_MCP_OAUTH_TIMEOUT_SECONDS = 5 * 60;
 const MAX_CODEX_RATE_LIMIT_BUCKETS = 16;
 const MAX_CODEX_RATE_LIMIT_RESET_CREDITS = 1_000_000;
+const CODEX_AGENT_THREAD_PAGE_LIMIT = 100;
+const MAX_CODEX_AGENT_THREADS = 1_000;
 const CODEX_ACCOUNT_PLAN_TYPES = new Set<CodexAccountPlanType>([
   "free",
   "go",
@@ -1257,6 +1260,102 @@ export class CodexService {
     );
   }
 
+  /**
+   * Reads the native AgentControl tree directly from Codex. The relationship
+   * query is persisted by app-server, so completed descendants remain visible
+   * after either Sandpi or the Environment runtime restarts.
+   */
+  async listSessionAgentThreads(input: {
+    userId: string;
+    sessionId: string;
+  }): Promise<CodexAgentThreads> {
+    const sessionRuntime = await this.requireNativeSessionRuntime(
+      input.userId,
+      input.sessionId,
+    );
+    const environmentRuntime = await this.environmentRuntimeForSession(
+      input.userId,
+      input.sessionId,
+    );
+    return this.readNativeAgentTree(
+      environmentRuntime,
+      sessionRuntime,
+      input.sessionId,
+    );
+  }
+
+  /**
+   * Reads one root or descendant Thread without converting it into a Sandpi
+   * Session. The ancestor check prevents arbitrary same-Environment Thread
+   * reads while keeping Codex as the only transcript authority.
+   */
+  async readSessionAgentThread(input: {
+    userId: string;
+    sessionId: string;
+    nativeThreadId: string;
+  }) {
+    const sessionRuntime = await this.requireNativeSessionRuntime(
+      input.userId,
+      input.sessionId,
+    );
+    const environmentRuntime = await this.environmentRuntimeForSession(
+      input.userId,
+      input.sessionId,
+    );
+    const tree = await this.readNativeAgentTree(
+      environmentRuntime,
+      sessionRuntime,
+      input.sessionId,
+    );
+    if (
+      input.nativeThreadId !== tree.root.id &&
+      !tree.descendants.some((thread) => thread.id === input.nativeThreadId)
+    ) {
+      throw new HttpError(
+        404,
+        "codex_agent_thread_not_found",
+        "The requested Codex Agent Thread does not belong to this Session.",
+      );
+    }
+
+    const read = (includeTurns: boolean) =>
+      this.requestCodex(
+        sessionRuntime.environmentId,
+        environmentRuntime,
+        {
+          method: "thread/read",
+          id: rpcId("agent-thread-read", input.sessionId),
+          params: {
+            threadId: input.nativeThreadId,
+            includeTurns,
+          },
+        },
+        input.sessionId,
+      );
+    let response = await read(true);
+    if (
+      response.error &&
+      canFallbackFromAgentThreadHistoryError(response.error)
+    ) {
+      response = await read(false);
+    }
+    if (response.error) {
+      throw new HttpError(
+        502,
+        "codex_agent_thread_read_failed",
+        rpcErrorMessage(response.error),
+      );
+    }
+    const thread = threadFromRpcResponse(response);
+    if (!thread || thread.id !== input.nativeThreadId) {
+      throw invalidCodexResponse(
+        "codex_agent_thread_read_failed",
+        "Codex returned an invalid Agent Thread.",
+      );
+    }
+    return thread;
+  }
+
   async listEnvironmentModels(userId: string, environmentId: string) {
     // Model configuration is a live harness capability. Wake and query the
     // Environment-native app-server instead of serving auth metadata or a
@@ -1927,6 +2026,7 @@ export class CodexService {
       current.observedState === "running" &&
       current.supervisorSessionId &&
       current.attemptId &&
+      current.codexCredentialBindingCurrent === true &&
       this.initializing.has(environmentProtocolKey(current))
     ) {
       await this.ensureProtocolInitialized(current);
@@ -1980,29 +2080,31 @@ export class CodexService {
 
   private async performEnvironmentRecovery(environmentId: string) {
     const deadline = Date.now() + RUNTIME_RECOVERY_LOCK_TIMEOUT_MS;
-    const credential =
-      await this.credentials.credentialForEnvironmentRuntime(environmentId);
     while (!this.closed) {
       try {
+        const credential =
+          await this.credentials.credentialForEnvironmentRuntime(environmentId);
         const locked =
           await this.advisoryLockStore().withEnvironmentLifecycleLock(
             environmentId,
             async (lockedStore) => {
               const scopedStore = lockedStore ?? this.store;
-              const ready = await this.reconcileEnvironmentRuntime(
+              return this.reconcileEnvironmentRuntime(
                 environmentId,
                 credential,
                 scopedStore,
               );
-              await this.credentials.markCredentialMaterialized(
-                environmentId,
-                credential,
-              );
-              return ready;
             },
           );
         if (locked.acquired) {
           await this.ensureProtocolInitialized(locked.value);
+          // A credential binding means the process-local Codex account is
+          // ready, not merely that auth.json was written. Publish it only
+          // after the replacement app-server answers initialize.
+          await this.credentials.markCredentialMaterialized(
+            environmentId,
+            credential,
+          );
           this.scheduleExceptionalSessionReconciliation(locked.value);
           return locked.value;
         }
@@ -2035,6 +2137,11 @@ export class CodexService {
     const recovered = await this.runtime.ensureCodexEnvironmentRuntime(
       current,
       credential.authJson,
+      {
+        replaceSupervisorAttempt:
+          Boolean(current.supervisorSessionId && current.attemptId) &&
+          current.codexCredentialBindingCurrent !== true,
+      },
     );
     const ready = await lockedStore.recordCodexEnvironmentRuntime(
       environmentId,
@@ -3131,6 +3238,7 @@ export class CodexService {
           id: rpcId("initialize", runtime.id),
           params: {
             clientInfo: { name: "sandpi", title: "Sandpi", version: "0.1.0" },
+            capabilities: { experimentalApi: true },
           },
         },
         undefined,
@@ -3361,6 +3469,84 @@ export class CodexService {
       );
     }
     return thread;
+  }
+
+  private async readNativeAgentTree(
+    environmentRuntime: StoredEnvironmentRuntime,
+    sessionRuntime: StoredSessionRuntime & { nativeSessionId: string },
+    ownerSessionId: string,
+  ): Promise<CodexAgentThreads> {
+    const rootResponse = await this.requestCodex(
+      sessionRuntime.environmentId,
+      environmentRuntime,
+      {
+        method: "thread/read",
+        id: rpcId("agent-root-read", ownerSessionId),
+        params: {
+          threadId: sessionRuntime.nativeSessionId,
+          includeTurns: false,
+        },
+      },
+      ownerSessionId,
+    );
+    if (rootResponse.error) {
+      throw nativeSessionUnavailable(rootResponse.error);
+    }
+    const root = threadFromRpcResponse(rootResponse);
+    if (!root || root.id !== sessionRuntime.nativeSessionId) {
+      throw invalidCodexResponse(
+        "codex_agent_threads_list_failed",
+        "Codex returned an invalid root Agent Thread.",
+      );
+    }
+
+    const descendants: CodexThread[] = [];
+    const cursors = new Set<string>();
+    let cursor: string | undefined;
+    do {
+      const response = await this.requestCodex(
+        sessionRuntime.environmentId,
+        environmentRuntime,
+        {
+          method: "thread/list",
+          id: rpcId("agent-thread-list", ownerSessionId),
+          params: {
+            ancestorThreadId: sessionRuntime.nativeSessionId,
+            limit: CODEX_AGENT_THREAD_PAGE_LIMIT,
+            ...(cursor ? { cursor } : {}),
+          },
+        },
+        ownerSessionId,
+      );
+      if (response.error) {
+        throw new HttpError(
+          502,
+          "codex_agent_threads_list_failed",
+          rpcErrorMessage(response.error),
+        );
+      }
+      const page = threadListPage(response.result);
+      descendants.push(...page.data);
+      if (descendants.length > MAX_CODEX_AGENT_THREADS) {
+        throw invalidCodexResponse(
+          "codex_agent_threads_list_failed",
+          "Codex returned too many Agent Threads.",
+        );
+      }
+      cursor = page.nextCursor;
+      if (cursor && cursors.has(cursor)) {
+        throw invalidCodexResponse(
+          "codex_agent_threads_list_failed",
+          "Codex returned a repeated Agent Thread cursor.",
+        );
+      }
+      if (cursor) cursors.add(cursor);
+    } while (cursor);
+
+    return {
+      root,
+      descendants: validateAgentThreadTree(root.id, descendants),
+    };
   }
 
   private async requestCodex(
@@ -4057,7 +4243,11 @@ function threadIdFromRpcResponse(response: Record<string, unknown>) {
 }
 
 function threadFromRpcResponse(response: Record<string, unknown>) {
-  const thread = objectRecord(objectRecord(response.result)?.thread);
+  return threadFromValue(objectRecord(response.result)?.thread);
+}
+
+function threadFromValue(value: unknown) {
+  const thread = objectRecord(value);
   if (
     !thread ||
     typeof thread.id !== "string" ||
@@ -4066,6 +4256,93 @@ function threadFromRpcResponse(response: Record<string, unknown>) {
     return undefined;
   }
   return thread as unknown as CodexThread;
+}
+
+function threadListPage(result: unknown) {
+  const page = objectRecord(result);
+  if (!page || !Array.isArray(page.data)) {
+    throw invalidCodexResponse(
+      "codex_agent_threads_list_failed",
+      "Codex returned an invalid Agent Thread list.",
+    );
+  }
+  const data = page.data.map(threadFromValue);
+  if (data.some((thread) => !thread)) {
+    throw invalidCodexResponse(
+      "codex_agent_threads_list_failed",
+      "Codex returned an invalid Agent Thread entry.",
+    );
+  }
+  const nextCursor = page.nextCursor;
+  if (
+    nextCursor !== undefined &&
+    nextCursor !== null &&
+    typeof nextCursor !== "string"
+  ) {
+    throw invalidCodexResponse(
+      "codex_agent_threads_list_failed",
+      "Codex returned an invalid Agent Thread cursor.",
+    );
+  }
+  return {
+    data: data as CodexThread[],
+    nextCursor:
+      typeof nextCursor === "string" && nextCursor ? nextCursor : undefined,
+  };
+}
+
+function validateAgentThreadTree(
+  rootThreadId: string,
+  descendants: CodexThread[],
+) {
+  const byId = new Map<string, CodexThread>();
+  for (const thread of descendants) {
+    if (thread.id === rootThreadId || byId.has(thread.id)) {
+      throw invalidCodexResponse(
+        "codex_agent_threads_list_failed",
+        "Codex returned a duplicate Agent Thread.",
+      );
+    }
+    if (!thread.parentThreadId) {
+      throw invalidCodexResponse(
+        "codex_agent_threads_list_failed",
+        "Codex returned an Agent Thread without its parent relation.",
+      );
+    }
+    byId.set(thread.id, thread);
+  }
+
+  const accepted = new Set([rootThreadId]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const thread of descendants) {
+      if (
+        !accepted.has(thread.id) &&
+        thread.parentThreadId &&
+        accepted.has(thread.parentThreadId)
+      ) {
+        accepted.add(thread.id);
+        changed = true;
+      }
+    }
+  }
+  if (accepted.size !== descendants.length + 1) {
+    throw invalidCodexResponse(
+      "codex_agent_threads_list_failed",
+      "Codex returned an Agent Thread outside the requested Session tree.",
+    );
+  }
+  return descendants;
+}
+
+function canFallbackFromAgentThreadHistoryError(error: unknown) {
+  const message = rpcErrorMessage(error).toLowerCase();
+  return (
+    message.includes("does not support thread/read(includeturns=true)") ||
+    message.includes("includeTurns is unavailable".toLowerCase()) ||
+    message.includes("ephemeral threads do not support includeturns")
+  );
 }
 
 function turnIdFromRpcResponse(response: Record<string, unknown>) {
