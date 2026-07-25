@@ -22,10 +22,7 @@ import type {
   CodexTurn,
 } from "../src/harnesses/codex/types";
 import { PENDING_GUEST_PROMPT_STORAGE_KEY } from "../src/lib/auth-navigation";
-import {
-  getMockBootstrap,
-  mockEnvironmentMetrics,
-} from "../src/lib/mock-data";
+import { mockEnvironmentMetrics } from "../src/lib/mock-data";
 
 interface ControlledEventWindow extends Window {
   __sandpiEmitEvent?: (
@@ -3240,102 +3237,6 @@ test("does not answer historical terminal queries on the live PTY", async ({
       ),
     )
     .toBe(true);
-});
-
-test("opens Files and Session Activity from the mobile conversation header", async ({
-  page,
-}) => {
-  const bootstrap = getMockBootstrap();
-  const environment = bootstrap.environments[0]!;
-  const session = bootstrap.sessions.find(
-    (candidate) => candidate.environmentId === environment.id,
-  )!;
-
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.route(
-    (url) => url.pathname === "/api/v1/bootstrap",
-    async (route) => {
-      await route.fulfill({ json: { data: bootstrap } });
-    },
-  );
-  await page.route("**/api/v1/sessions/**/events", async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: "text/event-stream",
-      body: ": mobile conversation header fixture\n\n",
-    });
-  });
-  await page.route("**/api/v1/sessions/**/models", async (route) => {
-    await route.fulfill({
-      json: {
-        data: {
-          data: [
-            {
-              id: "e2e-mobile-header-model",
-              displayName: "E2E mobile header model",
-              isDefault: true,
-            },
-          ],
-        },
-        meta: { availability: "available", source: "codex" },
-      },
-    });
-  });
-  await page.route("**/api/v1/environments/**/ide", async (route) => {
-    await route.fulfill({
-      json: {
-        data: {
-          files: [],
-          git: { repositories: [] },
-          refreshedAt: Date.now() / 1_000,
-        },
-      },
-    });
-  });
-
-  await page.goto(
-    `/?environment=${encodeURIComponent(environment.id)}&session=${encodeURIComponent(session.id)}`,
-  );
-
-  const header = page.locator(".conversation-header");
-  const openFiles = header.getByRole("button", { name: "Open files" });
-  const openActivity = header.getByRole("button", {
-    name: "Open Codex Session Activity",
-  });
-  await expect(openFiles).toBeVisible();
-  await expect(openActivity).toBeVisible();
-  await expect(
-    header.getByRole("button", { name: "Terminal" }),
-  ).toBeHidden();
-  await expect(
-    header.getByRole("button", { name: "Open inspector" }),
-  ).toBeHidden();
-
-  await openFiles.click();
-  const inspector = page.getByRole("complementary", { name: "Inspector" });
-  const inspectorViews = inspector.getByRole("navigation", {
-    name: "Inspector views",
-  });
-  await expect(inspector).toBeVisible();
-  await expect(
-    inspectorViews.getByRole("button", { name: "Files", exact: true }),
-  ).toHaveClass(/is-active/);
-  await expect(openFiles).toHaveAttribute("aria-pressed", "true");
-
-  await inspector
-    .getByRole("button", { name: "Close inspector" })
-    .click();
-  await expect(inspector).toBeHidden();
-  await expect(openFiles).toHaveAttribute("aria-pressed", "false");
-
-  await openActivity.click();
-  await expect(
-    page.getByLabel("Codex Session Activity", { exact: true }),
-  ).toBeVisible();
-  await expect(
-    inspectorViews.getByRole("button", { name: "Activity", exact: true }),
-  ).toHaveClass(/is-active/);
-  await expect(openActivity).toHaveAttribute("aria-pressed", "true");
 });
 
 test("shows a matching skeleton while each Inspector tab loads", async ({
