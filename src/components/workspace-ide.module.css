@@ -138,6 +138,12 @@
   color: var(--ink);
 }
 
+.treeRow.contextTarget {
+  background: var(--hover);
+  color: var(--ink);
+  box-shadow: inset 2px 0 0 var(--blue);
+}
+
 .treeRow.deletedFile .fileName {
   opacity: 0.65;
   text-decoration: line-through;
@@ -480,11 +486,8 @@ button.directoryStatus:hover {
 
 .imagePreview {
   position: relative;
-}
-
-.previewImage {
-  padding: clamp(12px, 3vw, 32px);
-  object-fit: contain;
+  align-items: stretch;
+  justify-content: stretch;
 }
 
 .audioPreview {

@@ -24,7 +24,6 @@ import {
   X,
 } from "lucide-react";
 import dynamic from "next/dynamic";
-import Image from "next/image";
 import {
   useCallback,
   useEffect,
@@ -70,6 +69,11 @@ import type {
   WorkspaceIdeWriteRequest,
 } from "@/lib/types";
 
+import { WorkspaceImagePreview } from "./workspace-image-preview";
+import {
+  WorkspaceTreeContextMenu,
+  type WorkspaceTreeContextMenuTarget,
+} from "./workspace-tree-context-menu";
 import styles from "./workspace-ide.module.css";
 
 export interface WorkspaceFileNavigationRequest {
@@ -132,6 +136,7 @@ const copy = {
     previewOnly: "Read-only preview",
     previewUnavailable: "Your browser cannot preview this media format.",
     downloadPreview: "Download file",
+    downloadFailed: "File could not be downloaded.",
     previewLabel: (kind: string, name: string) =>
       `${kind === "pdf" ? "PDF" : `${kind[0]?.toUpperCase()}${kind.slice(1)}`} preview: ${name}`,
     deletedFile: "Deleted files are read-only. Restore them from Git before editing.",
@@ -174,6 +179,7 @@ const copy = {
     previewOnly: "只读预览",
     previewUnavailable: "当前浏览器无法预览此媒体格式。",
     downloadPreview: "下载文件",
+    downloadFailed: "文件无法下载。",
     previewLabel: (kind: string, name: string) => `${name} ${kind}预览`,
     deletedFile: "已删除文件为只读；请先通过 Git 恢复后再编辑。",
     managedFile: "Sandpi 管理的文件在 Web IDE 中为只读。",
@@ -431,13 +437,12 @@ function WorkspaceFileMediaPreview({
   if (preview.kind === "image") {
     return (
       <div className={`${styles.filePreview} ${styles.imagePreview}`}>
-        <Image
-          src={source}
+        <WorkspaceImagePreview
+          key={`${file.path}:${file.revision}`}
+          source={source}
+          name={file.name}
           alt={label}
-          fill
-          sizes="100vw"
-          unoptimized
-          className={styles.previewImage}
+          language={language}
         />
       </div>
     );
@@ -504,6 +509,9 @@ function environmentHref(environmentId: string, sessionId?: string) {
 }
 
 function IdeFileTree({
+  language,
+  environmentId,
+  sessionId,
   files,
   changes,
   repositories,
@@ -516,7 +524,11 @@ function IdeFileTree({
   onExpand,
   loadingFolderLabel,
   folderUnavailableLabel,
+  onDownloadFile,
 }: {
+  language: OperationLanguage;
+  environmentId: string;
+  sessionId?: string;
   files: WorkspaceFile[];
   changes: Map<string, WorkspaceGitFileChange>;
   repositories: Map<string, WorkspaceGitRepository>;
@@ -529,10 +541,15 @@ function IdeFileTree({
   onExpand: (path: string, force?: boolean) => void;
   loadingFolderLabel: string;
   folderUnavailableLabel: string;
+  onDownloadFile: (path: string) => void;
 }) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({
     "/workspace": true,
   });
+  const [contextMenu, setContextMenu] =
+    useState<WorkspaceTreeContextMenuTarget>();
+  const [announcement, setAnnouncement] = useState("");
+  const announcementTimerRef = useRef<number | null>(null);
   const selectedRowRef = useRef<HTMLButtonElement | null>(null);
   const changedDescendants = useMemo(() => {
     const counts = new Map<string, number>();
@@ -573,6 +590,60 @@ function IdeFileTree({
     return () => window.cancelAnimationFrame(frame);
   }, [expanded, files, revealRequest, selectedPath]);
 
+  useEffect(
+    () => () => {
+      if (announcementTimerRef.current !== null) {
+        window.clearTimeout(announcementTimerRef.current);
+      }
+    },
+    [],
+  );
+
+  function setFolderExpanded(filePath: string, nextExpanded: boolean) {
+    setExpanded((current) => ({
+      ...current,
+      [filePath]: nextExpanded,
+    }));
+    if (nextExpanded && !loadedDirectories.has(filePath)) onExpand(filePath);
+  }
+
+  function openContextMenu(
+    file: WorkspaceFile,
+    isExpanded: boolean,
+    anchor: HTMLButtonElement,
+    point?: { x: number; y: number },
+  ) {
+    const anchorRect = anchor.getBoundingClientRect();
+    anchor.focus({ preventScroll: true });
+    setContextMenu({
+      file,
+      expanded: isExpanded,
+      anchor,
+      point:
+        point && (point.x !== 0 || point.y !== 0)
+          ? point
+          : {
+              x: anchorRect.left + Math.min(anchorRect.width, 24),
+              y: anchorRect.bottom,
+            },
+    });
+  }
+
+  function announce(message: string) {
+    setAnnouncement(message);
+    if (announcementTimerRef.current !== null) {
+      window.clearTimeout(announcementTimerRef.current);
+    }
+    announcementTimerRef.current = window.setTimeout(() => {
+      setAnnouncement("");
+      announcementTimerRef.current = null;
+    }, 1_600);
+  }
+
+  const closeContextMenu = useCallback(() => {
+    setContextMenu(undefined);
+  }, []);
+
   function render(items: WorkspaceFile[], depth: number) {
     return items.map((file) => {
       const folder = file.kind === "folder";
@@ -590,24 +661,39 @@ function IdeFileTree({
             ref={file.path === selectedPath ? selectedRowRef : undefined}
             className={`${styles.treeRow} ${
               file.path === selectedPath ? styles.selected : ""
-            } ${change?.kind === "deleted" ? styles.deletedFile : ""}`}
+            } ${change?.kind === "deleted" ? styles.deletedFile : ""} ${
+              contextMenu?.file.path === file.path ? styles.contextTarget : ""
+            }`}
             aria-current={
               !folder && file.path === selectedPath ? "page" : undefined
             }
             aria-expanded={folder ? isExpanded : undefined}
+            aria-haspopup="menu"
             style={{ paddingLeft: `${7 + depth * 13}px` }}
             title={file.path}
             onClick={() => {
               if (folder) {
-                const nextExpanded = !isExpanded;
-                setExpanded((current) => ({
-                  ...current,
-                  [file.path]: nextExpanded,
-                }));
-                if (nextExpanded && !isLoaded) onExpand(file.path);
+                setFolderExpanded(file.path, !isExpanded);
               } else {
                 onOpen(file.path);
               }
+            }}
+            onContextMenu={(event) => {
+              event.preventDefault();
+              openContextMenu(file, isExpanded, event.currentTarget, {
+                x: event.clientX,
+                y: event.clientY,
+              });
+            }}
+            onKeyDown={(event) => {
+              if (
+                event.key !== "ContextMenu" &&
+                !(event.shiftKey && event.key === "F10")
+              ) {
+                return;
+              }
+              event.preventDefault();
+              openContextMenu(file, isExpanded, event.currentTarget);
             }}
           >
             <span className={styles.disclosure}>
@@ -670,7 +756,35 @@ function IdeFileTree({
     });
   }
 
-  return <>{render(files, 0)}</>;
+  return (
+    <>
+      {render(files, 0)}
+      {contextMenu ? (
+        <WorkspaceTreeContextMenu
+          language={language}
+          target={contextMenu}
+          openInNewTabHref={
+            contextMenu.file.kind === "file"
+              ? workspaceIdeHref(
+                  environmentId,
+                  sessionId,
+                  contextMenu.file.path,
+                )
+              : undefined
+          }
+          onClose={closeContextMenu}
+          onOpenFile={onOpen}
+          onToggleFolder={setFolderExpanded}
+          onRefreshFolder={(filePath) => onExpand(filePath, true)}
+          onDownloadFile={onDownloadFile}
+          onAnnounce={announce}
+        />
+      ) : null}
+      <span className="sr-only" role="status" aria-live="polite">
+        {announcement}
+      </span>
+    </>
+  );
 }
 
 export function WorkspaceIde({
@@ -1082,6 +1196,45 @@ export function WorkspaceIde({
       }
     },
     [environment.id, loadDocument],
+  );
+
+  const downloadWorkspaceFile = useCallback(
+    async (requestedPath: string) => {
+      const filePath = userVisibleWorkspacePath(requestedPath);
+      if (!filePath || filePath === WORKSPACE_ROOT) return;
+      try {
+        const query = new URLSearchParams({ path: filePath });
+        const response = await apiFetch<ApiEnvelope<WorkspaceIdeFile>>(
+          `/api/v1/environments/${encodeURIComponent(environment.id)}/ide/file?${query.toString()}`,
+        );
+        const responsePath = userVisibleWorkspacePath(response.data.path);
+        if (!responsePath || responsePath !== filePath) {
+          throw new Error(
+            "Workspace returned an internal or unexpected file path.",
+          );
+        }
+        const objectUrl = URL.createObjectURL(
+          new Blob([decodeBase64Bytes(response.data.content)], {
+            type: response.data.preview?.mimeType ?? "application/octet-stream",
+          }),
+        );
+        const link = window.document.createElement("a");
+        link.href = objectUrl;
+        link.download = response.data.name;
+        link.style.display = "none";
+        try {
+          window.document.body.appendChild(link);
+          link.click();
+        } finally {
+          link.remove();
+          window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
+        }
+        setError("");
+      } catch (cause) {
+        setError(cause instanceof Error ? cause.message : ui.downloadFailed);
+      }
+    },
+    [environment.id, ui.downloadFailed],
   );
 
   const revealWorkspaceFile = useCallback(
@@ -1525,6 +1678,9 @@ export function WorkspaceIde({
             {workspaceFiles.length > 0 ? (
               <IdeFileTree
                 key={environment.id}
+                language={language}
+                environmentId={environment.id}
+                sessionId={session?.id}
                 files={workspaceFiles}
                 changes={changesByPath}
                 repositories={repositoriesByRoot}
@@ -1539,6 +1695,9 @@ export function WorkspaceIde({
                 }
                 loadingFolderLabel={ui.loadingFolder}
                 folderUnavailableLabel={ui.folderUnavailable}
+                onDownloadFile={(filePath) =>
+                  void downloadWorkspaceFile(filePath)
+                }
               />
             ) : (
               <p className={styles.sidebarEmpty}>{ui.noFiles}</p>

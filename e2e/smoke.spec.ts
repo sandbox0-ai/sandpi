@@ -3769,6 +3769,22 @@ test("renders the dedicated live Web IDE with Git state and changed lines", asyn
       socket.send(JSON.stringify({ type: "ready", at: now }));
     },
   );
+  await page.addInitScript(() => {
+    Object.defineProperty(document, "execCommand", {
+      configurable: true,
+      value(command: string) {
+        if (command.toLowerCase() !== "copy") return false;
+        const activeElement = document.activeElement;
+        if (activeElement instanceof HTMLTextAreaElement) {
+          window.localStorage.setItem(
+            "__sandpi_e2e_clipboard",
+            activeElement.value,
+          );
+        }
+        return true;
+      },
+    });
+  });
 
   await page.goto(
     `/ide/?environment=${encodeURIComponent(environment.id)}&new=1`,
@@ -3797,11 +3813,82 @@ test("renders the dedicated live Web IDE with Git state and changed lines", asyn
   ).toBeVisible();
   await expect.poll(() => directoryLoads).toBeGreaterThan(0);
   await page.waitForTimeout(600);
-  const directoryLoadsBeforeToggle = directoryLoads;
-  await sourceFolder.click();
-  await sourceFolder.click();
-  await page.waitForTimeout(200);
-  expect(directoryLoads).toBe(directoryLoadsBeforeToggle);
+  const demoFile = page.locator('button[title="/workspace/src/demo.ts"]');
+  const directoryLoadsBeforeContextActions = directoryLoads;
+  await sourceFolder.click({ button: "right" });
+  const folderMenu = page.getByRole("menu", { name: "Actions for src" });
+  await expect(folderMenu).toBeVisible();
+  await folderMenu.getByRole("menuitem", { name: "Collapse Folder" }).click();
+  await expect(demoFile).toBeHidden();
+
+  await sourceFolder.focus();
+  await page.keyboard.press("Shift+F10");
+  await expect(folderMenu).toBeVisible();
+  const expandFolder = folderMenu.getByRole("menuitem", {
+    name: "Expand Folder",
+  });
+  await expect(expandFolder).toBeFocused();
+  await expandFolder.click();
+  await expect(demoFile).toBeVisible();
+  expect(directoryLoads).toBe(directoryLoadsBeforeContextActions);
+
+  await sourceFolder.click({ button: "right" });
+  await folderMenu.getByRole("menuitem", { name: "Refresh Folder" }).click();
+  await expect
+    .poll(() => directoryLoads)
+    .toBeGreaterThan(directoryLoadsBeforeContextActions);
+
+  await demoFile.focus();
+  await page.keyboard.press("Shift+F10");
+  const fileMenu = page.getByRole("menu", { name: "Actions for demo.ts" });
+  await expect(fileMenu).toBeVisible();
+  await expect(
+    fileMenu.getByRole("menuitem", { name: "Open", exact: true }),
+  ).toBeFocused();
+  await expect(
+    fileMenu.getByRole("menuitem", { name: "Open in New Tab" }),
+  ).toHaveAttribute(
+    "href",
+    /path=%2Fworkspace%2Fsrc%2Fdemo\.ts/,
+  );
+  await page.keyboard.press("End");
+  const copyRelativePath = fileMenu.getByRole("menuitem", {
+    name: "Copy Relative Path",
+  });
+  await expect(copyRelativePath).toBeFocused();
+  await copyRelativePath.click();
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        window.localStorage.getItem("__sandpi_e2e_clipboard"),
+      ),
+    )
+    .toBe("src/demo.ts");
+  await expect(demoFile).toBeFocused();
+
+  await page.keyboard.press("Shift+F10");
+  await expect(fileMenu).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(fileMenu).toBeHidden();
+  await expect(demoFile).toBeFocused();
+
+  await demoFile.click({ button: "right" });
+  await fileMenu.getByRole("menuitem", { name: "Copy Path" }).click();
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        window.localStorage.getItem("__sandpi_e2e_clipboard"),
+      ),
+    )
+    .toBe("/workspace/src/demo.ts");
+  await expect(page.getByRole("status")).toHaveText("Path copied");
+
+  await demoFile.click({ button: "right" });
+  const downloadPromise = page.waitForEvent("download");
+  await fileMenu.getByRole("menuitem", { name: "Download" }).click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toBe("demo.ts");
+
   await expect(page.getByText('const transport = "websocket";')).toBeVisible();
   await expect(page.locator(".sandpi-line-modified")).toHaveCount(1);
   await expect(page.locator(".sandpi-line-added")).toHaveCount(1);
@@ -4016,6 +4103,56 @@ test("renders verified image, audio, video and PDF Workspace previews", async ({
     page.getByAltText("Image preview: pixel.png"),
   ).toBeVisible();
   await expect(page.getByText("PNG image", { exact: false })).toBeVisible();
+  const imageViewer = page.getByRole("region", {
+    name: "Image viewer: pixel.png",
+  });
+  const zoomLevel = page.getByLabel("Image zoom level");
+  const zoomIn = page.getByRole("button", { name: "Zoom in (+)" });
+  const zoomOut = page.getByRole("button", { name: "Zoom out (−)" });
+  const fitImage = page.getByRole("button", {
+    name: "Fit image to viewport (0)",
+  });
+  await expect(imageViewer).toHaveAttribute("data-zoom", "1");
+  await expect(zoomLevel).toHaveText("100%");
+  await expect(page.getByText("1 × 1 px", { exact: true })).toBeVisible();
+  await expect(fitImage).toBeDisabled();
+  const fittedImageWidth = await page
+    .getByAltText("Image preview: pixel.png")
+    .evaluate((image) => image.getBoundingClientRect().width);
+
+  await zoomIn.click();
+  await expect(imageViewer).toHaveAttribute("data-zoom", "1.25");
+  await expect(zoomLevel).toHaveText("125%");
+  await expect
+    .poll(() =>
+      page
+        .getByAltText("Image preview: pixel.png")
+        .evaluate((image) => image.getBoundingClientRect().width),
+    )
+    .toBeGreaterThan(fittedImageWidth * 1.2);
+  await expect
+    .poll(() =>
+      imageViewer.evaluate(
+        (viewer) =>
+          viewer.scrollWidth > viewer.clientWidth &&
+          viewer.scrollHeight > viewer.clientHeight &&
+          viewer.scrollLeft > 0 &&
+          viewer.scrollTop > 0,
+      ),
+    )
+    .toBe(true);
+  await imageViewer.focus();
+  await page.keyboard.press("=");
+  await expect(imageViewer).toHaveAttribute("data-zoom", "1.5");
+  await page.keyboard.press("-");
+  await expect(imageViewer).toHaveAttribute("data-zoom", "1.25");
+  await zoomOut.click();
+  await expect(imageViewer).toHaveAttribute("data-zoom", "1");
+  await zoomOut.click();
+  await expect(imageViewer).toHaveAttribute("data-zoom", "0.75");
+  await fitImage.click();
+  await expect(imageViewer).toHaveAttribute("data-zoom", "1");
+  await expect(fitImage).toBeDisabled();
 
   await page.locator('button[title="/workspace/tone.wav"]').click();
   await expect(

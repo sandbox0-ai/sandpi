@@ -705,13 +705,17 @@ Sandbox0 implementation details.
   files are editable; PNG, JPEG, GIF, WebP, AVIF, BMP and ICO images, MP3, WAV,
   Ogg/Opus, FLAC, AAC, AIFF, MIDI and MPEG-4/WebM audio, MP4, WebM, Ogg and
   QuickTime video, and PDF are signature-verified read-only previews. Actual
-  playback still depends on browser codec support. Larger media is not fetched
-  or streamed because the current Sandbox0 File API exposes neither ranged
-  reads nor a streaming URL. `.git`, symbolic links and unsupported binary
-  files remain read-only. The single file tree includes staged, unstaged,
-  untracked, renamed, deleted and conflicted Git state across optional root or
-  nested repositories. Workspace events refresh clean files automatically and
-  turn external changes to dirty files into an explicit
+  playback still depends on browser codec support. Image previews provide
+  fit-relative 25–400% zoom controls, pixel dimensions and keyboard shortcuts.
+  Larger media is not fetched or streamed because the current Sandbox0 File API
+  exposes neither ranged reads nor a streaming URL. `.git`, symbolic links and
+  unsupported binary files remain read-only. The single file tree includes
+  staged, unstaged, untracked, renamed, deleted and conflicted Git state across
+  optional root or nested repositories. Right-click or `Shift+F10` opens the
+  file actions for opening, opening in a new tab, downloading and path copying,
+  and folder actions for expanding, collapsing, refreshing and path copying.
+  Workspace events refresh clean files automatically and turn external changes
+  to dirty files into an explicit
   compare/reload/overwrite decision.
 - The OSS server currently expects one active server replica. PostgreSQL,
   Supervisor replay and the fenced Recovery Turn claim make both Sandpi process
