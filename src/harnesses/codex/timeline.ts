@@ -30,6 +30,13 @@ export type CodexTurnTimelineBlock =
       entry: CodexTurnResultView;
     };
 
+function entryShowsActiveWork(entry: CodexTimelineEntry) {
+  if (entry.kind === "message") {
+    return entry.role === "assistant" && Boolean(entry.streaming);
+  }
+  return entry.kind !== "turnResult" && entry.status === "running";
+}
+
 /**
  * Preserve Codex-native item order within each Turn while separating visible
  * messages from intermediate work. In particular, do not hoist every user
@@ -110,23 +117,36 @@ export function groupCodexTimelineByTurn(
 
     let activeActivityBlockId: string | undefined;
     if (projection.activeTurn?.turnId === turnId) {
-      const lastUserMessageIndex = blocks.findLastIndex(
-        (block) => block.kind === "message" && block.entry.role === "user",
+      const runningActivityIndex = blocks.findLastIndex(
+        (block) =>
+          block.kind === "activity" &&
+          block.entries.some(entryShowsActiveWork),
       );
-      const existingActivityIndex = blocks.findIndex(
-        (block, index) =>
-          index > lastUserMessageIndex && block.kind === "activity",
-      );
-      if (existingActivityIndex >= 0) {
-        activeActivityBlockId = blocks[existingActivityIndex]?.id;
+      if (runningActivityIndex >= 0) {
+        activeActivityBlockId = blocks[runningActivityIndex]?.id;
       } else {
-        const activeActivity = {
-          kind: "activity" as const,
-          id: `${turnId}:activity:active`,
-          entries: [],
-        };
-        blocks.splice(Math.max(0, lastUserMessageIndex + 1), 0, activeActivity);
-        activeActivityBlockId = activeActivity.id;
+        const lastUserMessageIndex = blocks.findLastIndex(
+          (block) => block.kind === "message" && block.entry.role === "user",
+        );
+        const existingActivityIndex = blocks.findLastIndex(
+          (block, index) =>
+            index > lastUserMessageIndex && block.kind === "activity",
+        );
+        if (existingActivityIndex >= 0) {
+          activeActivityBlockId = blocks[existingActivityIndex]?.id;
+        } else {
+          const activeActivity = {
+            kind: "activity" as const,
+            id: `${turnId}:activity:active`,
+            entries: [],
+          };
+          blocks.splice(
+            Math.max(0, lastUserMessageIndex + 1),
+            0,
+            activeActivity,
+          );
+          activeActivityBlockId = activeActivity.id;
+        }
       }
     }
 

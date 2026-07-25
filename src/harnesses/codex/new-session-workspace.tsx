@@ -16,12 +16,22 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
+import type { EnvironmentSettingsTab } from "@/components/environment-settings";
 import {
   CodexComposerLocalImages,
   CodexComposerToolbar,
   encodeCodexComposerLocalImages,
 } from "@/harnesses/codex/composer";
 import { insertCodexFileMentions } from "@/harnesses/codex/file-mentions";
+import {
+  CodexSlashCommandMenu,
+  useCodexSlashCommandMenu,
+} from "@/harnesses/codex/slash-command-menu";
+import {
+  CODEX_INIT_COMMAND_PROMPT,
+  parseCodexSlashInvocation,
+  type CodexSlashCommand,
+} from "@/harnesses/codex/slash-commands";
 import {
   shouldSubmitComposer,
   type OperationLanguage,
@@ -44,6 +54,7 @@ import {
 import {
   codexModelOptionsFromNativeResult,
   codexReasoningEffortForModel,
+  codexReasoningEffortLabel,
   reconcileCodexComposerPreference,
   type CodexModelOption,
 } from "@/harnesses/codex/models";
@@ -66,9 +77,17 @@ interface NewSessionWorkspaceProps {
   onCreated: (session: CodexSession) => void;
   onOpenSettings: () => void;
   onOpenAgentHarnessSettings: () => void;
+  onOpenEnvironmentSettings: (tab: EnvironmentSettingsTab) => void;
   onToggleSidebar: () => void;
   terminalOpen: boolean;
   onToggleTerminal: () => void;
+}
+
+interface CreateCodexSessionOptions {
+  instruction?: string;
+  collaborationMode?: "plan";
+  bypassSlash?: boolean;
+  restorePrompt?: string;
 }
 
 export function CodexNewSessionWorkspace({
@@ -80,6 +99,7 @@ export function CodexNewSessionWorkspace({
   onCreated,
   onOpenSettings,
   onOpenAgentHarnessSettings,
+  onOpenEnvironmentSettings,
   onToggleSidebar,
   terminalOpen,
   onToggleTerminal,
@@ -98,9 +118,17 @@ export function CodexNewSessionWorkspace({
   const [creating, setCreating] = useState(false);
   const [retryingEnvironment, setRetryingEnvironment] = useState(false);
   const [error, setError] = useState("");
+  const [commandNotice, setCommandNotice] = useState<{
+    tone: "info" | "error";
+    message: string;
+  } | null>(null);
+  const [planMode, setPlanMode] = useState(false);
+  const [fastMode, setFastMode] = useState(false);
+  const [mentionOpenRequest, setMentionOpenRequest] = useState(0);
   const [images, setImages] = useState<CodexComposerImage[]>([]);
   const [localImages, setLocalImages] = useState<CodexComposerLocalImage[]>([]);
   const promptRef = useRef<HTMLTextAreaElement>(null);
+  const modelSelectRef = useRef<HTMLSelectElement>(null);
   const selectedModel = modelOptions.find(
     (model) => model.id === selectedModelId,
   );
@@ -108,6 +136,12 @@ export function CodexNewSessionWorkspace({
     selectedModel,
     selectedModel ? reasoningEfforts[selectedModel.id] : undefined,
   );
+  const slashMenu = useCodexSlashCommandMenu({
+    value: prompt,
+    context: "new-session",
+    onComplete: setComposerPrompt,
+    onExecute: (command) => void executeSlashCommand(command, ""),
+  });
 
   useEffect(() => {
     if (!window.matchMedia("(min-width: 641px)").matches) {
@@ -137,6 +171,10 @@ export function CodexNewSessionWorkspace({
     setReasoningEfforts({});
     setModelCatalogError("");
     setModelCatalogState("idle");
+    setCommandNotice(null);
+    setPlanMode(false);
+    setFastMode(false);
+    setMentionOpenRequest(0);
     if (
       environment.status !== "ready" ||
       environment.codingAgent.status !== "connected"
@@ -206,6 +244,7 @@ export function CodexNewSessionWorkspace({
       ),
     };
     setSelectedModelId(model.id);
+    if (!model.fastServiceTier) setFastMode(false);
     setReasoningEfforts(nextReasoningEfforts);
     rememberComposerPreference(model.id, nextReasoningEfforts);
   }
@@ -237,7 +276,180 @@ export function CodexNewSessionWorkspace({
     });
   }
 
-  async function createSession() {
+  function setComposerPrompt(value: string) {
+    setPrompt(value);
+    window.requestAnimationFrame(() => {
+      const textarea = promptRef.current;
+      if (!textarea) return;
+      textarea.focus();
+      textarea.setSelectionRange(value.length, value.length);
+    });
+  }
+
+  function clearComposerPrompt() {
+    setPrompt("");
+    window.requestAnimationFrame(() => promptRef.current?.focus());
+  }
+
+  function openModelPicker() {
+    const select = modelSelectRef.current;
+    if (!select || select.disabled) {
+      setCommandNotice({
+        tone: "error",
+        message:
+          language === "zh-CN"
+            ? "Codex 模型列表当前不可用。"
+            : "The Codex model catalog is currently unavailable.",
+      });
+      return;
+    }
+    select.focus();
+    try {
+      select.showPicker();
+    } catch {
+      // Focus remains a usable fallback when the browser blocks showPicker.
+    }
+  }
+
+  async function executeSlashCommand(
+    command: CodexSlashCommand,
+    argumentsValue: string,
+  ) {
+    clearComposerPrompt();
+    setCommandNotice(null);
+    setError("");
+    if (command.name === "model") {
+      openModelPicker();
+      return;
+    }
+    if (command.name === "fast") {
+      if (!selectedModel?.fastServiceTier) {
+        setCommandNotice({
+          tone: "error",
+          message:
+            language === "zh-CN"
+              ? "所选模型没有通过 Codex 提供 Fast tier。"
+              : "Codex does not report a Fast tier for the selected model.",
+        });
+        return;
+      }
+      setFastMode((enabled) => !enabled);
+      setCommandNotice({
+        tone: "info",
+        message: fastMode
+          ? language === "zh-CN"
+            ? "Fast mode 已关闭。"
+            : "Fast mode is off."
+          : language === "zh-CN"
+            ? "Fast mode 已开启。"
+            : "Fast mode is on.",
+      });
+      return;
+    }
+    if (command.name === "mention") {
+      setMentionOpenRequest((request) => request + 1);
+      return;
+    }
+    if (command.name === "skills") {
+      onOpenEnvironmentSettings("skills");
+      return;
+    }
+    if (command.name === "mcp") {
+      onOpenEnvironmentSettings("mcp");
+      return;
+    }
+    if (command.name === "permissions") {
+      onOpenEnvironmentSettings("network");
+      return;
+    }
+    if (command.name === "usage" || command.name === "logout") {
+      onOpenEnvironmentSettings("credentials");
+      return;
+    }
+    if (command.name === "status") {
+      setCommandNotice({
+        tone: "info",
+        message: [
+          environment.name,
+          environment.status,
+          environment.codingAgent.label,
+          selectedModel?.displayName,
+          selectedReasoningEffort
+            ? codexReasoningEffortLabel(selectedReasoningEffort)
+            : undefined,
+        ]
+          .filter(Boolean)
+          .join(" · "),
+      });
+      return;
+    }
+    if (command.name === "plan") {
+      setPlanMode(true);
+      if (argumentsValue) {
+        await createSession({
+          instruction: argumentsValue,
+          collaborationMode: "plan",
+          bypassSlash: true,
+          restorePrompt: `/plan ${argumentsValue}`,
+        });
+      } else {
+        setCommandNotice({
+          tone: "info",
+          message:
+            language === "zh-CN"
+              ? "计划模式已开启，将应用到新 Session。"
+              : "Plan mode is active for the new Session.",
+        });
+      }
+      return;
+    }
+    if (command.name === "init") {
+      await createSession({
+        instruction: CODEX_INIT_COMMAND_PROMPT,
+        bypassSlash: true,
+        restorePrompt: "/init",
+      });
+    }
+  }
+
+  async function createSession(options: CreateCodexSessionOptions = {}) {
+    if (!options.bypassSlash) {
+      const invocation = parseCodexSlashInvocation(prompt, "new-session");
+      if (invocation.kind === "command") {
+        await executeSlashCommand(invocation.command, invocation.arguments);
+        return;
+      }
+      if (invocation.kind === "unknown") {
+        setCommandNotice({
+          tone: "error",
+          message:
+            language === "zh-CN"
+              ? `未知命令 /${invocation.name}。输入 / 查看可用命令。`
+              : `Unknown command /${invocation.name}. Type / to see available commands.`,
+        });
+        return;
+      }
+      if (invocation.kind === "unavailable") {
+        setCommandNotice({
+          tone: "error",
+          message:
+            language === "zh-CN"
+              ? `/${invocation.command.name} 需要先打开一个 Session。`
+              : `/${invocation.command.name} requires an active Session.`,
+        });
+        return;
+      }
+      if (invocation.kind === "missing-arguments") {
+        setCommandNotice({
+          tone: "error",
+          message:
+            language === "zh-CN"
+              ? `/${invocation.command.name} 缺少参数。`
+              : `/${invocation.command.name} requires an argument.`,
+        });
+        return;
+      }
+    }
     if (environment.status !== "ready") {
       setError(
         environment.status === "error"
@@ -258,7 +470,7 @@ export function CodexNewSessionWorkspace({
       setError(modelCatalogError || ui.waitForModels);
       return;
     }
-    const instruction = prompt.trim();
+    const instruction = (options.instruction ?? prompt).trim();
     if (!instruction && images.length === 0 && localImages.length === 0) {
       setError(ui.emptyInstruction(environment.codingAgent.label));
       promptRef.current?.focus();
@@ -267,6 +479,7 @@ export function CodexNewSessionWorkspace({
 
     setCreating(true);
     setError("");
+    setCommandNotice(null);
     try {
       const response = await apiFetch<ApiEnvelope<CodexSession>>(
         "/api/v1/sessions",
@@ -281,12 +494,25 @@ export function CodexNewSessionWorkspace({
             ...(selectedReasoningEffort
               ? { reasoningEffort: selectedReasoningEffort }
               : {}),
+            ...((options.collaborationMode ?? (planMode ? "plan" : undefined))
+              ? {
+                  collaborationMode:
+                    options.collaborationMode ??
+                    (planMode ? ("plan" as const) : undefined),
+                }
+              : {}),
+            ...(fastMode && selectedModel.fastServiceTier
+              ? { serviceTier: selectedModel.fastServiceTier.id }
+              : {}),
           }),
         },
       );
       onCreated(response.data);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : ui.startFailed);
+      if (options.restorePrompt) {
+        setComposerPrompt(options.restorePrompt);
+      }
       setCreating(false);
     }
   }
@@ -414,6 +640,14 @@ export function CodexNewSessionWorkspace({
         </div>
 
         <div className={`composer-shell ${styles.composer}`}>
+          <CodexSlashCommandMenu
+            id={slashMenu.id}
+            language={language}
+            commands={slashMenu.commands}
+            activeIndex={slashMenu.activeIndex}
+            onActiveIndexChange={slashMenu.setActiveIndex}
+            onSelect={slashMenu.select}
+          />
           {images.length > 0 ? (
             <div className={styles.imagePreviews} aria-label="Attached images">
               {images.map((image) => (
@@ -451,6 +685,59 @@ export function CodexNewSessionWorkspace({
               setError("");
             }}
           />
+          {commandNotice ? (
+            <div
+              className="codex-composer-notice"
+              data-tone={commandNotice.tone}
+              role={commandNotice.tone === "error" ? "alert" : "status"}
+            >
+              <span>{commandNotice.message}</span>
+            </div>
+          ) : null}
+          {planMode ? (
+            <div className="codex-composer-mode" role="status">
+              <span>
+                <strong>{language === "zh-CN" ? "计划模式" : "Plan mode"}</strong>
+                {" · "}
+                {language === "zh-CN"
+                  ? "新 Session 使用 Codex 计划协作模式"
+                  : "The new Session uses Codex Plan collaboration mode"}
+              </span>
+              <button
+                type="button"
+                aria-label={
+                  language === "zh-CN" ? "退出计划模式" : "Exit Plan mode"
+                }
+                onClick={() => {
+                  setPlanMode(false);
+                  setCommandNotice(null);
+                }}
+              >
+                <X size={12} aria-hidden="true" />
+              </button>
+            </div>
+          ) : null}
+          {fastMode && selectedModel?.fastServiceTier ? (
+            <div className="codex-composer-mode" role="status">
+              <span>
+                <strong>Fast mode</strong>
+                {" · "}
+                {selectedModel.fastServiceTier.description}
+              </span>
+              <button
+                type="button"
+                aria-label={
+                  language === "zh-CN" ? "关闭 Fast mode" : "Turn off Fast mode"
+                }
+                onClick={() => {
+                  setFastMode(false);
+                  setCommandNotice(null);
+                }}
+              >
+                <X size={12} aria-hidden="true" />
+              </button>
+            </div>
+          ) : null}
           {/*
             Codex slash-command completion belongs in this Codex composer. Future harnesses
             provide their own composer instead of registering commands in a shared catalog.
@@ -464,6 +751,8 @@ export function CodexNewSessionWorkspace({
             placeholder={ui.placeholder(environment.codingAgent.label)}
             onChange={(event) => {
               setPrompt(event.target.value);
+              slashMenu.show();
+              setCommandNotice(null);
               if (error && event.target.value.trim()) {
                 setError("");
               }
@@ -476,6 +765,7 @@ export function CodexNewSessionWorkspace({
               void addImages(pasted);
             }}
             onKeyDown={(event) => {
+              if (slashMenu.handleKeyDown(event)) return;
               if (
                 shouldSubmitComposer(
                   {
@@ -492,6 +782,14 @@ export function CodexNewSessionWorkspace({
                 void createSession();
               }
             }}
+            aria-controls={
+              slashMenu.commands.length > 0 ? slashMenu.id : undefined
+            }
+            aria-activedescendant={
+              slashMenu.activeCommand
+                ? `${slashMenu.id}-${slashMenu.activeCommand.name}`
+                : undefined
+            }
           />
           <CodexComposerToolbar
             language={language}
@@ -523,6 +821,8 @@ export function CodexNewSessionWorkspace({
             selectedReasoningEffort={selectedReasoningEffort}
             onModelChange={selectModel}
             onReasoningEffortChange={selectReasoningEffort}
+            modelSelectRef={modelSelectRef}
+            mentionOpenRequest={mentionOpenRequest}
             status={{
               state:
                 environment.codingAgent.status !== "connected" ||

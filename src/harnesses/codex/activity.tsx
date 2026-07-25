@@ -10,7 +10,12 @@ import {
   Wrench,
   X,
 } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import React, {
+  Children,
+  useEffect,
+  useState,
+  type ReactNode,
+} from "react";
 
 import type {
   CodexActivityStatus,
@@ -112,7 +117,18 @@ function CompactActivity({
   renderDetails?: () => ReactNode;
   className?: string;
 }) {
-  const [open, setOpen] = useState(false);
+  const expandable = Boolean(renderDetails);
+  const running = status === "running";
+  const [open, setOpen] = useState(running && expandable);
+
+  useEffect(() => {
+    if (!expandable) {
+      setOpen(false);
+      return;
+    }
+    setOpen(running);
+  }, [expandable, running]);
+
   const summaryContent = (
     <>
       <span
@@ -143,7 +159,7 @@ function CompactActivity({
         </span>
       ) : null}
       {meta ? <span className="codex-compact-activity-meta">{meta}</span> : null}
-      {renderDetails ? (
+      {expandable ? (
         <ChevronRight
           className="codex-compact-activity-chevron"
           size={13}
@@ -210,7 +226,7 @@ export function CodexCommandActivity({
     const backgroundUpdates = evidenceSummaries.filter(
       (summary) => summary.followsBackgroundHandle,
     ).length;
-    const hasDetails = Boolean(activity.cwd || output || evidence.length > 0);
+    const hasDetails = Boolean(output || evidence.length > 0);
     return (
       <article className="message message-codex-activity">
         <CompactActivity
@@ -263,9 +279,8 @@ export function CodexCommandActivity({
                       </small>
                     ) : null}
                     {evidence.length > 0 ? (
-                      <CodexRolloutEvidenceDetails
+                      <CodexRolloutEvidencePayload
                         activities={evidence}
-                        label={displayCodexCommand(activity.command)}
                         language={language}
                       />
                     ) : null}
@@ -415,12 +430,8 @@ export function CodexFileChangeActivity({
                 {ui.openChangedFiles}
               </button>
               {evidence.length > 0 ? (
-                <CodexRolloutEvidenceDetails
+                <CodexRolloutEvidencePayload
                   activities={evidence}
-                  label={ui.fileStatus(
-                    status,
-                    activity.changes.length,
-                  )}
                   language={language}
                 />
               ) : null}
@@ -708,6 +719,53 @@ function nativeToolPayloads(
   ];
 }
 
+function payloadHasVisibleContent(value: unknown) {
+  if (value === null || value === undefined) return false;
+  if (typeof value === "string") return Boolean(value.trim());
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === "object") return Object.keys(value).length > 0;
+  return true;
+}
+
+function NativePayloadContent({
+  payloads,
+  language,
+}: {
+  payloads: Array<{ label: string; value: unknown }>;
+  language: OperationLanguage;
+}) {
+  const ui = getCodexUiCopy(language).conversation;
+  return (
+    <div>
+      {payloads.map((payload, index) => (
+        <section key={`${payload.label}:${index}`}>
+          <strong>{payload.label}</strong>
+          <pre
+            aria-label={`${ui.technicalDetails}: ${payload.label}`}
+            tabIndex={0}
+          >
+            {boundedNativeToolPayload(payload.value)}
+          </pre>
+        </section>
+      ))}
+    </div>
+  );
+}
+
+function InlineNativePayload({
+  payloads,
+  language,
+}: {
+  payloads: Array<{ label: string; value: unknown }>;
+  language: OperationLanguage;
+}) {
+  return (
+    <div className="codex-native-tool-details is-inline">
+      <NativePayloadContent payloads={payloads} language={language} />
+    </div>
+  );
+}
+
 function NativePayloadDetails({
   payloads,
   label,
@@ -732,38 +790,23 @@ function NativePayloadDetails({
         <ChevronRight size={12} aria-hidden="true" />
       </summary>
       {open ? (
-        <div>
-          {payloads.map((payload, index) => (
-            <section key={`${payload.label}:${index}`}>
-              <strong>{payload.label}</strong>
-              <pre
-                aria-label={`${ui.technicalDetails}: ${payload.label}`}
-                tabIndex={0}
-              >
-                {boundedNativeToolPayload(payload.value)}
-              </pre>
-            </section>
-          ))}
-        </div>
+        <NativePayloadContent payloads={payloads} language={language} />
       ) : null}
     </details>
   );
 }
 
-function CodexRolloutEvidenceDetails({
+function CodexRolloutEvidencePayload({
   activities,
-  label,
   language,
 }: {
   activities: CodexRolloutToolActivity[];
-  label: string;
   language: OperationLanguage;
 }) {
   const ui = getCodexUiCopy(language).conversation;
   return (
-    <NativePayloadDetails
+    <InlineNativePayload
       language={language}
-      label={label}
       payloads={activities.map((activity, index) => ({
         label: [
           ui.nativeRecord(index + 1, activities.length),
@@ -797,6 +840,9 @@ export function CodexNativeToolActivity({
 }) {
   const ui = getCodexUiCopy(language).conversation;
   const payloads = nativeToolPayloads(activity);
+  const visiblePayloads = payloads.filter((payload) =>
+    payloadHasVisibleContent(payload.value),
+  );
   const external =
     activity.kind === "mcpToolCall" ||
     activity.kind === "dynamicToolCall" ||
@@ -825,11 +871,10 @@ export function CodexNativeToolActivity({
             ) : null
           }
           renderDetails={
-            payloads.length > 0
+            visiblePayloads.length > 0
               ? () => (
-                  <NativePayloadDetails
-                    payloads={payloads}
-                    label={subject || activity.kind}
+                  <InlineNativePayload
+                    payloads={visiblePayloads}
                     language={language}
                   />
                 )
@@ -875,26 +920,12 @@ export function CodexNativeToolActivity({
             {subject}
           </p>
         ) : null}
-        {payloads.length > 0 ? (
-          <details className="codex-native-tool-details">
-            <summary>
-              <Braces size={12} aria-hidden="true" />
-              {ui.nativePayload}
-            </summary>
-            <div>
-              {payloads.map((payload) => (
-                <section key={payload.label}>
-                  <strong>{payload.label}</strong>
-                  <pre
-                    aria-label={`${ui.nativePayload}: ${payload.label}`}
-                    tabIndex={0}
-                  >
-                    {boundedNativeToolPayload(payload.value)}
-                  </pre>
-                </section>
-              ))}
-            </div>
-          </details>
+        {visiblePayloads.length > 0 ? (
+          <NativePayloadDetails
+            payloads={visiblePayloads}
+            label={subject || activity.kind}
+            language={language}
+          />
         ) : null}
       </div>
     </article>
@@ -1050,9 +1081,8 @@ export function CodexRolloutToolCallActivity({
                 <code>{readableOutput}</code>
               </pre>
             ) : null}
-            <CodexRolloutEvidenceDetails
+            <CodexRolloutEvidencePayload
               activities={activities}
-              label={subject}
               language={language}
             />
             {activities.some((item) => item.payloadTruncated) ? (
@@ -1107,11 +1137,16 @@ export function CodexTurnActivity({
 }) {
   const ui = getCodexUiCopy(language).conversation;
   const running = Boolean(activeTurn);
-  const [open, setOpen] = useState(running);
+  const hasActivity = Children.count(children) > 0;
+  const [open, setOpen] = useState(running && hasActivity);
 
   useEffect(() => {
-    if (running) setOpen(true);
-  }, [running]);
+    if (!hasActivity) {
+      setOpen(false);
+      return;
+    }
+    setOpen(running);
+  }, [hasActivity, running]);
 
   const durationMs = activeTurn
     ? Math.max(0, now - activeTurn.startedAt * 1_000)
@@ -1125,6 +1160,34 @@ export function CodexTurnActivity({
       ? ui.viewTurnActivity
       : ui.workedFor(formatDuration(durationMs));
 
+  const activityHeader = (disclosure: boolean) => (
+    <>
+      {disclosure ? (
+        <ChevronRight
+          className="codex-turn-activity-chevron"
+          size={14}
+          aria-hidden="true"
+        />
+      ) : null}
+      {running ? (
+        <span className="activity-spinner" aria-hidden="true" />
+      ) : (
+        <span className="codex-turn-activity-dot" aria-hidden="true" />
+      )}
+      <strong>{summary}</strong>
+      {activeTurn?.detail ? (
+        <small className="codex-turn-activity-detail">
+          {activeTurn.detail}
+        </small>
+      ) : null}
+      {activeTurn && durationMs !== null ? (
+        <span className="codex-turn-running-duration" aria-hidden="true">
+          {ui.runningFor(formatElapsed(durationMs))}
+        </span>
+      ) : null}
+    </>
+  );
+
   return (
     <article className="message message-codex-turn-activity">
       <span
@@ -1135,42 +1198,30 @@ export function CodexTurnActivity({
       >
         {summary}
       </span>
-      <details
-        className={`codex-turn-activity${running ? " is-running" : ""}`}
-        open={open}
-        onToggle={(event) => setOpen(event.currentTarget.open)}
-      >
-        <summary
-          aria-label={`${summary}. ${
-            open ? ui.collapseTurnActivity : ui.expandTurnActivity
+      {hasActivity ? (
+        <details
+          className={`codex-turn-activity${running ? " is-running" : ""}`}
+          open={open}
+          onToggle={(event) => setOpen(event.currentTarget.open)}
+        >
+          <summary
+            aria-label={`${summary}. ${
+              open ? ui.collapseTurnActivity : ui.expandTurnActivity
+            }`}
+          >
+            {activityHeader(true)}
+          </summary>
+          <div className="codex-turn-activity-content">{children}</div>
+        </details>
+      ) : (
+        <div
+          className={`codex-turn-activity codex-turn-activity-static${
+            running ? " is-running" : ""
           }`}
         >
-          <ChevronRight
-            className="codex-turn-activity-chevron"
-            size={14}
-            aria-hidden="true"
-          />
-          {running ? (
-            <span className="activity-spinner" aria-hidden="true" />
-          ) : (
-            <span className="codex-turn-activity-dot" aria-hidden="true" />
-          )}
-          <strong>{summary}</strong>
-          {activeTurn?.detail ? (
-            <small className="codex-turn-activity-detail">
-              {activeTurn.detail}
-            </small>
-          ) : null}
-          {activeTurn && durationMs !== null ? (
-            <span className="codex-turn-running-duration" aria-hidden="true">
-              {ui.runningFor(formatElapsed(durationMs))}
-            </span>
-          ) : null}
-        </summary>
-        {children ? (
-          <div className="codex-turn-activity-content">{children}</div>
-        ) : null}
-      </details>
+          {activityHeader(false)}
+        </div>
+      )}
     </article>
   );
 }

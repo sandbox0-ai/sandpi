@@ -17,6 +17,7 @@ import {
   useRef,
   useState,
   type Dispatch,
+  type RefObject,
   type ReactNode,
   type SetStateAction,
 } from "react";
@@ -61,6 +62,8 @@ interface CodexComposerToolbarProps {
   selectedReasoningEffort: string;
   onModelChange: (modelId: string) => void;
   onReasoningEffortChange: (effort: string) => void;
+  modelSelectRef?: RefObject<HTMLSelectElement | null>;
+  mentionOpenRequest?: number;
   status: CodexComposerStatus;
   action: ReactNode;
 }
@@ -181,6 +184,8 @@ export function CodexComposerToolbar({
   selectedReasoningEffort,
   onModelChange,
   onReasoningEffortChange,
+  modelSelectRef,
+  mentionOpenRequest,
   status,
   action,
 }: CodexComposerToolbarProps) {
@@ -206,6 +211,15 @@ export function CodexComposerToolbar({
     setMentionResults([]);
     setMentionState("idle");
   }, [environmentId]);
+
+  useEffect(() => {
+    if (!mentionOpenRequest) return;
+    setMentionOpen(true);
+    setMentionQuery("");
+    setMentionResults([]);
+    setMentionState("idle");
+    onAttachmentError("");
+  }, [mentionOpenRequest, onAttachmentError]);
 
   useEffect(() => {
     if (!mentionOpen) return;
@@ -489,6 +503,7 @@ export function CodexComposerToolbar({
           >
             <span className="sr-only">{copy.selectModel(agentLabel)}</span>
             <select
+              ref={modelSelectRef}
               name="coding-agent-model"
               aria-label={copy.selectModel(agentLabel)}
               value={selectedModel?.id ?? ""}

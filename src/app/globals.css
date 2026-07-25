@@ -1398,7 +1398,8 @@ pre,
   color: var(--ink-faint);
 }
 
-.codex-turn-activity > summary {
+.codex-turn-activity > summary,
+.codex-turn-activity-static {
   display: flex;
   width: fit-content;
   max-width: 100%;
@@ -1411,12 +1412,21 @@ pre,
   list-style: none;
 }
 
+.codex-turn-activity-static {
+  cursor: default;
+}
+
 .codex-turn-activity > summary::-webkit-details-marker {
   display: none;
 }
 
 .codex-turn-activity > summary:hover {
   color: var(--ink-soft);
+}
+
+.codex-turn-activity > summary:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 1px;
 }
 
 .codex-turn-activity-chevron {
@@ -1436,13 +1446,15 @@ pre,
   background: currentColor;
 }
 
-.codex-turn-activity > summary > .activity-spinner {
+.codex-turn-activity > summary > .activity-spinner,
+.codex-turn-activity-static > .activity-spinner {
   width: 9px;
   height: 9px;
   flex: 0 0 auto;
 }
 
-.codex-turn-activity > summary strong {
+.codex-turn-activity > summary strong,
+.codex-turn-activity-static > strong {
   flex: 0 0 auto;
   color: var(--ink-soft);
   font-size: 11.5px;
@@ -1523,6 +1535,12 @@ pre,
 .codex-turn-activity-content .markdown-content h4 {
   margin: 8px 0 4px;
   font-size: 12px;
+}
+
+@media (pointer: coarse) {
+  .codex-turn-activity > summary {
+    min-height: 40px;
+  }
 }
 
 .message-codex-activity {
@@ -2488,6 +2506,7 @@ code.codex-compact-activity-subject {
 }
 
 .composer-shell {
+  position: relative;
   width: min(
     calc(
       100% - var(--conversation-column-inline-padding) -
@@ -2506,11 +2525,133 @@ code.codex-compact-activity-subject {
     0 2px 8px rgb(30 30 24 / 8%);
 }
 
+.codex-slash-command-menu {
+  position: absolute;
+  z-index: 30;
+  right: 0;
+  bottom: calc(100% + 8px);
+  left: 0;
+  display: grid;
+  max-height: min(360px, 48dvh);
+  overflow-y: auto;
+  padding: 5px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel-strong);
+  box-shadow:
+    0 18px 48px rgb(30 30 24 / 18%),
+    0 2px 9px rgb(30 30 24 / 10%);
+}
+
+.codex-slash-command-menu > button {
+  display: grid;
+  grid-template-columns: minmax(130px, 0.4fr) minmax(0, 1fr);
+  align-items: baseline;
+  gap: 12px;
+  min-height: 36px;
+  padding: 8px 9px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+
+.codex-slash-command-menu > button.is-active,
+.codex-slash-command-menu > button:hover {
+  background: var(--selected);
+}
+
+.codex-slash-command-name {
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.codex-slash-command-name i {
+  margin-left: 5px;
+  color: var(--ink-faint);
+  font-style: normal;
+  font-weight: 450;
+}
+
+.codex-slash-command-description {
+  overflow: hidden;
+  color: var(--ink-soft);
+  font-size: 10.5px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.codex-composer-notice,
+.codex-composer-mode {
+  display: flex;
+  min-height: 28px;
+  align-items: center;
+  gap: 7px;
+  margin: 0 1px 6px;
+  padding: 5px 8px;
+  border-radius: 7px;
+  background: var(--sidebar);
+  color: var(--ink-soft);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.codex-composer-notice[data-tone="error"] {
+  background: color-mix(in srgb, var(--red) 9%, transparent);
+  color: var(--red);
+}
+
+.codex-composer-notice strong,
+.codex-composer-mode strong {
+  color: var(--ink);
+  font-weight: 650;
+}
+
+.codex-composer-notice > span,
+.codex-composer-mode > span {
+  min-width: 0;
+  flex: 1;
+}
+
+.codex-composer-mode > button {
+  display: inline-flex;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ink-faint);
+  cursor: pointer;
+}
+
+.codex-composer-mode > button:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+
 .composer-shell:focus-within {
   border-color: var(--ink-faint);
   box-shadow:
     0 18px 50px rgb(30 30 24 / 16%),
     0 2px 9px rgb(30 30 24 / 10%);
+}
+
+@media (max-width: 640px) {
+  .codex-slash-command-menu > button {
+    grid-template-columns: minmax(112px, 0.46fr) minmax(0, 1fr);
+    gap: 8px;
+  }
 }
 
 .native-context-reset-notice {

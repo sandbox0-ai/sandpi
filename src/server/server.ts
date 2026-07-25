@@ -763,6 +763,8 @@ function registerApiRoutes(
           title: z.string().trim().max(200).optional(),
           modelId: z.string().max(200).optional(),
           reasoningEffort: codexReasoningEffortSchema.optional(),
+          collaborationMode: z.literal("plan").optional(),
+          serviceTier: z.string().trim().min(1).max(100).optional(),
           images: codexInputImagesSchema,
           localImages: codexLocalImagesSchema,
         })
@@ -796,6 +798,8 @@ function registerApiRoutes(
         localImages: body.localImages,
         modelId: body.modelId,
         reasoningEffort: body.reasoningEffort,
+        collaborationMode: body.collaborationMode,
+        serviceTier: body.serviceTier,
       });
       return reply.status(201).send({
         data: await services.store.getSession(
@@ -851,6 +855,8 @@ function registerApiRoutes(
           modelId: z.string().trim().min(1).max(200).optional(),
           reasoningEffort: codexReasoningEffortSchema.optional(),
           clientMessageId: z.string().trim().min(1).max(200).optional(),
+          collaborationMode: z.literal("plan").optional(),
+          serviceTier: z.string().trim().min(1).max(100).optional(),
           localImages: codexLocalImagesSchema,
         })
         .refine(
@@ -871,6 +877,8 @@ function registerApiRoutes(
         modelId: body.modelId,
         reasoningEffort: body.reasoningEffort,
         clientMessageId: body.clientMessageId,
+        collaborationMode: body.collaborationMode,
+        serviceTier: body.serviceTier,
         localImages: body.localImages,
       });
       return reply.status(202).send({ data: result });
@@ -891,6 +899,67 @@ function registerApiRoutes(
       });
       return reply.status(202).send({ data: result });
     },
+  );
+  app.post<{ Params: { sessionId: string } }>(
+    "/api/v1/sessions/:sessionId/compact",
+    async (request, reply) =>
+      reply.status(202).send({
+        data: await services.codex.compactSession({
+          userId: request.principal.userId,
+          sessionId: request.params.sessionId,
+        }),
+      }),
+  );
+  app.post<{ Params: { sessionId: string } }>(
+    "/api/v1/sessions/:sessionId/review",
+    async (request, reply) => {
+      const body = z
+        .object({
+          instructions: z.string().trim().min(1).max(100_000).optional(),
+        })
+        .default({})
+        .parse(request.body);
+      return reply.status(202).send({
+        data: await services.codex.startReview({
+          userId: request.principal.userId,
+          sessionId: request.params.sessionId,
+          instructions: body.instructions,
+        }),
+      });
+    },
+  );
+  app.get<{ Params: { sessionId: string } }>(
+    "/api/v1/sessions/:sessionId/goal",
+    async (request) => ({
+      data: await services.codex.readSessionGoal({
+        userId: request.principal.userId,
+        sessionId: request.params.sessionId,
+      }),
+    }),
+  );
+  app.put<{ Params: { sessionId: string } }>(
+    "/api/v1/sessions/:sessionId/goal",
+    async (request) => {
+      const body = z
+        .object({ objective: z.string().trim().min(1).max(10_000) })
+        .parse(request.body);
+      return {
+        data: await services.codex.setSessionGoal({
+          userId: request.principal.userId,
+          sessionId: request.params.sessionId,
+          objective: body.objective,
+        }),
+      };
+    },
+  );
+  app.delete<{ Params: { sessionId: string } }>(
+    "/api/v1/sessions/:sessionId/goal",
+    async (request) => ({
+      data: await services.codex.clearSessionGoal({
+        userId: request.principal.userId,
+        sessionId: request.params.sessionId,
+      }),
+    }),
   );
   app.post<{ Params: { sessionId: string } }>(
     "/api/v1/sessions/:sessionId/fork",

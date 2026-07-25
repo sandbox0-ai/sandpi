@@ -1,6 +1,7 @@
 "use client";
 
 import type { InspectorTab } from "@/components/inspector";
+import type { EnvironmentSettingsTab } from "@/components/environment-settings";
 import type { WorkspaceFileNavigationRequest } from "@/components/workspace-ide";
 import { CodexConversation } from "@/harnesses/codex/conversation";
 import { isCodexSession } from "@/harnesses/codex/types";
@@ -21,6 +22,7 @@ interface ConversationProps {
   onInspectorTabChange: (tab: InspectorTab) => void;
   onToggleTerminal: () => void;
   onNewSession: () => void;
+  onOpenEnvironmentSettings: (tab: EnvironmentSettingsTab) => void;
   onOpenInspector: (tab: InspectorTab) => void;
   workspaceNavigationRequest?: WorkspaceFileNavigationRequest;
   onOpenWorkspacePath: (path: string) => void;

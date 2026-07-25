@@ -98,7 +98,9 @@ Web today; iOS / Android / HarmonyOS later
   showing a Sandpi-owned default. The picker preserves each model's native
   reasoning-effort options and sends the selected model and effort through
   `thread/start`/`turn/start`; Sandpi does not publish or maintain a separate
-  Codex model or reasoning catalog. Future harness adapters must follow the
+  Codex model or reasoning catalog. Repeated native entries are stably
+  deduplicated by their Codex model id before rendering, without a model-name
+  allowlist. Future harness adapters must follow the
   same live capability-discovery rule and preserve unknown native option values
   instead of adding shared Sandpi enums.
   Browser-only UI choices use the versioned
@@ -118,6 +120,22 @@ Web today; iOS / Android / HarmonyOS later
   user text. The bounded runtime scan excludes hidden,
   internal and dependency directories and does not maintain a persistent file
   index or require a running coding-agent app-server.
+  Both Codex composers expose a harness-owned slash menu. Commands map to real
+  browser product actions: `/new` and `/clear` open New Session, `/fork`
+  creates and selects a child product Session, and `/skills`, `/mcp`,
+  `/permissions`, `/usage`, `/model`, `/mention` and `/diff` open their existing
+  Sandpi surfaces. `/agent`, `/subagents` and `/ide` route to the Activity or
+  Workspace Inspector, while `/logout` opens the Codex account connection
+  instead of logging out without confirmation. `/compact`, `/review` and
+  `/goal` call the native Codex app-server. Inline review displays the native
+  wrapper result without exposing its private reviewer Turn as an interrupted
+  user Turn. `/plan` submits Codex's native Plan collaboration mode, and
+  `/fast` uses the selected model's live service-tier metadata rather than a
+  model allowlist. Sandpi never
+  forwards an unknown slash command as ordinary agent text. Terminal-only
+  commands are absent, and `/resume`, `/side` and `/btw` are deliberately not
+  registered because Sandpi already owns Session selection and does not expose
+  a side-thread composer.
   Browser uploads are written through Sandbox0 into
   `/workspace/.sandpi/uploads/{id}/` and referenced from there. Valid native
   image formats become `localImage` inputs; other files insert their protected
@@ -180,8 +198,12 @@ Web today; iOS / Android / HarmonyOS later
   recorded output from that Thread's bounded rollout JSONL (or its compressed
   sibling); it does not use diagnostic logs SQLite. The Activity feed places
   the newest Turn first while retaining native chronological action order
-  within each Turn. An unavailable or partially parseable rollout is reported
-  in Activity without blocking the app-server conversation.
+  within each Turn. In the conversation, a live tool stays attached to the
+  Turn work disclosure that contains it. Empty Running states are
+  non-interactive, while meaningful live output opens directly and collapses
+  after completion instead of creating empty or nested detail controls. An
+  unavailable or partially parseable rollout is reported in Activity without
+  blocking the app-server conversation.
 - **Durable lifecycle:** Environment Sandboxes explicitly disable Sandbox0 soft
   and hard TTLs. Each Environment configures its own idle auto-pause timeout,
   defaulting to thirty minutes; zero leaves no time-based expiration.

@@ -192,6 +192,16 @@ export type CodexThreadItem =
       revisedPrompt: string | null;
       result: string;
       savedPath?: string;
+    }
+  | {
+      type: "enteredReviewMode";
+      id: string;
+      review: string;
+    }
+  | {
+      type: "exitedReviewMode";
+      id: string;
+      review: string;
     };
 
 export interface CodexTurn {

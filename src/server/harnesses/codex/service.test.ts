@@ -492,6 +492,36 @@ function fixture(
       lastStartedTurnId = `turn-new-${childSequence || 1}`;
       return { id, result: { turn: { id: lastStartedTurnId } } };
     }
+    if (message.method === "review/start") {
+      return {
+        id,
+        result: {
+          turn: { id: "turn-review", status: "inProgress", items: [] },
+          reviewThreadId: "thread-one",
+        },
+      };
+    }
+    if (
+      message.method === "thread/goal/get" ||
+      message.method === "thread/goal/set"
+    ) {
+      const params = message.params as { objective?: string };
+      return {
+        id,
+        result: {
+          goal: {
+            threadId: "thread-one",
+            objective: params.objective ?? "Existing native goal",
+            status: "active",
+            tokenBudget: 10_000,
+            tokensUsed: 250,
+            timeUsedSeconds: 12,
+            createdAt: 1,
+            updatedAt: 2,
+          },
+        },
+      };
+    }
     if (message.method === "thread/read") {
       const params = message.params as {
         threadId: string;
@@ -1717,6 +1747,214 @@ test("starts the first Turn on a newly created loaded Thread without resume", as
     assert.equal(
       context.sessionRuntimes.get(sessionId)?.reasoningEffort,
       "high",
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("passes native Plan collaboration settings to a new Thread and its first Turn", async () => {
+  const context = fixture();
+  try {
+    await context.service.createSession({
+      userId: "user",
+      environment,
+      title: "Plan native Session",
+      prompt: "Design the change",
+      images: [],
+      modelId: "gpt-test",
+      reasoningEffort: "high",
+      collaborationMode: "plan",
+      serviceTier: "native-priority",
+    });
+
+    const expectedMode = {
+      mode: "plan",
+      settings: {
+        model: "gpt-test",
+        reasoning_effort: "high",
+        developer_instructions: null,
+      },
+    };
+    const threadStart = context.writes.find(
+      ({ message }) => message.method === "thread/start",
+    )?.message.params as Record<string, unknown>;
+    const turnStart = context.writes.find(
+      ({ message }) => message.method === "turn/start",
+    )?.message.params as Record<string, unknown>;
+    assert.deepEqual(threadStart.collaborationMode, expectedMode);
+    assert.deepEqual(turnStart.collaborationMode, expectedMode);
+    assert.equal(threadStart.serviceTier, "native-priority");
+    assert.equal(turnStart.serviceTier, "native-priority");
+  } finally {
+    await context.close();
+  }
+});
+
+test("starts native compaction on the current Codex Thread", async () => {
+  const context = fixture();
+  try {
+    assert.deepEqual(
+      await context.service.compactSession({
+        userId: "user",
+        sessionId: "session-one",
+      }),
+      { accepted: true },
+    );
+    const compact = context.writes.find(
+      ({ message }) => message.method === "thread/compact/start",
+    )?.message;
+    assert.deepEqual(compact?.params, { threadId: "thread-one" });
+  } finally {
+    await context.close();
+  }
+});
+
+test("starts native inline reviews with Codex-owned review targets", async () => {
+  const context = fixture();
+  try {
+    assert.deepEqual(
+      await context.service.startReview({
+        userId: "user",
+        sessionId: "session-one",
+      }),
+      { nativeTurnId: "turn-review" },
+    );
+    assert.deepEqual(
+      context.writes.find(
+        ({ message }) => message.method === "review/start",
+      )?.message.params,
+      {
+        threadId: "thread-one",
+        delivery: "inline",
+        target: { type: "uncommittedChanges" },
+      },
+    );
+
+    await context.service.startReview({
+      userId: "user",
+      sessionId: "session-one",
+      instructions: "Focus on persistence races",
+    });
+    assert.deepEqual(
+      context.writes
+        .filter(({ message }) => message.method === "review/start")
+        .at(-1)?.message.params,
+      {
+        threadId: "thread-one",
+        delivery: "inline",
+        target: {
+          type: "custom",
+          instructions: "Focus on persistence races",
+        },
+      },
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("reads, sets, and clears the native Codex Session goal", async () => {
+  const context = fixture();
+  try {
+    assert.deepEqual(
+      await context.service.readSessionGoal({
+        userId: "user",
+        sessionId: "session-one",
+      }),
+      {
+        goal: {
+          objective: "Existing native goal",
+          status: "active",
+          tokenBudget: 10_000,
+          tokensUsed: 250,
+          timeUsedSeconds: 12,
+        },
+      },
+    );
+    assert.deepEqual(
+      await context.service.setSessionGoal({
+        userId: "user",
+        sessionId: "session-one",
+        objective: "Ship the native integration",
+      }),
+      {
+        goal: {
+          objective: "Ship the native integration",
+          status: "active",
+          tokenBudget: 10_000,
+          tokensUsed: 250,
+          timeUsedSeconds: 12,
+        },
+      },
+    );
+    assert.deepEqual(
+      context.writes.find(
+        ({ message }) => message.method === "thread/goal/set",
+      )?.message.params,
+      {
+        threadId: "thread-one",
+        objective: "Ship the native integration",
+        status: "active",
+      },
+    );
+    assert.deepEqual(
+      await context.service.clearSessionGoal({
+        userId: "user",
+        sessionId: "session-one",
+      }),
+      { goal: null },
+    );
+    assert.deepEqual(
+      context.writes.find(
+        ({ message }) => message.method === "thread/goal/clear",
+      )?.message.params,
+      { threadId: "thread-one" },
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("rejects native slash mutations while the Session has an active Turn", async () => {
+  const context = fixture({
+    sessions: [
+      {
+        id: "session-one",
+        nativeSessionId: "thread-one",
+        status: "running",
+        activeNativeTurnId: "turn-active",
+      },
+    ],
+  });
+  try {
+    await assert.rejects(
+      context.service.compactSession({
+        userId: "user",
+        sessionId: "session-one",
+      }),
+      (error: unknown) =>
+        error instanceof HttpError &&
+        error.statusCode === 409 &&
+        error.code === "codex_compact_not_ready",
+    );
+    await assert.rejects(
+      context.service.startReview({
+        userId: "user",
+        sessionId: "session-one",
+      }),
+      (error: unknown) =>
+        error instanceof HttpError &&
+        error.statusCode === 409 &&
+        error.code === "codex_review_not_ready",
+    );
+    assert.equal(
+      context.writes.some(({ message }) =>
+        ["thread/compact/start", "review/start"].includes(
+          String(message.method),
+        ),
+      ),
+      false,
     );
   } finally {
     await context.close();
@@ -4086,6 +4324,90 @@ test("repairs the active projection to the newest in-progress native Turn", asyn
   }
 });
 
+test("repairs an inline review without adopting its interrupted delegate", async () => {
+  const review = "One real review finding.";
+  const context = fixture({
+    sessions: [
+      {
+        id: "session-one",
+        nativeSessionId: "thread-one",
+        status: "running",
+        activeNativeTurnId: "turn-review-delegate",
+      },
+    ],
+    onRequest(message) {
+      if (message.method !== "thread/read") return undefined;
+      return {
+        id: message.id,
+        result: {
+          thread: {
+            id: "thread-one",
+            status: { type: "idle" },
+            turns: [
+              {
+                ...completedTurn("turn-review"),
+                startedAt: null,
+                items: [
+                  {
+                    type: "enteredReviewMode",
+                    id: "review-entered",
+                    review: "current changes",
+                  },
+                  {
+                    type: "exitedReviewMode",
+                    id: "review-exited",
+                    review,
+                  },
+                ],
+              },
+              {
+                ...interruptedTurn("turn-review-delegate"),
+                completedAt: null,
+                durationMs: null,
+                items: [
+                  {
+                    type: "userMessage",
+                    id: "review-prompt",
+                    clientId: null,
+                    content: [],
+                  },
+                  {
+                    type: "agentMessage",
+                    id: "review-result",
+                    text: review,
+                    phase: null,
+                    memoryCitation: null,
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      };
+    },
+  });
+  try {
+    const snapshot = await context.service.readNativeSnapshot(
+      "user",
+      "session-one",
+    );
+
+    assert.equal(snapshot.thread.turns.length, 2);
+    assert.equal(snapshot.sessionStatus, "waiting");
+    assert.equal(
+      context.sessionRuntimes.get("session-one")?.activeNativeTurnId,
+      undefined,
+    );
+    assert.equal(
+      context.writes.filter(({ message }) => message.method === "turn/start")
+        .length,
+      0,
+    );
+  } finally {
+    await context.close();
+  }
+});
+
 test("repairs a stale running Session from a native Thread system error", async () => {
   const context = fixture({
     sessions: [
@@ -4848,6 +5170,72 @@ test("routes a shared Supervisor journal by native thread id", async () => {
       context.sessionRuntimes.get("session-two")?.activeNativeTurnId,
       undefined,
     );
+  } finally {
+    await context.close();
+  }
+});
+
+test("keeps an inline review wrapper as the Session control Turn", async () => {
+  const context = fixture();
+  try {
+    await context.commitEvents([
+      supervisorOutputEvent(1, [
+        {
+          method: "item/started",
+          params: {
+            threadId: "thread-one",
+            turnId: "turn-review",
+            item: {
+              type: "enteredReviewMode",
+              id: "review-entered",
+              review: "current changes",
+            },
+          },
+        },
+      ]),
+    ]);
+    assert.equal(
+      context.sessionRuntimes.get("session-one")?.activeNativeTurnId,
+      "turn-review",
+    );
+
+    await context.commitEvents([
+      supervisorOutputEvent(2, [
+        {
+          method: "turn/started",
+          params: {
+            threadId: "thread-one",
+            turn: {
+              ...completedTurn("turn-review-delegate"),
+              status: "inProgress",
+              completedAt: null,
+              durationMs: null,
+            },
+          },
+        },
+      ]),
+    ]);
+    assert.equal(
+      context.sessionRuntimes.get("session-one")?.activeNativeTurnId,
+      "turn-review",
+    );
+
+    await context.commitEvents([
+      supervisorOutputEvent(3, [
+        {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-one",
+            turn: completedTurn("turn-review"),
+          },
+        },
+      ]),
+    ]);
+    assert.equal(
+      context.sessionRuntimes.get("session-one")?.activeNativeTurnId,
+      undefined,
+    );
+    assert.equal(context.sessions.get("session-one")?.status, "waiting");
   } finally {
     await context.close();
   }

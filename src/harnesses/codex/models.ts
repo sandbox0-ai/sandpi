@@ -9,6 +9,11 @@ export interface CodexModelOption {
   isDefault: boolean;
   defaultReasoningEffort: string;
   supportedReasoningEfforts: CodexReasoningEffortOption[];
+  fastServiceTier?: {
+    id: string;
+    name: string;
+    description: string;
+  };
 }
 
 interface NativeCodexModel {
@@ -19,10 +24,13 @@ interface NativeCodexModel {
   isDefault?: unknown;
   defaultReasoningEffort?: unknown;
   supportedReasoningEfforts?: unknown;
+  additionalSpeedTiers?: unknown;
+  serviceTiers?: unknown;
 }
 
 function reasoningEffortOptions(value: unknown) {
   if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
   return value.flatMap((candidate): CodexReasoningEffortOption[] => {
     if (!candidate || typeof candidate !== "object") return [];
     const option = candidate as {
@@ -31,10 +39,12 @@ function reasoningEffortOptions(value: unknown) {
     };
     if (
       typeof option.reasoningEffort !== "string" ||
-      !option.reasoningEffort
+      !option.reasoningEffort ||
+      seen.has(option.reasoningEffort)
     ) {
       return [];
     }
+    seen.add(option.reasoningEffort);
     return [
       {
         id: option.reasoningEffort,
@@ -45,6 +55,42 @@ function reasoningEffortOptions(value: unknown) {
       },
     ];
   });
+}
+
+function fastServiceTier(model: NativeCodexModel) {
+  if (
+    !Array.isArray(model.additionalSpeedTiers) ||
+    !model.additionalSpeedTiers.some(
+      (tier) => typeof tier === "string" && tier.toLowerCase() === "fast",
+    ) ||
+    !Array.isArray(model.serviceTiers)
+  ) {
+    return undefined;
+  }
+  const serviceTiers = model.serviceTiers.flatMap((candidate) => {
+    if (!candidate || typeof candidate !== "object") return [];
+    const tier = candidate as {
+      id?: unknown;
+      name?: unknown;
+      description?: unknown;
+    };
+    if (typeof tier.id !== "string" || !tier.id) return [];
+    return [
+      {
+        id: tier.id,
+        name: typeof tier.name === "string" ? tier.name : tier.id,
+        description:
+          typeof tier.description === "string" ? tier.description : tier.id,
+      },
+    ];
+  });
+  return (
+    serviceTiers.find(
+      (tier) =>
+        tier.id.toLowerCase() === "fast" ||
+        tier.name.toLowerCase() === "fast",
+    ) ?? (serviceTiers.length === 1 ? serviceTiers[0] : undefined)
+  );
 }
 
 /**
@@ -60,6 +106,7 @@ export function codexModelOptionsFromNativeResult(result: unknown) {
   if (!Array.isArray(data)) {
     return [];
   }
+  const seen = new Set<string>();
   return data.flatMap((candidate): CodexModelOption[] => {
     if (!candidate || typeof candidate !== "object") {
       return [];
@@ -71,9 +118,10 @@ export function codexModelOptionsFromNativeResult(result: unknown) {
         : typeof model.model === "string"
           ? model.model
           : undefined;
-    if (!id || model.hidden === true) {
+    if (!id || model.hidden === true || seen.has(id)) {
       return [];
     }
+    seen.add(id);
     const supportedReasoningEfforts = reasoningEffortOptions(
       model.supportedReasoningEfforts,
     );
@@ -81,6 +129,7 @@ export function codexModelOptionsFromNativeResult(result: unknown) {
       typeof model.defaultReasoningEffort === "string"
         ? model.defaultReasoningEffort
         : "";
+    const nativeFastServiceTier = fastServiceTier(model);
     return [
       {
         id,
@@ -93,6 +142,9 @@ export function codexModelOptionsFromNativeResult(result: unknown) {
           ? nativeDefaultReasoningEffort
           : (supportedReasoningEfforts[0]?.id ?? ""),
         supportedReasoningEfforts,
+        ...(nativeFastServiceTier
+          ? { fastServiceTier: nativeFastServiceTier }
+          : {}),
       },
     ];
   });

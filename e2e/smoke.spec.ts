@@ -375,6 +375,14 @@ test("waits for native New Session models and scopes reasoning effort by model",
                     description: "Deeper reasoning",
                   },
                 ],
+                additionalSpeedTiers: ["fast"],
+                serviceTiers: [
+                  {
+                    id: "e2e-native-priority",
+                    name: "Fast",
+                    description: "Fast native processing",
+                  },
+                ],
               },
               {
                 id: "e2e-codex-deep",
@@ -1360,6 +1368,246 @@ test("interrupts a persisted running Session before its native snapshot arrives"
   await expect.poll(() => interruptBody).toEqual({});
 });
 
+test("deduplicates native models and sends Plan mode from the new Session slash command", async ({
+  page,
+  request,
+}) => {
+  const workspace = await activeWorkspace(request);
+  test.skip(
+    !workspace ||
+      workspace.environment.status !== "ready" ||
+      workspace.environment.codingAgent.status !== "connected",
+    "A ready Environment with Codex connected is required for this check.",
+  );
+  if (
+    !workspace ||
+    workspace.environment.status !== "ready" ||
+    workspace.environment.codingAgent.status !== "connected"
+  ) {
+    return;
+  }
+  const { environment } = workspace;
+  let createBody: Record<string, unknown> | undefined;
+
+  await page.route(
+    `**/api/v1/environments/${encodeURIComponent(environment.id)}/harnesses/codex/models`,
+    async (route) => {
+      await route.fulfill({
+        json: {
+          data: {
+            data: [
+              {
+                id: "e2e-plan-model",
+                displayName: "E2E Plan Model",
+                isDefault: true,
+                defaultReasoningEffort: "high",
+                supportedReasoningEfforts: [
+                  {
+                    reasoningEffort: "high",
+                    description: "Deep reasoning",
+                  },
+                ],
+                additionalSpeedTiers: ["fast"],
+                serviceTiers: [
+                  {
+                    id: "e2e-native-priority",
+                    name: "Fast",
+                    description: "Fast native processing",
+                  },
+                ],
+              },
+              {
+                id: "e2e-plan-model",
+                displayName: "Duplicate E2E Plan Model",
+                isDefault: false,
+                defaultReasoningEffort: "low",
+                supportedReasoningEfforts: [
+                  {
+                    reasoningEffort: "low",
+                    description: "Duplicate native entry",
+                  },
+                ],
+              },
+            ],
+          },
+          meta: { availability: "available", source: "codex" },
+        },
+      });
+    },
+  );
+  await page.route("**/api/v1/sessions", async (route) => {
+    if (route.request().method() !== "POST") {
+      await route.continue();
+      return;
+    }
+    createBody = route.request().postDataJSON() as Record<string, unknown>;
+    await route.fulfill({ status: 204 });
+  });
+
+  await page.goto(
+    `/?environment=${encodeURIComponent(environment.id)}&new=1`,
+  );
+  const modelPicker = page.locator(
+    'select[name="coding-agent-model"]',
+  );
+  await expect(modelPicker).toBeEnabled();
+  await expect(modelPicker.locator("option")).toHaveText(["E2E Plan Model"]);
+
+  const composer = page.locator(
+    'textarea[name="new-session-instruction"]',
+  );
+  await composer.fill("/plan");
+  await composer.press("Enter");
+  await expect(page.locator(".codex-composer-mode")).toBeVisible();
+  await expect(composer).toHaveValue("");
+  await composer.fill("/fast");
+  await composer.press("Enter");
+  await expect(page.locator(".codex-composer-mode")).toHaveCount(2);
+  await expect(composer).toHaveValue("");
+
+  await composer.fill("Design the persistence change");
+  await page.locator(".composer-shell .send-button").click();
+  await expect.poll(() => createBody).toMatchObject({
+    environmentId: environment.id,
+    prompt: "Design the persistence change",
+    modelId: "e2e-plan-model",
+    reasoningEffort: "high",
+    collaborationMode: "plan",
+    serviceTier: "e2e-native-priority",
+  });
+});
+
+test("maps Codex slash commands to Sandpi new and fork Session flows", async ({
+  page,
+  request,
+}) => {
+  const workspace = await activeWorkspace(request);
+  test.skip(!workspace, "An active Session is required for this check.");
+  if (!workspace) return;
+  const { environment, session } = workspace;
+  const eventPath = `/api/v1/sessions/${session.id}/events`;
+  const nativeThreadId = "thread-e2e-slash-commands";
+  const forkedSessionId = "session-e2e-slash-fork";
+  const now = Date.now() / 1_000;
+  const snapshot: CodexNativeSnapshot = {
+    protocol: "codex-app-server",
+    nativeSessionId: nativeThreadId,
+    historyRevision: 1,
+    modelId: "e2e-slash-model",
+    reasoningEffort: "high",
+    sessionStatus: "waiting",
+    forkableTurnIds: [],
+    activity: {
+      source: "codex-rollout",
+      availability: "available",
+      error: null,
+      records: [],
+    },
+    thread: {
+      id: nativeThreadId,
+      createdAt: now,
+      updatedAt: now,
+      status: { type: "idle" },
+      turns: [],
+    },
+  };
+  let forkBody: unknown;
+  const browserErrors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") browserErrors.push(message.text());
+  });
+  page.on("pageerror", (error) => browserErrors.push(error.message));
+
+  await installControlledEventSource(page);
+  await page.route("**/api/v1/**/models", async (route) => {
+    await route.fulfill({
+      json: {
+        data: {
+          data: [
+            {
+              id: snapshot.modelId,
+              displayName: "E2E slash model",
+              isDefault: true,
+              defaultReasoningEffort: "high",
+              supportedReasoningEfforts: [
+                {
+                  reasoningEffort: "high",
+                  description: "Deep reasoning",
+                },
+              ],
+            },
+          ],
+        },
+        meta: { availability: "available", source: "codex" },
+      },
+    });
+  });
+  await page.route(
+    `**/api/v1/sessions/${encodeURIComponent(session.id)}/fork`,
+    async (route) => {
+      forkBody = route.request().postDataJSON();
+      await route.fulfill({
+        status: 201,
+        json: {
+          data: {
+            ...session,
+            id: forkedSessionId,
+            title: "Forked from slash command",
+            status: "waiting",
+            archived: false,
+            createdAt: now,
+            updatedAt: now,
+          },
+        },
+      });
+    },
+  );
+
+  const sourceUrl =
+    `/?environment=${encodeURIComponent(environment.id)}` +
+    `&session=${encodeURIComponent(session.id)}`;
+  await page.goto(sourceUrl);
+  await emitControlledEvent(page, eventPath, "snapshot", snapshot);
+  await expect(page.getByText("Loading conversation…")).toBeHidden();
+
+  const composer = page.locator('textarea[name="message"]');
+  await composer.fill("/");
+  const menu = page.getByRole("listbox", {
+    name: /Codex slash commands|Codex 斜杠命令/,
+  });
+  await expect(menu).toBeVisible();
+  await expect(
+    menu.locator(".codex-slash-command-name", { hasText: "/new" }),
+  ).toHaveCount(1);
+  await expect(
+    menu.locator(".codex-slash-command-name", { hasText: "/fork" }),
+  ).toHaveCount(1);
+  await expect(menu).not.toContainText("/resume");
+  await expect(menu).not.toContainText("/side");
+  await expect(menu).not.toContainText("/btw");
+
+  await composer.fill("/new");
+  await composer.press("Enter");
+  await expect
+    .poll(() => new URL(page.url()).searchParams.get("session"))
+    .toBeNull();
+  await expect(
+    page.locator('textarea[name="new-session-instruction"]'),
+  ).toBeVisible();
+
+  await page.goto(sourceUrl);
+  await emitControlledEvent(page, eventPath, "snapshot", snapshot);
+  await expect(page.getByText("Loading conversation…")).toBeHidden();
+  const resumedComposer = page.locator('textarea[name="message"]');
+  await resumedComposer.fill("/fork");
+  await resumedComposer.press("Enter");
+  await expect.poll(() => forkBody).toEqual({});
+  await expect
+    .poll(() => new URL(page.url()).searchParams.get("session"))
+    .toBe(forkedSessionId);
+  expect(browserErrors).toEqual([]);
+});
+
 test("keeps an optimistic prompt ahead of native Activity without duplicating it", async ({
   page,
   request,
@@ -1482,17 +1730,23 @@ test("keeps an optimistic prompt ahead of native Activity without duplicating it
   await emitControlledEvent(page, eventPath, "snapshot", snapshot);
   await expect(page.getByText("Loading conversation…")).toBeHidden();
 
-  const composer = page.getByRole("textbox", {
-    name: `Message ${environment.codingAgent.label}`,
-  });
+  const composer = page.locator('textarea[name="message"]');
   const submittedPrompt = `${prompt} app/page.tsx`;
   await expect(page.getByTestId("codex-composer-upload-input")).toHaveCount(1);
   await composer.fill(prompt);
-  await page.getByRole("button", { name: "Mention a Workspace file" }).click();
-  await page.getByPlaceholder("Search /workspace").fill("page");
+  await page
+    .getByRole("button", {
+      name: /Mention a Workspace file|引用工作区文件/,
+    })
+    .click();
+  await page
+    .getByPlaceholder(/Search \/workspace|搜索 \/workspace/)
+    .fill("page");
   await page.getByRole("option").filter({ hasText: "app/page.tsx" }).click();
   await expect(composer).toHaveValue(`${submittedPrompt} `);
-  await page.getByRole("button", { name: "Send message" }).click();
+  await page
+    .getByRole("button", { name: /Send message|发送消息/ })
+    .click();
   await expect
     .poll(() => turnRequestBody?.clientMessageId)
     .toMatch(/^user-message-/);
@@ -1504,7 +1758,9 @@ test("keeps an optimistic prompt ahead of native Activity without duplicating it
   await expect(composer).toHaveValue("");
   await expect(page.getByText(submittedPrompt, { exact: true })).toHaveCount(1);
   await expect(
-    page.getByRole("button", { name: "Starting Codex turn" }),
+    page.getByRole("button", {
+      name: /Starting Codex turn|正在启动 Codex Turn/,
+    }),
   ).toHaveAttribute("aria-busy", "true");
 
   const userRow = page.locator(".message-column > .message-user");
@@ -1590,6 +1846,10 @@ test("keeps an optimistic prompt ahead of native Activity without duplicating it
     }),
   );
   await expect(page.getByText(submittedPrompt, { exact: true })).toHaveCount(1);
+  await expect(
+    activityRow.locator(":scope > .codex-turn-activity-static"),
+  ).toBeVisible();
+  await expect(activityRow.locator(":scope > details")).toHaveCount(0);
   releaseTurnResponse();
   await emitControlledEvent(
     page,
@@ -1607,6 +1867,9 @@ test("keeps an optimistic prompt ahead of native Activity without duplicating it
   );
   const activityDetails = activityRow.locator(":scope > details");
   await expect(activityDetails).toHaveAttribute("open", "");
+  await expect(activityDetails).toContainText("rg --files");
+  await expect(activityDetails).toContainText("app/page.tsx");
+  await expect(activityDetails.locator("details")).toHaveCount(0);
   const runningActivityHeight = await activityDetails.evaluate(
     (details) => details.getBoundingClientRect().height,
   );
@@ -1646,11 +1909,11 @@ test("keeps an optimistic prompt ahead of native Activity without duplicating it
   await expect(
     page.getByText("The ordering is stable.", { exact: true }),
   ).toBeVisible();
-  await expect(activityDetails).toHaveAttribute("open", "");
+  await expect(activityDetails).not.toHaveAttribute("open", "");
   const completedActivityHeight = await activityDetails.evaluate(
     (details) => details.getBoundingClientRect().height,
   );
-  expect(completedActivityHeight).toBeGreaterThan(40);
+  expect(completedActivityHeight).toBeLessThan(runningActivityHeight);
   const completedRows = await page
     .locator(".message-column > .message")
     .evaluateAll((rows) => rows.map((row) => row.className));

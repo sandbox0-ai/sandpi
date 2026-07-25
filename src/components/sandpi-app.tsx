@@ -832,6 +832,9 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
           onInspectorTabChange={handleInspectorTabChange}
           onToggleTerminal={() => setTerminalOpen((open) => !open)}
           onNewSession={() => handleNewSession(selectedEnvironment.id)}
+          onOpenEnvironmentSettings={(tab) =>
+            openEnvironmentSettings(selectedEnvironment.id, tab)
+          }
           onOpenInspector={(tab) => {
             handleInspectorTabChange(tab);
             handleInspectorOpenChange(true);
@@ -855,6 +858,9 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
           }
           onOpenAgentHarnessSettings={() =>
             openEnvironmentSettings(selectedEnvironment.id, "credentials")
+          }
+          onOpenEnvironmentSettings={(tab) =>
+            openEnvironmentSettings(selectedEnvironment.id, tab)
           }
           onToggleSidebar={handleToggleNavigation}
           terminalOpen={showTerminal}

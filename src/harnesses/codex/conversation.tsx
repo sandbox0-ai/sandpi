@@ -37,6 +37,15 @@ import {
 } from "@/harnesses/codex/composer";
 import { insertCodexFileMentions } from "@/harnesses/codex/file-mentions";
 import {
+  CodexSlashCommandMenu,
+  useCodexSlashCommandMenu,
+} from "@/harnesses/codex/slash-command-menu";
+import {
+  CODEX_INIT_COMMAND_PROMPT,
+  parseCodexSlashInvocation,
+  type CodexSlashCommand,
+} from "@/harnesses/codex/slash-commands";
+import {
   codexModelOptionsFromNativeResult,
   codexReasoningEffortForModel,
   codexReasoningEffortLabel,
@@ -106,6 +115,7 @@ import {
   type SendShortcut,
 } from "@/lib/operation-ui";
 import { getCodexUiCopy } from "@/harnesses/codex/ui";
+import type { EnvironmentSettingsTab } from "@/components/environment-settings";
 import type { Environment } from "@/lib/types";
 
 interface ConversationProps {
@@ -122,6 +132,7 @@ interface ConversationProps {
   onInspectorTabChange: (tab: InspectorTab) => void;
   onToggleTerminal: () => void;
   onNewSession: () => void;
+  onOpenEnvironmentSettings: (tab: EnvironmentSettingsTab) => void;
   onOpenInspector: (tab: InspectorTab) => void;
   workspaceNavigationRequest?: WorkspaceFileNavigationRequest;
   onOpenWorkspacePath: (path: string) => void;
@@ -155,6 +166,23 @@ interface PendingCodexTurn {
   phase: "submitting" | "accepted";
 }
 
+interface SubmitCodexMessageOptions {
+  content?: string;
+  collaborationMode?: "plan";
+  bypassSlash?: boolean;
+  restoreDraft?: string;
+}
+
+interface CodexGoalProjection {
+  goal: {
+    objective: string;
+    status: string;
+    tokenBudget: number | null;
+    tokensUsed: number;
+    timeUsedSeconds: number;
+  } | null;
+}
+
 export function CodexConversation({
   language,
   timeZone,
@@ -169,6 +197,7 @@ export function CodexConversation({
   onInspectorTabChange,
   onToggleTerminal,
   onNewSession,
+  onOpenEnvironmentSettings,
   onOpenInspector,
   workspaceNavigationRequest,
   onOpenWorkspacePath,
@@ -217,6 +246,13 @@ export function CodexConversation({
   const [pastedImages, setPastedImages] = useState<CodexComposerImage[]>([]);
   const [localImages, setLocalImages] = useState<CodexComposerLocalImage[]>([]);
   const [attachmentError, setAttachmentError] = useState("");
+  const [commandNotice, setCommandNotice] = useState<{
+    tone: "info" | "error";
+    message: string;
+  } | null>(null);
+  const [planMode, setPlanMode] = useState(false);
+  const [fastMode, setFastMode] = useState(false);
+  const [mentionOpenRequest, setMentionOpenRequest] = useState(0);
   const [sending, setSending] = useState(false);
   const [interrupting, setInterrupting] = useState(false);
   const [forkingMessageId, setForkingMessageId] = useState<string | null>(null);
@@ -233,6 +269,7 @@ export function CodexConversation({
   const [activityClock, setActivityClock] = useState(() => Date.now());
   const [pendingTurn, setPendingTurn] = useState<PendingCodexTurn | null>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  const modelSelectRef = useRef<HTMLSelectElement>(null);
   const scrollbarHideTimerRef = useRef<number | null>(null);
   const pendingTurnStartedAtRef = useRef<number | null>(null);
   const nativeAcceptedMessageIdsRef = useRef(new Set<string>());
@@ -307,6 +344,13 @@ export function CodexConversation({
   // Do not infer a cold start from persisted Sandbox state here: bootstrap may
   // still say paused while an ordinary refresh is already loading the runtime.
   const nativeHistoryLoading = !nativeSnapshot && !nativeHistoryError;
+  const slashMenu = useCodexSlashCommandMenu({
+    value: draft,
+    context: "session",
+    turnRunning,
+    onComplete: setComposerDraft,
+    onExecute: (command) => void executeSlashCommand(command, ""),
+  });
   const {
     scrollRef: conversationScrollRef,
     contentRef: conversationContentRef,
@@ -336,6 +380,10 @@ export function CodexConversation({
     setPastedImages([]);
     setLocalImages([]);
     setAttachmentError("");
+    setCommandNotice(null);
+    setPlanMode(false);
+    setFastMode(false);
+    setMentionOpenRequest(0);
     setSending(false);
     setInterrupting(false);
     setForkingMessageId(null);
@@ -756,6 +804,7 @@ export function CodexConversation({
     };
     localComposerPreferenceActiveRef.current = true;
     setSelectedModelId(model.id);
+    if (!model.fastServiceTier) setFastMode(false);
     setReasoningEfforts(nextReasoningEfforts);
     rememberComposerPreference(model.id, nextReasoningEfforts);
   }
@@ -789,11 +838,381 @@ export function CodexConversation({
     });
   }
 
-  async function submitMessage() {
-    const submittedDraft = draft;
+  function setComposerDraft(value: string) {
+    setDraft(value);
+    window.requestAnimationFrame(() => {
+      const textarea = composerRef.current;
+      if (!textarea) return;
+      textarea.focus();
+      textarea.setSelectionRange(value.length, value.length);
+      syncComposerHeight(textarea);
+    });
+  }
+
+  function clearComposerDraft() {
+    setDraft("");
+    window.requestAnimationFrame(() => {
+      const textarea = composerRef.current;
+      if (!textarea) return;
+      textarea.style.height = "auto";
+      textarea.focus();
+    });
+  }
+
+  function openModelPicker() {
+    const select = modelSelectRef.current;
+    if (!select || select.disabled) {
+      setCommandNotice({
+        tone: "error",
+        message:
+          language === "zh-CN"
+            ? "Codex 模型列表当前不可用。"
+            : "The Codex model catalog is currently unavailable.",
+      });
+      return;
+    }
+    select.focus();
+    try {
+      select.showPicker();
+    } catch {
+      // Focus remains a usable fallback when the browser blocks showPicker.
+    }
+  }
+
+  function markNativeCommandRunning() {
+    const current = sessionRef.current;
+    const next: CodexSession = {
+      ...current,
+      status: "running",
+      unread: false,
+    };
+    sessionRef.current = next;
+    onSessionChange(next);
+  }
+
+  async function executeSlashCommand(
+    command: CodexSlashCommand,
+    argumentsValue: string,
+  ) {
+    if (command.unavailableWhileTurnRunning && turnRunning) {
+      setCommandNotice({
+        tone: "error",
+        message:
+          language === "zh-CN"
+            ? `请等待当前 Turn 完成后再运行 /${command.name}。`
+            : `Wait for the current Turn to finish before running /${command.name}.`,
+      });
+      return;
+    }
+    clearComposerDraft();
+    setCommandNotice(null);
+
+    if (command.name === "new" || command.name === "clear") {
+      onNewSession();
+      return;
+    }
+    if (command.name === "model") {
+      openModelPicker();
+      return;
+    }
+    if (command.name === "fast") {
+      if (!selectedModel.fastServiceTier) {
+        setCommandNotice({
+          tone: "error",
+          message:
+            language === "zh-CN"
+              ? "所选模型没有通过 Codex 提供 Fast tier。"
+              : "Codex does not report a Fast tier for the selected model.",
+        });
+        return;
+      }
+      setFastMode((enabled) => !enabled);
+      setCommandNotice({
+        tone: "info",
+        message: fastMode
+          ? language === "zh-CN"
+            ? "Fast mode 已关闭。"
+            : "Fast mode is off."
+          : language === "zh-CN"
+            ? "Fast mode 已开启。"
+            : "Fast mode is on.",
+      });
+      return;
+    }
+    if (command.name === "mention") {
+      setMentionOpenRequest((request) => request + 1);
+      return;
+    }
+    if (command.name === "diff" || command.name === "ide") {
+      onOpenInspector("files");
+      return;
+    }
+    if (command.name === "agent" || command.name === "subagents") {
+      onOpenInspector("activity");
+      return;
+    }
+    if (command.name === "skills") {
+      onOpenEnvironmentSettings("skills");
+      return;
+    }
+    if (command.name === "mcp") {
+      onOpenEnvironmentSettings("mcp");
+      return;
+    }
+    if (command.name === "permissions") {
+      onOpenEnvironmentSettings("network");
+      return;
+    }
+    if (command.name === "usage" || command.name === "logout") {
+      onOpenEnvironmentSettings("credentials");
+      return;
+    }
+    if (command.name === "status") {
+      setCommandNotice({
+        tone: "info",
+        message: [
+          environment.name,
+          session.title,
+          ui.status(session.status),
+          selectedModel.displayName,
+          selectedReasoningEffort
+            ? codexReasoningEffortLabel(selectedReasoningEffort)
+            : undefined,
+        ]
+          .filter(Boolean)
+          .join(" · "),
+      });
+      return;
+    }
+    if (command.name === "copy") {
+      const latest = [...visibleTimeline.entries]
+        .reverse()
+        .find(
+          (entry): entry is CodexMessageView =>
+            entry.kind === "message" &&
+            entry.role === "assistant" &&
+            Boolean(entry.content.trim()),
+        );
+      if (!latest) {
+        setCommandNotice({
+          tone: "error",
+          message:
+            language === "zh-CN"
+              ? "当前 Session 还没有可复制的助手回复。"
+              : "This Session has no assistant response to copy yet.",
+        });
+        return;
+      }
+      await copyMessage(latest);
+      setCommandNotice({
+        tone: "info",
+        message:
+          language === "zh-CN"
+            ? "已复制最近一条助手回复。"
+            : "Copied the latest assistant response.",
+      });
+      return;
+    }
+    if (command.name === "plan") {
+      setPlanMode(true);
+      if (argumentsValue) {
+        await submitMessage({
+          content: argumentsValue,
+          collaborationMode: "plan",
+          bypassSlash: true,
+          restoreDraft: `/plan ${argumentsValue}`,
+        });
+      } else {
+        setCommandNotice({
+          tone: "info",
+          message:
+            language === "zh-CN"
+              ? "计划模式已开启，将应用到后续消息。"
+              : "Plan mode is active for subsequent messages.",
+        });
+      }
+      return;
+    }
+    if (command.name === "init") {
+      await submitMessage({
+        content: CODEX_INIT_COMMAND_PROMPT,
+        bypassSlash: true,
+        restoreDraft: "/init",
+      });
+      return;
+    }
+
+    const originalDraft =
+      draft || `/${command.name}${argumentsValue ? ` ${argumentsValue}` : ""}`;
+    clearComposerDraft();
+    setSending(true);
+    setAttachmentError("");
+    try {
+      if (command.name === "goal") {
+        const clear = argumentsValue.toLowerCase() === "clear";
+        const response = await apiFetch<ApiEnvelope<CodexGoalProjection>>(
+          `/api/v1/sessions/${encodeURIComponent(session.id)}/goal`,
+          argumentsValue
+            ? clear
+              ? { method: "DELETE" }
+              : {
+                  method: "PUT",
+                  body: JSON.stringify({ objective: argumentsValue }),
+                }
+            : undefined,
+        );
+        const goal = response.data.goal;
+        setCommandNotice({
+          tone: "info",
+          message: clear
+            ? language === "zh-CN"
+              ? "已清除 Codex 原生 Session 目标。"
+              : "Cleared the native Codex Session goal."
+            : goal
+              ? [
+                  language === "zh-CN" ? "目标" : "Goal",
+                  goal.status,
+                  goal.objective,
+                  goal.tokenBudget === null
+                    ? `${goal.tokensUsed} tokens`
+                    : `${goal.tokensUsed}/${goal.tokenBudget} tokens`,
+                ].join(" · ")
+              : language === "zh-CN"
+                ? "当前没有 Codex Session 目标。"
+                : "This Codex Session has no goal.",
+        });
+        return;
+      }
+      if (command.name === "fork") {
+        const response = await apiFetch<ApiEnvelope<CodexSession>>(
+          `/api/v1/sessions/${encodeURIComponent(session.id)}/fork`,
+          { method: "POST", body: JSON.stringify({}) },
+        );
+        onDerivedSessionCreated(response.data);
+        return;
+      }
+      if (command.name === "compact") {
+        await apiFetch<ApiEnvelope<{ accepted: boolean }>>(
+          `/api/v1/sessions/${encodeURIComponent(session.id)}/compact`,
+          { method: "POST", body: JSON.stringify({}) },
+        );
+        markNativeCommandRunning();
+        setCommandNotice({
+          tone: "info",
+          message:
+            language === "zh-CN"
+              ? "Codex 正在压缩当前 Session 上下文。"
+              : "Codex is compacting this Session context.",
+        });
+        return;
+      }
+      if (command.name === "review") {
+        await apiFetch<ApiEnvelope<{ nativeTurnId: string }>>(
+          `/api/v1/sessions/${encodeURIComponent(session.id)}/review`,
+          {
+            method: "POST",
+            body: JSON.stringify(
+              argumentsValue ? { instructions: argumentsValue } : {},
+            ),
+          },
+        );
+        markNativeCommandRunning();
+        setCommandNotice({
+          tone: "info",
+          message:
+            language === "zh-CN"
+              ? "Codex 原生代码审查已开始。"
+              : "The native Codex review has started.",
+        });
+        return;
+      }
+      if (command.name === "rename") {
+        const response = await apiFetch<ApiEnvelope<CodexSession>>(
+          `/api/v1/sessions/${encodeURIComponent(session.id)}/metadata`,
+          {
+            method: "PUT",
+            body: JSON.stringify({ title: argumentsValue }),
+          },
+        );
+        onSessionChange(response.data);
+        setCommandNotice({
+          tone: "info",
+          message:
+            language === "zh-CN"
+              ? `Session 已重命名为“${response.data.title}”。`
+              : `Renamed the Session to “${response.data.title}”.`,
+        });
+        return;
+      }
+      if (command.name === "archive") {
+        const response = await apiFetch<ApiEnvelope<CodexSession>>(
+          `/api/v1/sessions/${encodeURIComponent(session.id)}/metadata`,
+          {
+            method: "PUT",
+            body: JSON.stringify({ archived: true }),
+          },
+        );
+        onSessionChange(response.data);
+        onNewSession();
+      }
+    } catch (error) {
+      setComposerDraft(originalDraft);
+      setCommandNotice({
+        tone: "error",
+        message:
+          error instanceof Error
+            ? error.message
+            : language === "zh-CN"
+              ? `无法运行 /${command.name}。`
+              : `Could not run /${command.name}.`,
+      });
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function submitMessage(options: SubmitCodexMessageOptions = {}) {
+    if (!options.bypassSlash) {
+      const invocation = parseCodexSlashInvocation(draft, "session");
+      if (invocation.kind === "command") {
+        await executeSlashCommand(invocation.command, invocation.arguments);
+        return;
+      }
+      if (invocation.kind === "unknown") {
+        setCommandNotice({
+          tone: "error",
+          message:
+            language === "zh-CN"
+              ? `未知命令 /${invocation.name}。输入 / 查看可用命令。`
+              : `Unknown command /${invocation.name}. Type / to see available commands.`,
+        });
+        return;
+      }
+      if (invocation.kind === "unavailable") {
+        setCommandNotice({
+          tone: "error",
+          message:
+            language === "zh-CN"
+              ? `/${invocation.command.name} 不适用于当前输入框。`
+              : `/${invocation.command.name} is not available in this composer.`,
+        });
+        return;
+      }
+      if (invocation.kind === "missing-arguments") {
+        setCommandNotice({
+          tone: "error",
+          message:
+            language === "zh-CN"
+              ? `/${invocation.command.name} 需要${invocation.command.argumentHint?.[language] ?? "参数"}。`
+              : `/${invocation.command.name} requires ${invocation.command.argumentHint?.[language] ?? "an argument"}.`,
+        });
+        return;
+      }
+    }
+    const submittedDraft = options.restoreDraft ?? draft;
     const submittedImages = pastedImages;
     const submittedLocalImages = localImages;
-    const content = draft.trim();
+    const content = (options.content ?? draft).trim();
     if (
       !content &&
       submittedImages.length === 0 &&
@@ -820,6 +1239,7 @@ export function CodexConversation({
     setPastedImages([]);
     setLocalImages([]);
     setAttachmentError("");
+    setCommandNotice(null);
     try {
       const response = await apiFetch<
         ApiEnvelope<{
@@ -841,6 +1261,16 @@ export function CodexConversation({
               : {}),
             ...(selectedReasoningEffort
               ? { reasoningEffort: selectedReasoningEffort }
+              : {}),
+            ...((options.collaborationMode ?? (planMode ? "plan" : undefined))
+              ? {
+                  collaborationMode:
+                    options.collaborationMode ??
+                    (planMode ? ("plan" as const) : undefined),
+                }
+              : {}),
+            ...(fastMode && selectedModel.fastServiceTier
+              ? { serviceTier: selectedModel.fastServiceTier.id }
               : {}),
           }),
         },
@@ -1410,6 +1840,14 @@ export function CodexConversation({
             </button>
           ) : null}
           <div className="composer-shell">
+            <CodexSlashCommandMenu
+              id={slashMenu.id}
+              language={language}
+              commands={slashMenu.commands}
+              activeIndex={slashMenu.activeIndex}
+              onActiveIndexChange={slashMenu.setActiveIndex}
+              onSelect={slashMenu.select}
+            />
             {pastedImages.length ? (
               <div
                 className="composer-image-previews"
@@ -1446,6 +1884,59 @@ export function CodexConversation({
                 {attachmentError}
               </div>
             ) : null}
+            {commandNotice ? (
+              <div
+                className="codex-composer-notice"
+                data-tone={commandNotice.tone}
+                role={commandNotice.tone === "error" ? "alert" : "status"}
+              >
+                <span>{commandNotice.message}</span>
+              </div>
+            ) : null}
+            {planMode ? (
+              <div className="codex-composer-mode" role="status">
+                <span>
+                  <strong>{language === "zh-CN" ? "计划模式" : "Plan mode"}</strong>
+                  {" · "}
+                  {language === "zh-CN"
+                    ? "后续消息使用 Codex 计划协作模式"
+                    : "Subsequent messages use Codex Plan collaboration mode"}
+                </span>
+                <button
+                  type="button"
+                  aria-label={
+                    language === "zh-CN" ? "退出计划模式" : "Exit Plan mode"
+                  }
+                  onClick={() => {
+                    setPlanMode(false);
+                    setCommandNotice(null);
+                  }}
+                >
+                  <X size={12} aria-hidden="true" />
+                </button>
+              </div>
+            ) : null}
+            {fastMode && selectedModel.fastServiceTier ? (
+              <div className="codex-composer-mode" role="status">
+                <span>
+                  <strong>Fast mode</strong>
+                  {" · "}
+                  {selectedModel.fastServiceTier.description}
+                </span>
+                <button
+                  type="button"
+                  aria-label={
+                    language === "zh-CN" ? "关闭 Fast mode" : "Turn off Fast mode"
+                  }
+                  onClick={() => {
+                    setFastMode(false);
+                    setCommandNotice(null);
+                  }}
+                >
+                  <X size={12} aria-hidden="true" />
+                </button>
+              </div>
+            ) : null}
             <CodexComposerLocalImages
               language={language}
               localImages={localImages}
@@ -1467,6 +1958,8 @@ export function CodexConversation({
               value={draft}
               onChange={(event) => {
                 setDraft(event.target.value);
+                slashMenu.show();
+                setCommandNotice(null);
                 syncComposerHeight(event.currentTarget);
               }}
               onPaste={(event) => {
@@ -1480,6 +1973,7 @@ export function CodexConversation({
                 void addPastedImages(imageFiles);
               }}
               onKeyDown={(event) => {
+                if (slashMenu.handleKeyDown(event)) return;
                 if (
                   shouldSubmitComposer(
                     {
@@ -1496,6 +1990,14 @@ export function CodexConversation({
                   void submitMessage();
                 }
               }}
+              aria-controls={
+                slashMenu.commands.length > 0 ? slashMenu.id : undefined
+              }
+              aria-activedescendant={
+                slashMenu.activeCommand
+                  ? `${slashMenu.id}-${slashMenu.activeCommand.name}`
+                  : undefined
+              }
               aria-label={ui.messageAgent(environment.codingAgent.label)}
               placeholder={ui.askPlaceholder(environment.codingAgent.label)}
               rows={1}
@@ -1519,6 +2021,8 @@ export function CodexConversation({
               selectedReasoningEffort={selectedReasoningEffort}
               onModelChange={selectModel}
               onReasoningEffortChange={selectReasoningEffort}
+              modelSelectRef={modelSelectRef}
+              mentionOpenRequest={mentionOpenRequest}
               status={{
                 state: nativeHistoryError
                   ? "unavailable"

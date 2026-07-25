@@ -12,6 +12,10 @@ import type {
   CodexTurn,
   CodexUserInput,
 } from "./types";
+import {
+  enteredReviewModeItem,
+  visibleCodexTurns,
+} from "./inline-review";
 
 export type CodexActivityStatus =
   | "running"
@@ -339,6 +343,12 @@ function nativeItemStatus(
 }
 
 function activeItemDetail(item: CodexThreadItem) {
+  if (
+    item.type === "enteredReviewMode" ||
+    item.type === "exitedReviewMode"
+  ) {
+    return item.review.trim().slice(0, 2_000) || undefined;
+  }
   if (item.type === "reasoning") {
     return item.summary.join("\n").trim().slice(0, 2_000) || undefined;
   }
@@ -474,6 +484,25 @@ export function projectCodexTimeline(
   const entryIndex = new Map<string, number>();
   const turns = new Map<string, TurnState>();
   const seenSequences = new Set<number>();
+  const snapshotTurns = thread ? visibleCodexTurns(thread.turns) : [];
+  const visibleSnapshotTurnIds = new Set(snapshotTurns.map((turn) => turn.id));
+  const internalReviewDelegateTurnIds = new Set(
+    (thread?.turns ?? [])
+      .filter((turn) => !visibleSnapshotTurnIds.has(turn.id))
+      .map((turn) => turn.id),
+  );
+  const activeInlineReviewTurnIds = new Set(
+    snapshotTurns
+      .filter(
+        (turn) =>
+          turn.status === "inProgress" && enteredReviewModeItem(turn),
+      )
+      .map((turn) => turn.id),
+  );
+  const reviewOutputs = new Map<
+    string,
+    { entryId: string; text: string }
+  >();
   let projectionSequence = 0;
   let projectedThreadStatus = thread?.status;
 
@@ -593,6 +622,27 @@ export function projectCodexTimeline(
     turnStatus: CodexTurn["status"],
     streaming: boolean,
   ) => {
+    if (item.type === "enteredReviewMode") {
+      return;
+    }
+    if (item.type === "exitedReviewMode") {
+      const text = item.review.trim();
+      if (!text) return;
+      const review = {
+        entryId: `review-result:${turnId}`,
+        text,
+      };
+      reviewOutputs.set(turnId, review);
+      upsertAssistant(
+        review.entryId,
+        turnId,
+        text,
+        createdAt,
+        streaming,
+        "final_answer",
+      );
+      return;
+    }
     if (item.type === "userMessage") {
       const existingIndex = entryIndex.get(item.id);
       const existing =
@@ -606,6 +656,18 @@ export function projectCodexTimeline(
       return;
     }
     if (item.type === "agentMessage") {
+      const review = reviewOutputs.get(turnId);
+      if (review && review.text === item.text.trim()) {
+        upsertAssistant(
+          review.entryId,
+          turnId,
+          review.text,
+          createdAt,
+          streaming,
+          item.phase ?? "final_answer",
+        );
+        return;
+      }
       upsertAssistant(
         item.id,
         turnId,
@@ -893,7 +955,7 @@ export function projectCodexTimeline(
 
   if (thread) {
     const fallbackAt = thread.createdAt ?? 0;
-    for (const turn of thread.turns) reconcileTurn(turn, fallbackAt);
+    for (const turn of snapshotTurns) reconcileTurn(turn, fallbackAt);
   }
 
   // Live notification order belongs only to this SSE connection. Duplicate
@@ -903,6 +965,23 @@ export function projectCodexTimeline(
     seenSequences.add(event.sequence);
     projectionSequence += 1;
     const notification = event.notification;
+
+    if (notification.method === "turn/started") {
+      const { turn } = notification.params;
+      const reviewTurnId = [...activeInlineReviewTurnIds].at(-1);
+      if (reviewTurnId && turn.id !== reviewTurnId) {
+        internalReviewDelegateTurnIds.add(turn.id);
+        continue;
+      }
+    }
+
+    const notificationTurnId = nativeNotificationTurnId(notification);
+    if (
+      notificationTurnId &&
+      internalReviewDelegateTurnIds.has(notificationTurnId)
+    ) {
+      continue;
+    }
 
     if (notification.method === "turn/started") {
       const { turn } = notification.params;
@@ -926,6 +1005,13 @@ export function projectCodexTimeline(
 
     if (notification.method === "thread/status/changed") {
       projectedThreadStatus = notification.params.status;
+      if (
+        notification.params.status.type === "idle" ||
+        notification.params.status.type === "notLoaded" ||
+        notification.params.status.type === "systemError"
+      ) {
+        activeInlineReviewTurnIds.clear();
+      }
       continue;
     }
 
@@ -946,6 +1032,9 @@ export function projectCodexTimeline(
 
     if (notification.method === "item/started") {
       const { item, turnId, startedAtMs } = notification.params;
+      if (item.type === "enteredReviewMode") {
+        activeInlineReviewTurnIds.add(turnId);
+      }
       const createdAt = eventTimestamp(event, startedAtMs);
       const state = ensureTurn(
         turnId,
@@ -1178,6 +1267,7 @@ export function projectCodexTimeline(
     if (notification.method === "turn/completed") {
       const { turn } = notification.params;
       reconcileTurn(turn, event.receivedAt);
+      activeInlineReviewTurnIds.delete(turn.id);
       if (turn.status === "failed") {
         projectedThreadStatus = { type: "systemError" };
       } else if (projectedThreadStatus?.type !== "systemError") {
@@ -1245,6 +1335,17 @@ export function projectCodexTimeline(
     })),
     activeTurn,
   };
+}
+
+function nativeNotificationTurnId(
+  notification: CodexEventEnvelope["notification"],
+) {
+  const params = notification.params as {
+    turnId?: unknown;
+    turn?: { id?: unknown };
+  };
+  if (typeof params.turnId === "string") return params.turnId;
+  return typeof params.turn?.id === "string" ? params.turn.id : undefined;
 }
 
 export function projectCodexConversation(

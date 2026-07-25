@@ -1,6 +1,7 @@
 "use client";
 
 import { CodexNewSessionWorkspace } from "@/harnesses/codex/new-session-workspace";
+import type { EnvironmentSettingsTab } from "@/components/environment-settings";
 import type { CodexSession } from "@/harnesses/codex/types";
 import type { OperationLanguage, SendShortcut } from "@/lib/operation-ui";
 import type { CodingSession, Environment } from "@/lib/types";
@@ -14,6 +15,7 @@ interface NewSessionWorkspaceProps {
   onCreated: (session: CodingSession) => void;
   onOpenSettings: () => void;
   onOpenAgentHarnessSettings: () => void;
+  onOpenEnvironmentSettings: (tab: EnvironmentSettingsTab) => void;
   onToggleSidebar: () => void;
   terminalOpen: boolean;
   onToggleTerminal: () => void;

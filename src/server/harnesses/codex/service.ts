@@ -5,6 +5,10 @@ import path from "node:path";
 
 import type { CodexRolloutActivityFeed } from "@/harnesses/codex/rollout-activity";
 import {
+  enteredReviewModeItem,
+  visibleCodexTurns,
+} from "@/harnesses/codex/inline-review";
+import {
   CODEX_TRANSCRIPT_NOTIFICATION_METHODS,
   type CodexEventEnvelope,
   type CodexNativeSnapshot,
@@ -244,6 +248,7 @@ export class CodexService {
   >();
   private readonly interactiveEnvironmentOperations = new Map<string, number>();
   private readonly live = new Map<string, LiveNotificationState>();
+  private readonly activeInlineReviews = new Map<string, string>();
   private readonly events = new EventEmitter();
   private readonly startupRecoveries = new Set<Promise<void>>();
   private readonly advisoryLockScope = new AsyncLocalStorage<SandpiStore>();
@@ -316,6 +321,8 @@ export class CodexService {
     localImages?: EncodedCodexLocalImage[];
     modelId?: string;
     reasoningEffort?: string;
+    collaborationMode?: "plan";
+    serviceTier?: string;
   }) {
     const environmentRuntime = await this.ensureEnvironmentRuntimeForUser(
       input.userId,
@@ -329,7 +336,12 @@ export class CodexService {
         {
           method: "thread/start",
           id: rpcId("thread-start", sessionId),
-          params: threadConfiguration(input.modelId, input.reasoningEffort),
+          params: threadConfiguration({
+            modelId: input.modelId,
+            reasoningEffort: input.reasoningEffort,
+            collaborationMode: input.collaborationMode,
+            serviceTier: input.serviceTier,
+          }),
         },
         sessionId,
       );
@@ -363,6 +375,8 @@ export class CodexService {
         localImages: input.localImages,
         modelId: input.modelId,
         reasoningEffort: input.reasoningEffort,
+        collaborationMode: input.collaborationMode,
+        serviceTier: input.serviceTier,
       });
       this.ensureEnvironmentWorker(input.environment.id);
       return sessionId;
@@ -394,6 +408,124 @@ export class CodexService {
       kind: "turn",
       selectedNativeTurnId: input.nativeTurnId,
     });
+  }
+
+  /**
+   * Manual compaction is a native Codex operation on the existing Thread.
+   * Progress remains authoritative in the regular Turn/item event stream.
+   */
+  async compactSession(input: { userId: string; sessionId: string }) {
+    const response = await this.requestNativeSessionRpc({
+      ...input,
+      method: "thread/compact/start",
+      requestKind: "thread-compact",
+      requireIdleOperation: "compact",
+    });
+    if (response.error) {
+      throw new HttpError(
+        502,
+        "codex_compact_failed",
+        rpcErrorMessage(response.error),
+      );
+    }
+    return { accepted: true };
+  }
+
+  /**
+   * Reviews run inline on the current native Thread, so Sandpi keeps one
+   * product Session and receives the review as an ordinary native Turn.
+   */
+  async startReview(input: {
+    userId: string;
+    sessionId: string;
+    instructions?: string;
+  }) {
+    const response = await this.requestNativeSessionRpc({
+      userId: input.userId,
+      sessionId: input.sessionId,
+      method: "review/start",
+      requestKind: "review-start",
+      requireIdleOperation: "review",
+      params: {
+        delivery: "inline",
+        target: input.instructions
+          ? { type: "custom", instructions: input.instructions }
+          : { type: "uncommittedChanges" },
+      },
+    });
+    if (response.error) {
+      throw new HttpError(
+        502,
+        "codex_review_failed",
+        rpcErrorMessage(response.error),
+      );
+    }
+    const nativeTurnId = turnIdFromRpcResponse(response);
+    if (!nativeTurnId) {
+      throw new HttpError(
+        502,
+        "codex_review_failed",
+        "Codex did not return the native review Turn.",
+      );
+    }
+    return { nativeTurnId };
+  }
+
+  async readSessionGoal(input: { userId: string; sessionId: string }) {
+    const response = await this.requestNativeSessionRpc({
+      ...input,
+      method: "thread/goal/get",
+      requestKind: "thread-goal-get",
+    });
+    if (response.error) {
+      throw new HttpError(
+        502,
+        "codex_goal_read_failed",
+        rpcErrorMessage(response.error),
+      );
+    }
+    return nativeThreadGoal(response);
+  }
+
+  async setSessionGoal(input: {
+    userId: string;
+    sessionId: string;
+    objective: string;
+  }) {
+    const response = await this.requestNativeSessionRpc({
+      userId: input.userId,
+      sessionId: input.sessionId,
+      method: "thread/goal/set",
+      requestKind: "thread-goal-set",
+      params: {
+        objective: input.objective,
+        status: "active",
+      },
+    });
+    if (response.error) {
+      throw new HttpError(
+        502,
+        "codex_goal_update_failed",
+        rpcErrorMessage(response.error),
+      );
+    }
+    return nativeThreadGoal(response);
+  }
+
+  async clearSessionGoal(input: { userId: string; sessionId: string }) {
+    const response = await this.requestNativeSessionRpc({
+      ...input,
+      method: "thread/goal/clear",
+      requestKind: "thread-goal-clear",
+    });
+    if (response.error) {
+      throw new HttpError(
+        502,
+        "codex_goal_clear_failed",
+        rpcErrorMessage(response.error),
+      );
+    }
+    return { goal: null };
   }
 
   /**
@@ -467,10 +599,10 @@ export class CodexService {
             ...(input.selectedNativeTurnId
               ? { lastTurnId: input.selectedNativeTurnId }
               : {}),
-            ...threadConfiguration(
-              sourceRuntime.modelId,
-              sourceRuntime.reasoningEffort,
-            ),
+            ...threadConfiguration({
+              modelId: sourceRuntime.modelId,
+              reasoningEffort: sourceRuntime.reasoningEffort,
+            }),
           },
         },
         childSessionId,
@@ -914,6 +1046,8 @@ export class CodexService {
     modelId?: string;
     reasoningEffort?: string;
     clientMessageId?: string;
+    collaborationMode?: "plan";
+    serviceTier?: string;
   }) {
     const sessionRuntime = await this.requireNativeSessionRuntime(
       input.userId,
@@ -943,6 +1077,11 @@ export class CodexService {
         reasoningEffort:
           input.reasoningEffort ?? sessionRuntime.reasoningEffort,
       };
+      const turnCollaborationMode = nativeCollaborationMode(
+        input.collaborationMode,
+        turnRuntime.modelId,
+        turnRuntime.reasoningEffort,
+      );
       let turnDeliveryAttempted = false;
       let environmentRuntime: StoredEnvironmentRuntime | undefined;
       try {
@@ -982,6 +1121,10 @@ export class CodexService {
               ...(input.modelId ? { model: input.modelId } : {}),
               ...(input.reasoningEffort
                 ? { effort: input.reasoningEffort }
+                : {}),
+              ...turnCollaborationMode,
+              ...(input.serviceTier
+                ? { serviceTier: input.serviceTier }
                 : {}),
             },
           },
@@ -1173,6 +1316,11 @@ export class CodexService {
         "Codex returned an invalid native Session snapshot.",
       );
     }
+    rememberActiveInlineReview(
+      this.activeInlineReviews,
+      sessionRuntime.environmentId,
+      thread,
+    );
     const anchor = this.takeRpcAnchor(
       sessionRuntime.environmentId,
       requestId,
@@ -1568,7 +1716,11 @@ export class CodexService {
       codexRecordBelongsToRuntime(stored, record),
     );
     const epochChanged = environmentDecoderEpochChanged(stored, decoded.state);
-    const transitions = controlTransitions(records);
+    const transitions = controlTransitions(
+      records,
+      stored.id,
+      this.activeInlineReviews,
+    );
     const next = {
       ...stored,
       decoder: decoded.state,
@@ -1715,6 +1867,7 @@ export class CodexService {
     this.deferredExceptionalSessionReconciliations.clear();
     this.interactiveEnvironmentOperations.clear();
     this.mcpReloads.clear();
+    this.activeInlineReviews.clear();
   }
 
   private async ensureEnvironmentRuntimeForUser(
@@ -2980,6 +3133,75 @@ export class CodexService {
     return runtime as StoredSessionRuntime & { nativeSessionId: string };
   }
 
+  private async requireIdleNativeSessionRuntime(
+    userId: string,
+    sessionId: string,
+    operation: string,
+  ) {
+    const runtime = await this.requireNativeSessionRuntime(userId, sessionId);
+    if (
+      runtime.sessionStatus === "running" ||
+      runtime.activeNativeTurnId ||
+      runtime.pendingTurnPhase
+    ) {
+      throw new HttpError(
+        409,
+        `codex_${operation}_not_ready`,
+        `Wait for the current Codex Turn to finish before starting ${operation}.`,
+      );
+    }
+    return runtime;
+  }
+
+  private async requestNativeSessionRpc(input: {
+    userId: string;
+    sessionId: string;
+    method: string;
+    requestKind: string;
+    params?: Record<string, unknown>;
+    requireIdleOperation?: string;
+  }) {
+    const sessionRuntime = input.requireIdleOperation
+      ? await this.requireIdleNativeSessionRuntime(
+          input.userId,
+          input.sessionId,
+          input.requireIdleOperation,
+        )
+      : await this.requireNativeSessionRuntime(
+          input.userId,
+          input.sessionId,
+        );
+    const releaseInteractiveOperation =
+      this.retainInteractiveEnvironmentOperation(sessionRuntime.environmentId);
+    try {
+      const environmentRuntime = await this.environmentRuntimeForSession(
+        input.userId,
+        input.sessionId,
+      );
+      await this.ensureNativeSessionAttached(
+        environmentRuntime,
+        sessionRuntime,
+      );
+      const response = await this.requestCodex(
+        sessionRuntime.environmentId,
+        environmentRuntime,
+        {
+          method: input.method,
+          id: rpcId(input.requestKind, input.sessionId),
+          params: {
+            ...input.params,
+            threadId: sessionRuntime.nativeSessionId,
+          },
+        },
+        input.sessionId,
+      );
+      this.ensureEnvironmentWorker(sessionRuntime.environmentId);
+      return response;
+    } finally {
+      releaseInteractiveOperation();
+    }
+  }
+
   /**
    * Loaded Threads belong to one app-server attempt, not to the Environment
    * Sandbox generation alone. Session execution attaches only the requested
@@ -3021,7 +3243,10 @@ export class CodexService {
       id: rpcId("thread-resume", session.sessionId),
       params: {
         threadId: session.nativeSessionId,
-        ...threadConfiguration(session.modelId, session.reasoningEffort),
+        ...threadConfiguration({
+          modelId: session.modelId,
+          reasoningEffort: session.reasoningEffort,
+        }),
       },
     });
     if (response.error) throw nativeSessionAttachFailed(response.error);
@@ -3597,16 +3822,55 @@ export class CodexService {
 
 function controlTransitions(
   records: readonly DecodedCodexRecord[],
+  environmentId: string,
+  activeInlineReviews: Map<string, string>,
 ): CodexControlTransition[] {
   const transitions: CodexControlTransition[] = [];
   for (const record of records) {
     const method = record.message.method;
-    if (method !== "turn/started" && method !== "turn/completed") continue;
     const params = objectRecord(record.message.params);
-    const turn = objectRecord(params?.turn);
     const nativeSessionId = objectString(params, "threadId");
+    if (!nativeSessionId) continue;
+    const reviewKey = inlineReviewKey(environmentId, nativeSessionId);
+
+    if (method === "item/started") {
+      const item = objectRecord(params?.item);
+      const nativeTurnId = objectString(params, "turnId");
+      if (
+        nativeTurnId &&
+        objectString(item, "type") === "enteredReviewMode"
+      ) {
+        activeInlineReviews.set(reviewKey, nativeTurnId);
+        transitions.push({
+          type: "turnStarted",
+          nativeSessionId,
+          nativeTurnId,
+          startedAt: new Date(record.receivedAt),
+        });
+      }
+      continue;
+    }
+
+    if (method === "thread/status/changed") {
+      const status = objectString(objectRecord(params?.status), "type");
+      if (
+        status === "idle" ||
+        status === "notLoaded" ||
+        status === "systemError"
+      ) {
+        activeInlineReviews.delete(reviewKey);
+      }
+      continue;
+    }
+    if (method !== "turn/started" && method !== "turn/completed") continue;
+
+    const turn = objectRecord(params?.turn);
     const nativeTurnId = objectString(turn, "id");
-    if (!nativeSessionId || !nativeTurnId) continue;
+    if (!nativeTurnId) continue;
+    const activeReviewTurnId = activeInlineReviews.get(reviewKey);
+    if (activeReviewTurnId && activeReviewTurnId !== nativeTurnId) {
+      continue;
+    }
     if (method === "turn/started") {
       const startedAt = objectNumber(turn, "startedAt");
       transitions.push({
@@ -3637,9 +3901,38 @@ function controlTransitions(
             ? new Date(record.receivedAt)
             : new Date(completedAt * 1_000),
       });
+      if (activeReviewTurnId === nativeTurnId) {
+        activeInlineReviews.delete(reviewKey);
+      }
     }
   }
   return transitions;
+}
+
+function inlineReviewKey(environmentId: string, nativeSessionId: string) {
+  return `${environmentId}\0${nativeSessionId}`;
+}
+
+function rememberActiveInlineReview(
+  activeInlineReviews: Map<string, string>,
+  environmentId: string,
+  thread: CodexThread,
+) {
+  const key = inlineReviewKey(environmentId, thread.id);
+  const activeReview = visibleCodexTurns(thread.turns).findLast(
+    (turn) =>
+      turn.status === "inProgress" &&
+      enteredReviewModeItem(turn) !== undefined,
+  );
+  if (activeReview) {
+    activeInlineReviews.set(key, activeReview.id);
+  } else if (
+    thread.status.type === "idle" ||
+    thread.status.type === "notLoaded" ||
+    thread.status.type === "systemError"
+  ) {
+    activeInlineReviews.delete(key);
+  }
 }
 
 function isSuccessfulMcpOAuthLoginNotification(record: DecodedCodexRecord) {
@@ -3664,12 +3957,48 @@ function notificationThreadId(message: Record<string, unknown>) {
   );
 }
 
-function threadConfiguration(modelId?: string, reasoningEffort?: string) {
+function nativeCollaborationMode(
+  mode: "plan" | undefined,
+  modelId?: string,
+  reasoningEffort?: string,
+) {
+  if (!mode) return {};
+  if (!modelId) {
+    throw new HttpError(
+      400,
+      "codex_collaboration_mode_model_required",
+      "Codex Plan mode requires a model selected from the live model catalog.",
+    );
+  }
   return {
-    ...(modelId ? { model: modelId } : {}),
-    ...(reasoningEffort
-      ? { config: { model_reasoning_effort: reasoningEffort } }
+    collaborationMode: {
+      mode,
+      settings: {
+        model: modelId,
+        reasoning_effort: reasoningEffort ?? null,
+        developer_instructions: null,
+      },
+    },
+  };
+}
+
+function threadConfiguration(input: {
+  modelId?: string;
+  reasoningEffort?: string;
+  collaborationMode?: "plan";
+  serviceTier?: string;
+}) {
+  return {
+    ...(input.modelId ? { model: input.modelId } : {}),
+    ...(input.reasoningEffort
+      ? { config: { model_reasoning_effort: input.reasoningEffort } }
       : {}),
+    ...nativeCollaborationMode(
+      input.collaborationMode,
+      input.modelId,
+      input.reasoningEffort,
+    ),
+    ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
     cwd: "/workspace",
     approvalPolicy: "never",
     sandbox: "danger-full-access",
@@ -3697,6 +4026,31 @@ function threadFromRpcResponse(response: Record<string, unknown>) {
 
 function turnIdFromRpcResponse(response: Record<string, unknown>) {
   return objectString(objectRecord(objectRecord(response.result)?.turn), "id");
+}
+
+function nativeThreadGoal(response: Record<string, unknown>) {
+  const result = objectRecord(response.result);
+  const goalValue = result?.goal;
+  if (goalValue === null || goalValue === undefined) return { goal: null };
+  const goal = objectRecord(goalValue);
+  const objective = objectString(goal, "objective");
+  const status = objectString(goal, "status");
+  if (!goal || !objective || !status) {
+    throw new HttpError(
+      502,
+      "codex_goal_invalid_response",
+      "Codex returned an invalid native Session goal.",
+    );
+  }
+  return {
+    goal: {
+      objective,
+      status,
+      tokenBudget: objectNumber(goal, "tokenBudget") ?? null,
+      tokensUsed: objectNumber(goal, "tokensUsed") ?? 0,
+      timeUsedSeconds: objectNumber(goal, "timeUsedSeconds") ?? 0,
+    },
+  };
 }
 
 function requireRpcResult(
@@ -4275,14 +4629,15 @@ function nativeTurnForSessionProjection(
   thread: CodexThread,
   session: StoredSessionRuntime,
 ): NativeTurnProjection | undefined {
+  const visibleTurns = visibleCodexTurns(thread.turns);
   if (session.activeNativeTurnId) {
-    const turn = thread.turns.find(
+    const turn = visibleTurns.find(
       (candidate) => candidate.id === session.activeNativeTurnId,
     );
     if (turn) return { turn, matchedBy: "activeTurn" };
   }
   if (session.pendingTurnNativeTurnId) {
-    const turn = thread.turns.find(
+    const turn = visibleTurns.find(
       (candidate) => candidate.id === session.pendingTurnNativeTurnId,
     );
     if (turn) return { turn, matchedBy: "pendingTurn" };
@@ -4301,7 +4656,7 @@ function nativeTurnForClientMessage(
   thread: CodexThread,
   clientMessageId: string,
 ) {
-  return thread.turns.find((turn) =>
+  return visibleCodexTurns(thread.turns).find((turn) =>
     turn.items.some(
       (item) =>
         item.type === "userMessage" && item.clientId === clientMessageId,
@@ -4310,7 +4665,9 @@ function nativeTurnForClientMessage(
 }
 
 function latestInProgressNativeTurn(thread: CodexThread) {
-  return thread.turns.findLast((turn) => turn.status === "inProgress");
+  return visibleCodexTurns(thread.turns).findLast(
+    (turn) => turn.status === "inProgress",
+  );
 }
 
 function nativeTurnBelongsToReplacedRuntime(

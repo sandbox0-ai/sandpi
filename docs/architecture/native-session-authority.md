@@ -134,6 +134,14 @@ composer if submission fails before native acceptance, and is never written to
 PostgreSQL or treated as conversation authority. Tool Activity can therefore
 remain below its prompt without introducing a second transcript.
 
+The conversation keeps Codex commentary and tool items in native order inside
+Turn-level work disclosures. A running item owns the disclosure that already
+contains that item, even when a later steering message is present; Sandpi does
+not add a second empty Running disclosure. If an active Turn has no visible
+item yet, the UI renders a non-interactive status row. Compact tool rows become
+expandable only when they have meaningful output or payload data, show live
+details directly, and collapse when the tool or Turn completes.
+
 When Sandpi starts or recovers an Environment app-server, it restores and
 initializes only that shared transport. It does not bulk-read or resume product
 Threads. Conversation reconnect reads the selected persisted Thread directly
@@ -245,7 +253,10 @@ selects the native default model. Each model's `supportedReasoningEfforts` and
 `defaultReasoningEffort` drive the second picker directly. The selected effort
 is passed as `model_reasoning_effort` when creating or resuming a Thread and as
 `effort` on `turn/start`; the PostgreSQL Session runtime stores only this scalar
-control projection for recovery, never a separate model catalog.
+control projection for recovery, never a separate model catalog. The UI
+projection stably keeps the first native entry for each model id, so repeated
+pages or duplicate native records cannot create duplicate picker options. It
+does not deduplicate by a Sandpi-maintained display-name list.
 Every future coding-agent adapter follows the same capability-discovery rule:
 models and model-specific options come from the running native agent, unknown
 option values remain forward-compatible strings, and shared Sandpi code must
@@ -279,6 +290,53 @@ selection, matching the path the CLI leaves after replacing its temporary
 the native text input, not a filesystem-shaped app/plugin `mention`. Future
 coding-agent harnesses reuse the same Workspace search contract and own their
 corresponding visible composer and native input mapping.
+
+## Codex slash command boundary
+
+Slash completion is part of the Codex harness adapter, not the shared
+conversation dispatcher. The New Session and active Session composers use one
+Codex registry and parser, support pointer plus Up/Down/Tab/Enter/Escape
+interaction, and reject unknown commands locally instead of sending them to the
+model as user text.
+
+Commands preserve Sandpi product ownership where a browser-native surface
+already exists:
+
+- `/new` and `/clear` navigate to the Environment's New Session composer.
+- `/fork` calls native `thread/fork`, creates a child product Session and
+  selects it.
+- `/rename` and `/archive` update product Session metadata.
+- `/model`, `/mention`, `/diff`, `/skills`, `/mcp`, `/permissions` and `/usage`
+  open the corresponding composer, Inspector or Environment settings surface.
+- `/ide`, `/agent` and `/subagents` open the Workspace or native Activity
+  Inspector. `/logout` opens the Codex account connection so the user retains
+  the existing confirmation and reconnect flow.
+- `/copy` copies the latest assistant message, and `/status` shows a transient
+  composer-local summary instead of adding a timeline event.
+- `/compact` calls `thread/compact/start`; `/review` calls inline
+  `review/start` with either the native `uncommittedChanges` target or a custom
+  target. Their ordinary native Turn/item notifications remain authoritative.
+  Inline review can also expose Codex's private one-shot reviewer Turn beside
+  the completed review wrapper in `thread/read`. Sandpi derives that exact
+  adjacent relationship from the native review markers and matching output:
+  the wrapper remains the Session control Turn and owns the visible result,
+  while the private delegate is omitted from conversation and interruption
+  state. The raw native snapshot is not rewritten or persisted separately.
+- `/goal` reads, sets or clears native `thread/goal/*` state. `/fast` sends the
+  service-tier id returned by the selected model's live `model/list` entry and
+  is unavailable when Codex reports no Fast tier for that model.
+- `/plan` sends the selected live model and effort through Codex's native Plan
+  collaboration-mode settings. `/init` submits the harness-owned repository
+  instruction for creating or improving `AGENTS.md`.
+
+`/resume` is intentionally absent because Sandpi's sidebar and URL own product
+Session selection. `/side` and `/btw` are absent because Sandpi has no
+side-thread composer. TUI process, terminal styling, local-login and debug
+commands are likewise omitted rather than emulated or forwarded. Commands for
+Apps, plugins, hooks, memories, experimental flags, feedback and permanent
+deletion stay absent until Sandpi has a faithful product surface and lifecycle
+contract for them. A native mutation is hidden and rejected while the current
+Turn is active.
 
 Uploaded composer files use the Sandbox0 File API and live under
 `/workspace/.sandpi/uploads/{upload-id}/{safe-name}`. Sandpi validates a

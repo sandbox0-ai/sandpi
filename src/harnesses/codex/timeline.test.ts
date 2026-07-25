@@ -316,6 +316,73 @@ test("preserves steering messages between native activity blocks", () => {
   assert.equal(firstMessage.entry.clientId, "client-user-one");
 });
 
+test("keeps a live tool attached to its work block after a steering message", () => {
+  const turnId = "turn-with-live-tool-before-steering";
+  const startedAt = timestamp("2026-07-12T02:00:00Z");
+  const [group] = groupCodexTimelineByTurn({
+    entries: [
+      {
+        kind: "message",
+        id: "live-user-one",
+        clientId: "client-live-user-one",
+        turnId,
+        role: "user",
+        content: "Inspect the project",
+        createdAt: startedAt,
+      },
+      {
+        kind: "command",
+        id: "live-command",
+        turnId,
+        createdAt: startedAt,
+        status: "running",
+        command: "npm test",
+        cwd: "/workspace",
+        output: "",
+        outputTruncated: false,
+        exitCode: null,
+        durationMs: null,
+        exploration: false,
+        waitingForProcess: false,
+      },
+      {
+        kind: "message",
+        id: "live-user-two",
+        clientId: "client-live-user-two",
+        turnId,
+        role: "user",
+        content: "Also check lint",
+        createdAt: startedAt + 1,
+      },
+    ],
+    turns: [
+      {
+        turnId,
+        status: "inProgress",
+        startedAt,
+        completedAt: null,
+        durationMs: null,
+      },
+    ],
+    activeTurn: {
+      turnId,
+      startedAt,
+      state: "runningCommand",
+      detail: "npm test",
+    },
+  });
+
+  assert.ok(group);
+  assert.equal(group.blocks.length, 3);
+  const activity = group.blocks.find((block) => block.kind === "activity");
+  assert.ok(activity?.kind === "activity");
+  assert.equal(group.activeActivityBlockId, activity.id);
+  assert.deepEqual(
+    activity.entries.map((entry) => entry.id),
+    ["live-command"],
+  );
+});
+
 test("a replacement snapshot does not inherit a prior live suffix", () => {
   const oldTurnId = "turn-old-live";
   const oldSuffix = [
@@ -590,6 +657,190 @@ test("renders interruption from native thread/read without a synthetic recovery"
     "interrupted",
   );
   assert.equal(projected.entries[1]?.kind, "turnResult");
+});
+
+test("projects one completed inline review without its interrupted delegate", () => {
+  const review =
+    "The build succeeds, but project creation does not persist the name.";
+  const reviewTurn = liveTurn("turn-review", "completed", [
+    {
+      type: "enteredReviewMode",
+      id: "review-entered",
+      review: "current changes",
+    },
+    {
+      type: "exitedReviewMode",
+      id: "review-exited",
+      review,
+    },
+  ]);
+  reviewTurn.startedAt = null;
+  const delegate = liveTurn("turn-review-delegate", "interrupted", [
+    {
+      type: "userMessage",
+      id: "review-prompt-one",
+      clientId: null,
+      content: [
+        {
+          type: "text",
+          text: "Review the current code changes.",
+          text_elements: [],
+        },
+      ],
+    },
+    {
+      type: "userMessage",
+      id: "review-prompt-two",
+      clientId: null,
+      content: [
+        {
+          type: "text",
+          text: "Review the current code changes.",
+          text_elements: [],
+        },
+      ],
+    },
+    {
+      type: "agentMessage",
+      id: "review-delegate-result",
+      text: review,
+      phase: null,
+      memoryCitation: null,
+    },
+  ]);
+  delegate.completedAt = null;
+  delegate.durationMs = null;
+
+  const projected = projectCodexTimeline(
+    createMockCodexThread("thread-inline-review", [reviewTurn, delegate]),
+  );
+
+  assert.deepEqual(
+    projected.turns.map((turn) => turn.turnId),
+    ["turn-review"],
+  );
+  assert.equal(projected.activeTurn, undefined);
+  assert.deepEqual(
+    projected.entries.map((entry) => entry.kind),
+    ["message"],
+  );
+  const result = projected.entries[0];
+  assert.equal(result?.kind === "message" ? result.role : undefined, "assistant");
+  assert.equal(result?.kind === "message" ? result.content : undefined, review);
+});
+
+test("keeps the inline review delegate private in the live suffix", () => {
+  const review = "One prioritized review finding.";
+  const mainTurnId = "turn-review-live";
+  const delegateTurnId = "turn-review-live-delegate";
+  const entered: CodexThreadItem = {
+    type: "enteredReviewMode",
+    id: "review-live-entered",
+    review: "current changes",
+  };
+  const exited: CodexThreadItem = {
+    type: "exitedReviewMode",
+    id: "review-live-exited",
+    review,
+  };
+  const reviewMessage: CodexThreadItem = {
+    type: "agentMessage",
+    id: "review_rollout_assistant",
+    text: review,
+    phase: null,
+    memoryCitation: null,
+  };
+  const events = [
+    nativeEvent(80, {
+      method: "item/started",
+      params: {
+        threadId: nativeThread.id,
+        turnId: mainTurnId,
+        item: entered,
+        startedAtMs: Date.parse("2026-07-12T01:00:20Z"),
+      },
+    }),
+    nativeEvent(81, {
+      method: "item/completed",
+      params: {
+        threadId: nativeThread.id,
+        turnId: mainTurnId,
+        item: entered,
+        completedAtMs: Date.parse("2026-07-12T01:00:21Z"),
+      },
+    }),
+    nativeEvent(82, {
+      method: "turn/started",
+      params: {
+        threadId: nativeThread.id,
+        turn: liveTurn(delegateTurnId),
+      },
+    }),
+    nativeEvent(83, {
+      method: "item/started",
+      params: {
+        threadId: nativeThread.id,
+        turnId: mainTurnId,
+        item: exited,
+        startedAtMs: Date.parse("2026-07-12T01:00:40Z"),
+      },
+    }),
+    nativeEvent(84, {
+      method: "item/completed",
+      params: {
+        threadId: nativeThread.id,
+        turnId: mainTurnId,
+        item: exited,
+        completedAtMs: Date.parse("2026-07-12T01:00:41Z"),
+      },
+    }),
+    nativeEvent(85, {
+      method: "item/started",
+      params: {
+        threadId: nativeThread.id,
+        turnId: mainTurnId,
+        item: reviewMessage,
+        startedAtMs: Date.parse("2026-07-12T01:00:41Z"),
+      },
+    }),
+    nativeEvent(86, {
+      method: "item/completed",
+      params: {
+        threadId: nativeThread.id,
+        turnId: mainTurnId,
+        item: reviewMessage,
+        completedAtMs: Date.parse("2026-07-12T01:00:42Z"),
+      },
+    }),
+    nativeEvent(87, {
+      method: "turn/completed",
+      params: {
+        threadId: nativeThread.id,
+        turn: liveTurn(mainTurnId, "completed"),
+      },
+    }),
+  ];
+
+  const projected = projectCodexTimeline(
+    createMockCodexThread(nativeThread.id, []),
+    events,
+  );
+
+  assert.equal(projected.activeTurn, undefined);
+  assert.equal(
+    projected.turns.some((turn) => turn.turnId === delegateTurnId),
+    false,
+  );
+  assert.deepEqual(
+    projected.entries.map((entry) => entry.kind),
+    ["message"],
+  );
+  assert.equal(
+    projected.entries[0]?.kind === "message"
+      ? projected.entries[0].content
+      : undefined,
+    review,
+  );
 });
 
 test("projects a legacy completed Turn as failed when its Thread has a system error", () => {
