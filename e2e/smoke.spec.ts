@@ -3677,6 +3677,25 @@ test("renders the dedicated live Web IDE with Git state and changed lines", asyn
   let directoryLoads = 0;
   let managedDirectoryLoads = 0;
   let remoteFile = file;
+  const createRequests: Array<{
+    parentPath: string;
+    name: string;
+    kind: "file" | "folder";
+  }> = [];
+  const renameRequests: Array<{ path: string; name: string }> = [];
+  const deleteRequests: string[] = [];
+  const sourceEntries: WorkspaceDirectoryListing["entries"] = [
+    {
+      id: "demo",
+      name: "demo.ts",
+      path: "/workspace/src/demo.ts",
+      kind: "file",
+      language: "TypeScript",
+      size: "83 B",
+      modifiedAt: now,
+    },
+  ];
+  const createdFiles = new Map<string, WorkspaceIdeFile>();
   await page.route("**/api/v1/environments/**/files?*", async (route) => {
     const directoryPath = new URL(route.request().url()).searchParams.get(
       "path",
@@ -3706,25 +3725,101 @@ test("renders the dedicated live Web IDE with Git state and changed lines", asyn
     const listing: WorkspaceDirectoryListing = {
       path: "/workspace/src",
       refreshedAt: now,
-      entries: [
-        {
-          id: "demo",
-          name: "demo.ts",
-          path: "/workspace/src/demo.ts",
-          kind: "file",
-          language: "TypeScript",
-          size: "83 B",
-          modifiedAt: now,
-        },
-      ],
+      entries: sourceEntries,
     };
     await route.fulfill({ json: { data: listing } });
+  });
+  await page.route("**/api/v1/environments/**/ide/entries*", async (route) => {
+    const method = route.request().method();
+    if (method === "POST") {
+      const body = route.request().postDataJSON() as {
+        parentPath: string;
+        name: string;
+        kind: "file" | "folder";
+      };
+      createRequests.push(body);
+      const entryPath = `${body.parentPath}/${body.name}`;
+      const entry = {
+        id: Buffer.from(entryPath).toString("base64url"),
+        name: body.name,
+        path: entryPath,
+        kind: body.kind,
+      };
+      sourceEntries.push(entry);
+      if (body.kind === "file") {
+        createdFiles.set(entryPath, {
+          path: entryPath,
+          name: body.name,
+          revision: `sha256:${"e".repeat(43)}`,
+          encoding: "base64",
+          content: "",
+          kind: "text",
+          editable: true,
+          size: "0 B",
+          modifiedAt: now,
+          lineChanges: [],
+        });
+      }
+      await route.fulfill({ json: { data: entry } });
+      return;
+    }
+    if (method === "PUT") {
+      const body = route.request().postDataJSON() as {
+        path: string;
+        name: string;
+      };
+      renameRequests.push(body);
+      const index = sourceEntries.findIndex((entry) => entry.path === body.path);
+      expect(index).toBeGreaterThanOrEqual(0);
+      const source = sourceEntries[index]!;
+      const destinationPath = `${body.path.slice(0, body.path.lastIndexOf("/"))}/${body.name}`;
+      const renamed = {
+        ...source,
+        id: Buffer.from(destinationPath).toString("base64url"),
+        name: body.name,
+        path: destinationPath,
+      };
+      sourceEntries[index] = renamed;
+      const createdFile = createdFiles.get(body.path);
+      if (createdFile) {
+        createdFiles.delete(body.path);
+        createdFiles.set(destinationPath, {
+          ...createdFile,
+          path: destinationPath,
+          name: body.name,
+        });
+      }
+      await route.fulfill({ json: { data: renamed } });
+      return;
+    }
+    expect(method).toBe("DELETE");
+    const entryPath = new URL(route.request().url()).searchParams.get("path");
+    expect(entryPath).toBeTruthy();
+    deleteRequests.push(entryPath ?? "");
+    const index = sourceEntries.findIndex((entry) => entry.path === entryPath);
+    expect(index).toBeGreaterThanOrEqual(0);
+    const [deleted] = sourceEntries.splice(index, 1);
+    for (const createdPath of [...createdFiles.keys()]) {
+      if (
+        createdPath === entryPath ||
+        createdPath.startsWith(`${entryPath}/`)
+      ) {
+        createdFiles.delete(createdPath);
+      }
+    }
+    await route.fulfill({ json: { data: deleted } });
   });
   await page.route("**/api/v1/environments/**/ide/file?*", async (route) => {
     const filePath = new URL(route.request().url()).searchParams.get("path");
     if (filePath === managedFile.path) {
       expect(route.request().method()).toBe("GET");
       await route.fulfill({ json: { data: managedFile } });
+      return;
+    }
+    const createdFile = filePath ? createdFiles.get(filePath) : undefined;
+    if (createdFile) {
+      expect(route.request().method()).toBe("GET");
+      await route.fulfill({ json: { data: createdFile } });
       return;
     }
     if (route.request().method() === "PUT") {
@@ -3827,7 +3922,9 @@ test("renders the dedicated live Web IDE with Git state and changed lines", asyn
   const expandFolder = folderMenu.getByRole("menuitem", {
     name: "Expand Folder",
   });
-  await expect(expandFolder).toBeFocused();
+  await expect(
+    folderMenu.getByRole("menuitem", { name: "New File" }),
+  ).toBeFocused();
   await expandFolder.click();
   await expect(demoFile).toBeVisible();
   expect(directoryLoads).toBe(directoryLoadsBeforeContextActions);
@@ -3837,6 +3934,126 @@ test("renders the dedicated live Web IDE with Git state and changed lines", asyn
   await expect
     .poll(() => directoryLoads)
     .toBeGreaterThan(directoryLoadsBeforeContextActions);
+
+  await sourceFolder.click({ button: "right" });
+  await folderMenu.getByRole("menuitem", { name: "New Folder" }).click();
+  const newFolderName = page.getByRole("textbox", {
+    name: "New folder in /workspace/src",
+  });
+  await expect(newFolderName).toBeFocused();
+  await newFolderName.fill("components");
+  await newFolderName.press("Enter");
+  await expect(
+    page.locator('button[title="/workspace/src/components"]'),
+  ).toBeVisible();
+  expect(createRequests.at(-1)).toEqual({
+    parentPath: "/workspace/src",
+    name: "components",
+    kind: "folder",
+  });
+  const componentsFolder = page.locator(
+    'button[title="/workspace/src/components"]',
+  );
+  await componentsFolder.click({ button: "right" });
+  const componentsMenu = page.getByRole("menu", {
+    name: "Actions for components",
+  });
+  await componentsMenu.getByRole("menuitem", { name: "Rename" }).click();
+  const renameFolderName = page.getByRole("textbox", {
+    name: "Rename /workspace/src/components",
+  });
+  await expect(renameFolderName).toHaveValue("components");
+  await renameFolderName.fill("ui");
+  await renameFolderName.press("Enter");
+  const uiFolder = page.locator('button[title="/workspace/src/ui"]');
+  await expect(uiFolder).toBeVisible();
+  await expect(componentsFolder).toHaveCount(0);
+  expect(renameRequests.at(-1)).toEqual({
+    path: "/workspace/src/components",
+    name: "ui",
+  });
+
+  await uiFolder.click({ button: "right" });
+  const uiFolderMenu = page.getByRole("menu", { name: "Actions for ui" });
+  page.once("dialog", async (dialog) => {
+    expect(dialog.message()).toContain("and everything inside it");
+    await dialog.accept();
+  });
+  await uiFolderMenu.getByRole("menuitem", { name: "Delete" }).click();
+  await expect(uiFolder).toHaveCount(0);
+  expect(deleteRequests.at(-1)).toBe("/workspace/src/ui");
+
+  await sourceFolder.click({ button: "right" });
+  await folderMenu.getByRole("menuitem", { name: "New File" }).click();
+  const newFileForm = page.getByRole("form", {
+    name: "New file in /workspace/src",
+  });
+  const newFileName = newFileForm.getByRole("textbox");
+  await newFileName.fill("demo.ts");
+  await newFileName.press("Enter");
+  await expect(newFileForm.getByRole("alert")).toHaveText(
+    "“demo.ts” already exists in this folder.",
+  );
+  expect(createRequests).toHaveLength(1);
+  await newFileName.fill("notes.md");
+  await newFileName.press("Enter");
+  await expect(
+    page.locator('button[title="/workspace/src/notes.md"]'),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("tab", { name: /notes\.md/ }),
+  ).toHaveAttribute("aria-selected", "true");
+  expect(createRequests.at(-1)).toEqual({
+    parentPath: "/workspace/src",
+    name: "notes.md",
+    kind: "file",
+  });
+  const notesFile = page.locator('button[title="/workspace/src/notes.md"]');
+  const notesEditor = page.locator(".monaco-editor").first();
+  await expect(notesEditor).toBeVisible();
+  await notesEditor.click();
+  await page.keyboard.insertText("# local notes\n");
+  const notesSave = page.getByRole("button", { name: /Save file/ });
+  await expect(notesSave).toBeEnabled();
+
+  await notesFile.click({ button: "right" });
+  const notesMenu = page.getByRole("menu", { name: "Actions for notes.md" });
+  await notesMenu.getByRole("menuitem", { name: "Rename" }).click();
+  const renameFileName = page.getByRole("textbox", {
+    name: "Rename /workspace/src/notes.md",
+  });
+  await renameFileName.fill("renamed.md");
+  await renameFileName.press("Enter");
+  const renamedFile = page.locator(
+    'button[title="/workspace/src/renamed.md"]',
+  );
+  await expect(renamedFile).toBeVisible();
+  await expect(notesFile).toHaveCount(0);
+  await expect(
+    page.getByRole("tab", { name: /renamed\.md/ }),
+  ).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByText("# local notes")).toBeVisible();
+  await expect(notesSave).toBeEnabled();
+  await expect(page).toHaveURL(
+    /path=%2Fworkspace%2Fsrc%2Frenamed\.md/,
+  );
+  expect(renameRequests.at(-1)).toEqual({
+    path: "/workspace/src/notes.md",
+    name: "renamed.md",
+  });
+
+  await renamedFile.click({ button: "right" });
+  const renamedFileMenu = page.getByRole("menu", {
+    name: "Actions for renamed.md",
+  });
+  page.once("dialog", async (dialog) => {
+    expect(dialog.message()).toContain("1 open file has unsaved changes");
+    await dialog.accept();
+  });
+  await renamedFileMenu.getByRole("menuitem", { name: "Delete" }).click();
+  await expect(renamedFile).toHaveCount(0);
+  await expect(page.getByRole("tab", { name: /renamed\.md/ })).toHaveCount(0);
+  expect(deleteRequests.at(-1)).toBe("/workspace/src/renamed.md");
 
   await demoFile.focus();
   await page.keyboard.press("Shift+F10");
@@ -3889,6 +4106,7 @@ test("renders the dedicated live Web IDE with Git state and changed lines", asyn
   const download = await downloadPromise;
   expect(download.suggestedFilename()).toBe("demo.ts");
 
+  await demoFile.click();
   await expect(page.getByText('const transport = "websocket";')).toBeVisible();
   await expect(page.locator(".sandpi-line-modified")).toHaveCount(1);
   await expect(page.locator(".sandpi-line-added")).toHaveCount(1);
@@ -3942,7 +4160,25 @@ test("renders the dedicated live Web IDE with Git state and changed lines", asyn
   await expect(
     page.getByText("No Git repositories in this Workspace", { exact: true }),
   ).toBeVisible();
-  await page.locator('button[title="/workspace/.sandpi"]').click();
+  const managedFolder = page.locator('button[title="/workspace/.sandpi"]');
+  await managedFolder.click({ button: "right" });
+  const managedFolderMenu = page.getByRole("menu", {
+    name: "Actions for .sandpi",
+  });
+  await expect(
+    managedFolderMenu.getByRole("menuitem", { name: "New File" }),
+  ).toHaveCount(0);
+  await expect(
+    managedFolderMenu.getByRole("menuitem", { name: "New Folder" }),
+  ).toHaveCount(0);
+  await expect(
+    managedFolderMenu.getByRole("menuitem", { name: "Rename" }),
+  ).toHaveCount(0);
+  await expect(
+    managedFolderMenu.getByRole("menuitem", { name: "Delete" }),
+  ).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await managedFolder.click();
   const managedFileButton = page.locator(
     'button[title="/workspace/.sandpi/config.json"]',
   );

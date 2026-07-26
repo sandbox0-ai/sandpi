@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  isWorkspaceGitMetadataPath,
   isWorkspaceIdePathHidden,
   isWorkspaceInternalPath,
   normalizeWorkspacePath,
@@ -19,6 +20,14 @@ test("protects only the Sandpi-owned Workspace root and its descendants", () => 
   assert.equal(isWorkspaceInternalPath("/workspace/.sandpi-other/state"), false);
   assert.equal(isWorkspaceInternalPath("/workspace/project/.sandpi/state"), false);
   assert.equal(isWorkspaceInternalPath("/workspace/src/index.ts"), false);
+});
+
+test("identifies Git administrative paths without protecting ordinary dot-files", () => {
+  assert.equal(isWorkspaceGitMetadataPath("/workspace/.git"), true);
+  assert.equal(isWorkspaceGitMetadataPath("/workspace/project/.git/config"), true);
+  assert.equal(isWorkspaceGitMetadataPath("/workspace/project/.github"), false);
+  assert.equal(isWorkspaceGitMetadataPath("/workspace/.gitignore"), false);
+  assert.equal(isWorkspaceGitMetadataPath("/etc/.git/config"), false);
 });
 
 test("keeps dot-paths visible while excluding dependency trees", () => {

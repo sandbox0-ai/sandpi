@@ -25,8 +25,10 @@ import {
 } from "lucide-react";
 import dynamic from "next/dynamic";
 import {
+  type FormEvent,
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -63,8 +65,10 @@ import type {
   WorkspaceFile,
   WorkspaceGitFileChange,
   WorkspaceGitRepository,
+  WorkspaceIdeCreateEntryRequest,
   WorkspaceIdeEvent,
   WorkspaceIdeFile,
+  WorkspaceIdeRenameEntryRequest,
   WorkspaceIdeSnapshot,
   WorkspaceIdeWriteRequest,
 } from "@/lib/types";
@@ -156,6 +160,27 @@ const copy = {
     loading: "Loading Workspace…",
     loadingFolder: "Loading folder…",
     folderUnavailable: "Folder unavailable. Click to retry.",
+    newFileName: (parentPath: string) => `New file in ${parentPath}`,
+    newFolderName: (parentPath: string) => `New folder in ${parentPath}`,
+    fileNamePlaceholder: "File name",
+    folderNamePlaceholder: "Folder name",
+    entryNameRequired: "Enter a name.",
+    entryNameInvalid: "Names cannot be . or .. or contain slashes.",
+    entryExists: (name: string) => `“${name}” already exists in this folder.`,
+    entryCreateFailed: "The Workspace entry could not be created.",
+    renameEntryName: (path: string) => `Rename ${path}`,
+    entryRenameFailed: "The Workspace entry could not be renamed.",
+    entryRenamed: (name: string) => `Renamed to ${name}`,
+    entryDeleted: (name: string) => `${name} deleted`,
+    deleteConfirm: (
+      name: string,
+      kind: "file" | "folder",
+      dirtyCount: number,
+    ) =>
+      dirtyCount > 0
+        ? `Delete “${name}”${kind === "folder" ? " and everything inside it" : ""}? ${dirtyCount} open ${dirtyCount === 1 ? "file has" : "files have"} unsaved changes. This cannot be undone.`
+        : `Delete “${name}”${kind === "folder" ? " and everything inside it" : ""}? This cannot be undone.`,
+    deleteFailed: "The Workspace entry could not be deleted.",
     selectFile: "Select a file from workspace.",
     staged: "staged",
     unstaged: "working tree",
@@ -198,6 +223,27 @@ const copy = {
     loading: "正在加载 Workspace…",
     loadingFolder: "正在加载文件夹…",
     folderUnavailable: "文件夹暂时不可用，点击重试。",
+    newFileName: (parentPath: string) => `在 ${parentPath} 中新建文件`,
+    newFolderName: (parentPath: string) => `在 ${parentPath} 中新建文件夹`,
+    fileNamePlaceholder: "文件名",
+    folderNamePlaceholder: "文件夹名",
+    entryNameRequired: "请输入名称。",
+    entryNameInvalid: "名称不能是 . 或 ..，也不能包含斜杠。",
+    entryExists: (name: string) => `此文件夹中已存在“${name}”。`,
+    entryCreateFailed: "无法创建 Workspace 条目。",
+    renameEntryName: (path: string) => `重命名 ${path}`,
+    entryRenameFailed: "无法重命名 Workspace 条目。",
+    entryRenamed: (name: string) => `已重命名为 ${name}`,
+    entryDeleted: (name: string) => `已删除 ${name}`,
+    deleteConfirm: (
+      name: string,
+      kind: "file" | "folder",
+      dirtyCount: number,
+    ) =>
+      dirtyCount > 0
+        ? `确定删除“${name}”${kind === "folder" ? "及其中的所有内容" : ""}吗？其中 ${dirtyCount} 个已打开文件有未保存修改。此操作无法撤销。`
+        : `确定删除“${name}”${kind === "folder" ? "及其中的所有内容" : ""}吗？此操作无法撤销。`,
+    deleteFailed: "无法删除 Workspace 条目。",
     selectFile: "从 workspace 中选择文件。",
     staged: "已暂存",
     unstaged: "工作区",
@@ -209,6 +255,61 @@ function flattenFiles(files: WorkspaceFile[]): WorkspaceFile[] {
     file,
     ...(file.children ? flattenFiles(file.children) : []),
   ]);
+}
+
+function workspacePathAtOrBelow(candidate: string, root: string) {
+  return candidate === root || candidate.startsWith(`${root}/`);
+}
+
+function replaceWorkspacePathPrefix(
+  candidate: string,
+  source: string,
+  destination: string,
+) {
+  return workspacePathAtOrBelow(candidate, source)
+    ? `${destination}${candidate.slice(source.length)}`
+    : candidate;
+}
+
+function workspaceParentPath(filePath: string) {
+  const separator = filePath.lastIndexOf("/");
+  return separator <= WORKSPACE_ROOT.length
+    ? WORKSPACE_ROOT
+    : filePath.slice(0, separator);
+}
+
+function remapWorkspaceIdeFile(
+  file: WorkspaceIdeFile,
+  sourcePath: string,
+  destinationPath: string,
+): WorkspaceIdeFile {
+  const nextPath = replaceWorkspacePathPrefix(
+    file.path,
+    sourcePath,
+    destinationPath,
+  );
+  return {
+    ...file,
+    path: nextPath,
+    name: nextPath.split("/").at(-1) ?? file.name,
+    git: file.git
+      ? {
+          ...file.git,
+          path: replaceWorkspacePathPrefix(
+            file.git.path,
+            sourcePath,
+            destinationPath,
+          ),
+          originalPath: file.git.originalPath
+            ? replaceWorkspacePathPrefix(
+                file.git.originalPath,
+                sourcePath,
+                destinationPath,
+              )
+            : undefined,
+        }
+      : undefined,
+  };
 }
 
 type WorkspaceDirectoryListings = Record<string, WorkspaceFile[]>;
@@ -508,6 +609,156 @@ function environmentHref(environmentId: string, sessionId?: string) {
   return `/?${search.toString()}`;
 }
 
+function WorkspaceTreeNameForm({
+  language,
+  mode,
+  path,
+  kind,
+  depth,
+  initialName = "",
+  existingNames,
+  onSubmit,
+  onCancel,
+}: {
+  language: OperationLanguage;
+  mode: "create" | "rename";
+  path: string;
+  kind: "file" | "folder";
+  depth: number;
+  initialName?: string;
+  existingNames: ReadonlySet<string>;
+  onSubmit: (name: string) => Promise<void>;
+  onCancel: () => void;
+}) {
+  const ui = copy[language];
+  const inputRef = useRef<HTMLInputElement>(null);
+  const errorId = useId();
+  const [name, setName] = useState(initialName);
+  const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      const input = inputRef.current;
+      if (!input) return;
+      input.focus();
+      if (mode === "rename") {
+        const extensionIndex =
+          kind === "file" ? initialName.lastIndexOf(".") : -1;
+        input.setSelectionRange(
+          0,
+          extensionIndex > 0 ? extensionIndex : initialName.length,
+        );
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [initialName, kind, mode]);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (submitting) return;
+    const normalizedName = name.trim();
+    if (!normalizedName) {
+      setError(ui.entryNameRequired);
+      return;
+    }
+    if (
+      normalizedName === "." ||
+      normalizedName === ".." ||
+      /[/\u0000-\u001f\u007f]/.test(normalizedName)
+    ) {
+      setError(ui.entryNameInvalid);
+      return;
+    }
+    if (mode === "rename" && normalizedName === initialName) {
+      onCancel();
+      return;
+    }
+    if (existingNames.has(normalizedName)) {
+      setError(ui.entryExists(normalizedName));
+      return;
+    }
+
+    setSubmitting(true);
+    setError("");
+    try {
+      await onSubmit(normalizedName);
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : mode === "create"
+            ? ui.entryCreateFailed
+            : ui.entryRenameFailed,
+      );
+      setSubmitting(false);
+      window.requestAnimationFrame(() => inputRef.current?.focus());
+    }
+  }
+
+  const inputLabel =
+    mode === "rename"
+      ? ui.renameEntryName(path)
+      : kind === "file"
+        ? ui.newFileName(path)
+        : ui.newFolderName(path);
+
+  return (
+    <form
+      className={styles.treeNameForm}
+      style={{ paddingLeft: `${7 + depth * 13}px` }}
+      aria-label={inputLabel}
+      onSubmit={submit}
+      onKeyDown={(event) => {
+        if (event.key !== "Escape" || submitting) return;
+        event.preventDefault();
+        event.stopPropagation();
+        onCancel();
+      }}
+    >
+      <span className={styles.disclosure} />
+      <span className={styles.fileIcon}>
+        {submitting ? (
+          <RefreshCw
+            size={12}
+            className={styles.directorySpinner}
+            aria-hidden="true"
+          />
+        ) : kind === "file" ? (
+          <File size={13} aria-hidden="true" />
+        ) : (
+          <Folder size={13} aria-hidden="true" />
+        )}
+      </span>
+      <input
+        ref={inputRef}
+        type="text"
+        name="workspace-entry-name"
+        autoComplete="off"
+        spellCheck={false}
+        maxLength={255}
+        value={name}
+        placeholder={
+          kind === "file" ? ui.fileNamePlaceholder : ui.folderNamePlaceholder
+        }
+        aria-label={inputLabel}
+        aria-invalid={Boolean(error)}
+        aria-describedby={error ? errorId : undefined}
+        disabled={submitting}
+        onChange={(event) => {
+          setName(event.currentTarget.value);
+          if (error) setError("");
+        }}
+      />
+      {error ? (
+        <span id={errorId} className={styles.treeNameError} role="alert">
+          {error}
+        </span>
+      ) : null}
+    </form>
+  );
+}
+
 function IdeFileTree({
   language,
   environmentId,
@@ -525,6 +776,9 @@ function IdeFileTree({
   loadingFolderLabel,
   folderUnavailableLabel,
   onDownloadFile,
+  onCreateEntry,
+  onRenameEntry,
+  onDeleteEntry,
 }: {
   language: OperationLanguage;
   environmentId: string;
@@ -542,15 +796,36 @@ function IdeFileTree({
   loadingFolderLabel: string;
   folderUnavailableLabel: string;
   onDownloadFile: (path: string) => void;
+  onCreateEntry: (
+    parentPath: string,
+    name: string,
+    kind: "file" | "folder",
+  ) => Promise<void>;
+  onRenameEntry: (file: WorkspaceFile, name: string) => Promise<WorkspaceFile>;
+  onDeleteEntry: (file: WorkspaceFile) => Promise<boolean>;
 }) {
+  const ui = copy[language];
   const [expanded, setExpanded] = useState<Record<string, boolean>>({
     "/workspace": true,
   });
   const [contextMenu, setContextMenu] =
     useState<WorkspaceTreeContextMenuTarget>();
+  const [createTarget, setCreateTarget] = useState<{
+    parentPath: string;
+    kind: "file" | "folder";
+    anchor: HTMLButtonElement;
+    requestId: number;
+  }>();
+  const createRequestIdRef = useRef(0);
+  const [renameTarget, setRenameTarget] = useState<{
+    file: WorkspaceFile;
+    requestId: number;
+  }>();
+  const renameRequestIdRef = useRef(0);
   const [announcement, setAnnouncement] = useState("");
   const announcementTimerRef = useRef<number | null>(null);
   const selectedRowRef = useRef<HTMLButtonElement | null>(null);
+  const rowRefs = useRef(new Map<string, HTMLButtonElement>());
   const changedDescendants = useMemo(() => {
     const counts = new Map<string, number>();
     for (const changedPath of changes.keys()) {
@@ -644,6 +919,51 @@ function IdeFileTree({
     setContextMenu(undefined);
   }, []);
 
+  function startCreate(
+    parentPath: string,
+    kind: "file" | "folder",
+    anchor: HTMLButtonElement,
+  ) {
+    setFolderExpanded(parentPath, true);
+    setRenameTarget(undefined);
+    createRequestIdRef.current += 1;
+    setCreateTarget({
+      parentPath,
+      kind,
+      anchor,
+      requestId: createRequestIdRef.current,
+    });
+  }
+
+  function cancelCreate() {
+    const anchor = createTarget?.anchor;
+    setCreateTarget(undefined);
+    if (anchor) {
+      window.requestAnimationFrame(() =>
+        anchor.focus({ preventScroll: true }),
+      );
+    }
+  }
+
+  function startRename(file: WorkspaceFile) {
+    setCreateTarget(undefined);
+    renameRequestIdRef.current += 1;
+    setRenameTarget({
+      file,
+      requestId: renameRequestIdRef.current,
+    });
+  }
+
+  function cancelRename() {
+    const filePath = renameTarget?.file.path;
+    setRenameTarget(undefined);
+    if (filePath) {
+      window.requestAnimationFrame(() =>
+        rowRefs.current.get(filePath)?.focus({ preventScroll: true }),
+      );
+    }
+  }
+
   function render(items: WorkspaceFile[], depth: number) {
     return items.map((file) => {
       const folder = file.kind === "folder";
@@ -654,102 +974,171 @@ function IdeFileTree({
       const change = changes.get(file.path);
       const repository = repositories.get(file.path);
       const descendantCount = changedDescendants.get(file.path) ?? 0;
+      const isRenaming = renameTarget?.file.path === file.path;
       return (
         <div key={file.path}>
-          <button
-            type="button"
-            ref={file.path === selectedPath ? selectedRowRef : undefined}
-            className={`${styles.treeRow} ${
-              file.path === selectedPath ? styles.selected : ""
-            } ${change?.kind === "deleted" ? styles.deletedFile : ""} ${
-              contextMenu?.file.path === file.path ? styles.contextTarget : ""
-            }`}
-            aria-current={
-              !folder && file.path === selectedPath ? "page" : undefined
-            }
-            aria-expanded={folder ? isExpanded : undefined}
-            aria-haspopup="menu"
-            style={{ paddingLeft: `${7 + depth * 13}px` }}
-            title={file.path}
-            onClick={() => {
-              if (folder) {
-                setFolderExpanded(file.path, !isExpanded);
-              } else {
-                onOpen(file.path);
-              }
-            }}
-            onContextMenu={(event) => {
-              event.preventDefault();
-              openContextMenu(file, isExpanded, event.currentTarget, {
-                x: event.clientX,
-                y: event.clientY,
-              });
-            }}
-            onKeyDown={(event) => {
-              if (
-                event.key !== "ContextMenu" &&
-                !(event.shiftKey && event.key === "F10")
-              ) {
-                return;
-              }
-              event.preventDefault();
-              openContextMenu(file, isExpanded, event.currentTarget);
-            }}
-          >
-            <span className={styles.disclosure}>
-              {folder ? (
-                isLoading ? (
-                  <RefreshCw size={11} className={styles.directorySpinner} />
-                ) : isExpanded ? (
-                  <ChevronDown size={12} />
-                ) : (
-                  <ChevronRight size={12} />
+          {isRenaming ? (
+            <WorkspaceTreeNameForm
+              key={renameTarget.requestId}
+              language={language}
+              mode="rename"
+              path={file.path}
+              kind={file.kind}
+              depth={depth}
+              initialName={file.name}
+              existingNames={
+                new Set(
+                  items
+                    .filter((candidate) => candidate.path !== file.path)
+                    .map((candidate) => candidate.name),
                 )
+              }
+              onCancel={cancelRename}
+              onSubmit={async (name) => {
+                const renamed = await onRenameEntry(file, name);
+                setExpanded((current) =>
+                  Object.fromEntries(
+                    Object.entries(current).map(([filePath, value]) => [
+                      replaceWorkspacePathPrefix(
+                        filePath,
+                        file.path,
+                        renamed.path,
+                      ),
+                      value,
+                    ]),
+                  ),
+                );
+                setRenameTarget(undefined);
+                announce(ui.entryRenamed(renamed.name));
+                window.requestAnimationFrame(() =>
+                  rowRefs.current
+                    .get(renamed.path)
+                    ?.focus({ preventScroll: true }),
+                );
+              }}
+            />
+          ) : (
+            <button
+              type="button"
+              ref={(element) => {
+                if (element) rowRefs.current.set(file.path, element);
+                else rowRefs.current.delete(file.path);
+                if (file.path === selectedPath) {
+                  selectedRowRef.current = element;
+                }
+              }}
+              className={`${styles.treeRow} ${
+                file.path === selectedPath ? styles.selected : ""
+              } ${change?.kind === "deleted" ? styles.deletedFile : ""} ${
+                contextMenu?.file.path === file.path ? styles.contextTarget : ""
+              }`}
+              aria-current={
+                !folder && file.path === selectedPath ? "page" : undefined
+              }
+              aria-expanded={folder ? isExpanded : undefined}
+              aria-haspopup="menu"
+              style={{ paddingLeft: `${7 + depth * 13}px` }}
+              title={file.path}
+              onClick={() => {
+                if (folder) {
+                  setFolderExpanded(file.path, !isExpanded);
+                } else {
+                  onOpen(file.path);
+                }
+              }}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                openContextMenu(file, isExpanded, event.currentTarget, {
+                  x: event.clientX,
+                  y: event.clientY,
+                });
+              }}
+              onKeyDown={(event) => {
+                if (
+                  event.key !== "ContextMenu" &&
+                  !(event.shiftKey && event.key === "F10")
+                ) {
+                  return;
+                }
+                event.preventDefault();
+                openContextMenu(file, isExpanded, event.currentTarget);
+              }}
+            >
+              <span className={styles.disclosure}>
+                {folder ? (
+                  isLoading ? (
+                    <RefreshCw size={11} className={styles.directorySpinner} />
+                  ) : isExpanded ? (
+                    <ChevronDown size={12} />
+                  ) : (
+                    <ChevronRight size={12} />
+                  )
+                ) : null}
+              </span>
+              <span className={styles.fileIcon}>
+                {fileIcon(file.name, folder, isExpanded)}
+              </span>
+              <span className={styles.fileName}>{file.name}</span>
+              {change ? (
+                <span className={`${styles.statusCode} ${styles[change.kind]}`}>
+                  {statusCode(change)}
+                </span>
+              ) : repository ? (
+                <span
+                  className={styles.repositoryBadge}
+                  title={`${workspaceRepositoryLabel(repository.root)} · ${
+                    repository.branch ?? "detached HEAD"
+                  }`}
+                >
+                  <GitBranch size={9} />
+                  {repository.branch ?? "Git"}
+                </span>
+              ) : folder && descendantCount > 0 ? (
+                <span className={styles.descendantCount}>{descendantCount}</span>
               ) : null}
-            </span>
-            <span className={styles.fileIcon}>
-              {fileIcon(file.name, folder, isExpanded)}
-            </span>
-            <span className={styles.fileName}>{file.name}</span>
-            {change ? (
-              <span className={`${styles.statusCode} ${styles[change.kind]}`}>
-                {statusCode(change)}
-              </span>
-            ) : repository ? (
-              <span
-                className={styles.repositoryBadge}
-                title={`${workspaceRepositoryLabel(repository.root)} · ${
-                  repository.branch ?? "detached HEAD"
-                }`}
-              >
-                <GitBranch size={9} />
-                {repository.branch ?? "Git"}
-              </span>
-            ) : folder && descendantCount > 0 ? (
-              <span className={styles.descendantCount}>{descendantCount}</span>
-            ) : null}
-          </button>
+            </button>
+          )}
           {folder && isExpanded ? (
-            directoryError ? (
-              <button
-                type="button"
-                className={styles.directoryStatus}
-                style={{ paddingLeft: `${20 + (depth + 1) * 13}px` }}
-                title={directoryError}
-                onClick={() => onExpand(file.path, true)}
-              >
-                <CircleAlert size={11} /> {folderUnavailableLabel}
-              </button>
-            ) : isLoading && !isLoaded ? (
-              <span
-                className={styles.directoryStatus}
-                style={{ paddingLeft: `${20 + (depth + 1) * 13}px` }}
-              >
-                {loadingFolderLabel}
-              </span>
-            ) : isLoaded && file.children ? (
-              render(file.children, depth + 1)
-            ) : null
+            <>
+              {createTarget?.parentPath === file.path ? (
+                <WorkspaceTreeNameForm
+                  key={createTarget.requestId}
+                  language={language}
+                  mode="create"
+                  path={file.path}
+                  kind={createTarget.kind}
+                  depth={depth + 1}
+                  existingNames={
+                    new Set(file.children?.map((child) => child.name) ?? [])
+                  }
+                  onCancel={cancelCreate}
+                  onSubmit={async (name) => {
+                    await onCreateEntry(file.path, name, createTarget.kind);
+                    setCreateTarget(undefined);
+                  }}
+                />
+              ) : null}
+              {directoryError ? (
+                <button
+                  type="button"
+                  className={styles.directoryStatus}
+                  style={{ paddingLeft: `${20 + (depth + 1) * 13}px` }}
+                  title={directoryError}
+                  onClick={() => onExpand(file.path, true)}
+                >
+                  <CircleAlert size={11} /> {folderUnavailableLabel}
+                </button>
+              ) : isLoading && !isLoaded ? (
+                <span
+                  className={styles.directoryStatus}
+                  style={{ paddingLeft: `${20 + (depth + 1) * 13}px` }}
+                >
+                  {loadingFolderLabel}
+                </span>
+              ) : isLoaded && file.children ? (
+                render(file.children, depth + 1)
+              ) : null}
+            </>
           ) : null}
         </div>
       );
@@ -774,10 +1163,32 @@ function IdeFileTree({
           }
           onClose={closeContextMenu}
           onOpenFile={onOpen}
+          onCreateFile={(parentPath) =>
+            startCreate(parentPath, "file", contextMenu.anchor)
+          }
+          onCreateFolder={(parentPath) =>
+            startCreate(parentPath, "folder", contextMenu.anchor)
+          }
+          onRenameEntry={() => startRename(contextMenu.file)}
+          onDeleteEntry={() => {
+            const { file, anchor } = contextMenu;
+            void onDeleteEntry(file).then((deleted) => {
+              if (deleted) {
+                announce(ui.entryDeleted(file.name));
+              } else {
+                window.requestAnimationFrame(() =>
+                  anchor.focus({ preventScroll: true }),
+                );
+              }
+            });
+          }}
           onToggleFolder={setFolderExpanded}
           onRefreshFolder={(filePath) => onExpand(filePath, true)}
           onDownloadFile={onDownloadFile}
           onAnnounce={announce}
+          canMutateEntry={
+            changes.get(contextMenu.file.path)?.kind !== "deleted"
+          }
         />
       ) : null}
       <span className="sr-only" role="status" aria-live="polite">
@@ -1196,6 +1607,392 @@ export function WorkspaceIde({
       }
     },
     [environment.id, loadDocument],
+  );
+
+  const createWorkspaceEntry = useCallback(
+    async (
+      requestedParentPath: string,
+      name: string,
+      kind: "file" | "folder",
+    ) => {
+      const parentPath = userVisibleWorkspacePath(requestedParentPath);
+      if (!parentPath) {
+        throw new Error("The target Workspace folder is unavailable.");
+      }
+      const environmentId = environment.id;
+      const environmentGeneration = environmentGenerationRef.current;
+      const body: WorkspaceIdeCreateEntryRequest = {
+        parentPath,
+        name,
+        kind,
+      };
+      const response = await apiFetch<ApiEnvelope<WorkspaceFile>>(
+        `/api/v1/environments/${encodeURIComponent(environmentId)}/ide/entries`,
+        { method: "POST", body: JSON.stringify(body) },
+      );
+      if (
+        environmentIdRef.current !== environmentId ||
+        environmentGenerationRef.current !== environmentGeneration
+      ) {
+        return;
+      }
+      const responsePath = userVisibleWorkspacePath(response.data.path);
+      const expectedPath = `${parentPath}/${name}`;
+      if (
+        !responsePath ||
+        responsePath !== expectedPath ||
+        response.data.kind !== kind
+      ) {
+        throw new Error(
+          "Workspace returned an internal or unexpected created path.",
+        );
+      }
+
+      await directoryRequestsRef.current.get(parentPath)?.promise;
+      await loadDirectory(parentPath, true);
+      if (
+        environmentIdRef.current !== environmentId ||
+        environmentGenerationRef.current !== environmentGeneration
+      ) {
+        return;
+      }
+      setError("");
+      if (kind === "file") openFile(responsePath);
+    },
+    [environment.id, loadDirectory, openFile],
+  );
+
+  const renameWorkspaceEntry = useCallback(
+    async (source: WorkspaceFile, requestedName: string) => {
+      const sourcePath = userVisibleWorkspacePath(source.path);
+      if (!sourcePath || sourcePath === WORKSPACE_ROOT) {
+        throw new Error("The Workspace entry cannot be renamed.");
+      }
+      const parentPath = workspaceParentPath(sourcePath);
+      const destinationPath = userVisibleWorkspacePath(
+        `${parentPath}/${requestedName}`,
+      );
+      if (!destinationPath || workspaceParentPath(destinationPath) !== parentPath) {
+        throw new Error("The new Workspace entry name is invalid.");
+      }
+
+      const environmentId = environment.id;
+      const environmentGeneration = environmentGenerationRef.current;
+      await Promise.all(
+        [...directoryRequestsRef.current.entries()]
+          .filter(
+            ([directoryPath]) =>
+              directoryPath === parentPath ||
+              workspacePathAtOrBelow(directoryPath, sourcePath),
+          )
+          .map(([, request]) => request.promise),
+      );
+
+      const body: WorkspaceIdeRenameEntryRequest = {
+        path: sourcePath,
+        name: requestedName,
+      };
+      const response = await apiFetch<ApiEnvelope<WorkspaceFile>>(
+        `/api/v1/environments/${encodeURIComponent(environmentId)}/ide/entries`,
+        { method: "PUT", body: JSON.stringify(body) },
+      );
+      if (
+        environmentIdRef.current !== environmentId ||
+        environmentGenerationRef.current !== environmentGeneration
+      ) {
+        return response.data;
+      }
+      const responsePath = userVisibleWorkspacePath(response.data.path);
+      if (
+        !responsePath ||
+        responsePath !== destinationPath ||
+        response.data.kind !== source.kind
+      ) {
+        throw new Error(
+          "Workspace returned an internal or unexpected renamed path.",
+        );
+      }
+      const renamedEntry = { ...response.data, path: responsePath };
+      const sourceWasLoaded = Object.hasOwn(
+        directoryListingsRef.current,
+        sourcePath,
+      );
+
+      const nextListings = Object.fromEntries(
+        Object.entries(directoryListingsRef.current).map(
+          ([directoryPath, entries]) => [
+            replaceWorkspacePathPrefix(
+              directoryPath,
+              sourcePath,
+              responsePath,
+            ),
+            entries.map((entry) => {
+              const nextPath = replaceWorkspacePathPrefix(
+                entry.path,
+                sourcePath,
+                responsePath,
+              );
+              if (nextPath === entry.path) return entry;
+              return {
+                ...entry,
+                ...(entry.path === sourcePath ? renamedEntry : {}),
+                path: nextPath,
+                name: nextPath.split("/").at(-1) ?? entry.name,
+              };
+            }),
+          ],
+        ),
+      );
+      directoryListingsRef.current = nextListings;
+      setDirectoryListings(nextListings);
+      setDirectoryErrors((current) =>
+        Object.fromEntries(
+          Object.entries(current).map(([directoryPath, message]) => [
+            replaceWorkspacePathPrefix(
+              directoryPath,
+              sourcePath,
+              responsePath,
+            ),
+            message,
+          ]),
+        ),
+      );
+      setLoadingDirectories((current) => {
+        const next = new Set<string>();
+        for (const directoryPath of current) {
+          next.add(
+            replaceWorkspacePathPrefix(
+              directoryPath,
+              sourcePath,
+              responsePath,
+            ),
+          );
+        }
+        return next;
+      });
+
+      const nextOpenPaths = [
+        ...new Set(
+          openPathsRef.current.map((filePath) =>
+            replaceWorkspacePathPrefix(filePath, sourcePath, responsePath),
+          ),
+        ),
+      ];
+      openPathsRef.current = nextOpenPaths;
+      setOpenPaths(nextOpenPaths);
+
+      const nextDocuments: Record<string, DocumentState> = {};
+      for (const [filePath, document] of Object.entries(documentsRef.current)) {
+        const nextPath = replaceWorkspacePathPrefix(
+          filePath,
+          sourcePath,
+          responsePath,
+        );
+        nextDocuments[nextPath] =
+          nextPath === filePath
+            ? document
+            : {
+                ...document,
+                data: document.data
+                  ? remapWorkspaceIdeFile(
+                      document.data,
+                      sourcePath,
+                      responsePath,
+                    )
+                  : undefined,
+                conflict: document.conflict
+                  ? remapWorkspaceIdeFile(
+                      document.conflict,
+                      sourcePath,
+                      responsePath,
+                    )
+                  : undefined,
+              };
+      }
+      documentsRef.current = nextDocuments;
+      setDocuments(nextDocuments);
+      setSelectedPath((current) =>
+        replaceWorkspacePathPrefix(current, sourcePath, responsePath),
+      );
+      setRevealRequest((current) =>
+        current
+          ? {
+              ...current,
+              path: replaceWorkspacePathPrefix(
+                current.path,
+                sourcePath,
+                responsePath,
+              ),
+            }
+          : current,
+      );
+      pendingPathsRef.current = new Set(
+        [...pendingPathsRef.current].map((filePath) =>
+          replaceWorkspacePathPrefix(filePath, sourcePath, responsePath),
+        ),
+      );
+      setError("");
+
+      void (async () => {
+        await refreshSnapshot(true);
+        if (
+          environmentIdRef.current !== environmentId ||
+          environmentGenerationRef.current !== environmentGeneration
+        ) {
+          return;
+        }
+        const directoryRefreshes = [loadDirectory(parentPath, true)];
+        if (source.kind === "folder" && sourceWasLoaded) {
+          directoryRefreshes.push(loadDirectory(responsePath, true));
+        }
+        await Promise.all(directoryRefreshes);
+        await Promise.all(
+          nextOpenPaths
+            .filter((filePath) =>
+              workspacePathAtOrBelow(filePath, responsePath),
+            )
+            .map((filePath) => loadDocument(filePath, "external")),
+        );
+      })();
+
+      return renamedEntry;
+    },
+    [environment.id, loadDirectory, loadDocument, refreshSnapshot],
+  );
+
+  const deleteWorkspaceEntry = useCallback(
+    async (entry: WorkspaceFile) => {
+      const entryPath = userVisibleWorkspacePath(entry.path);
+      if (!entryPath || entryPath === WORKSPACE_ROOT) return false;
+      const dirtyCount = Object.entries(documentsRef.current).filter(
+        ([filePath, document]) =>
+          document.dirty && workspacePathAtOrBelow(filePath, entryPath),
+      ).length;
+      if (!window.confirm(ui.deleteConfirm(entry.name, entry.kind, dirtyCount))) {
+        return false;
+      }
+
+      const environmentId = environment.id;
+      const environmentGeneration = environmentGenerationRef.current;
+      const parentPath = workspaceParentPath(entryPath);
+      try {
+        await Promise.all(
+          [...directoryRequestsRef.current.entries()]
+            .filter(
+              ([directoryPath]) =>
+                directoryPath === parentPath ||
+                workspacePathAtOrBelow(directoryPath, entryPath),
+            )
+            .map(([, request]) => request.promise),
+        );
+        const query = new URLSearchParams({ path: entryPath });
+        const response = await apiFetch<ApiEnvelope<WorkspaceFile>>(
+          `/api/v1/environments/${encodeURIComponent(environmentId)}/ide/entries?${query.toString()}`,
+          { method: "DELETE" },
+        );
+        if (
+          environmentIdRef.current !== environmentId ||
+          environmentGenerationRef.current !== environmentGeneration
+        ) {
+          return true;
+        }
+        const responsePath = userVisibleWorkspacePath(response.data.path);
+        if (
+          !responsePath ||
+          responsePath !== entryPath ||
+          response.data.kind !== entry.kind
+        ) {
+          throw new Error(
+            "Workspace returned an internal or unexpected deleted path.",
+          );
+        }
+
+        const currentOpenPaths = openPathsRef.current;
+        const nextOpenPaths = currentOpenPaths.filter(
+          (filePath) => !workspacePathAtOrBelow(filePath, entryPath),
+        );
+        openPathsRef.current = nextOpenPaths;
+        setOpenPaths(nextOpenPaths);
+        setSelectedPath((current) => {
+          if (!workspacePathAtOrBelow(current, entryPath)) return current;
+          const previousIndex = Math.max(currentOpenPaths.indexOf(current), 0);
+          return (
+            nextOpenPaths[Math.min(previousIndex, nextOpenPaths.length - 1)] ??
+            ""
+          );
+        });
+
+        const nextDocuments = Object.fromEntries(
+          Object.entries(documentsRef.current).filter(
+            ([filePath]) => !workspacePathAtOrBelow(filePath, entryPath),
+          ),
+        );
+        documentsRef.current = nextDocuments;
+        setDocuments(nextDocuments);
+        pendingPathsRef.current = new Set(
+          [...pendingPathsRef.current].filter(
+            (filePath) => !workspacePathAtOrBelow(filePath, entryPath),
+          ),
+        );
+        setRevealRequest((current) =>
+          current && workspacePathAtOrBelow(current.path, entryPath)
+            ? undefined
+            : current,
+        );
+
+        const nextListings = Object.fromEntries(
+          Object.entries(directoryListingsRef.current).flatMap(
+            ([directoryPath, entries]) =>
+              workspacePathAtOrBelow(directoryPath, entryPath)
+                ? []
+                : [
+                    [
+                      directoryPath,
+                      entries.filter(
+                        (candidate) =>
+                          !workspacePathAtOrBelow(candidate.path, entryPath),
+                      ),
+                    ] as const,
+                  ],
+          ),
+        );
+        directoryListingsRef.current = nextListings;
+        setDirectoryListings(nextListings);
+        setDirectoryErrors((current) =>
+          Object.fromEntries(
+            Object.entries(current).filter(
+              ([directoryPath]) =>
+                !workspacePathAtOrBelow(directoryPath, entryPath),
+            ),
+          ),
+        );
+        setLoadingDirectories((current) => {
+          const next = new Set(current);
+          for (const directoryPath of next) {
+            if (workspacePathAtOrBelow(directoryPath, entryPath)) {
+              next.delete(directoryPath);
+            }
+          }
+          return next;
+        });
+        setError("");
+
+        void (async () => {
+          await refreshSnapshot(true);
+          if (
+            environmentIdRef.current === environmentId &&
+            environmentGenerationRef.current === environmentGeneration
+          ) {
+            await loadDirectory(parentPath, true);
+          }
+        })();
+        return true;
+      } catch (cause) {
+        setError(cause instanceof Error ? cause.message : ui.deleteFailed);
+        return false;
+      }
+    },
+    [environment.id, loadDirectory, refreshSnapshot, ui],
   );
 
   const downloadWorkspaceFile = useCallback(
@@ -1698,6 +2495,9 @@ export function WorkspaceIde({
                 onDownloadFile={(filePath) =>
                   void downloadWorkspaceFile(filePath)
                 }
+                onCreateEntry={createWorkspaceEntry}
+                onRenameEntry={renameWorkspaceEntry}
+                onDeleteEntry={deleteWorkspaceEntry}
               />
             ) : (
               <p className={styles.sidebarEmpty}>{ui.noFiles}</p>

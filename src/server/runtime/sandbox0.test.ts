@@ -9,6 +9,7 @@ import type {
   EnvironmentCredentialResolverKind,
 } from "@/lib/environment-credentials";
 import type { Environment } from "@/lib/types";
+import { HttpError } from "@/server/http-error";
 import { createSandbox0FetchWithRetry, Sandbox0Runtime } from "./sandbox0";
 import {
   CODEX_MCP_OAUTH_CALLBACK_BASE_PATH,
@@ -2506,6 +2507,368 @@ test("lists one Workspace directory without recursively expanding folders", asyn
       { name: "README.md", kind: "file", children: undefined },
     ],
   );
+});
+
+test("creates empty Workspace files and folders without replacing existing entries", async () => {
+  const entries = new Map<
+    string,
+    { type: "file" | "dir" | "symlink"; size: number; isLink: boolean }
+  >([
+    ["/workspace", { type: "dir", size: 0, isLink: false }],
+    ["/workspace/src", { type: "dir", size: 0, isLink: false }],
+    [
+      "/workspace/src/existing.ts",
+      { type: "file", size: 12, isLink: false },
+    ],
+    [
+      "/workspace/link",
+      { type: "symlink", size: 0, isLink: true },
+    ],
+  ]);
+  const writes: Array<{ path: string; size: number }> = [];
+  const directories: string[] = [];
+  const missing = () =>
+    new APIError({
+      statusCode: 404,
+      code: "not_found",
+      message: "not found",
+    });
+  const runtime = runtimeWithClient({
+    sandboxes: {
+      sandbox(sandboxId: string) {
+        assert.equal(sandboxId, "sandbox-environment");
+        return {
+          async statFile(filePath: string) {
+            const entry = entries.get(filePath);
+            if (!entry) throw missing();
+            return entry;
+          },
+          async writeFile(filePath: string, content: Uint8Array) {
+            writes.push({ path: filePath, size: content.byteLength });
+            entries.set(filePath, {
+              type: "file",
+              size: content.byteLength,
+              isLink: false,
+            });
+          },
+          async mkdir(directoryPath: string) {
+            directories.push(directoryPath);
+            entries.set(directoryPath, {
+              type: "dir",
+              size: 0,
+              isLink: false,
+            });
+          },
+        };
+      },
+    },
+  });
+  const coordinates: EnvironmentRuntimeRecord = {
+    id: environment.id,
+    sandboxId: environment.sandboxId,
+    workspaceVolumeId: environment.workspaceVolumeId,
+    runtimeGeneration: 1,
+    decoder: { supervisorCursor: 0, tailBase64: "", runtimeGeneration: 1 },
+  };
+
+  assert.deepEqual(
+    await runtime.createWorkspaceIdeEntry(
+      coordinates,
+      "/workspace/src",
+      "new.ts",
+      "file",
+    ),
+    {
+      id: Buffer.from("/workspace/src/new.ts").toString("base64url"),
+      name: "new.ts",
+      path: "/workspace/src/new.ts",
+      kind: "file",
+    },
+  );
+  assert.deepEqual(
+    await runtime.createWorkspaceIdeEntry(
+      coordinates,
+      "/workspace/src",
+      "components",
+      "folder",
+    ),
+    {
+      id: Buffer.from("/workspace/src/components").toString("base64url"),
+      name: "components",
+      path: "/workspace/src/components",
+      kind: "folder",
+    },
+  );
+  assert.deepEqual(writes, [{ path: "/workspace/src/new.ts", size: 0 }]);
+  assert.deepEqual(directories, ["/workspace/src/components"]);
+
+  await assert.rejects(
+    runtime.createWorkspaceIdeEntry(
+      coordinates,
+      "/workspace/src",
+      "existing.ts",
+      "file",
+    ),
+    (error: unknown) =>
+      error instanceof HttpError && error.code === "workspace_entry_exists",
+  );
+  await assert.rejects(
+    runtime.createWorkspaceIdeEntry(
+      coordinates,
+      "/workspace",
+      ".sandpi",
+      "folder",
+    ),
+    (error: unknown) =>
+      error instanceof HttpError &&
+      error.code === "workspace_internal_path_protected",
+  );
+  await assert.rejects(
+    runtime.createWorkspaceIdeEntry(
+      coordinates,
+      "/workspace",
+      "node_modules",
+      "folder",
+    ),
+    (error: unknown) =>
+      error instanceof HttpError && error.code === "workspace_entry_hidden",
+  );
+  await assert.rejects(
+    runtime.createWorkspaceIdeEntry(
+      coordinates,
+      "/workspace",
+      "nested/file.ts",
+      "file",
+    ),
+    (error: unknown) =>
+      error instanceof HttpError &&
+      error.code === "workspace_entry_name_invalid",
+  );
+  await assert.rejects(
+    runtime.createWorkspaceIdeEntry(
+      coordinates,
+      "/workspace/link",
+      "escaped.ts",
+      "file",
+    ),
+    (error: unknown) =>
+      error instanceof HttpError &&
+      error.code === "workspace_symlink_not_editable",
+  );
+  assert.equal(writes.length, 1);
+  assert.equal(directories.length, 1);
+});
+
+test("renames and recursively deletes mutable Workspace entries", async () => {
+  const modifiedAt = new Date("2026-07-27T08:00:00.000Z");
+  const entries = new Map<
+    string,
+    {
+      type: "file" | "dir" | "symlink";
+      size: number;
+      isLink: boolean;
+      modTime?: Date;
+    }
+  >([
+    ["/workspace", { type: "dir", size: 0, isLink: false }],
+    ["/workspace/src", { type: "dir", size: 0, isLink: false }],
+    [
+      "/workspace/src/demo.ts",
+      { type: "file", size: 12, isLink: false, modTime: modifiedAt },
+    ],
+    [
+      "/workspace/src/existing.ts",
+      { type: "file", size: 4, isLink: false },
+    ],
+    [
+      "/workspace/src/components",
+      { type: "dir", size: 0, isLink: false, modTime: modifiedAt },
+    ],
+    [
+      "/workspace/src/components/button.tsx",
+      { type: "file", size: 8, isLink: false },
+    ],
+    [
+      "/workspace/src/vendor",
+      { type: "dir", size: 0, isLink: false },
+    ],
+    [
+      "/workspace/link",
+      { type: "symlink", size: 0, isLink: true },
+    ],
+  ]);
+  const moves: Array<{ source: string; destination: string }> = [];
+  const deletions: string[] = [];
+  const missing = () =>
+    new APIError({
+      statusCode: 404,
+      code: "not_found",
+      message: "not found",
+    });
+  const runtime = runtimeWithClient({
+    sandboxes: {
+      sandbox(sandboxId: string) {
+        assert.equal(sandboxId, "sandbox-environment");
+        return {
+          async statFile(filePath: string) {
+            const entry = entries.get(filePath);
+            if (!entry) throw missing();
+            return entry;
+          },
+          async moveFile(sourcePath: string, destinationPath: string) {
+            moves.push({ source: sourcePath, destination: destinationPath });
+            for (const [entryPath, entry] of [...entries]) {
+              if (
+                entryPath !== sourcePath &&
+                !entryPath.startsWith(`${sourcePath}/`)
+              ) {
+                continue;
+              }
+              entries.delete(entryPath);
+              entries.set(
+                `${destinationPath}${entryPath.slice(sourcePath.length)}`,
+                entry,
+              );
+            }
+          },
+          async deleteFile(entryPath: string) {
+            deletions.push(entryPath);
+            for (const candidate of [...entries.keys()]) {
+              if (
+                candidate === entryPath ||
+                candidate.startsWith(`${entryPath}/`)
+              ) {
+                entries.delete(candidate);
+              }
+            }
+          },
+        };
+      },
+    },
+  });
+  const coordinates: EnvironmentRuntimeRecord = {
+    id: environment.id,
+    sandboxId: environment.sandboxId,
+    workspaceVolumeId: environment.workspaceVolumeId,
+    runtimeGeneration: 1,
+    decoder: { supervisorCursor: 0, tailBase64: "", runtimeGeneration: 1 },
+  };
+
+  assert.deepEqual(
+    await runtime.renameWorkspaceIdeEntry(
+      coordinates,
+      "/workspace/src/demo.ts",
+      "main.ts",
+    ),
+    {
+      id: Buffer.from("/workspace/src/main.ts").toString("base64url"),
+      name: "main.ts",
+      path: "/workspace/src/main.ts",
+      kind: "file",
+      size: "12 B",
+      modifiedAt: modifiedAt.getTime() / 1_000,
+    },
+  );
+  assert.deepEqual(
+    await runtime.renameWorkspaceIdeEntry(
+      coordinates,
+      "/workspace/src/components",
+      "ui",
+    ),
+    {
+      id: Buffer.from("/workspace/src/ui").toString("base64url"),
+      name: "ui",
+      path: "/workspace/src/ui",
+      kind: "folder",
+      size: "0 B",
+      modifiedAt: modifiedAt.getTime() / 1_000,
+    },
+  );
+  assert.equal(entries.has("/workspace/src/ui/button.tsx"), true);
+  assert.deepEqual(moves, [
+    {
+      source: "/workspace/src/demo.ts",
+      destination: "/workspace/src/main.ts",
+    },
+    {
+      source: "/workspace/src/components",
+      destination: "/workspace/src/ui",
+    },
+  ]);
+
+  assert.deepEqual(
+    await runtime.deleteWorkspaceIdeEntry(
+      coordinates,
+      "/workspace/src/ui",
+    ),
+    {
+      id: Buffer.from("/workspace/src/ui").toString("base64url"),
+      name: "ui",
+      path: "/workspace/src/ui",
+      kind: "folder",
+      size: "0 B",
+      modifiedAt: modifiedAt.getTime() / 1_000,
+    },
+  );
+  assert.deepEqual(deletions, ["/workspace/src/ui"]);
+  assert.equal(entries.has("/workspace/src/ui"), false);
+  assert.equal(entries.has("/workspace/src/ui/button.tsx"), false);
+
+  await assert.rejects(
+    runtime.renameWorkspaceIdeEntry(
+      coordinates,
+      "/workspace/src/main.ts",
+      "existing.ts",
+    ),
+    (error: unknown) =>
+      error instanceof HttpError && error.code === "workspace_entry_exists",
+  );
+  await assert.rejects(
+    runtime.renameWorkspaceIdeEntry(coordinates, "/workspace", "renamed"),
+    (error: unknown) =>
+      error instanceof HttpError && error.code === "workspace_root_protected",
+  );
+  await assert.rejects(
+    runtime.deleteWorkspaceIdeEntry(coordinates, "/workspace/.sandpi"),
+    (error: unknown) =>
+      error instanceof HttpError &&
+      error.code === "workspace_internal_path_protected",
+  );
+  await assert.rejects(
+    runtime.deleteWorkspaceIdeEntry(
+      coordinates,
+      "/workspace/src/.git/config",
+    ),
+    (error: unknown) =>
+      error instanceof HttpError &&
+      error.code === "workspace_git_metadata_protected",
+  );
+  await assert.rejects(
+    runtime.renameWorkspaceIdeEntry(
+      coordinates,
+      "/workspace/src/vendor",
+      "node_modules",
+    ),
+    (error: unknown) =>
+      error instanceof HttpError && error.code === "workspace_entry_hidden",
+  );
+  await assert.rejects(
+    runtime.deleteWorkspaceIdeEntry(coordinates, "/workspace/link"),
+    (error: unknown) =>
+      error instanceof HttpError &&
+      error.code === "workspace_symlink_not_editable",
+  );
+  await assert.rejects(
+    runtime.deleteWorkspaceIdeEntry(
+      coordinates,
+      "/workspace/src/missing.ts",
+    ),
+    (error: unknown) =>
+      error instanceof HttpError &&
+      error.code === "workspace_entry_not_found",
+  );
+  assert.equal(moves.length, 2);
+  assert.equal(deletions.length, 1);
 });
 
 test("searches Workspace files through the harness-neutral Sandbox0 runtime", async () => {

@@ -7,7 +7,11 @@ import {
   Download,
   ExternalLink,
   File,
+  FilePlus2,
+  FolderPlus,
+  Pencil,
   RefreshCw,
+  Trash2,
 } from "lucide-react";
 import {
   type CSSProperties,
@@ -20,7 +24,11 @@ import { createPortal } from "react-dom";
 
 import { copyTextToClipboard } from "@/lib/clipboard";
 import type { OperationLanguage } from "@/lib/operation-ui";
-import { WORKSPACE_ROOT } from "@/lib/workspace-path-policy";
+import {
+  isWorkspaceGitMetadataPath,
+  isWorkspaceInternalPath,
+  WORKSPACE_ROOT,
+} from "@/lib/workspace-path-policy";
 import type { WorkspaceFile } from "@/lib/types";
 
 import styles from "./workspace-tree-context-menu.module.css";
@@ -44,6 +52,10 @@ const copy = {
     expand: "Expand Folder",
     collapse: "Collapse Folder",
     refresh: "Refresh Folder",
+    newFile: "New File",
+    newFolder: "New Folder",
+    rename: "Rename",
+    delete: "Delete",
     copyPath: "Copy Path",
     copyRelativePath: "Copy Relative Path",
     pathCopied: "Path copied",
@@ -58,6 +70,10 @@ const copy = {
     expand: "展开目录",
     collapse: "折叠目录",
     refresh: "刷新目录",
+    newFile: "新建文件",
+    newFolder: "新建文件夹",
+    rename: "重命名",
+    delete: "删除",
     copyPath: "复制路径",
     copyRelativePath: "复制相对路径",
     pathCopied: "路径已复制",
@@ -78,24 +94,43 @@ export function WorkspaceTreeContextMenu({
   openInNewTabHref,
   onClose,
   onOpenFile,
+  onCreateFile,
+  onCreateFolder,
+  onRenameEntry,
+  onDeleteEntry,
   onToggleFolder,
   onRefreshFolder,
   onDownloadFile,
   onAnnounce,
+  canMutateEntry,
 }: {
   language: OperationLanguage;
   target: WorkspaceTreeContextMenuTarget;
   openInNewTabHref?: string;
   onClose: () => void;
   onOpenFile: (path: string) => void;
+  onCreateFile: (parentPath: string) => void;
+  onCreateFolder: (parentPath: string) => void;
+  onRenameEntry: (path: string) => void;
+  onDeleteEntry: (path: string) => void;
   onToggleFolder: (path: string, expanded: boolean) => void;
   onRefreshFolder: (path: string) => void;
   onDownloadFile: (path: string) => void;
   onAnnounce: (message: string) => void;
+  canMutateEntry: boolean;
 }) {
   const ui = copy[language];
   const menuRef = useRef<HTMLDivElement>(null);
   const folder = target.file.kind === "folder";
+  const canCreateEntries =
+    folder &&
+    !isWorkspaceInternalPath(target.file.path) &&
+    !isWorkspaceGitMetadataPath(target.file.path);
+  const canMutate =
+    canMutateEntry &&
+    target.file.path !== WORKSPACE_ROOT &&
+    !isWorkspaceInternalPath(target.file.path) &&
+    !isWorkspaceGitMetadataPath(target.file.path);
 
   const closeMenu = useCallback(
     (restoreFocus = false) => {
@@ -204,6 +239,33 @@ export function WorkspaceTreeContextMenu({
     >
       {folder ? (
         <>
+          {canCreateEntries ? (
+            <>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  closeMenu();
+                  onCreateFile(target.file.path);
+                }}
+              >
+                <FilePlus2 size={14} aria-hidden="true" />
+                {ui.newFile}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  closeMenu();
+                  onCreateFolder(target.file.path);
+                }}
+              >
+                <FolderPlus size={14} aria-hidden="true" />
+                {ui.newFolder}
+              </button>
+              <span className={styles.separator} role="separator" />
+            </>
+          ) : null}
           <button
             type="button"
             role="menuitem"
@@ -271,6 +333,34 @@ export function WorkspaceTreeContextMenu({
       )}
 
       <span className={styles.separator} role="separator" />
+      {canMutate ? (
+        <>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              closeMenu();
+              onRenameEntry(target.file.path);
+            }}
+          >
+            <Pencil size={14} aria-hidden="true" />
+            {ui.rename}
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className={styles.danger}
+            onClick={() => {
+              closeMenu();
+              onDeleteEntry(target.file.path);
+            }}
+          >
+            <Trash2 size={14} aria-hidden="true" />
+            {ui.delete}
+          </button>
+          <span className={styles.separator} role="separator" />
+        </>
+      ) : null}
       <button
         type="button"
         role="menuitem"

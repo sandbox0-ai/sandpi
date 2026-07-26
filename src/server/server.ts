@@ -1194,6 +1194,64 @@ function registerApiRoutes(
       };
     },
   );
+  app.post<{ Params: { environmentId: string }; Body: unknown }>(
+    "/api/v1/environments/:environmentId/ide/entries",
+    async (request) => {
+      const input = workspaceIdeCreateEntrySchema.parse(request.body);
+      return {
+        data: await services.runtimeAccess.withRuntimeAccess(
+          request.principal.userId,
+          request.params.environmentId,
+          (runtime) =>
+            services.runtime.createWorkspaceIdeEntry(
+              runtime,
+              input.parentPath,
+              input.name,
+              input.kind,
+            ),
+        ),
+      };
+    },
+  );
+  app.put<{ Params: { environmentId: string }; Body: unknown }>(
+    "/api/v1/environments/:environmentId/ide/entries",
+    async (request) => {
+      const input = workspaceIdeRenameEntrySchema.parse(request.body);
+      return {
+        data: await services.runtimeAccess.withRuntimeAccess(
+          request.principal.userId,
+          request.params.environmentId,
+          (runtime) =>
+            services.runtime.renameWorkspaceIdeEntry(
+              runtime,
+              input.path,
+              input.name,
+            ),
+        ),
+      };
+    },
+  );
+  app.delete<{ Params: { environmentId: string } }>(
+    "/api/v1/environments/:environmentId/ide/entries",
+    async (request) => {
+      const entryPath = queryString(request, "path");
+      if (!entryPath) {
+        throw new HttpError(
+          400,
+          "path_required",
+          "Workspace entry path is required.",
+        );
+      }
+      return {
+        data: await services.runtimeAccess.withRuntimeAccess(
+          request.principal.userId,
+          request.params.environmentId,
+          (runtime) =>
+            services.runtime.deleteWorkspaceIdeEntry(runtime, entryPath),
+        ),
+      };
+    },
+  );
   app.put<{ Params: { environmentId: string }; Body: unknown }>(
     "/api/v1/environments/:environmentId/ide/file",
     { bodyLimit: WORKSPACE_FILE_BODY_LIMIT_BYTES },
@@ -1840,6 +1898,21 @@ const workspaceIdeWriteSchema = z.object({
     ),
   baseRevision: z.string().regex(/^sha256:[A-Za-z0-9_-]{43}$/),
 });
+
+const workspaceIdeCreateEntrySchema = z
+  .object({
+    parentPath: z.string().trim().min(1).max(4_096),
+    name: z.string().trim().min(1).max(255),
+    kind: z.enum(["file", "folder"]),
+  })
+  .strict();
+
+const workspaceIdeRenameEntrySchema = z
+  .object({
+    path: z.string().trim().min(1).max(4_096),
+    name: z.string().trim().min(1).max(255),
+  })
+  .strict();
 
 const terminalInputSchema = z.discriminatedUnion("type", [
   z.object({

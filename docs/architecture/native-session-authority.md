@@ -64,6 +64,14 @@ invalidates loaded pages but never causes the server to eagerly enumerate the
 whole Workspace. While a native volume watch is connecting or unavailable, the
 client reconciles only the shallow pages it already loaded; this keeps live
 agent-created files visible without reverting to eager recursive traversal.
+File-tree context actions create one direct child, rename an entry within its
+current parent, or delete a file or folder recursively through the Sandpi API.
+The server validates paths and leaf names, rejects protected, hidden, symlinked
+or existing destinations, and delegates every mutation to the Sandbox0 SDK.
+Deletion requires an explicit client confirmation that calls out recursive
+folder removal and open unsaved files. A rename remaps open tabs and preserves
+dirty drafts; a deletion closes every affected tab. The client then reconciles
+the parent page and opens a newly created file.
 Each file open is one bounded Sandbox0 read. UTF-8 content enters the text
 editor; signature-verified image, audio, video and PDF containers receive a
 read-only browser preview. Sandpi does not infer a preview MIME type from the

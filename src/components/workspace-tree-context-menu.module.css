@@ -61,6 +61,16 @@
   flex: 0 0 auto;
 }
 
+.menu > button.danger {
+  color: var(--red);
+}
+
+.menu > button.danger:hover,
+.menu > button.danger:focus-visible {
+  background: color-mix(in srgb, var(--red) 10%, var(--panel-strong));
+  color: var(--red);
+}
+
 .separator {
   height: 1px;
   flex: 0 0 auto;

@@ -265,6 +265,17 @@ export interface WorkspaceIdeWriteRequest {
   baseRevision: string;
 }
 
+export interface WorkspaceIdeCreateEntryRequest {
+  parentPath: string;
+  name: string;
+  kind: "file" | "folder";
+}
+
+export interface WorkspaceIdeRenameEntryRequest {
+  path: string;
+  name: string;
+}
+
 export type WorkspaceIdeEvent =
   | { type: "ready"; at: UnixTimestamp }
   | {

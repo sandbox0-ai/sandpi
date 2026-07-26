@@ -3,6 +3,7 @@ import type {
   NetworkPolicy,
   RuntimeMetrics,
   WorkspaceDirectoryListing,
+  WorkspaceFile,
   WorkspaceFileSearchResult,
   WorkspaceGitState,
   WorkspaceIdeFile,
@@ -261,6 +262,24 @@ export interface RuntimeAdapter {
     content: Uint8Array,
     baseRevision: string,
   ): Promise<WorkspaceIdeFile>;
+  /** Creates one direct child after enforcing the Web IDE's protected-path boundary. */
+  createWorkspaceIdeEntry(
+    runtime: EnvironmentRuntimeRecord,
+    parentPath: string,
+    name: string,
+    kind: "file" | "folder",
+  ): Promise<WorkspaceFile>;
+  /** Renames one direct entry without moving it to another Workspace folder. */
+  renameWorkspaceIdeEntry(
+    runtime: EnvironmentRuntimeRecord,
+    path: string,
+    name: string,
+  ): Promise<WorkspaceFile>;
+  /** Recursively deletes one mutable file or folder from the Workspace. */
+  deleteWorkspaceIdeEntry(
+    runtime: EnvironmentRuntimeRecord,
+    path: string,
+  ): Promise<WorkspaceFile>;
   watchWorkspaceFiles(
     runtime: EnvironmentRuntimeRecord,
   ): Promise<RuntimeWorkspaceWatchHandle>;

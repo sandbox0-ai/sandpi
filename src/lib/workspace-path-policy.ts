@@ -40,6 +40,16 @@ export function isWorkspaceInternalPath(candidate: string) {
   );
 }
 
+/** Git administrative data is visible for inspection but never writable from the IDE. */
+export function isWorkspaceGitMetadataPath(candidate: string) {
+  const normalized = normalizeWorkspacePath(candidate);
+  if (!normalized) return false;
+  return normalized
+    .slice(`${WORKSPACE_ROOT}/`.length)
+    .split("/")
+    .includes(".git");
+}
+
 /** Returns the canonical path only when it is valid for user-facing Workspace surfaces. */
 export function userVisibleWorkspacePath(candidate: string) {
   return normalizeWorkspacePath(candidate);

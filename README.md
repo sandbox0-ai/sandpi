@@ -179,7 +179,14 @@ Web today; iOS / Android / HarmonyOS later
   dot-files and dot-directories are visible, including Sandpi's internal
   `/workspace/.sandpi` subtree; known generated dependency trees are omitted.
   Sandpi-managed files are readable but remain read-only in the Web IDE and are
-  excluded from Git projections. The recursive Sandbox0 stream is used
+  excluded from Git projections. File-tree context actions create empty files
+  or folders, rename an entry in place, or delete a file or folder recursively
+  through the Sandpi server. They reject existing names instead of replacing
+  them, protect the Workspace root plus `.sandpi` and `.git`, and confirm
+  destructive deletion including any open unsaved files. The client preserves
+  open drafts across a rename, closes affected tabs after deletion, refreshes
+  the parent directory and opens a newly created file. The
+  recursive Sandbox0 stream is used
   only for invalidation. Loaded shallow pages
   are reconciled while that native watch is connecting or unavailable, so files
   created by a running agent do not remain hidden until Turn completion. Sandpi discovers
@@ -712,8 +719,10 @@ Sandbox0 implementation details.
   unsupported binary files remain read-only. The single file tree includes
   staged, unstaged, untracked, renamed, deleted and conflicted Git state across
   optional root or nested repositories. Right-click or `Shift+F10` opens the
-  file actions for opening, opening in a new tab, downloading and path copying,
-  and folder actions for expanding, collapsing, refreshing and path copying.
+  file actions for opening, opening in a new tab, downloading, renaming,
+  deleting and path copying, and folder actions for creating files or folders,
+  renaming, recursively deleting, expanding, collapsing, refreshing and path
+  copying.
   Workspace events refresh clean files automatically and turn external changes
   to dirty files into an explicit
   compare/reload/overwrite decision.

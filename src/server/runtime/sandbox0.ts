@@ -36,6 +36,7 @@ import {
   userVisibleWorkspaceGitState,
 } from "@/lib/workspace-git";
 import {
+  isWorkspaceGitMetadataPath,
   isWorkspaceIdePathHidden,
   isWorkspaceInternalPath,
   userVisibleWorkspacePath,
@@ -1629,6 +1630,157 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     };
   }
 
+  async createWorkspaceIdeEntry(
+    runtime: EnvironmentRuntimeRecord,
+    requestedParentPath: string,
+    requestedName: string,
+    kind: "file" | "folder",
+  ): Promise<WorkspaceFile> {
+    const parentPath = safeEditableWorkspacePath(requestedParentPath);
+    const name = safeWorkspaceEntryName(requestedName);
+    const entryPath = safeEditableWorkspacePath(path.posix.join(parentPath, name));
+    if (isWorkspaceIdePathHidden(entryPath, kind === "folder")) {
+      throw new HttpError(
+        400,
+        "workspace_entry_hidden",
+        "Entries hidden by the Web IDE cannot be created from the file browser.",
+      );
+    }
+
+    const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
+    try {
+      await assertWorkspacePathHasNoSymlink(sandbox, parentPath);
+      const parent = await sandbox.statFile(parentPath);
+      if (parent.type !== "dir") {
+        throw new HttpError(
+          400,
+          "workspace_entry_parent_not_directory",
+          "New Workspace entries must be created inside a folder.",
+        );
+      }
+
+      try {
+        await sandbox.statFile(entryPath);
+        throw new HttpError(
+          409,
+          "workspace_entry_exists",
+          `“${name}” already exists in this folder.`,
+        );
+      } catch (error) {
+        if (error instanceof HttpError) throw error;
+        if (!isMissingResource(error)) throw error;
+      }
+
+      if (kind === "folder") {
+        await sandbox.mkdir(entryPath);
+      } else {
+        await sandbox.writeFile(entryPath, new Uint8Array());
+      }
+    } catch (error) {
+      if (error instanceof HttpError) throw error;
+      if (error instanceof APIError && error.statusCode === 409) {
+        throw new HttpError(
+          409,
+          "workspace_entry_exists",
+          `“${name}” already exists in this folder.`,
+        );
+      }
+      throw translateWorkspaceFileError(error);
+    }
+
+    return {
+      id: Buffer.from(entryPath).toString("base64url"),
+      name,
+      path: entryPath,
+      kind,
+    };
+  }
+
+  async renameWorkspaceIdeEntry(
+    runtime: EnvironmentRuntimeRecord,
+    requestedPath: string,
+    requestedName: string,
+  ): Promise<WorkspaceFile> {
+    const sourcePath = safeMutableWorkspaceEntryPath(requestedPath);
+    const name = safeWorkspaceEntryName(requestedName);
+    const destinationPath = safeEditableWorkspacePath(
+      path.posix.join(path.posix.dirname(sourcePath), name),
+    );
+    const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
+
+    try {
+      await assertWorkspacePathHasNoSymlink(sandbox, sourcePath);
+      const source = mutableWorkspaceEntryFromStat(
+        sourcePath,
+        await sandbox.statFile(sourcePath),
+      );
+      if (
+        isWorkspaceIdePathHidden(
+          destinationPath,
+          source.kind === "folder",
+        )
+      ) {
+        throw new HttpError(
+          400,
+          "workspace_entry_hidden",
+          "Entries hidden by the Web IDE cannot be renamed from the file browser.",
+        );
+      }
+      if (destinationPath === sourcePath) return source;
+
+      try {
+        await sandbox.statFile(destinationPath);
+        throw new HttpError(
+          409,
+          "workspace_entry_exists",
+          `“${name}” already exists in this folder.`,
+        );
+      } catch (error) {
+        if (error instanceof HttpError) throw error;
+        if (!isMissingResource(error)) throw error;
+      }
+
+      await sandbox.moveFile(sourcePath, destinationPath);
+      return {
+        ...source,
+        id: Buffer.from(destinationPath).toString("base64url"),
+        name,
+        path: destinationPath,
+      };
+    } catch (error) {
+      if (error instanceof HttpError) throw error;
+      if (error instanceof APIError && error.statusCode === 409) {
+        throw new HttpError(
+          409,
+          "workspace_entry_exists",
+          `“${name}” already exists in this folder.`,
+        );
+      }
+      throw translateWorkspaceEntryMutationError(error);
+    }
+  }
+
+  async deleteWorkspaceIdeEntry(
+    runtime: EnvironmentRuntimeRecord,
+    requestedPath: string,
+  ): Promise<WorkspaceFile> {
+    const entryPath = safeMutableWorkspaceEntryPath(requestedPath);
+    const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
+
+    try {
+      await assertWorkspacePathHasNoSymlink(sandbox, entryPath);
+      const entry = mutableWorkspaceEntryFromStat(
+        entryPath,
+        await sandbox.statFile(entryPath),
+      );
+      await sandbox.deleteFile(entryPath);
+      return entry;
+    } catch (error) {
+      if (error instanceof HttpError) throw error;
+      throw translateWorkspaceEntryMutationError(error);
+    }
+  }
+
   async watchWorkspaceFiles(
     runtime: EnvironmentRuntimeRecord,
   ): Promise<RuntimeWorkspaceWatchHandle> {
@@ -2425,7 +2577,7 @@ function safeEditableWorkspacePath(requestedPath: string) {
       "Sandpi-managed Workspace state is read-only in the Web IDE.",
     );
   }
-  if (path.posix.relative("/workspace", filePath).split("/").includes(".git")) {
+  if (isWorkspaceGitMetadataPath(filePath)) {
     throw new HttpError(
       403,
       "workspace_git_metadata_protected",
@@ -2433,6 +2585,82 @@ function safeEditableWorkspacePath(requestedPath: string) {
     );
   }
   return filePath;
+}
+
+function safeMutableWorkspaceEntryPath(requestedPath: string) {
+  const entryPath = safeEditableWorkspacePath(requestedPath);
+  if (entryPath === WORKSPACE_ROOT) {
+    throw new HttpError(
+      403,
+      "workspace_root_protected",
+      "The Workspace root cannot be renamed or deleted.",
+    );
+  }
+  return entryPath;
+}
+
+function safeWorkspaceEntryName(requestedName: string) {
+  const name = requestedName.trim();
+  if (
+    !name ||
+    name === "." ||
+    name === ".." ||
+    Buffer.byteLength(name, "utf8") > 255 ||
+    /[/\u0000-\u001f\u007f]/.test(name)
+  ) {
+    throw new HttpError(
+      400,
+      "workspace_entry_name_invalid",
+      "Use a file or folder name without slashes or control characters.",
+    );
+  }
+  return name;
+}
+
+function mutableWorkspaceEntryFromStat(
+  entryPath: string,
+  file: {
+    type?: string;
+    size?: number;
+    modTime?: Date;
+    isLink?: boolean;
+  },
+): WorkspaceFile {
+  if (file.type === "symlink" || file.isLink) {
+    throw new HttpError(
+      403,
+      "workspace_symlink_not_editable",
+      "Symbolic links cannot be changed from the Web IDE.",
+    );
+  }
+  const kind =
+    file.type === "dir"
+      ? ("folder" as const)
+      : file.type === "file"
+        ? ("file" as const)
+        : undefined;
+  if (!kind) {
+    throw new HttpError(
+      400,
+      "workspace_entry_not_supported",
+      "Only regular files and folders can be changed from the Web IDE.",
+    );
+  }
+  if (isWorkspaceIdePathHidden(entryPath, kind === "folder")) {
+    throw new HttpError(
+      403,
+      "workspace_entry_hidden",
+      "Entries hidden by the Web IDE cannot be changed from the file browser.",
+    );
+  }
+  return {
+    id: Buffer.from(entryPath).toString("base64url"),
+    name: path.posix.basename(entryPath),
+    path: entryPath,
+    kind,
+    size: file.size === undefined ? undefined : formatFileSize(file.size),
+    modifiedAt: file.modTime ? toUnixTimestamp(file.modTime) : undefined,
+  };
 }
 
 async function assertWorkspacePathHasNoSymlink(
@@ -2795,6 +3023,17 @@ function translateWorkspaceFileError(error: unknown) {
       404,
       "workspace_file_not_found",
       "The requested Workspace file does not exist.",
+    );
+  }
+  return translateSandbox0Error(error);
+}
+
+function translateWorkspaceEntryMutationError(error: unknown) {
+  if (error instanceof APIError && error.statusCode === 404) {
+    return new HttpError(
+      404,
+      "workspace_entry_not_found",
+      "The requested Workspace entry does not exist.",
     );
   }
   return translateSandbox0Error(error);
