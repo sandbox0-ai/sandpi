@@ -238,9 +238,9 @@ Web today; iOS / Android / HarmonyOS later
   blocking the app-server conversation.
 - **Durable lifecycle:** Environment Sandboxes explicitly disable Sandbox0 soft
   and hard TTLs. Each Environment configures its own idle auto-pause timeout,
-  defaulting to thirty minutes; zero leaves no time-based expiration.
+  defaulting to fifteen minutes; zero leaves no time-based expiration.
   **Environment Settings → Sandbox** also persists the shared Sandbox memory
-  limit in MiB, defaulting to 2 GiB and offering 512 MiB, 1 GiB, 2 GiB, 4 GiB
+  limit in MiB, defaulting to 1 GiB and offering 512 MiB, 1 GiB, 2 GiB, 4 GiB
   and 8 GiB presets. Sandpi applies it both when claiming and when updating the
   existing Sandbox. Runtime access and native `turn/completed` events calculate
   the PostgreSQL deadline from that setting.
@@ -783,7 +783,7 @@ Sandbox0 implementation details.
 - Every Environment is provisioned from the fixed Sandbox0 `coding-agent`
   template; product Sessions allocate only native harness Sessions.
 - The Environment Sandbox explicitly disables Sandbox0 soft and hard TTLs. Its
-  configurable idle pause defaults to thirty minutes without a running Turn
+  configurable idle pause defaults to fifteen minutes without a running Turn
   following the latest activity; setting it to zero leaves no time-based
   expiration. Deadlines and retries are PostgreSQL state, not process-local
   timers.

@@ -1,5 +1,6 @@
 import { createMockCodexHarnessState } from "@/harnesses/codex/events";
 import type { CodexSession } from "@/harnesses/codex/types";
+import { DEFAULT_ENVIRONMENT_IDLE_PAUSE_TIMEOUT_SECONDS } from "@/lib/environment-lifecycle";
 import { ENVIRONMENT_SANDBOX_MEMORY_DEFAULT_MIB } from "@/lib/environment-resources";
 import { createId, randomToken } from "@/lib/id";
 import { toUnixTimestamp, type UnixTimestamp } from "@/lib/time";
@@ -75,7 +76,7 @@ export const mockEnvironments: Environment[] = [
   {
     id: "env-default",
     ownerId: mockViewer.id,
-    idlePauseTimeoutSeconds: 30 * 60,
+    idlePauseTimeoutSeconds: DEFAULT_ENVIRONMENT_IDLE_PAUSE_TIMEOUT_SECONDS,
     sandboxMemoryMiB: ENVIRONMENT_SANDBOX_MEMORY_DEFAULT_MIB,
     workspaceBackup: { intervalSeconds: 0, retentionCount: 7 },
     name: "Development",
@@ -111,7 +112,7 @@ export const mockEnvironments: Environment[] = [
   {
     id: "env-release",
     ownerId: mockViewer.id,
-    idlePauseTimeoutSeconds: 30 * 60,
+    idlePauseTimeoutSeconds: DEFAULT_ENVIRONMENT_IDLE_PAUSE_TIMEOUT_SECONDS,
     sandboxMemoryMiB: ENVIRONMENT_SANDBOX_MEMORY_DEFAULT_MIB,
     workspaceBackup: { intervalSeconds: 0, retentionCount: 7 },
     name: "Release lab",
@@ -142,7 +143,7 @@ export const mockEnvironments: Environment[] = [
   {
     id: "env-side-projects",
     ownerId: mockViewer.id,
-    idlePauseTimeoutSeconds: 30 * 60,
+    idlePauseTimeoutSeconds: DEFAULT_ENVIRONMENT_IDLE_PAUSE_TIMEOUT_SECONDS,
     sandboxMemoryMiB: ENVIRONMENT_SANDBOX_MEMORY_DEFAULT_MIB,
     workspaceBackup: { intervalSeconds: 0, retentionCount: 7 },
     name: "Experiments",
@@ -245,7 +246,7 @@ export const mockEnvironmentMetrics: EnvironmentMetrics = {
       statistic: "average",
     },
   ),
-  memoryLimitBytes: 2048 * 1024 * 1024,
+  memoryLimitBytes: ENVIRONMENT_SANDBOX_MEMORY_DEFAULT_MIB * 1024 * 1024,
   networkReceive: metricSeries(
     [96, 144, 208, 352, 680, 1210, 940, 520, 860, 1320, 780, 612].map(
       (value) => value * 1024,

@@ -73,6 +73,7 @@ test("migration history contains every durable Sandpi boundary", async () => {
       "0046_codex_runtime_turn_recovery",
       "0047_environment_egress_credentials",
       "0048_user_billing_and_usage",
+      "0049_environment_resource_defaults",
     ],
   );
 
@@ -189,6 +190,17 @@ test("migration history contains every durable Sandpi boundary", async () => {
     billingUsageSql,
     /public Sandbox0 SDK; Sandbox0 remains usage truth/,
   );
+
+  const environmentResourceDefaultsSql = migrations[48]?.sql ?? "";
+  assert.match(
+    environmentResourceDefaultsSql,
+    /ALTER COLUMN idle_pause_timeout_seconds SET DEFAULT 900/,
+  );
+  assert.match(
+    environmentResourceDefaultsSql,
+    /ALTER COLUMN sandbox_memory_mib SET DEFAULT 1024/,
+  );
+  assert.doesNotMatch(environmentResourceDefaultsSql, /UPDATE environments/i);
 
   const turnSubmissionSql = migrations[16]?.sql ?? "";
   assert.match(turnSubmissionSql, /pending_turn_request_id TEXT/);

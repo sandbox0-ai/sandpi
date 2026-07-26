@@ -481,6 +481,108 @@ test("loads the live workspace and Environment credential surface", async ({
   expect(browserErrors).toEqual([]);
 });
 
+test("replaces the Environment idle timeout after clearing the number input", async ({
+  page,
+}) => {
+  const bootstrap = getMockBootstrap();
+  useEnglishUi(bootstrap);
+  const environment = bootstrap.environments[0];
+  expect(environment).toBeTruthy();
+  if (!environment) return;
+  bootstrap.sessions = [];
+  bootstrap.selectedSessionId = "";
+  environment.idlePauseTimeoutSeconds = 30 * 60;
+  environment.codingAgent = {
+    harness: "codex",
+    label: "Codex",
+    status: "not-connected",
+  };
+
+  await page.route(
+    (url) => url.pathname === "/api/v1/bootstrap",
+    async (route) => {
+      await route.fulfill({ json: { data: bootstrap } });
+    },
+  );
+  await page.route(
+    (url) => url.pathname === "/api/v1/billing/summary",
+    async (route) => {
+      await route.fulfill({
+        json: {
+          data: {
+            plan: {
+              id: "deployment",
+              name: "Deployment",
+              memoryConfigurable: true,
+            },
+          },
+        },
+      });
+    },
+  );
+  await page.route(
+    (url) =>
+      url.pathname ===
+      `/api/v1/environments/${encodeURIComponent(environment.id)}/workspace-backups`,
+    async (route) => {
+      await route.fulfill({ json: { data: [] } });
+    },
+  );
+  await page.route(
+    (url) =>
+      url.pathname ===
+      `/api/v1/environments/${encodeURIComponent(environment.id)}/harnesses/codex/device-login`,
+    async (route) => {
+      await route.fulfill({ json: { data: null } });
+    },
+  );
+  let updateBody: Record<string, unknown> | undefined;
+  await page.route(
+    (url) =>
+      url.pathname ===
+      `/api/v1/environments/${encodeURIComponent(environment.id)}`,
+    async (route) => {
+      if (route.request().method() !== "PUT") {
+        await route.continue();
+        return;
+      }
+      updateBody = route.request().postDataJSON() as Record<string, unknown>;
+      await route.fulfill({
+        json: {
+          data: {
+            ...environment,
+            idlePauseTimeoutSeconds: updateBody.idlePauseTimeoutSeconds,
+          },
+        },
+      });
+    },
+  );
+
+  await page.goto(
+    `/?environment=${encodeURIComponent(environment.id)}&new=1`,
+  );
+  await page
+    .getByRole("button", { name: `${environment.name} settings` })
+    .click();
+  await page.getByRole("button", { name: "Sandbox", exact: true }).click();
+
+  const idleInput = page.getByRole("spinbutton", {
+    name: "Environment auto-pause timeout in minutes",
+  });
+  const saveButton = page.getByRole("button", { name: "Save changes" });
+  await expect(idleInput).toHaveValue("30");
+  await idleInput.press("ControlOrMeta+A");
+  await idleInput.press("Backspace");
+  await expect(idleInput).toHaveValue("");
+  await expect(saveButton).toBeDisabled();
+  await idleInput.pressSequentially("15");
+  await expect(idleInput).toHaveValue("15");
+  await expect(saveButton).toBeEnabled();
+
+  await saveButton.click();
+  await expect.poll(() => updateBody?.idlePauseTimeoutSeconds).toBe(15 * 60);
+});
+
 test("waits for native New Session models and scopes reasoning effort by model", async ({
   page,
   request,

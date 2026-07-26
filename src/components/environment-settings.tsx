@@ -32,7 +32,10 @@ import { EnvironmentEgressCredentials } from "@/components/environment-egress-cr
 import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
 import type { SandpiBillingSummary } from "@/lib/billing";
 import { copyTextToClipboard } from "@/lib/clipboard";
-import { MAX_ENVIRONMENT_IDLE_PAUSE_TIMEOUT_SECONDS } from "@/lib/environment-lifecycle";
+import {
+  idlePauseTimeoutSecondsFromMinutesInput,
+  MAX_ENVIRONMENT_IDLE_PAUSE_TIMEOUT_SECONDS,
+} from "@/lib/environment-lifecycle";
 import { ENVIRONMENT_SANDBOX_MEMORY_OPTIONS_MIB } from "@/lib/environment-resources";
 import {
   ENVIRONMENT_WORKSPACE_BACKUP_INTERVAL_OPTIONS,
@@ -220,6 +223,9 @@ export function EnvironmentSettings({
   const [activeTab, setActiveTab] =
     useState<EnvironmentSettingsTab>(initialTab);
   const [draft, setDraft] = useState(environment);
+  const [idlePauseMinutesInput, setIdlePauseMinutesInput] = useState(() =>
+    String(environment.idlePauseTimeoutSeconds / 60),
+  );
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
@@ -270,6 +276,12 @@ export function EnvironmentSettings({
   const codexUsageResetIdempotencyKeyRef = useRef<string | null>(null);
   const codexAuthFlowId = codexAuthFlow?.id;
   const codexAuthFlowStatus = codexAuthFlow?.status;
+  const idlePauseTimeoutSeconds = idlePauseTimeoutSecondsFromMinutesInput(
+    idlePauseMinutesInput,
+  );
+  const idlePauseMinutesValid = idlePauseTimeoutSeconds !== undefined;
+  const idlePauseMinutesInvalid =
+    idlePauseMinutesInput !== "" && !idlePauseMinutesValid;
   const blocksByDefault = draft.networkPolicy.mode === "block-all";
   const domainAction = blocksByDefault ? "allow" : "block";
   const domainActionPast = blocksByDefault ? "allowed" : "blocked";
@@ -663,6 +675,14 @@ export function EnvironmentSettings({
     if (saving) {
       return;
     }
+    if (idlePauseTimeoutSeconds === undefined) {
+      setSaveError(
+        `Enter a whole number from 0 to ${
+          MAX_ENVIRONMENT_IDLE_PAUSE_TIMEOUT_SECONDS / 60
+        } minutes.`,
+      );
+      return;
+    }
 
     setSaving(true);
     setSaveError("");
@@ -675,7 +695,7 @@ export function EnvironmentSettings({
             name: draft.name.trim(),
             description: draft.description,
             color: draft.color,
-            idlePauseTimeoutSeconds: draft.idlePauseTimeoutSeconds,
+            idlePauseTimeoutSeconds,
             sandboxMemoryMiB: draft.sandboxMemoryMiB,
             workspaceBackup: {
               intervalSeconds: draft.workspaceBackup.intervalSeconds,
@@ -687,6 +707,9 @@ export function EnvironmentSettings({
       );
       onChange(response.data);
       setDraft(response.data);
+      setIdlePauseMinutesInput(
+        String(response.data.idlePauseTimeoutSeconds / 60),
+      );
       setSaved(true);
       window.setTimeout(onClose, 250);
     } catch (error) {
@@ -1129,24 +1152,46 @@ export function EnvironmentSettings({
                     min={0}
                     max={MAX_ENVIRONMENT_IDLE_PAUSE_TIMEOUT_SECONDS / 60}
                     step={1}
-                    value={draft.idlePauseTimeoutSeconds / 60}
+                    value={idlePauseMinutesInput}
+                    aria-invalid={idlePauseMinutesInvalid}
+                    aria-describedby={
+                      idlePauseMinutesInvalid
+                        ? "environment-idle-pause-help environment-idle-pause-error"
+                        : "environment-idle-pause-help"
+                    }
                     onChange={(event) => {
-                      const minutes = event.currentTarget.valueAsNumber;
-                      if (!Number.isFinite(minutes)) return;
+                      const value = event.currentTarget.value;
+                      setIdlePauseMinutesInput(value);
+                      const seconds =
+                        idlePauseTimeoutSecondsFromMinutesInput(value);
+                      if (seconds === undefined) return;
                       setDraft((current) => ({
                         ...current,
-                        idlePauseTimeoutSeconds:
-                          Math.min(
-                            MAX_ENVIRONMENT_IDLE_PAUSE_TIMEOUT_SECONDS / 60,
-                            Math.max(0, Math.round(minutes)),
-                          ) * 60,
+                        idlePauseTimeoutSeconds: seconds,
                       }));
                     }}
+                    onBlur={() => {
+                      if (!idlePauseMinutesValid) {
+                        setIdlePauseMinutesInput(
+                          String(draft.idlePauseTimeoutSeconds / 60),
+                        );
+                      }
+                    }}
                   />
-                  <small>
+                  <small id="environment-idle-pause-help">
                     Sandpi pauses the shared Sandbox after this much idle time.
                     Set 0 to keep it running with no time limit.
                   </small>
+                  {idlePauseMinutesInvalid ? (
+                    <small
+                      id="environment-idle-pause-error"
+                      className="settings-inline-error"
+                      role="alert"
+                    >
+                      Enter a whole number from 0 to{" "}
+                      {MAX_ENVIRONMENT_IDLE_PAUSE_TIMEOUT_SECONDS / 60} minutes.
+                    </small>
+                  ) : null}
                 </label>
                 <label className="full-field">
                   Sandbox memory
@@ -2311,6 +2356,7 @@ export function EnvironmentSettings({
                     deleting ||
                     deleteConfirming ||
                     pendingNetworkMode !== null ||
+                    !idlePauseMinutesValid ||
                     !draft.name.trim()
                   }
                   onClick={() => void saveAndClose()}

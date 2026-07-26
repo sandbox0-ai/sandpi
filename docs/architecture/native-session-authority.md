@@ -484,20 +484,21 @@ Sandpi disables Sandbox0 soft TTL because its native Turn projection owns the
 idle-pause decision. The Workspace Volume and native harness home have their
 independent durable lifecycle.
 
-Each native `turn/completed` transition stores `last_turn_completed_at` and a
-thirty-minute `idle_pause_due_at` in PostgreSQL in the same transaction as the
-active-Turn projection. These rows are the distributed timers: every Sandpi
-replica may scan due Environments, while a PostgreSQL advisory lock keyed by
-Environment elects the replica allowed to call Sandbox0. Under that lock it
-rechecks that no product Session is provisioning or running and that no native
-Turn is active or pending before calling `pauseAndWait`.
+Each native `turn/completed` transition stores `last_turn_completed_at` and the
+configured `idle_pause_due_at` in PostgreSQL in the same transaction as the
+active-Turn projection. The idle window defaults to fifteen minutes. These rows
+are the distributed timers: every Sandpi replica may scan due Environments,
+while a PostgreSQL advisory lock keyed by Environment elects the replica
+allowed to call Sandbox0. Under that lock it rechecks that no product Session
+is provisioning or running and that no native Turn is active or pending before
+calling `pauseAndWait`.
 
 Turn admission takes the same advisory lock and persists pending delivery
 before touching the native harness. Therefore either pause completes first and
 the following supported runtime access is serialized and auto-resumed by
 Sandbox0, or admission completes first and the pause recheck observes work.
 Failed pause requests retain a durable retry deadline. Sandpi records the new
-runtime generation after auto-resume and grants a fresh thirty-minute idle window
+runtime generation after auto-resume and grants a fresh configured idle window
 to avoid an immediately repeated pause, but the next native completion remains
 the authoritative deadline source. Sandbox0 may return `sandbox is waking up`
 while that transition commits; Sandpi waits for the native running generation
