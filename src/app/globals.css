@@ -696,6 +696,45 @@ pre,
   border-top: 1px solid var(--line);
 }
 
+.sidebar-product-links {
+  display: grid;
+  gap: 3px;
+  padding: 4px 7px 7px;
+}
+
+.sidebar-product-links a,
+.sidebar-product-links p {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  color: var(--ink-faint);
+  font-size: 9.5px;
+  line-height: 1.35;
+}
+
+.sidebar-product-links a {
+  border-radius: 5px;
+  text-decoration: none;
+}
+
+.sidebar-product-links a:hover,
+.sidebar-product-links a:focus-visible {
+  color: var(--ink);
+}
+
+.sidebar-product-links svg {
+  flex: 0 0 auto;
+}
+
+.sidebar-product-links span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .account-menu-trigger {
   display: flex;
   width: 100%;
@@ -714,14 +753,6 @@ pre,
 .account-menu-trigger:hover,
 .account-menu-trigger.is-open {
   background: var(--hover);
-}
-
-.sidebar-account-summary-static {
-  cursor: default;
-}
-
-.sidebar-account-summary-static:hover {
-  background: transparent;
 }
 
 .account-avatar {
@@ -755,6 +786,11 @@ pre,
 
 .account-copy small {
   font-size: 10px;
+}
+
+.account-menu-indicator {
+  flex: 0 0 auto;
+  opacity: 0.65;
 }
 
 .sidebar-account-menu {
@@ -794,6 +830,25 @@ pre,
 .sidebar-account-menu button:focus-visible {
   background: var(--hover);
   color: var(--ink);
+}
+
+.sidebar-account-menu button:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.sidebar-account-menu-divider {
+  display: block;
+  height: 1px;
+  margin: 5px 4px;
+  background: var(--line);
+}
+
+.sidebar-account-menu-error {
+  margin: 5px 9px 4px;
+  color: var(--red);
+  font-size: 9.5px;
+  line-height: 1.45;
 }
 
 .conversation-pane {
@@ -4294,6 +4349,19 @@ code.codex-compact-activity-subject {
   color: var(--ink-faint);
   font-size: 9.5px;
   font-weight: 450;
+}
+
+.settings-plan-notice a {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--blue);
+  font-weight: 640;
+  text-decoration: none;
+}
+
+.settings-plan-notice a:hover {
+  text-decoration: underline;
 }
 
 .color-input-row {

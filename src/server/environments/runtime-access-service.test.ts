@@ -466,6 +466,45 @@ test("skips a live runtime touch when lifecycle transition owns the lock", async
   assert.equal(touches, 0);
 });
 
+test("quota admission rejects a runtime operation while holding the shared lock", async () => {
+  let operationCalls = 0;
+  let quotaChecks = 0;
+  const store = runtimeAccessStore();
+  const service = new EnvironmentRuntimeAccessService(
+    store,
+    {} as RuntimeAdapter,
+    {
+      quotaGate: {
+        async assertEnvironmentRuntimeAllowed(environmentId: string) {
+          quotaChecks += 1;
+          assert.equal(environmentId, environmentRuntime.id);
+          throw new HttpError(
+            429,
+            "sandbox_runtime_quota_exhausted",
+            "Runtime quota exhausted.",
+          );
+        },
+      },
+    },
+  );
+
+  await assert.rejects(
+    service.withRuntimeAccess(
+      "user-test",
+      environmentRuntime.id,
+      async () => {
+        operationCalls += 1;
+      },
+    ),
+    (error) =>
+      error instanceof HttpError &&
+      error.code === "sandbox_runtime_quota_exhausted",
+  );
+
+  assert.equal(quotaChecks, 1);
+  assert.equal(operationCalls, 0);
+});
+
 function runtimeAccessStore(
   overrides: {
     runtime?: StoredEnvironmentRuntime;

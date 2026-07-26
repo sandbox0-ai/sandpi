@@ -47,6 +47,7 @@ import type {
   EnvironmentRuntimeRecord,
   RuntimeAdapter,
 } from "@/server/runtime/types";
+import type { RuntimeQuotaGate } from "@/server/billing/quota-service";
 import {
   CODEX_MCP_OAUTH_CALLBACK_BASE_PATH,
   CODEX_MCP_OAUTH_CALLBACK_PORT,
@@ -284,6 +285,7 @@ export class CodexService {
       exceptionalSessionRetryBaseMs?: number;
       exceptionalSessionActiveRecheckMs?: number;
       exceptionalSessionRequestTimeoutMs?: number;
+      runtimeQuotaGate?: RuntimeQuotaGate;
     } = {},
   ) {
     this.events.setMaxListeners(0);
@@ -2008,6 +2010,9 @@ export class CodexService {
     userId: string,
     environment: Environment,
   ) {
+    await this.options.runtimeQuotaGate?.assertEnvironmentRuntimeAllowed(
+      environment.id,
+    );
     const current = await this.store.getEnvironmentRuntime(
       userId,
       environment.id,
@@ -2073,6 +2078,9 @@ export class CodexService {
     const deadline = Date.now() + RUNTIME_RECOVERY_LOCK_TIMEOUT_MS;
     while (!this.closed) {
       try {
+        await this.options.runtimeQuotaGate?.assertEnvironmentRuntimeAllowed(
+          environmentId,
+        );
         const credential =
           await this.credentials.credentialForEnvironmentRuntime(environmentId);
         const locked =
@@ -2124,6 +2132,9 @@ export class CodexService {
     credential: CodexCredentialMaterial,
     lockedStore: SandpiStore,
   ) {
+    await this.options.runtimeQuotaGate?.assertEnvironmentRuntimeAllowed(
+      environmentId,
+    );
     const current = await lockedStore.environmentRuntime(environmentId);
     const recovered = await this.runtime.ensureCodexEnvironmentRuntime(
       current,
@@ -3635,6 +3646,9 @@ export class CodexService {
           async (lockedStore) => {
             const scopedStore = lockedStore ?? this.store;
             const current = await scopedStore.environmentRuntime(environmentId);
+            await this.options.runtimeQuotaGate?.assertEnvironmentRuntimeAllowed(
+              environmentId,
+            );
             if (
               current.desiredState !== "running" ||
               current.observedState !== "running" ||

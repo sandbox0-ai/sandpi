@@ -36,12 +36,15 @@ Required repository variables:
 
 - `SANDBOX0_API_HOST`
 - `SANDPI_AUTH_MODE`
+- `SANDPI_BILLING_MODE`
 - `SANDPI_INGRESS_IP`
 - `SANDPI_OIDC_CLIENT_ID`
 - `SANDPI_OIDC_ISSUER`
 - `SANDPI_OIDC_SCOPES`
 - `SANDPI_OIDC_TOKEN_ENDPOINT_AUTH_METHOD`
 - `SANDPI_PUBLIC_URL`
+- `SANDPI_STRIPE_PLUS_PRICE_ID`
+- `SANDPI_STRIPE_PRO_PRICE_ID`
 
 Required repository secrets:
 
@@ -51,6 +54,19 @@ Required repository secrets:
 - `SANDPI_OIDC_CLIENT_SECRET`
 - `SANDPI_POSTGRES_PASSWORD`
 - `SANDPI_SECRET_KEY`
+- `SANDPI_STRIPE_SECRET_KEY`
+- `SANDPI_STRIPE_WEBHOOK_SECRET`
+
+The production workflow requires `SANDPI_BILLING_MODE=stripe`. Configure the
+Stripe webhook endpoint as
+`https://sandpi.ai/api/v1/billing/webhook`. Sandpi verifies the raw request
+body with `SANDPI_STRIPE_WEBHOOK_SECRET`; the endpoint intentionally bypasses
+OIDC, while every summary, Checkout and Customer Portal route remains
+user-authenticated.
+
+Before enabling Stripe mode, publish and install a Sandbox0 JavaScript SDK
+release that exposes `client.usage.listWindows()`. Sandpi deliberately fails
+startup with an older SDK instead of bypassing the public SDK boundary.
 
 The apex `sandpi.ai` DNS record must be an A record for the ingress address in
 `SANDPI_INGRESS_IP`. No AAAA record is published while the ingress has no IPv6

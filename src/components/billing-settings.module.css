@@ -1,0 +1,382 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.loading {
+  display: flex;
+  min-height: 180px;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  color: var(--ink-faint, #8a8982);
+  font-size: 11px;
+}
+
+.loading svg,
+.portalButton svg,
+.planCard button svg {
+  animation: spin 850ms linear infinite;
+}
+
+.overview {
+  display: grid;
+  grid-template-columns: minmax(0, 0.75fr) minmax(0, 1.25fr);
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid var(--line, #deddd7);
+  border-radius: 10px;
+  background: var(--line, #deddd7);
+}
+
+.planIdentity,
+.usage {
+  min-width: 0;
+  padding: 20px;
+  background: var(--panel-strong, #fff);
+}
+
+.planIdentity {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.planIdentity > span,
+.usageHeading > span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink-faint, #8a8982);
+  font-size: 9px;
+  font-weight: 680;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.planIdentity > strong {
+  margin-top: 8px;
+  font-size: 24px;
+  letter-spacing: -0.04em;
+}
+
+.planIdentity > small,
+.usage > small {
+  margin-top: 5px;
+  color: var(--ink-faint, #8a8982);
+  font-size: 9.5px;
+}
+
+.usageHeading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.usageHeading > strong {
+  font-size: 11px;
+  font-weight: 670;
+}
+
+.progress,
+.unlimitedLine {
+  height: 7px;
+  margin-top: 15px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--selected, #dfddd5);
+}
+
+.progress > span {
+  display: block;
+  height: 100%;
+  min-width: 2px;
+  border-radius: inherit;
+  background: var(--blue, #416d9d);
+}
+
+.progress > span.exhausted {
+  background: var(--red, #b6483e);
+}
+
+.unlimitedLine {
+  background: linear-gradient(
+    90deg,
+    var(--blue, #416d9d),
+    color-mix(in srgb, var(--blue, #416d9d) 20%, transparent)
+  );
+}
+
+.entitlements {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.entitlements > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+  padding: 13px;
+  border: 1px solid var(--line-soft, #ebe9e3);
+  border-radius: 8px;
+  background: var(--panel, #fbfaf7);
+}
+
+.entitlements span {
+  color: var(--ink-faint, #8a8982);
+  font-size: 9px;
+}
+
+.entitlements strong {
+  overflow: hidden;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.entitlements > div.entitlementWarning {
+  border-color: color-mix(in srgb, var(--red, #b6483e) 40%, transparent);
+  background: var(--red-soft, #faece9);
+}
+
+.deploymentNotice,
+.errorCard {
+  display: flex;
+  gap: 11px;
+  padding: 15px;
+  border: 1px solid color-mix(in srgb, var(--green, #258658) 35%, transparent);
+  border-radius: 9px;
+  background: var(--green-soft, #e9f5ef);
+  color: var(--green, #258658);
+}
+
+.deploymentNotice svg,
+.errorCard > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.deploymentNotice strong,
+.errorCard strong {
+  font-size: 11px;
+}
+
+.deploymentNotice p,
+.errorCard p {
+  margin: 4px 0 0;
+  color: var(--ink-soft, #62615c);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.errorCard {
+  border-color: color-mix(in srgb, var(--red, #b6483e) 35%, transparent);
+  background: var(--red-soft, #faece9);
+  color: var(--red, #b6483e);
+}
+
+.errorCard button {
+  display: inline-flex;
+  min-height: 30px;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 0 10px;
+  border: 1px solid var(--line, #deddd7);
+  border-radius: 6px;
+  background: var(--panel-strong, #fff);
+  color: var(--ink, #171716);
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.planHeader {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 18px;
+  padding-top: 3px;
+}
+
+.planHeader strong {
+  font-size: 13px;
+}
+
+.planHeader p {
+  margin: 4px 0 0;
+  color: var(--ink-faint, #8a8982);
+  font-size: 9.5px;
+  line-height: 1.5;
+}
+
+.portalButton {
+  display: inline-flex;
+  min-height: 32px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid var(--line, #deddd7);
+  border-radius: 7px;
+  background: var(--panel-strong, #fff);
+  color: var(--ink, #171716);
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.portalButton:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.portalButton svg:not(:global(.lucide-loader-circle)) {
+  animation: none;
+}
+
+.planGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.planCard {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  padding: 15px;
+  border: 1px solid var(--line, #deddd7);
+  border-radius: 9px;
+  background: var(--panel-strong, #fff);
+}
+
+.planCard.current {
+  border-color: var(--blue, #416d9d);
+  box-shadow: 0 0 0 2px rgb(65 109 157 / 8%);
+}
+
+.planCard header {
+  display: flex;
+  min-height: 70px;
+  flex-direction: column;
+}
+
+.planCard header > span {
+  color: var(--ink-soft, #62615c);
+  font-size: 10px;
+  font-weight: 680;
+}
+
+.planCard header > strong {
+  margin-top: 7px;
+  font-size: 22px;
+  letter-spacing: -0.04em;
+}
+
+.planCard header > small {
+  margin-top: 2px;
+  color: var(--ink-faint, #8a8982);
+  font-size: 8.5px;
+}
+
+.planCard ul {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-height: 84px;
+  margin: 13px 0 16px;
+  padding: 13px 0 0;
+  border-top: 1px solid var(--line-soft, #ebe9e3);
+  color: var(--ink-soft, #62615c);
+  font-size: 9.5px;
+  line-height: 1.35;
+  list-style: none;
+}
+
+.planCard li::before {
+  margin-right: 6px;
+  color: var(--green, #258658);
+  content: "✓";
+}
+
+.planCard button {
+  display: inline-flex;
+  min-height: 33px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-top: auto;
+  border: 1px solid var(--ink, #171716);
+  border-radius: 7px;
+  background: var(--ink, #171716);
+  color: var(--canvas, #f7f6f2);
+  font-size: 10px;
+  font-weight: 640;
+  cursor: pointer;
+}
+
+.planCard button:disabled {
+  border-color: var(--line, #deddd7);
+  background: var(--selected, #dfddd5);
+  color: var(--ink-soft, #62615c);
+  cursor: default;
+}
+
+.planCard button svg:not(:global(.lucide-loader-circle)) {
+  animation: none;
+}
+
+.subscriptionNote {
+  margin: -5px 0 0;
+  color: var(--ink-faint, #8a8982);
+  font-size: 9.5px;
+}
+
+.subscriptionNote strong {
+  color: var(--ink-soft, #62615c);
+}
+
+.inlineError {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  padding: 10px 11px;
+  border-radius: 7px;
+  background: var(--red-soft, #faece9);
+  color: var(--red, #b6483e);
+  font-size: 10px;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 680px) {
+  .overview {
+    grid-template-columns: 1fr;
+  }
+
+  .entitlements,
+  .planGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .planHeader {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loading svg,
+  .portalButton svg,
+  .planCard button svg {
+    animation: none;
+  }
+}

@@ -110,6 +110,22 @@ export interface RuntimeMetricWindow {
   endedAt: Date;
 }
 
+export interface RuntimeUsageWindow {
+  windowId: string;
+  windowType: string;
+  sandboxId?: string;
+  windowStart: Date;
+  windowEnd: Date;
+  value: number;
+  unit: string;
+  recordedAt: Date;
+}
+
+export interface RuntimeUsageWindowPage {
+  windows: RuntimeUsageWindow[];
+  nextCursor: string;
+}
+
 export interface CodexAuthRuntime {
   sandboxId: string;
   supervisorSessionId: string;
@@ -119,6 +135,12 @@ export interface CodexAuthRuntime {
 
 export interface RuntimeAdapter {
   readonly mode: "sandbox0" | "unconfigured";
+  supportsUsageWindows(): boolean;
+  listUsageWindows(options?: {
+    cursor?: string;
+    limit?: number;
+    windowType?: string;
+  }): Promise<RuntimeUsageWindowPage>;
   provisionEnvironment(
     input: RuntimeProvisionEnvironmentInput,
   ): Promise<ProvisionedEnvironment>;

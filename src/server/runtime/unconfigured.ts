@@ -12,6 +12,8 @@ function unavailable(): never {
 export class UnconfiguredRuntime implements RuntimeAdapter {
   readonly mode = "unconfigured" as const;
 
+  supportsUsageWindows = () => false;
+  listUsageWindows = unavailable;
   provisionEnvironment = unavailable;
   deleteEnvironmentResources = async () => undefined;
   updateEnvironmentNetworkPolicy = unavailable;

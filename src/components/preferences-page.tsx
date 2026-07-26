@@ -3,6 +3,7 @@
 import {
   Check,
   CircleAlert,
+  CreditCard,
   LoaderCircle,
   Palette,
   Settings2,
@@ -21,7 +22,8 @@ import {
   AppSidebar,
   SidebarBackAction,
 } from "@/components/app-frame";
-import { StaticSidebarAccount } from "@/components/sidebar-primitives";
+import { BillingSettings } from "@/components/billing-settings";
+import { SidebarAccountFooter } from "@/components/sidebar-account-footer";
 import {
   applyClientPreferences,
   buildAppearancePreviewPreferences,
@@ -33,7 +35,7 @@ import type { SandpiPreferences, SandpiUser } from "@/lib/types";
 
 import styles from "./preferences-page.module.css";
 
-type PreferenceTab = "general" | "appearance";
+type PreferenceTab = "general" | "appearance" | "billing";
 
 interface PreferencesPageProps {
   initialPreferences: SandpiPreferences;
@@ -47,6 +49,7 @@ const tabs: Array<{
 }> = [
   { id: "general", label: "General", icon: Settings2 },
   { id: "appearance", label: "Appearance", icon: Palette },
+  { id: "billing", label: "Billing", icon: CreditCard },
 ];
 
 export function PreferencesPage({
@@ -113,6 +116,12 @@ export function PreferencesPage({
       restoreSavedPreferences();
     };
   }, [initialPreferences]);
+
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).has("billing")) {
+      setActiveTab("billing");
+    }
+  }, []);
 
   useEffect(() => {
     if (!hydrated) {
@@ -218,7 +227,13 @@ export function PreferencesPage({
             label={text("Back to workspace", "返回工作区")}
           />
         }
-        footer={<StaticSidebarAccount viewer={viewer} context={viewer.email} />}
+        footer={
+          <SidebarAccountFooter
+            language={baseline.general.language}
+            viewer={viewer}
+            showPreferences={false}
+          />
+        }
       >
         <div className={styles.sidebarHeading}>
           <span>{text("Settings", "设置")}</span>
@@ -248,6 +263,7 @@ export function PreferencesPage({
                     {
                       General: "通用",
                       Appearance: "外观",
+                      Billing: "订阅与用量",
                     }[tab.label] ?? tab.label,
                   )}
                 </span>
@@ -263,7 +279,11 @@ export function PreferencesPage({
         </p>
       </AppSidebar>
 
-      <div className={styles.workspace}>
+      <div
+        className={`${styles.workspace} ${
+          activeTab === "billing" ? styles.workspaceFull : ""
+        }`}
+      >
         <main className={styles.content} id="preferences-content">
           {activeTab === "general" ? (
             <PreferenceSection
@@ -420,9 +440,26 @@ export function PreferencesPage({
             </PreferenceSection>
           ) : null}
 
+          {activeTab === "billing" ? (
+            <PreferenceSection
+              eyebrow={text("Account", "账户")}
+              title={text("Billing & usage", "订阅与用量")}
+              description={text(
+                "Manage your Sandpi plan and review account-attributed Sandbox runtime usage.",
+                "管理 Sandpi 套餐并查看归属当前账户的 Sandbox 运行用量。",
+              )}
+            >
+              <BillingSettings
+                language={baseline.general.language}
+                timeZone={baseline.general.timeZone}
+              />
+            </PreferenceSection>
+          ) : null}
+
         </main>
 
-        <footer className={styles.saveBar}>
+        {activeTab !== "billing" ? (
+          <footer className={styles.saveBar}>
           <div className={styles.saveStatus} aria-live="polite">
             {saveState ? (
               <span
@@ -474,7 +511,8 @@ export function PreferencesPage({
                 : text("Save changes", "保存更改")}
             </button>
           </div>
-        </footer>
+          </footer>
+        ) : null}
       </div>
     </AppFrame>
   );

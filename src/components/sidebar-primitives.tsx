@@ -1,3 +1,6 @@
+import { Github, Smartphone } from "lucide-react";
+
+import { SANDPI_GITHUB_REPOSITORY_URL } from "@/lib/help-feedback";
 import type { SandpiUser } from "@/lib/types";
 
 export function SandpiBrandLockup() {
@@ -27,16 +30,29 @@ export function SidebarAccountSummary({
   );
 }
 
-export function StaticSidebarAccount({
-  viewer,
-  context,
+export function SidebarProductLinks({
+  githubLabel,
+  mobileAppsLabel,
 }: {
-  viewer: SandpiUser;
-  context: string;
+  githubLabel: string;
+  mobileAppsLabel: string;
 }) {
   return (
-    <div className="account-menu-trigger sidebar-account-summary-static">
-      <SidebarAccountSummary viewer={viewer} context={context} />
+    <div className="sidebar-product-links">
+      <a
+        href={SANDPI_GITHUB_REPOSITORY_URL}
+        target="_blank"
+        rel="noreferrer"
+        aria-label={githubLabel}
+        title={githubLabel}
+      >
+        <Github size={13} aria-hidden="true" />
+        <span>github.com/sandbox0-ai/sandpi</span>
+      </a>
+      <p>
+        <Smartphone size={12} aria-hidden="true" />
+        <span>{mobileAppsLabel}</span>
+      </p>
     </div>
   );
 }

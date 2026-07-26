@@ -72,6 +72,7 @@ test("migration history contains every durable Sandpi boundary", async () => {
       "0045_codex_native_mcp",
       "0046_codex_runtime_turn_recovery",
       "0047_environment_egress_credentials",
+      "0048_user_billing_and_usage",
     ],
   );
 
@@ -176,6 +177,18 @@ test("migration history contains every durable Sandpi boundary", async () => {
   assert.match(workspaceNativeStateSql, /DROP COLUMN replacement_native_session_id/);
   assert.match(workspaceNativeStateSql, /DROP COLUMN branch_through_native_turn_id/);
   assert.doesNotMatch(workspaceNativeStateSql, /payload JSONB|notification JSONB/);
+
+  const billingUsageSql = migrations[47]?.sql ?? "";
+  assert.match(billingUsageSql, /CREATE TABLE user_subscriptions\b/);
+  assert.match(billingUsageSql, /CREATE TABLE stripe_webhook_events\b/);
+  assert.match(billingUsageSql, /processing_started_at TIMESTAMPTZ/);
+  assert.match(billingUsageSql, /CREATE TABLE sandbox_usage_attributions\b/);
+  assert.match(billingUsageSql, /CREATE TABLE sandbox_usage_windows\b/);
+  assert.match(billingUsageSql, /CREATE TABLE sandbox_runtime_segments\b/);
+  assert.match(
+    billingUsageSql,
+    /public Sandbox0 SDK; Sandbox0 remains usage truth/,
+  );
 
   const turnSubmissionSql = migrations[16]?.sql ?? "";
   assert.match(turnSubmissionSql, /pending_turn_request_id TEXT/);

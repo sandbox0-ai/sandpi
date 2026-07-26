@@ -5,6 +5,47 @@ import type { Pool } from "pg";
 
 import { SandpiStore } from "./store";
 
+test("serializes Environment creation against the user plan limit", async () => {
+  const queries: string[] = [];
+  const client = {
+    async query(sql: string) {
+      queries.push(sql);
+      if (sql.includes("COUNT(*)::TEXT")) {
+        return { rowCount: 1, rows: [{ count: "1" }] };
+      }
+      return { rowCount: 1, rows: [] };
+    },
+    release() {},
+  };
+  const store = new SandpiStore({
+    async connect() {
+      return client;
+    },
+  } as unknown as Pool);
+
+  await assert.rejects(
+    store.createEnvironmentMetadata({
+      userId: "user-viewer",
+      name: "Second Environment",
+      environmentLimit: 1,
+    }),
+    (error: unknown) =>
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "environment_plan_limit",
+  );
+
+  assert.equal(
+    queries.some((sql) => sql.includes("pg_advisory_xact_lock")),
+    true,
+  );
+  assert.equal(
+    queries.some((sql) => sql.includes("INSERT INTO environments")),
+    false,
+  );
+  assert.equal(queries.at(-1), "ROLLBACK");
+});
+
 test("scopes Environments and Sessions to the owning user", async () => {
   const queries: string[] = [];
   const now = new Date("2026-07-21T00:00:00.000Z");

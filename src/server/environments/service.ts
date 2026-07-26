@@ -4,6 +4,10 @@ import type { Environment, NetworkPolicy } from "@/lib/types";
 import { conflict, HttpError } from "@/server/http-error";
 import type { RuntimeAdapter } from "@/server/runtime/types";
 import { SandpiStore } from "@/server/store";
+import type {
+  EnvironmentQuotaPolicy,
+  RuntimeQuotaGate,
+} from "@/server/billing/quota-service";
 
 interface ServiceLogger {
   info(fields: object, message: string): void;
@@ -27,6 +31,8 @@ export class EnvironmentService {
     private readonly store: SandpiStore,
     private readonly runtime: RuntimeAdapter,
     private readonly logger: ServiceLogger,
+    private readonly quota?: EnvironmentQuotaPolicy,
+    private readonly runtimeQuotaGate?: RuntimeQuotaGate,
   ) {}
 
   setBeforeDelete(
@@ -78,7 +84,11 @@ export class EnvironmentService {
     userId: string;
     name: string;
   }) {
-    const environment = await this.store.createEnvironmentMetadata(input);
+    const environmentLimit = await this.quota?.environmentLimit(input.userId);
+    const environment = await this.store.createEnvironmentMetadata({
+      ...input,
+      environmentLimit,
+    });
     // The logical Environment exists before its Workspace Volume is ready.
     // Return immediately so native harness login can run in an Auth Runner
     // while the Sandbox0 Volume is provisioned independently.
@@ -119,6 +129,13 @@ export class EnvironmentService {
     const idlePauseChanged =
       current.idlePauseTimeoutSeconds !== input.idlePauseTimeoutSeconds;
     const memoryChanged = current.sandboxMemoryMiB !== input.sandboxMemoryMiB;
+    if (memoryChanged) {
+      await this.quota?.assertMemoryConfigurationAllowed(
+        userId,
+        current.sandboxMemoryMiB,
+        input.sandboxMemoryMiB,
+      );
+    }
     const backupPolicyChanged =
       current.workspaceBackup.intervalSeconds !==
         input.workspaceBackup.intervalSeconds ||
@@ -142,6 +159,13 @@ export class EnvironmentService {
         JSON.stringify(locked.networkPolicy) !== JSON.stringify(input.networkPolicy);
       const lockedMemoryChanged =
         locked.sandboxMemoryMiB !== input.sandboxMemoryMiB;
+      if (lockedMemoryChanged) {
+        await this.quota?.assertMemoryConfigurationAllowed(
+          userId,
+          locked.sandboxMemoryMiB,
+          input.sandboxMemoryMiB,
+        );
+      }
       if (lockedNetworkChanged || lockedMemoryChanged) {
         const runtime = await scopedStore.getEnvironmentRuntime(
           userId,
@@ -279,6 +303,9 @@ export class EnvironmentService {
     let resources: Parameters<RuntimeAdapter["deleteEnvironmentResources"]>[0] = {};
     try {
       const environment = await this.store.getEnvironmentById(environmentId);
+      await this.runtimeQuotaGate?.assertEnvironmentRuntimeAllowed(
+        environmentId,
+      );
       const credentials =
         await this.store.listEnvironmentEgressCredentialsByEnvironmentId(
           environmentId,

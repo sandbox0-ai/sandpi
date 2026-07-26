@@ -27,6 +27,10 @@
   grid-template-rows: minmax(0, 1fr) 64px;
 }
 
+.workspaceFull {
+  grid-template-rows: minmax(0, 1fr);
+}
+
 .sidebarBody {
   padding: 18px 18px 24px 20px;
 }

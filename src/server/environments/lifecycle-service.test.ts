@@ -260,3 +260,96 @@ test("a failed pause remains a durable retry instead of failing the scheduler", 
 
   assert.equal(recordedError, "pause timed out");
 });
+
+test("quota pause is lifecycle-locked and records a distinct pause reason", async () => {
+  const calls: string[] = [];
+  const runtimeState = storedRuntime();
+  const scopedStore = {
+    async prepareEnvironmentQuotaPause(environmentId: string) {
+      assert.equal(environmentId, runtimeState.id);
+      calls.push("prepare");
+      return runtimeState;
+    },
+    async recordEnvironmentPaused(
+      environmentId: string,
+      sandboxId: string,
+      reason: string,
+    ) {
+      assert.equal(environmentId, runtimeState.id);
+      assert.equal(sandboxId, runtimeState.sandboxId);
+      assert.equal(reason, "quota");
+      calls.push("record");
+    },
+    async recordEnvironmentQuotaPauseFailure() {
+      assert.fail("successful quota pause must not record a failure");
+    },
+  } as unknown as SandpiStore;
+  const rootStore = {
+    async withEnvironmentLifecycleLock(
+      environmentId: string,
+      operation: (store: SandpiStore) => Promise<void>,
+    ) {
+      assert.equal(environmentId, runtimeState.id);
+      calls.push("lock");
+      return { acquired: true, value: await operation(scopedStore) };
+    },
+  } as unknown as SandpiStore;
+  const runtime = {
+    mode: "sandbox0",
+    async pauseEnvironment(received: StoredEnvironmentRuntime) {
+      assert.strictEqual(received, runtimeState);
+      calls.push("pause");
+    },
+  } as unknown as RuntimeAdapter;
+  const service = new EnvironmentLifecycleService(rootStore, runtime, logger);
+  service.setBeforePause((_environmentId, store) => {
+    assert.strictEqual(store, scopedStore);
+    calls.push("flush");
+  });
+
+  await service.pauseForQuota(runtimeState.id);
+  await service.close();
+
+  assert.deepEqual(calls, ["lock", "prepare", "flush", "pause", "record"]);
+});
+
+test("quota pause rechecks entitlement after taking the lifecycle lock", async () => {
+  const calls: string[] = [];
+  const runtimeState = storedRuntime();
+  const store = {
+    async withEnvironmentLifecycleLock(
+      _environmentId: string,
+      operation: (store: SandpiStore) => Promise<void>,
+    ) {
+      calls.push("lock");
+      return {
+        acquired: true,
+        value: await operation(store as unknown as SandpiStore),
+      };
+    },
+    async prepareEnvironmentQuotaPause() {
+      calls.push("prepare");
+      return runtimeState;
+    },
+  } as unknown as SandpiStore;
+  const runtime = {
+    mode: "sandbox0",
+    async pauseEnvironment() {
+      calls.push("pause");
+    },
+  } as unknown as RuntimeAdapter;
+  const service = new EnvironmentLifecycleService(store, runtime, logger, {
+    quotaGate: {
+      async assertEnvironmentRuntimeAllowed() {},
+      async isEnvironmentRuntimeBlocked() {
+        calls.push("quota");
+        return false;
+      },
+    },
+  });
+
+  await service.pauseForQuota(runtimeState.id);
+  await service.close();
+
+  assert.deepEqual(calls, ["lock", "quota"]);
+});

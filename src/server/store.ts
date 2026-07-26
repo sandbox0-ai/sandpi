@@ -630,11 +630,35 @@ export class SandpiStore {
     return result.rows.map((row) => row.environment_id);
   }
 
-  async createEnvironmentMetadata(input: { userId: string; name: string }) {
+  async createEnvironmentMetadata(input: {
+    userId: string;
+    name: string;
+    environmentLimit?: number | null;
+  }) {
     const id = `env_${randomUUID()}`;
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
+      if (input.environmentLimit != null) {
+        await client.query(
+          "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+          [`sandpi:environment-limit:${input.userId}`],
+        );
+        const count = await client.query<{ count: string }>(
+          `SELECT COUNT(*)::TEXT AS count
+           FROM environments
+           WHERE created_by_user_id = $1 AND status <> 'archived'`,
+          [input.userId],
+        );
+        if (Number(count.rows[0]?.count ?? 0) >= input.environmentLimit) {
+          throw new HttpError(
+            429,
+            "environment_plan_limit",
+            `The current plan allows ${input.environmentLimit} Environment${input.environmentLimit === 1 ? "" : "s"}.`,
+            { environmentLimit: input.environmentLimit },
+          );
+        }
+      }
       await client.query(
         `INSERT INTO environments (
            id, created_by_user_id, name, description, color, status,
@@ -1748,14 +1772,50 @@ export class SandpiStore {
     return this.environmentRuntime(environmentId);
   }
 
-  async recordEnvironmentPaused(environmentId: string, sandboxId: string) {
+  async prepareEnvironmentQuotaPause(environmentId: string) {
+    const result = await this.pool.query<{ environment_id: string }>(
+      `UPDATE environment_runtime
+       SET desired_state = 'paused', lifecycle_error = NULL,
+           version = version + 1
+       WHERE environment_id = $1
+         AND sandbox_id IS NOT NULL
+         AND desired_state <> 'terminated'
+         AND observed_state NOT IN ('paused', 'terminated')
+       RETURNING environment_id`,
+      [environmentId],
+    );
+    if (!result.rowCount) return undefined;
+    return this.environmentRuntime(environmentId);
+  }
+
+  async recordEnvironmentPaused(
+    environmentId: string,
+    sandboxId: string,
+    reason: "idle" | "quota" = "idle",
+  ) {
     await this.pool.query(
       `UPDATE environment_runtime
        SET desired_state = 'paused', observed_state = 'paused',
            idle_pause_due_at = NULL, lifecycle_error = NULL,
-           paused_at = NOW(), version = version + 1
+           pause_reason = $3, paused_at = NOW(), version = version + 1
        WHERE environment_id = $1 AND sandbox_id = $2`,
-      [environmentId, sandboxId],
+      [environmentId, sandboxId, reason],
+    );
+  }
+
+  async recordEnvironmentQuotaPauseFailure(
+    environmentId: string,
+    sandboxId: string,
+    error: string,
+  ) {
+    await this.pool.query(
+      `UPDATE environment_runtime
+       SET desired_state = 'paused', lifecycle_error = $3,
+           version = version + 1
+       WHERE environment_id = $1
+         AND sandbox_id = $2
+         AND observed_state = 'running'`,
+      [environmentId, sandboxId, error],
     );
   }
 

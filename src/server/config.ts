@@ -46,6 +46,18 @@ const environmentSchema = z.object({
   SANDBOX0_API_KEY: z.string().min(1).optional(),
   SANDBOX0_BASE_URL: optionalUrl,
   SANDBOX0_TOKEN: z.string().min(1).optional(),
+  SANDPI_BILLING_MODE: z.enum(["disabled", "stripe"]).default("disabled"),
+  SANDPI_STRIPE_SECRET_KEY: z.string().min(1).optional(),
+  SANDPI_STRIPE_PRIVATE_KEY: z.string().min(1).optional(),
+  SANDPI_STRIPE_WEBHOOK_SECRET: z.string().min(1).optional(),
+  SANDPI_STRIPE_PLUS_PRICE_ID: z.string().min(1).optional(),
+  SANDPI_STRIPE_PRO_PRICE_ID: z.string().min(1).optional(),
+  SANDPI_USAGE_POLL_INTERVAL_MS: z.coerce
+    .number()
+    .int()
+    .min(5_000)
+    .max(300_000)
+    .default(15_000),
   SANDPI_LOG_LEVEL: z
     .enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"])
     .default("info"),
@@ -74,6 +86,16 @@ export interface SandpiConfig {
       };
   secretKey?: string;
   sandbox0?: { apiHost: string; apiKey: string };
+  billing:
+    | { mode: "disabled" }
+    | {
+        mode: "stripe";
+        secretKey: string;
+        webhookSecret: string;
+        plusPriceId: string;
+        proPriceId: string;
+        usagePollIntervalMs: number;
+      };
 }
 
 export function loadConfig(
@@ -85,6 +107,8 @@ export function loadConfig(
   );
   const apiHost = value.SANDBOX0_API_HOST ?? value.SANDBOX0_BASE_URL;
   const apiKey = value.SANDBOX0_API_KEY ?? value.SANDBOX0_TOKEN;
+  const stripeSecretKey =
+    value.SANDPI_STRIPE_SECRET_KEY ?? value.SANDPI_STRIPE_PRIVATE_KEY;
 
   let auth: SandpiConfig["auth"];
   if (value.SANDPI_AUTH_MODE === "oidc") {
@@ -137,6 +161,31 @@ export function loadConfig(
     auth = { mode: "admin", cookieSecret: value.SANDPI_COOKIE_SECRET };
   }
 
+  let billing: SandpiConfig["billing"] = { mode: "disabled" };
+  if (value.SANDPI_BILLING_MODE === "stripe") {
+    const missing = [
+      ["SANDPI_STRIPE_SECRET_KEY", stripeSecretKey],
+      ["SANDPI_STRIPE_WEBHOOK_SECRET", value.SANDPI_STRIPE_WEBHOOK_SECRET],
+      ["SANDPI_STRIPE_PLUS_PRICE_ID", value.SANDPI_STRIPE_PLUS_PRICE_ID],
+      ["SANDPI_STRIPE_PRO_PRICE_ID", value.SANDPI_STRIPE_PRO_PRICE_ID],
+    ]
+      .filter(([, configured]) => !configured)
+      .map(([name]) => name);
+    if (missing.length > 0) {
+      throw new Error(
+        `${missing.join(", ")} ${missing.length === 1 ? "is" : "are"} required when SANDPI_BILLING_MODE=stripe`,
+      );
+    }
+    billing = {
+      mode: "stripe",
+      secretKey: stripeSecretKey!,
+      webhookSecret: value.SANDPI_STRIPE_WEBHOOK_SECRET!,
+      plusPriceId: value.SANDPI_STRIPE_PLUS_PRICE_ID!,
+      proPriceId: value.SANDPI_STRIPE_PRO_PRICE_ID!,
+      usagePollIntervalMs: value.SANDPI_USAGE_POLL_INTERVAL_MS,
+    };
+  }
+
   return {
     nodeEnv: value.NODE_ENV,
     databaseUrl: value.DATABASE_URL,
@@ -150,5 +199,6 @@ export function loadConfig(
     auth,
     secretKey: value.SANDPI_SECRET_KEY,
     sandbox0: apiHost && apiKey ? { apiHost, apiKey } : undefined,
+    billing,
   };
 }

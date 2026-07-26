@@ -78,3 +78,39 @@ test("requires the openid scope for OIDC", () => {
     /SANDPI_OIDC_SCOPES must include openid/,
   );
 });
+
+test("keeps self-hosted billing disabled by default", () => {
+  assert.deepEqual(loadConfig({ NODE_ENV: "test" }).billing, {
+    mode: "disabled",
+  });
+});
+
+test("requires a complete server-side Stripe configuration", () => {
+  assert.throws(
+    () =>
+      loadConfig({
+        NODE_ENV: "test",
+        SANDPI_BILLING_MODE: "stripe",
+        SANDPI_STRIPE_SECRET_KEY: "sk_test_example",
+      }),
+    /SANDPI_STRIPE_WEBHOOK_SECRET.*SANDPI_STRIPE_PLUS_PRICE_ID.*SANDPI_STRIPE_PRO_PRICE_ID/,
+  );
+
+  const config = loadConfig({
+    NODE_ENV: "test",
+    SANDPI_BILLING_MODE: "stripe",
+    SANDPI_STRIPE_PRIVATE_KEY: "sk_test_example",
+    SANDPI_STRIPE_WEBHOOK_SECRET: "whsec_example",
+    SANDPI_STRIPE_PLUS_PRICE_ID: "price_plus",
+    SANDPI_STRIPE_PRO_PRICE_ID: "price_pro",
+    SANDPI_USAGE_POLL_INTERVAL_MS: "30000",
+  });
+  assert.deepEqual(config.billing, {
+    mode: "stripe",
+    secretKey: "sk_test_example",
+    webhookSecret: "whsec_example",
+    plusPriceId: "price_plus",
+    proPriceId: "price_pro",
+    usagePollIntervalMs: 30_000,
+  });
+});

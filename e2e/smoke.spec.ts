@@ -242,6 +242,127 @@ test("starts login from the anonymous account action", async ({ page }) => {
   expect(new URL(loginRequestUrl()!).searchParams.get("return_to")).toBe(appUrl);
 });
 
+test("offers Help & feedback to anonymous visitors", async ({ page }) => {
+  await serveAnonymousBootstrap(page);
+
+  await page.goto(
+    "/?environment=env-private&session=session-private&path=%2Fworkspace%2Fsecret",
+  );
+  await expect(
+    page.getByRole("link", { name: "Sandpi GitHub repository" }),
+  ).toHaveAttribute("href", "https://github.com/sandbox0-ai/sandpi");
+  await expect(
+    page.getByText("iOS · Android · HarmonyOS coming soon"),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Help & feedback" }).click();
+
+  const dialog = page.getByRole("dialog", { name: "Help & feedback" });
+  await expect(dialog).toBeVisible();
+  await expect(
+    dialog.getByRole("link", { name: /Read the documentation/ }),
+  ).toHaveAttribute("href", "https://github.com/sandbox0-ai/sandpi#readme");
+
+  const reportHref = await dialog
+    .getByRole("link", { name: /Report a problem/ })
+    .getAttribute("href");
+  expect(reportHref).toBeTruthy();
+  const reportUrl = new URL(reportHref!);
+  expect(`${reportUrl.origin}${reportUrl.pathname}`).toBe(
+    "https://github.com/sandbox0-ai/sandpi/issues/new",
+  );
+  expect(reportUrl.searchParams.get("body")).not.toContain("env-private");
+  expect(reportUrl.searchParams.get("body")).not.toContain("session-private");
+  expect(reportUrl.searchParams.get("body")).not.toContain("workspace");
+
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+});
+
+test("logs OIDC users out to the anonymous app home", async ({ page }) => {
+  const bootstrap = getMockBootstrap();
+  let loggedOut = false;
+  let logoutRequests = 0;
+
+  await page.route(
+    (url) => url.pathname === "/api/v1/bootstrap",
+    async (route) => {
+      if (loggedOut) {
+        await route.fulfill({
+          status: 401,
+          contentType: "application/json",
+          body: JSON.stringify({
+            error: {
+              code: "authentication_required",
+              message: "Sign in required.",
+              loginUrl: "/api/v1/auth/login",
+            },
+          }),
+        });
+        return;
+      }
+      await route.fulfill({ json: { data: bootstrap } });
+    },
+  );
+  await page.route(
+    (url) => url.pathname === "/api/v1/auth/logout",
+    async (route) => {
+      expect(route.request().method()).toBe("POST");
+      logoutRequests += 1;
+      loggedOut = true;
+      await route.fulfill({ status: 204 });
+    },
+  );
+
+  await page.goto(
+    "/?environment=env-private&session=session-private&path=%2Fworkspace%2Fsecret",
+  );
+  await page.getByRole("button", { name: "Open account menu" }).click();
+  await page.getByRole("menuitem", { name: "Log out" }).click();
+
+  await expect(
+    page.getByRole("heading", { name: "What should Codex work on?" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Log in or sign up" }),
+  ).toBeVisible();
+  expect(new URL(page.url()).pathname).toBe("/");
+  expect(new URL(page.url()).search).toBe("");
+  expect(logoutRequests).toBe(1);
+});
+
+test("keeps built-in logout anonymous until the user signs in again", async ({
+  page,
+  request,
+}) => {
+  const response = await request.get("/api/v1/bootstrap");
+  expect(response.ok()).toBeTruthy();
+  const bootstrap = (await response.json()) as ApiEnvelope<SandpiBootstrap>;
+  test.skip(
+    bootstrap.data.deployment.identity.protocol !== "builtin",
+    "The built-in identity mode is required for this check.",
+  );
+
+  await page.goto(
+    "/?environment=env-private&session=session-private&path=%2Fworkspace%2Fsecret",
+  );
+  await page.getByRole("button", { name: "Open account menu" }).click();
+  await page.getByRole("menuitem", { name: "Log out" }).click();
+
+  await expect(
+    page.getByRole("heading", { name: "What should Codex work on?" }),
+  ).toBeVisible();
+  expect(new URL(page.url()).pathname).toBe("/");
+  expect(new URL(page.url()).search).toBe("");
+
+  await page.getByRole("button", { name: "Log in or sign up" }).click();
+  await expect(
+    page.getByRole("button", { name: "Open account menu" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Log in or sign up" }),
+  ).toBeHidden();
+});
+
 test("restores a guest message on the authenticated new Session page", async ({
   page,
   request,
@@ -1308,13 +1429,19 @@ test("serves the Preferences layout", async ({ page }) => {
   const preferenceSections = page.getByRole("navigation", {
     name: "Preference sections",
   });
-  await expect(preferenceSections.getByRole("button")).toHaveCount(2);
+  await expect(preferenceSections.getByRole("button")).toHaveCount(3);
   await expect(
     preferenceSections.getByRole("button", { name: "General", exact: true }),
   ).toBeVisible();
   await expect(
     preferenceSections.getByRole("button", {
       name: "Appearance",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(
+    preferenceSections.getByRole("button", {
+      name: "Billing",
       exact: true,
     }),
   ).toBeVisible();
@@ -1326,6 +1453,108 @@ test("serves the Preferences layout", async ({ page }) => {
       }),
     ).toHaveCount(0);
   }
+});
+
+test("renders server-owned plan entitlements and submits only a plan id", async ({
+  page,
+}) => {
+  let checkoutBody: unknown;
+  const periodStartsAt = Date.parse("2026-07-01T00:00:00.000Z") / 1_000;
+  const periodEndsAt = Date.parse("2026-08-01T00:00:00.000Z") / 1_000;
+  await page.route(
+    (url) => url.pathname === "/api/v1/billing/summary",
+    async (route) => {
+      await route.fulfill({
+        json: {
+          data: {
+            billingEnabled: true,
+            plan: {
+              id: "free",
+              name: "Free",
+              monthlyPriceUsd: 0,
+              environmentLimit: 1,
+              memoryConfigurable: false,
+              runtimeQuotaGiBHours: 1,
+              quotaPeriod: "account-month",
+            },
+            availablePlans: [
+              {
+                id: "free",
+                name: "Free",
+                monthlyPriceUsd: 0,
+                environmentLimit: 1,
+                memoryConfigurable: false,
+                runtimeQuotaGiBHours: 1,
+                quotaPeriod: "account-month",
+              },
+              {
+                id: "plus",
+                name: "Plus",
+                monthlyPriceUsd: 10,
+                environmentLimit: 3,
+                memoryConfigurable: true,
+                runtimeQuotaGiBHours: 168,
+                quotaPeriod: "fixed-week",
+              },
+              {
+                id: "pro",
+                name: "Pro",
+                monthlyPriceUsd: 25,
+                environmentLimit: 10,
+                memoryConfigurable: true,
+                runtimeQuotaGiBHours: 500,
+                quotaPeriod: "fixed-week",
+              },
+            ],
+            usage: {
+              periodStartsAt,
+              periodEndsAt,
+              confirmedMiBMilliseconds: 921_600_000,
+              projectedMiBMilliseconds: 1_843_200_000,
+              usedMiBMilliseconds: 1_843_200_000,
+              limitMiBMilliseconds: 3_686_400_000,
+              remainingMiBMilliseconds: 1_843_200_000,
+              usedGiBHours: 0.5,
+              limitGiBHours: 1,
+              percentUsed: 50,
+              exhausted: false,
+            },
+            environmentCount: 1,
+            overEnvironmentLimit: false,
+            customerPortalAvailable: false,
+            usageSource: "sandbox0-sdk",
+          },
+        },
+      });
+    },
+  );
+  await page.route(
+    (url) => url.pathname === "/api/v1/billing/checkout",
+    async (route) => {
+      checkoutBody = route.request().postDataJSON();
+      await route.fulfill({
+        json: { data: { kind: "subscription-updated" } },
+      });
+    },
+  );
+
+  await page.goto("/preferences?billing=open");
+
+  await expect(
+    page.getByRole("heading", { name: "Billing & usage" }),
+  ).toBeVisible();
+  await expect(page.getByText("0.5 / 1 GiB-hours")).toBeVisible();
+  await expect(page.getByText("Sandbox0 SDK", { exact: true })).toBeVisible();
+  const plusPlan = page
+    .getByRole("article")
+    .filter({ hasText: "Plus" });
+  await plusPlan.getByRole("button", { name: "Choose plan" }).click();
+
+  await expect.poll(() => checkoutBody).toBeTruthy();
+  expect(checkoutBody).toEqual({
+    planId: "plus",
+    idempotencyKey: expect.any(String),
+  });
 });
 
 test("keeps the Codex live event response open between tool updates", async ({

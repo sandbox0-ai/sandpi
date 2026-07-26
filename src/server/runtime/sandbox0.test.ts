@@ -64,6 +64,61 @@ function sandbox0FetchTimeout() {
   return error;
 }
 
+test("reads Sandbox0 usage only through the official SDK resource", async () => {
+  const calls: unknown[] = [];
+  const expected = {
+    windows: [
+      {
+        windowId: "window-one",
+        windowType: "sandbox.runtime_mib_milliseconds",
+        sandboxId: "sandbox-one",
+        windowStart: new Date("2026-07-26T00:00:00.000Z"),
+        windowEnd: new Date("2026-07-26T01:00:00.000Z"),
+        value: 3_686_400_000,
+        unit: "mib_milliseconds",
+        recordedAt: new Date("2026-07-26T01:00:01.000Z"),
+      },
+    ],
+    nextCursor: "cursor-two",
+  };
+  const runtime = runtimeWithClient({
+    usage: {
+      async listWindows(options: unknown) {
+        calls.push(options);
+        return expected;
+      },
+    },
+  });
+
+  assert.equal(runtime.supportsUsageWindows(), true);
+  const result = await runtime.listUsageWindows({
+    cursor: "cursor-one",
+    limit: 1000,
+    windowType: "sandbox.runtime_mib_milliseconds",
+  });
+
+  assert.strictEqual(result, expected);
+  assert.deepEqual(calls, [
+    {
+      cursor: "cursor-one",
+      limit: 1000,
+      windowType: "sandbox.runtime_mib_milliseconds",
+    },
+  ]);
+});
+
+test("does not fall back to raw Sandbox0 HTTP when the SDK lacks usage", async () => {
+  const runtime = runtimeWithClient({});
+
+  assert.equal(runtime.supportsUsageWindows(), false);
+  await assert.rejects(
+    runtime.listUsageWindows(),
+    (error) =>
+      error instanceof HttpError &&
+      error.code === "sandbox0_usage_sdk_unavailable",
+  );
+});
+
 test("claims exactly one Environment Sandbox around its shared Workspace Volume", async () => {
   const allocations: Array<Record<string, string>> = [];
   let volumeCreates = 0;

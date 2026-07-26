@@ -1,5 +1,6 @@
 import type { RuntimeAdapter } from "@/server/runtime/types";
 import type { SandpiStore } from "@/server/store";
+import type { RuntimeQuotaGate } from "@/server/billing/quota-service";
 import {
   ENVIRONMENT_LIFECYCLE_POLICY_VERSION,
 } from "./lifecycle-policy";
@@ -30,7 +31,11 @@ export class EnvironmentLifecycleService {
     private readonly store: SandpiStore,
     private readonly runtime: RuntimeAdapter,
     private readonly logger: LifecycleLogger,
-    private readonly options: { pollIntervalMs?: number; batchSize?: number } = {},
+    private readonly options: {
+      pollIntervalMs?: number;
+      batchSize?: number;
+      quotaGate?: RuntimeQuotaGate;
+    } = {},
   ) {}
 
   setBeforePause(
@@ -71,6 +76,50 @@ export class EnvironmentLifecycleService {
     });
     this.reconciliation = run;
     return run;
+  }
+
+  async pauseForQuota(environmentId: string) {
+    if (this.closed || this.runtime.mode === "unconfigured") return;
+    await this.store.withEnvironmentLifecycleLock(
+      environmentId,
+      async (lockedStore) => {
+        const scopedStore = lockedStore ?? this.store;
+        if (
+          this.options.quotaGate?.isEnvironmentRuntimeBlocked &&
+          !(await this.options.quotaGate.isEnvironmentRuntimeBlocked(
+            environmentId,
+          ))
+        ) {
+          return;
+        }
+        const runtime =
+          await scopedStore.prepareEnvironmentQuotaPause(environmentId);
+        if (!runtime) return;
+        try {
+          await this.beforePause?.(environmentId, scopedStore);
+          await this.runtime.pauseEnvironment(
+            runtime,
+            this.controller.signal,
+          );
+          await scopedStore.recordEnvironmentPaused(
+            environmentId,
+            runtime.sandboxId,
+            "quota",
+          );
+          this.logger.info(
+            { environmentId },
+            "Quota-blocked Environment Sandbox paused",
+          );
+        } catch (error) {
+          await scopedStore.recordEnvironmentQuotaPauseFailure(
+            environmentId,
+            runtime.sandboxId,
+            errorMessage(error),
+          );
+          throw error;
+        }
+      },
+    );
   }
 
   private schedule() {

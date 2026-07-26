@@ -1,23 +1,18 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import Link from "next/link";
+import { useEffect, useState } from "react";
 import {
-  CircleHelp,
   PanelLeftClose,
   Pin,
   Plus,
   Search,
-  Settings,
   Settings2,
   X,
 } from "lucide-react";
 
+import { SidebarAccountFooter } from "@/components/sidebar-account-footer";
 import { SessionActionsMenu } from "@/components/session-actions-menu";
 import { SessionSearchDialog } from "@/components/session-search-dialog";
-import {
-  SidebarAccountSummary,
-} from "@/components/sidebar-primitives";
 import { AppSidebar } from "@/components/app-frame";
 import { getOperationUiCopy, type OperationLanguage } from "@/lib/operation-ui";
 import { sessionStateMarker } from "@/lib/session-state-marker";
@@ -101,9 +96,6 @@ export function Sidebar({
   const unreadLabel = language === "zh-CN" ? "未读" : "Unread";
   const runningLabel = language === "zh-CN" ? "运行中" : "Running";
   const [sessionSearchOpen, setSessionSearchOpen] = useState(false);
-  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
-  const accountMenuRef = useRef<HTMLDivElement>(null);
-  const accountTriggerRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     const handleSearchShortcut = (event: KeyboardEvent) => {
@@ -120,130 +112,17 @@ export function Sidebar({
     return () => document.removeEventListener("keydown", handleSearchShortcut);
   }, []);
 
-  useEffect(() => {
-    if (!accountMenuOpen) {
-      return;
-    }
-
-    const focusFrame = window.requestAnimationFrame(() => {
-      accountMenuRef.current
-        ?.querySelector<HTMLElement>("[role='menuitem']")
-        ?.focus();
-    });
-    const handlePointerDown = (event: PointerEvent) => {
-      const target = event.target as Node;
-      if (
-        !accountMenuRef.current?.contains(target) &&
-        !accountTriggerRef.current?.contains(target)
-      ) {
-        setAccountMenuOpen(false);
-      }
-    };
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") {
-        return;
-      }
-      event.preventDefault();
-      setAccountMenuOpen(false);
-      window.requestAnimationFrame(() => accountTriggerRef.current?.focus());
-    };
-
-    document.addEventListener("pointerdown", handlePointerDown);
-    document.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.cancelAnimationFrame(focusFrame);
-      document.removeEventListener("pointerdown", handlePointerDown);
-      document.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [accountMenuOpen]);
-
-  function handleAccountMenuKeyDown(
-    event: React.KeyboardEvent<HTMLDivElement>,
-  ) {
-    const menuItems = Array.from(
-      event.currentTarget.querySelectorAll<HTMLElement>(
-        "[role='menuitem']",
-      ),
-    );
-    const activeIndex = menuItems.indexOf(document.activeElement as HTMLElement);
-    let nextIndex: number | null = null;
-
-    if (event.key === "ArrowDown") {
-      nextIndex = activeIndex < menuItems.length - 1 ? activeIndex + 1 : 0;
-    } else if (event.key === "ArrowUp") {
-      nextIndex = activeIndex > 0 ? activeIndex - 1 : menuItems.length - 1;
-    } else if (event.key === "Home") {
-      nextIndex = 0;
-    } else if (event.key === "End") {
-      nextIndex = menuItems.length - 1;
-    }
-
-    if (nextIndex !== null) {
-      event.preventDefault();
-      menuItems[nextIndex]?.focus();
-    }
-  }
-
-  const accountFooter = (
-    <>
-      <button
-        ref={accountTriggerRef}
-        type="button"
-        className={`account-menu-trigger ${accountMenuOpen ? "is-open" : ""}`}
-        aria-label={ui.accountMenu}
-        aria-haspopup="menu"
-        aria-expanded={accountMenuOpen}
-        onClick={() => setAccountMenuOpen((open) => !open)}
-        onKeyDown={(event) => {
-          if (
-            !accountMenuOpen &&
-            (event.key === "ArrowUp" || event.key === "ArrowDown")
-          ) {
-            event.preventDefault();
-            setAccountMenuOpen(true);
-          }
-        }}
-      >
-        <SidebarAccountSummary
-          viewer={viewer}
-          context={viewer.email}
-        />
-      </button>
-      {accountMenuOpen ? (
-        <div
-          ref={accountMenuRef}
-          className="sidebar-account-menu"
-          role="menu"
-          aria-label={ui.accountActions}
-          onKeyDown={handleAccountMenuKeyDown}
-        >
-          <Link
-            href="/preferences"
-            role="menuitem"
-            onClick={() => setAccountMenuOpen(false)}
-          >
-            <Settings size={15} aria-hidden="true" />
-            {ui.preferences}
-          </Link>
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => setAccountMenuOpen(false)}
-          >
-            <CircleHelp size={15} aria-hidden="true" />
-            {ui.help}
-          </button>
-        </div>
-      ) : null}
-    </>
-  );
-
   return (
     <>
       <AppSidebar
         className="sidebar"
         label={ui.navigation}
-        footer={accountFooter}
+        footer={
+          <SidebarAccountFooter
+            language={language}
+            viewer={viewer}
+          />
+        }
         headerAction={
           <>
             <button

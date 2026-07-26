@@ -6,6 +6,7 @@ import fastifyCookie from "@fastify/cookie";
 import fastifyCors from "@fastify/cors";
 import fastifyStatic from "@fastify/static";
 import fastifyWebsocket from "@fastify/websocket";
+import fastifyRawBody from "fastify-raw-body";
 import Fastify, {
   type FastifyInstance,
   type FastifyReply,
@@ -15,6 +16,13 @@ import type { Pool } from "pg";
 import { ZodError, z } from "zod";
 
 import type { SandpiDeploymentSummary, SandpiPreferences } from "@/lib/types";
+import { BillingQuotaService } from "@/server/billing/quota-service";
+import { BillingRepository } from "@/server/billing/repository";
+import {
+  isPaidPlanInput,
+  StripeBillingService,
+} from "@/server/billing/stripe-service";
+import { SandboxUsageService } from "@/server/billing/usage-service";
 import {
   ENVIRONMENT_SANDBOX_MEMORY_MAX_MIB,
   ENVIRONMENT_SANDBOX_MEMORY_MIN_MIB,
@@ -79,6 +87,7 @@ import { TerminalInputQueue } from "@/server/terminal-input-queue";
 import { networkPolicySchema } from "@/server/network-policy-schema";
 
 const SESSION_COOKIE = "sandpi_session";
+const BUILTIN_SIGNED_OUT_COOKIE = "sandpi_builtin_signed_out";
 const CODEX_IMAGE_BODY_LIMIT_BYTES = 36 * 1024 * 1024;
 const CODEX_UPLOAD_BODY_LIMIT_BYTES =
   MAX_CODEX_COMPOSER_UPLOAD_BASE64_LENGTH + 64 * 1024;
@@ -142,6 +151,8 @@ export async function createSandpiServer(
   options: SandpiServerOptions = {},
 ): Promise<SandpiServer> {
   const config = options.config ?? loadConfig();
+  const runtime = options.runtime ?? createRuntime(config);
+  validateBillingRuntime(config.billing, runtime);
   const ownsPool = !options.pool;
   const pool =
     options.pool ??
@@ -168,7 +179,27 @@ export async function createSandpiServer(
       request.headers["x-request-id"]?.toString() || randomUUID(),
   });
   const store = new SandpiStore(pool, advisoryLockPool);
-  const runtime = options.runtime ?? createRuntime(config);
+  const billingRepository = new BillingRepository(pool);
+  const billingQuota = new BillingQuotaService(
+    billingRepository,
+    config.billing,
+  );
+  const stripeBilling = new StripeBillingService(
+    billingRepository,
+    config.billing,
+    config.publicUrl,
+    app.log,
+  );
+  const sandboxUsage =
+    config.billing.mode === "stripe"
+      ? new SandboxUsageService(
+          billingRepository,
+          billingQuota,
+          runtime,
+          app.log,
+          config.billing.usagePollIntervalMs,
+        )
+      : undefined;
   const secretBox = config.secretKey
     ? new SecretBox(config.secretKey)
     : undefined;
@@ -179,15 +210,27 @@ export async function createSandpiServer(
     secretBox,
     app.log,
   );
-  const lifecycle = new EnvironmentLifecycleService(store, runtime, app.log);
+  const lifecycle = new EnvironmentLifecycleService(store, runtime, app.log, {
+    quotaGate: billingQuota,
+  });
   const workspaceBackups = new EnvironmentWorkspaceBackupService(
     store,
     runtime,
     app.log,
   );
-  const runtimeAccess = new EnvironmentRuntimeAccessService(store, runtime);
-  const codex = new CodexService(store, runtime, app.log, codexAuth);
-  const environments = new EnvironmentService(store, runtime, app.log);
+  const runtimeAccess = new EnvironmentRuntimeAccessService(store, runtime, {
+    quotaGate: billingQuota,
+  });
+  const codex = new CodexService(store, runtime, app.log, codexAuth, {
+    runtimeQuotaGate: billingQuota,
+  });
+  const environments = new EnvironmentService(
+    store,
+    runtime,
+    app.log,
+    billingQuota,
+    billingQuota,
+  );
   const egressCredentials = new EnvironmentEgressCredentialService(
     store,
     runtime,
@@ -197,6 +240,9 @@ export async function createSandpiServer(
     await codex.flushEnvironmentCredentials(environmentId);
     codex.suspendEnvironmentWorker(environmentId);
   });
+  sandboxUsage?.setPauseForQuota((environmentId) =>
+    lifecycle.pauseForQuota(environmentId),
+  );
   workspaceBackups.setRestoreHooks({
     before: async (environmentId) => {
       await codex.flushEnvironmentCredentials(environmentId);
@@ -241,6 +287,12 @@ export async function createSandpiServer(
   await app.register(fastifyWebsocket, {
     options: { maxPayload: 1_100_000 },
   });
+  await app.register(fastifyRawBody, {
+    field: "rawBody",
+    global: false,
+    encoding: false,
+    runFirst: true,
+  });
 
   app.setErrorHandler((error, request, reply) => {
     const normalized = normalizeError(error);
@@ -281,6 +333,8 @@ export async function createSandpiServer(
     codex,
     codexAuth,
     environments,
+    billingQuota,
+    stripeBilling,
     egressCredentials,
     workspaceBackups,
   });
@@ -301,6 +355,7 @@ export async function createSandpiServer(
   }
 
   app.addHook("onClose", async () => {
+    await sandboxUsage?.close();
     await workspaceBackups.close();
     await lifecycle.close();
     await codexAuth.close();
@@ -312,6 +367,7 @@ export async function createSandpiServer(
   await environments.reconcilePending();
   await egressCredentials.reconcilePending();
   await lifecycle.start();
+  sandboxUsage?.start();
   await workspaceBackups.start();
   await codexAuth.resumePending();
   // Runtime recovery is Environment-scoped and may wait for Sandbox0
@@ -357,8 +413,10 @@ function registerAuthRoutes(
 ) {
   app.get("/api/v1/auth/login", async (request, reply) => {
     const returnTo = queryString(request, "return_to") ?? "/";
-    if (!oidcIdentity)
+    if (!oidcIdentity) {
+      reply.clearCookie(BUILTIN_SIGNED_OUT_COOKIE, { path: "/" });
       return reply.redirect(safeLocalRedirect(returnTo, config));
+    }
     const login = await oidcIdentity.startLogin(returnTo);
     return reply.redirect(login.authorizationUrl.toString());
   });
@@ -384,6 +442,7 @@ function registerAuthRoutes(
       result.token,
       sessionCookie(config, result.expiresAt),
     );
+    reply.clearCookie(BUILTIN_SIGNED_OUT_COOKIE, { path: "/" });
     return reply.redirect(result.returnTo);
   });
 
@@ -392,6 +451,13 @@ function registerAuthRoutes(
     const token = request.cookies[SESSION_COOKIE];
     if (token && oidcIdentity) await oidcIdentity.logout(token);
     reply.clearCookie(SESSION_COOKIE, { path: "/" });
+    if (!oidcIdentity) {
+      reply.setCookie(
+        BUILTIN_SIGNED_OUT_COOKIE,
+        "1",
+        builtinSignedOutCookie(config),
+      );
+    }
     return reply.status(204).send();
   });
 }
@@ -406,6 +472,8 @@ function registerApiRoutes(
     codex: CodexService;
     codexAuth: CodexEnvironmentAuthService;
     environments: EnvironmentService;
+    billingQuota: BillingQuotaService;
+    stripeBilling: StripeBillingService;
     egressCredentials: EnvironmentEgressCredentialService;
     workspaceBackups: EnvironmentWorkspaceBackupService;
   },
@@ -415,7 +483,8 @@ function registerApiRoutes(
     if (
       request.url.includes("/harnesses/codex/mcp") ||
       request.url.includes("/workspace-backups") ||
-      request.url.includes("/egress-credentials")
+      request.url.includes("/egress-credentials") ||
+      request.url.includes("/billing")
     ) {
       reply.header("Cache-Control", "no-store");
     }
@@ -432,6 +501,68 @@ function registerApiRoutes(
     ),
     meta: { runtime: services.runtime.mode },
   }));
+
+  app.get("/api/v1/billing/summary", async (request) => ({
+    data: await services.billingQuota.summary(request.principal.userId),
+  }));
+  app.post("/api/v1/billing/checkout", async (request) => {
+    const body = z
+      .object({
+        planId: z.string().refine(isPaidPlanInput),
+        idempotencyKey: z
+          .string()
+          .trim()
+          .min(16)
+          .max(128)
+          .refine((value) => !/[\u0000\r\n]/.test(value)),
+      })
+      .strict()
+      .parse(request.body);
+    return {
+      data: await services.stripeBilling.checkout(
+        request.principal.userId,
+        body.planId,
+        body.idempotencyKey,
+      ),
+    };
+  });
+  app.post("/api/v1/billing/portal", async (request) => ({
+    data: await services.stripeBilling.customerPortal(
+      request.principal.userId,
+    ),
+  }));
+  app.post(
+    "/api/v1/billing/webhook",
+    {
+      bodyLimit: 1024 * 1024,
+      config: { rawBody: true },
+    },
+    async (request, reply) => {
+      const signature = request.headers["stripe-signature"];
+      if (typeof signature !== "string" || !Buffer.isBuffer(request.rawBody)) {
+        throw new HttpError(
+          400,
+          "stripe_webhook_invalid",
+          "A signed Stripe webhook body is required.",
+        );
+      }
+      let event;
+      try {
+        event = services.stripeBilling.constructWebhookEvent(
+          request.rawBody,
+          signature,
+        );
+      } catch {
+        throw new HttpError(
+          400,
+          "stripe_webhook_invalid",
+          "The Stripe webhook signature is invalid.",
+        );
+      }
+      await services.stripeBilling.processWebhook(event);
+      return reply.status(204).send();
+    },
+  );
 
   app.get("/api/v1/environments", async (request) => ({
     data: await services.store.listEnvironments(request.principal.userId),
@@ -1774,6 +1905,13 @@ async function authenticateRequest(
   oidcIdentity?: OidcIdentityService,
 ): Promise<Principal> {
   if (!oidcIdentity) {
+    if (request.cookies[BUILTIN_SIGNED_OUT_COOKIE] === "1") {
+      throw new HttpError(
+        401,
+        "authentication_required",
+        "Sign in required.",
+      );
+    }
     return {
       userId: "user-admin",
       subject: "builtin:admin",
@@ -1789,9 +1927,24 @@ async function authenticateRequest(
   return principal;
 }
 
-function publicAuthPath(url: string) {
+export function publicAuthPath(url: string) {
   const path = url.split("?", 1)[0];
-  return path === "/api/v1/auth/login" || path === "/api/v1/auth/callback";
+  return (
+    path === "/api/v1/auth/login" ||
+    path === "/api/v1/auth/callback" ||
+    path === "/api/v1/billing/webhook"
+  );
+}
+
+export function validateBillingRuntime(
+  billing: SandpiConfig["billing"],
+  runtime: Pick<RuntimeAdapter, "supportsUsageWindows">,
+) {
+  if (billing.mode === "stripe" && !runtime.supportsUsageWindows()) {
+    throw new Error(
+      "Stripe billing requires a Sandbox0 SDK release with client.usage.listWindows().",
+    );
+  }
 }
 
 function deploymentSummary(
@@ -1829,6 +1982,16 @@ function sessionCookie(config: SandpiConfig, expires: Date) {
     sameSite: "lax" as const,
     secure: config.publicUrl.protocol === "https:",
     expires,
+  };
+}
+
+function builtinSignedOutCookie(config: SandpiConfig) {
+  return {
+    path: "/",
+    httpOnly: true,
+    sameSite: "lax" as const,
+    secure: config.publicUrl.protocol === "https:",
+    expires: new Date(Date.now() + 365 * 24 * 60 * 60 * 1_000),
   };
 }
 

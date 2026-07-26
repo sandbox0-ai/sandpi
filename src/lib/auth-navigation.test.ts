@@ -5,6 +5,7 @@ import {
   PENDING_GUEST_PROMPT_STORAGE_KEY,
   authLoginUrl,
   consumePendingGuestPrompt,
+  loggedOutHomeUrl,
   newSessionAuthLoginUrl,
   storePendingGuestPrompt,
 } from "./auth-navigation";
@@ -51,6 +52,15 @@ test("guest messages return to an authenticated new Session", () => {
       "https://sandpi.ai/?session=session-private",
     ),
     "https://sandpi.ai/api/v1/auth/login?return_to=https%3A%2F%2Fsandpi.ai%2F%3Fnew%3D1",
+  );
+});
+
+test("logout returns to the public home without private workspace coordinates", () => {
+  assert.equal(
+    loggedOutHomeUrl(
+      "https://sandpi.ai/?environment=env-private&session=session-private&path=%2Fworkspace%2Fsecret",
+    ),
+    "https://sandpi.ai/",
   );
 });
 

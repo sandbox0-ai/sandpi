@@ -50,8 +50,13 @@ const copy = {
       archive: "Archive",
       preferences: "Preferences",
       help: "Help & feedback",
+      logout: "Log out",
+      loggingOut: "Logging out…",
+      logoutFailed: "Sandpi could not log you out. Try again.",
       accountMenu: "Open account menu",
       accountActions: "Account actions",
+      githubRepository: "Sandpi GitHub repository",
+      mobileAppsComingSoon: "iOS · Android · HarmonyOS coming soon",
     },
     guest: {
       signInOrSignUp: "Log in or sign up",
@@ -76,6 +81,25 @@ const copy = {
         "Find the highest-risk bug and fix it",
         "Run the tests and resolve any failures",
       ],
+    },
+    helpFeedback: {
+      eyebrow: "Support",
+      title: "Help & feedback",
+      description:
+        "Find Sandpi documentation, report a problem, or tell us what would make the workspace better.",
+      documentation: "Read the documentation",
+      documentationDescription:
+        "Learn how Environments, Sessions, Sandboxes, Skills, and MCP work.",
+      reportBug: "Report a problem",
+      reportBugDescription:
+        "Open a prefilled GitHub issue with safe browser context.",
+      shareFeedback: "Share feedback",
+      shareFeedbackDescription:
+        "Suggest an improvement or describe a workflow Sandpi should support.",
+      publicIssueNotice:
+        "GitHub issues are public. Do not include credentials, private code, or customer data.",
+      close: "Close Help & feedback",
+      opensNewTab: "Opens in a new tab",
     },
     inspector: {
       label: "Environment inspector",
@@ -145,8 +169,13 @@ const copy = {
       archive: "归档",
       preferences: "偏好设置",
       help: "帮助与反馈",
+      logout: "退出登录",
+      loggingOut: "正在退出…",
+      logoutFailed: "无法退出登录，请重试。",
       accountMenu: "打开账户菜单",
       accountActions: "账户操作",
+      githubRepository: "Sandpi GitHub 仓库",
+      mobileAppsComingSoon: "iOS · Android · HarmonyOS 即将发布",
     },
     guest: {
       signInOrSignUp: "登录或注册",
@@ -170,6 +199,24 @@ const copy = {
         "找出风险最高的问题并修复",
         "运行测试并解决所有失败",
       ],
+    },
+    helpFeedback: {
+      eyebrow: "支持",
+      title: "帮助与反馈",
+      description:
+        "查看 Sandpi 文档、报告问题，或者告诉我们怎样让工作区更好用。",
+      documentation: "查看文档",
+      documentationDescription:
+        "了解环境、会话、Sandbox、Skills 和 MCP 的工作方式。",
+      reportBug: "报告问题",
+      reportBugDescription: "使用安全的浏览器上下文创建 GitHub Issue。",
+      shareFeedback: "提交建议",
+      shareFeedbackDescription:
+        "建议一项改进，或者描述希望 Sandpi 支持的工作流。",
+      publicIssueNotice:
+        "GitHub Issue 是公开的，请勿包含凭证、私有代码或客户数据。",
+      close: "关闭帮助与反馈",
+      opensNewTab: "将在新标签页打开",
     },
     inspector: {
       label: "环境检查器",

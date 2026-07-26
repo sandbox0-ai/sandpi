@@ -30,6 +30,11 @@ export function newSessionAuthLoginUrl(loginUrl: string, currentUrl: string) {
   return target.toString();
 }
 
+/** Return to the public home surface without retaining private workspace coordinates. */
+export function loggedOutHomeUrl(currentUrl: string) {
+  return new URL("/", currentUrl).toString();
+}
+
 export function storePendingGuestPrompt(
   storage: PromptStorage,
   prompt: string,

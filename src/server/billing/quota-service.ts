@@ -1,0 +1,358 @@
+import type {
+  SandpiAccountPlan,
+  SandpiBillingSummary,
+} from "@/lib/billing";
+import { toUnixTimestamp } from "@/lib/time";
+import type { SandpiConfig } from "@/server/config";
+import { HttpError, notFound } from "@/server/http-error";
+
+import {
+  accountMonthPeriod,
+  fixedWeekPeriod,
+  MIB_MILLISECONDS_PER_GIB_HOUR,
+  PLAN_DEFINITIONS,
+  type PlanDefinition,
+  subscriptionHasPaidEntitlement,
+} from "./plans";
+import type {
+  BillingAccountRecord,
+  EnvironmentEntitlementPosition,
+  RunningEnvironmentCandidate,
+  SubscriptionRecord,
+  UsageTotals,
+} from "./repository";
+
+export interface BillingQuotaStore {
+  account(userId: string): Promise<BillingAccountRecord | undefined>;
+  subscription(userId: string): Promise<SubscriptionRecord | undefined>;
+  stripeCustomerId(userId: string): Promise<string | undefined>;
+  environmentCount(userId: string): Promise<number>;
+  environmentEntitlementPosition(
+    environmentId: string,
+  ): Promise<EnvironmentEntitlementPosition | undefined>;
+  usageTotals(
+    userId: string,
+    startsAt: Date,
+    endsAt: Date,
+  ): Promise<UsageTotals>;
+  runningEnvironmentCandidates(): Promise<RunningEnvironmentCandidate[]>;
+}
+
+export interface EnvironmentQuotaPolicy {
+  environmentLimit(userId: string): Promise<number | null>;
+  assertMemoryConfigurationAllowed(
+    userId: string,
+    currentMemoryMiB: number,
+    requestedMemoryMiB: number,
+  ): Promise<void>;
+}
+
+export interface RuntimeQuotaGate {
+  assertEnvironmentRuntimeAllowed(environmentId: string): Promise<void>;
+  isEnvironmentRuntimeBlocked?(
+    environmentId: string,
+  ): Promise<boolean>;
+}
+
+interface ResolvedEntitlement {
+  account: BillingAccountRecord;
+  plan: PlanDefinition;
+  subscription?: SubscriptionRecord;
+  period: { startsAt: Date; endsAt: Date };
+}
+
+export class BillingQuotaService
+  implements EnvironmentQuotaPolicy, RuntimeQuotaGate
+{
+  constructor(
+    private readonly store: BillingQuotaStore,
+    private readonly billing: SandpiConfig["billing"],
+    private readonly now: () => Date = () => new Date(),
+  ) {}
+
+  async summary(userId: string): Promise<SandpiBillingSummary> {
+    const entitlement = await this.resolveEntitlement(userId);
+    const [usage, environmentCount, customerId] = await Promise.all([
+      this.store.usageTotals(
+        userId,
+        entitlement.period.startsAt,
+        entitlement.period.endsAt,
+      ),
+      this.store.environmentCount(userId),
+      this.store.stripeCustomerId(userId),
+    ]);
+    const limit = entitlement.plan.runtimeQuotaMiBMilliseconds;
+    const used = Math.max(
+      usage.confirmedMiBMilliseconds,
+      usage.projectedMiBMilliseconds,
+    );
+    const remaining = limit == null ? null : Math.max(0, limit - used);
+
+    return {
+      billingEnabled: this.billing.mode === "stripe",
+      plan: publicPlan(entitlement.plan),
+      availablePlans:
+        this.billing.mode === "stripe"
+          ? [
+              publicPlan(PLAN_DEFINITIONS.free),
+              publicPlan(PLAN_DEFINITIONS.plus),
+              publicPlan(PLAN_DEFINITIONS.pro),
+            ]
+          : [publicPlan(PLAN_DEFINITIONS.deployment)],
+      subscription: entitlement.subscription
+        ? {
+            status: entitlement.subscription.status,
+            cancelAtPeriodEnd:
+              entitlement.subscription.cancelAtPeriodEnd,
+            currentPeriodEndsAt:
+              entitlement.subscription.currentPeriodEndsAt &&
+              toUnixTimestamp(
+                entitlement.subscription.currentPeriodEndsAt,
+              ),
+            graceEndsAt:
+              entitlement.subscription.graceEndsAt &&
+              toUnixTimestamp(entitlement.subscription.graceEndsAt),
+            pendingPlanId: entitlement.subscription.pendingPlanId,
+            pendingEffectiveAt:
+              entitlement.subscription.pendingEffectiveAt &&
+              toUnixTimestamp(
+                entitlement.subscription.pendingEffectiveAt,
+              ),
+          }
+        : undefined,
+      usage: {
+        periodStartsAt: toUnixTimestamp(entitlement.period.startsAt),
+        periodEndsAt: toUnixTimestamp(entitlement.period.endsAt),
+        confirmedMiBMilliseconds: usage.confirmedMiBMilliseconds,
+        projectedMiBMilliseconds: usage.projectedMiBMilliseconds,
+        usedMiBMilliseconds: used,
+        limitMiBMilliseconds: limit,
+        remainingMiBMilliseconds: remaining,
+        usedGiBHours: used / MIB_MILLISECONDS_PER_GIB_HOUR,
+        limitGiBHours: entitlement.plan.runtimeQuotaGiBHours,
+        percentUsed:
+          limit == null ? null : Math.min(100, (used / limit) * 100),
+        exhausted: limit != null && used >= limit,
+      },
+      environmentCount,
+      overEnvironmentLimit:
+        entitlement.plan.environmentLimit != null &&
+        environmentCount > entitlement.plan.environmentLimit,
+      customerPortalAvailable:
+        this.billing.mode === "stripe" && Boolean(customerId),
+      usageSource:
+        this.billing.mode === "stripe"
+          ? "sandbox0-sdk"
+          : "local-projection",
+    };
+  }
+
+  async environmentLimit(userId: string) {
+    return (await this.resolveEntitlement(userId)).plan.environmentLimit;
+  }
+
+  async assertMemoryConfigurationAllowed(
+    userId: string,
+    currentMemoryMiB: number,
+    requestedMemoryMiB: number,
+  ) {
+    if (currentMemoryMiB === requestedMemoryMiB) return;
+    const entitlement = await this.resolveEntitlement(userId);
+    if (entitlement.plan.memoryConfigurable) return;
+    throw new HttpError(
+      403,
+      "sandbox_memory_plan_restricted",
+      "The Free plan does not allow Sandbox memory changes. Upgrade to change it.",
+      { planId: entitlement.plan.id },
+    );
+  }
+
+  async assertEnvironmentRuntimeAllowed(environmentId: string) {
+    if (this.billing.mode === "disabled") return;
+    const position =
+      await this.store.environmentEntitlementPosition(environmentId);
+    if (!position) {
+      throw notFound("environment_not_found", "Environment not found.");
+    }
+    const entitlement = await this.resolveEntitlement(position.userId);
+    if (
+      entitlement.plan.environmentLimit != null &&
+      position.position > entitlement.plan.environmentLimit
+    ) {
+      throw environmentPlanLimitError(
+        entitlement.plan,
+        entitlement.period.endsAt,
+      );
+    }
+    const usage = await this.store.usageTotals(
+      position.userId,
+      entitlement.period.startsAt,
+      entitlement.period.endsAt,
+    );
+    if (
+      entitlement.plan.runtimeQuotaMiBMilliseconds != null &&
+      Math.max(
+        usage.confirmedMiBMilliseconds,
+        usage.projectedMiBMilliseconds,
+      ) >= entitlement.plan.runtimeQuotaMiBMilliseconds
+    ) {
+      throw runtimeQuotaError(
+        entitlement.plan,
+        entitlement.period.endsAt,
+      );
+    }
+  }
+
+  async isEnvironmentRuntimeBlocked(environmentId: string) {
+    try {
+      await this.assertEnvironmentRuntimeAllowed(environmentId);
+      return false;
+    } catch (error) {
+      if (
+        error instanceof HttpError &&
+        (error.code === "environment_plan_limit" ||
+          error.code === "sandbox_runtime_quota_exhausted")
+      ) {
+        return true;
+      }
+      throw error;
+    }
+  }
+
+  async runningEnvironmentViolations() {
+    if (this.billing.mode === "disabled") return [];
+    const candidates = await this.store.runningEnvironmentCandidates();
+    const entitlementByUser = new Map<
+      string,
+      Promise<{
+        entitlement: ResolvedEntitlement;
+        usage: UsageTotals;
+      }>
+    >();
+    return (
+      await Promise.all(
+        candidates.map(async (candidate) => {
+          let resolved = entitlementByUser.get(candidate.userId);
+          if (!resolved) {
+            resolved = this.resolveEntitlement(candidate.userId).then(
+              async (entitlement) => ({
+                entitlement,
+                usage: await this.store.usageTotals(
+                  candidate.userId,
+                  entitlement.period.startsAt,
+                  entitlement.period.endsAt,
+                ),
+              }),
+            );
+            entitlementByUser.set(candidate.userId, resolved);
+          }
+          const { entitlement, usage } = await resolved;
+          const environmentViolation =
+            entitlement.plan.environmentLimit != null &&
+            candidate.position > entitlement.plan.environmentLimit;
+          const runtimeViolation =
+            entitlement.plan.runtimeQuotaMiBMilliseconds != null &&
+            Math.max(
+              usage.confirmedMiBMilliseconds,
+              usage.projectedMiBMilliseconds,
+            ) >= entitlement.plan.runtimeQuotaMiBMilliseconds;
+          return environmentViolation || runtimeViolation
+            ? candidate.environmentId
+            : undefined;
+        }),
+      )
+    ).filter((value): value is string => Boolean(value));
+  }
+
+  private async resolveEntitlement(
+    userId: string,
+  ): Promise<ResolvedEntitlement> {
+    const account = await this.store.account(userId);
+    if (!account) {
+      throw notFound("user_not_found", "User not found.");
+    }
+    const now = this.now();
+    if (this.billing.mode === "disabled") {
+      return {
+        account,
+        plan: PLAN_DEFINITIONS.deployment,
+        period: accountMonthPeriod(account.createdAt, now),
+      };
+    }
+
+    const subscription = await this.store.subscription(userId);
+    if (
+      subscription &&
+      subscriptionHasPaidEntitlement({
+        status: subscription.status,
+        graceEndsAt: subscription.graceEndsAt,
+        now,
+      })
+    ) {
+      const anchor =
+        subscription.quotaAnchorAt ??
+        subscription.currentPeriodStartsAt ??
+        account.createdAt;
+      return {
+        account,
+        subscription,
+        plan:
+          PLAN_DEFINITIONS[
+            subscription.pendingPlanId &&
+            subscription.pendingEffectiveAt &&
+            subscription.pendingEffectiveAt.getTime() <= now.getTime()
+              ? subscription.pendingPlanId
+              : subscription.planId
+          ],
+        period: fixedWeekPeriod(anchor, now),
+      };
+    }
+    return {
+      account,
+      subscription,
+      plan: PLAN_DEFINITIONS.free,
+      period: accountMonthPeriod(account.createdAt, now),
+    };
+  }
+}
+
+function publicPlan(plan: PlanDefinition): SandpiAccountPlan {
+  return {
+    id: plan.id,
+    name: plan.name,
+    monthlyPriceUsd: plan.monthlyPriceUsd,
+    environmentLimit: plan.environmentLimit,
+    memoryConfigurable: plan.memoryConfigurable,
+    runtimeQuotaGiBHours: plan.runtimeQuotaGiBHours,
+    quotaPeriod: plan.quotaPeriod,
+  };
+}
+
+function runtimeQuotaError(plan: PlanDefinition, resetAt: Date) {
+  return new HttpError(
+    429,
+    "sandbox_runtime_quota_exhausted",
+    "The Sandbox runtime allowance is exhausted for this quota period.",
+    {
+      planId: plan.id,
+      resetAt: toUnixTimestamp(resetAt),
+      limitMiBMilliseconds: plan.runtimeQuotaMiBMilliseconds,
+    },
+  );
+}
+
+function environmentPlanLimitError(
+  plan: PlanDefinition,
+  resetAt: Date,
+) {
+  return new HttpError(
+    429,
+    "environment_plan_limit",
+    "This Environment is outside the current plan limit.",
+    {
+      planId: plan.id,
+      environmentLimit: plan.environmentLimit,
+      resetAt: toUnixTimestamp(resetAt),
+    },
+  );
+}

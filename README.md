@@ -9,9 +9,12 @@ The root route is the application itself; Sandpi has no marketing landing page.
 Codex is the first supported harness. Claude Code, OpenCode and Pi can be added
 later as independent harness integrations.
 
-Sandpi is licensed under Apache-2.0. Sandpi Cloud composes this public server
-with hosted identity, quota and commercial services instead of maintaining a
-separate product implementation.
+Sandpi is licensed under Apache-2.0. Sandpi and Sandbox0 are independent
+products: Sandpi consumes Sandbox0 only through the official JavaScript SDK and
+never reads a Sandbox0 database, internal metering endpoint or ClickHouse
+credential. The same Sandpi server supports optional Stripe subscriptions and
+product quota enforcement; self-hosted deployments keep that feature disabled
+by default.
 
 The hosted `sandpi.ai` deployment is built and rolled out to DigitalOcean
 Kubernetes by GitHub Actions. Its namespace-scoped deployment, retained
@@ -27,9 +30,9 @@ Sandbox0 runtime wiring, Codex app-server event transport, native model
 discovery, image input, native Session/Turn branching, a live Web IDE,
 Environment terminal and runtime metrics.
 
-Webhooks, cron jobs, mobile clients, fine-grained Environment ACLs and additional
-native harness integrations remain future work. Sandpi's `/api/v1` contract is
-versioned, but the project is still pre-1.0 and may evolve it between releases.
+Mobile clients, fine-grained Environment ACLs and additional native harness
+integrations remain future work. Sandpi's `/api/v1` contract is versioned, but
+the project is still pre-1.0 and may evolve it between releases.
 
 ## Architecture
 
@@ -43,11 +46,11 @@ Web today; iOS / Android / HarmonyOS later
         | Fastify API + static Web  |
         +-------------+-------------+
                       |
-             +--------+--------+
-             |                 |
-        PostgreSQL        Sandbox0 SDK
-       product and         deployment API
-       control state              |
+             +--------+------------------+
+             |        |                  |
+        PostgreSQL  Stripe          Sandbox0 SDK
+       product and  subscription     public API
+       control state state                 |
                             Environment Sandbox
                       native Codex app-server with
                       many Threads, /workspace, PTY
@@ -57,6 +60,14 @@ Web today; iOS / Android / HarmonyOS later
   service. Platform-specific clients must not reimplement orchestration rules.
 - **Client/server execution:** the browser is only an interaction client. A
   coding agent runs through its native harness in a Sandbox0 Supervisor Session.
+- **Product and data boundary:** Sandbox0 owns Sandbox runtime and usage truth.
+  Sandpi owns its users, Environment attribution, plan entitlements and Stripe
+  subscription state. The server imports only authenticated-team usage windows
+  through `client.usage.listWindows()` in the official SDK. Its local runtime
+  segments are a timely admission projection, not a replacement usage ledger;
+  confirmed and projected totals are compared with `max`, never added together.
+  The browser talks only to Sandpi and receives neither a Sandbox0 API key nor a
+  direct Sandbox0 endpoint.
 - **Recoverable sessions:** every harness-native Session and rollout remains in
   the Environment Workspace Volume, so closing the browser or losing the client
   network does not terminate the coding agent. A reconnect reads a native
@@ -266,6 +277,14 @@ Web today; iOS / Android / HarmonyOS later
   Only that user can list, use, configure or delete it. OIDC users receive
   independent default Environments on first login; Sandpi has no shared tenant,
   membership, invitation or role model.
+- **Subscription quota:** when Stripe mode is enabled, account-scoped plans
+  limit Environment count, Sandbox memory configuration and memory-weighted
+  runtime. Creation is serialized against the user limit in PostgreSQL.
+  Workspace, Terminal, Codex Turn admission, runtime repair and startup recovery
+  all recheck entitlement before they can wake or use a Sandbox. A background
+  SDK usage importer pauses running Environments that cross a limit and records
+  `quota` separately from ordinary idle pause. Disabling billing selects the
+  unlimited self-hosted entitlement and performs no usage import.
 - **Session attribution and personal pins:** every Session stays inside its
   creator's Environment and shares that Environment runtime. Pinning is stored
   for the owning user and persists across clients without becoming native
@@ -328,7 +347,8 @@ reload the harness-native snapshot.
 - PostgreSQL 15 or newer
 - A Sandbox0 deployment and deployment API key with Sandbox/Volume access and
   `credentialsource:read`, `credentialsource:write` and
-  `credentialsource:delete`
+  `credentialsource:delete`. Subscription quota mode additionally requires
+  `usage:read`.
 - A Sandbox0 `coding-agent` template; Sandpi mounts each Environment's
   Workspace Volume at `/workspace`
 - Docker Engine with Compose v2 for the container workflow
@@ -548,6 +568,17 @@ guest composer message or choosing **Log in or sign up** in the lower-left
 account area. A submitted guest draft is kept in same-tab session storage and
 restored on the authenticated new-Session page. Direct visits to protected
 surfaces such as Preferences and the Web IDE still start OIDC immediately.
+Authenticated users can choose **Log out** from the lower-left account menu;
+Sandpi revokes the local OIDC Web session, or records an explicit signed-out
+choice in built-in administrator mode, and returns to the anonymous root
+without retaining Environment, Session or file coordinates in the URL.
+
+The same lower-left area links to the Sandpi GitHub repository and exposes
+**Help & feedback** for documentation, prefilled bug reports and product
+suggestions. Bug and feedback links include only the page origin/path and
+bounded browser user-agent, never Environment, Session or file query
+parameters. The UI also marks iOS, Android and HarmonyOS clients as coming
+soon.
 
 `SANDPI_OIDC_TOKEN_ENDPOINT_AUTH_METHOD` accepts `client_secret_post`,
 `client_secret_basic` or `none`. It defaults to `client_secret_post` when a
@@ -582,6 +613,70 @@ Sandpi deployment as
 (this may use an Auth0 custom domain). Do not store either client secret in the
 repository.
 
+## Subscription, usage and quota
+
+`SANDPI_BILLING_MODE=disabled` is the self-hosted default. It selects one
+unlimited deployment entitlement, does not poll Sandbox0 usage and leaves
+Environment count and Sandbox memory configurable.
+
+Stripe mode enables the Sandpi product plans:
+
+| Plan | Price | Runtime allowance | Environments | Sandbox memory |
+| --- | ---: | ---: | ---: | --- |
+| Free | $0 | 1 GiB-hour per account month | 1 | not configurable |
+| Plus | $10/month | 168 GiB-hours per fixed week | 3 | configurable |
+| Pro | $25/month | 500 GiB-hours per fixed week | 10 | configurable |
+
+The Free period is anchored to account creation and clamps month-end
+anniversaries. A paid user's seven-day period is anchored on first paid
+activation rather than Stripe invoice boundaries. `past_due` retains paid
+entitlement for a fixed 72-hour grace period. Upgrades apply immediately;
+downgrades retain the current Sandpi entitlement until the saved subscription
+period end. Checkout, Customer Portal and webhook processing use server-side
+Stripe keys and durable event idempotency.
+
+Configure recurring monthly Stripe Prices and the signed webhook:
+
+```dotenv
+SANDPI_BILLING_MODE=stripe
+SANDPI_STRIPE_SECRET_KEY=sk_test_or_live
+SANDPI_STRIPE_WEBHOOK_SECRET=whsec_value
+SANDPI_STRIPE_PLUS_PRICE_ID=price_plus
+SANDPI_STRIPE_PRO_PRICE_ID=price_pro
+SANDPI_USAGE_POLL_INTERVAL_MS=15000
+```
+
+The webhook URL is:
+
+```text
+${SANDPI_PUBLIC_URL}/api/v1/billing/webhook
+```
+
+Subscribe it to `checkout.session.completed` and
+`customer.subscription.created`, `customer.subscription.updated`,
+`customer.subscription.deleted`, `customer.subscription.paused` and
+`customer.subscription.resumed`. The webhook is the only unauthenticated
+billing route and verifies Stripe's signature against the unmodified raw body.
+Summary, Checkout and Customer Portal routes require a Sandpi user session.
+
+Sandbox0 remains usage truth. Its PostgreSQL metering projection/outbox feeds
+the ClickHouse read model, and the deployment key's authenticated team scopes
+`GET /api/v1/usage/windows`. Sandpi calls that contract only through the
+official JavaScript SDK, persists the opaque cursor and imports immutable closed
+`sandbox.runtime_mib_milliseconds` windows attributed to its known Environment
+Sandbox ids. It never calls `/internal/v1/metering/*`, queries ClickHouse, or
+reads Sandbox0 PostgreSQL. Sandpi's local runtime segments cover the SDK
+projection delay for admission; they are consumer state and are reconciled by
+using the greater of confirmed and projected totals.
+
+Stripe mode fails at startup unless the installed `sandbox0` package exposes
+`client.usage.listWindows()`. Release and install that SDK contract before
+enabling billing; Sandpi does not fall back to raw HTTP when an older package is
+installed.
+
+See [Billing and Sandbox0 usage boundary](docs/architecture/billing-and-usage.md)
+for lifecycle, downgrade and failure-mode invariants.
+
 ## Deployment configuration
 
 Configuration is server-owned. It must not appear in personal Preferences or
@@ -600,6 +695,12 @@ Environment settings.
 | `SANDPI_OIDC_*` | none | Standard OIDC provider, client and token-endpoint authentication configuration |
 | `SANDBOX0_API_HOST` | none | Operator-selected Sandbox0 API endpoint |
 | `SANDBOX0_API_KEY` | none | Operator-selected Sandbox0 deployment key |
+| `SANDPI_BILLING_MODE` | `disabled` | `disabled` for unlimited self-hosted use or `stripe` for product plans |
+| `SANDPI_STRIPE_SECRET_KEY` | none | Server-side Stripe API key; required in Stripe mode |
+| `SANDPI_STRIPE_WEBHOOK_SECRET` | none | Stripe webhook signing secret; required in Stripe mode |
+| `SANDPI_STRIPE_PLUS_PRICE_ID` | none | Recurring monthly Plus Price id |
+| `SANDPI_STRIPE_PRO_PRICE_ID` | none | Recurring monthly Pro Price id |
+| `SANDPI_USAGE_POLL_INTERVAL_MS` | `15000` | Sandbox0 SDK usage import interval, from 5000 to 300000 ms |
 | `SANDPI_LOG_LEVEL` | `info` | Fastify/Pino log level |
 
 Keep `.env` out of version control and readable only by the service account.
@@ -650,11 +751,14 @@ the Sandbox0 host and key remain independent deployment-level server secrets.
   and every Session belongs to an Environment owned by that same user.
 - Sandpi does not model shared tenants, memberships, invitations, roles,
   organization switching or shared Environment visibility.
-- Sandpi OSS does not contain a Plan, quota, billing or invoice model.
+- Sandpi plans and subscriptions are user-owned product state. They do not reuse
+  the Sandbox0 team, quota or billing model.
 - Provider accounts use the official authentication supported by the native
   harness, allowing users to retain their own coding plan and provider limits.
 - Sandbox0 and Sandpi remain separate products with separate identity and
-  authorization boundaries.
+  authorization boundaries. Sandpi's one deployment API key selects a
+  Sandbox0 team, while immutable Sandbox ids attribute that team usage back to
+  Sandpi users.
 
 ## Repository layout
 
@@ -731,8 +835,10 @@ Sandbox0 implementation details.
   restart and interrupted Sandbox runtime continuation recoverable, but
   multi-replica worker leadership is not yet part of the supported deployment
   contract.
-- Sandpi has no local Plan, quota or billing projection. Provider usage remains
-  a separate live, Environment-scoped projection.
+- Sandpi's optional product plan projection is account-scoped and uses
+  memory-weighted Sandbox runtime from the Sandbox0 SDK. Coding-provider usage
+  remains a separate live, Environment-scoped projection and is never counted
+  as Sandpi Sandbox quota.
 
 ## Verification
 

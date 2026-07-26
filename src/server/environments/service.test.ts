@@ -328,6 +328,70 @@ test("applies a memory change to the shared Sandbox under the lifecycle lock", a
   ]);
 });
 
+test("rechecks the memory entitlement after acquiring the lifecycle lock", async () => {
+  let quotaChecks = 0;
+  let runtimeUpdates = 0;
+  let writes = 0;
+  const store = {
+    async getManageableEnvironment() {
+      return environment;
+    },
+    async withEnvironmentLifecycleLock(
+      _environmentId: string,
+      operation: (lockedStore: SandpiStore) => Promise<Environment>,
+    ) {
+      return {
+        acquired: true as const,
+        value: await operation(store as unknown as SandpiStore),
+      };
+    },
+    async getEnvironmentRuntime() {
+      return { desiredState: "running" };
+    },
+    async updateEnvironment() {
+      writes += 1;
+      return environment;
+    },
+  } as unknown as SandpiStore;
+  const runtime = {
+    async updateEnvironmentMemory() {
+      runtimeUpdates += 1;
+    },
+  } as unknown as RuntimeAdapter;
+  const quota = {
+    async environmentLimit() {
+      return 1;
+    },
+    async assertMemoryConfigurationAllowed() {
+      quotaChecks += 1;
+      if (quotaChecks === 2) throw new Error("plan changed");
+    },
+  };
+  const service = new EnvironmentService(
+    store,
+    runtime,
+    { info() {}, error() {} },
+    quota,
+  );
+
+  await assert.rejects(
+    service.update("user-test", environment.id, {
+      name: "Development",
+      description: "",
+      color: "#151515",
+      idlePauseTimeoutSeconds: 30 * 60,
+      sandboxMemoryMiB: 4 * 1024,
+      workspaceBackup: environment.workspaceBackup,
+      networkPolicy: environment.networkPolicy,
+    }),
+    /plan changed/,
+  );
+
+  assert.equal(quotaChecks, 2);
+  assert.equal(runtimeUpdates, 0);
+  assert.equal(writes, 0);
+});
+
 test("rejects network policy changes after the Environment deletion gate", async () => {
   const nextPolicy: Environment["networkPolicy"] = {
     mode: "block-all",
@@ -569,4 +633,41 @@ test("keeps Environment metadata retryable when resource deletion fails", async 
     /volume cleanup failed/,
   );
   assert.deepEqual(steps, ["failure:volume cleanup failed"]);
+});
+
+test("checks runtime quota before provisioning Sandbox0 resources", async () => {
+  const failures: string[] = [];
+  const store = {
+    async environmentsNeedingProvisioning() {
+      return [environment];
+    },
+    async getEnvironmentById() {
+      return environment;
+    },
+    async markEnvironmentFailed(_environmentId: string, error: string) {
+      failures.push(error);
+    },
+  } as unknown as SandpiStore;
+  const runtime = {
+    async provisionEnvironment() {
+      assert.fail("quota-blocked provisioning must not call Sandbox0");
+    },
+  } as unknown as RuntimeAdapter;
+  const runtimeQuotaGate = {
+    async assertEnvironmentRuntimeAllowed(environmentId: string) {
+      assert.equal(environmentId, environment.id);
+      throw new Error("runtime quota exhausted");
+    },
+  };
+  const service = new EnvironmentService(
+    store,
+    runtime,
+    { info() {}, error() {} },
+    undefined,
+    runtimeQuotaGate,
+  );
+
+  await service.reconcilePending();
+
+  assert.deepEqual(failures, ["runtime quota exhausted"]);
 });

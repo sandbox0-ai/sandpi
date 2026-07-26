@@ -62,6 +62,7 @@ import {
   type RuntimeCredentialSourceMetadata,
   type RuntimeAdapter,
   type RuntimeCodexEventStreamHandle,
+  type RuntimeUsageWindowPage,
   type RuntimeEnvironmentEgressCredential,
   type RuntimeMcpOAuthCallbackService,
   type RuntimeProvisionEnvironmentInput,
@@ -163,6 +164,46 @@ export class Sandbox0Runtime implements RuntimeAdapter {
       // semantic boundaries, where idempotency can be proven separately.
       fetch: fetchSandbox0WithRetry,
     });
+  }
+
+  supportsUsageWindows() {
+    return Boolean(this.usageResource());
+  }
+
+  async listUsageWindows(
+    options: {
+      cursor?: string;
+      limit?: number;
+      windowType?: string;
+    } = {},
+  ): Promise<RuntimeUsageWindowPage> {
+    // The public usage resource is supplied by the official Sandbox0 SDK. This
+    // compatibility check allows Sandpi and sdk-js changes to be reviewed
+    // independently, while deployed Sandpi must install the SDK release that
+    // exposes client.usage before usage import can become ready.
+    const usage = this.usageResource();
+    if (!usage) {
+      throw new HttpError(
+        503,
+        "sandbox0_usage_sdk_unavailable",
+        "The installed Sandbox0 SDK does not expose the public usage resource.",
+      );
+    }
+    return usage.listWindows(options);
+  }
+
+  private usageResource() {
+    return (
+      this.client as unknown as {
+        usage?: {
+          listWindows(input?: {
+            cursor?: string;
+            limit?: number;
+            windowType?: string;
+          }): Promise<RuntimeUsageWindowPage>;
+        };
+      }
+    ).usage;
   }
 
   async provisionEnvironment(

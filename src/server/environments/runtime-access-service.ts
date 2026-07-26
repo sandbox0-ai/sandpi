@@ -1,6 +1,7 @@
 import { setTimeout as delay } from "node:timers/promises";
 
 import { HttpError } from "@/server/http-error";
+import type { RuntimeQuotaGate } from "@/server/billing/quota-service";
 import type { RuntimeAdapter } from "@/server/runtime/types";
 import type { SandpiStore, StoredEnvironmentRuntime } from "@/server/store";
 
@@ -10,6 +11,7 @@ const RUNTIME_ACCESS_LOCK_RETRY_MS = 250;
 interface EnvironmentRuntimeAccessOptions {
   lockTimeoutMs?: number;
   lockRetryMs?: number;
+  quotaGate?: RuntimeQuotaGate;
 }
 
 type RuntimeAdmission<T> =
@@ -55,6 +57,9 @@ export class EnvironmentRuntimeAccessService {
             environmentId,
           );
           requireAccessibleEnvironment(current);
+          await this.options.quotaGate?.assertEnvironmentRuntimeAllowed(
+            environmentId,
+          );
 
           let value: T;
           try {
@@ -130,6 +135,9 @@ export class EnvironmentRuntimeAccessService {
             environmentId,
           );
           requireAccessibleEnvironment(current);
+          await this.options.quotaGate?.assertEnvironmentRuntimeAllowed(
+            environmentId,
+          );
           await this.runtime.ensureEnvironmentRuntimeAccess(current);
         },
       );

@@ -30,6 +30,7 @@ import {
 
 import { EnvironmentEgressCredentials } from "@/components/environment-egress-credentials";
 import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
+import type { SandpiBillingSummary } from "@/lib/billing";
 import { copyTextToClipboard } from "@/lib/clipboard";
 import { MAX_ENVIRONMENT_IDLE_PAUSE_TIMEOUT_SECONDS } from "@/lib/environment-lifecycle";
 import { ENVIRONMENT_SANDBOX_MEMORY_OPTIONS_MIB } from "@/lib/environment-resources";
@@ -226,6 +227,9 @@ export function EnvironmentSettings({
     EnvironmentWorkspaceBackup[]
   >([]);
   const [workspaceBackupsLoading, setWorkspaceBackupsLoading] = useState(false);
+  const [billingSummary, setBillingSummary] =
+    useState<SandpiBillingSummary>();
+  const [billingSummaryError, setBillingSummaryError] = useState("");
   const [workspaceBackupBusy, setWorkspaceBackupBusy] = useState(false);
   const [workspaceBackupError, setWorkspaceBackupError] = useState("");
   const [workspaceRestoreBackup, setWorkspaceRestoreBackup] =
@@ -311,6 +315,29 @@ export function EnvironmentSettings({
       })
       .finally(() => {
         if (!controller.signal.aborted) setWorkspaceBackupsLoading(false);
+      });
+    return () => controller.abort();
+  }, [activeTab, environment.id]);
+
+  useEffect(() => {
+    if (activeTab !== "sandbox") return;
+    const controller = new AbortController();
+    setBillingSummaryError("");
+    void apiFetch<ApiEnvelope<SandpiBillingSummary>>(
+      "/api/v1/billing/summary",
+      { signal: controller.signal },
+    )
+      .then((response) => {
+        if (!controller.signal.aborted) setBillingSummary(response.data);
+      })
+      .catch((error) => {
+        if (!controller.signal.aborted) {
+          setBillingSummaryError(
+            error instanceof Error
+              ? error.message
+              : "Plan limits could not be loaded.",
+          );
+        }
       });
     return () => controller.abort();
   }, [activeTab, environment.id]);
@@ -1127,6 +1154,9 @@ export function EnvironmentSettings({
                     name="environment-sandbox-memory"
                     aria-label="Environment Sandbox memory"
                     value={draft.sandboxMemoryMiB}
+                    disabled={
+                      billingSummary?.plan.memoryConfigurable === false
+                    }
                     onChange={(event) => {
                       const memoryMiB = Number(event.currentTarget.value);
                       if (
@@ -1150,10 +1180,26 @@ export function EnvironmentSettings({
                       </option>
                     ))}
                   </select>
-                  <small>
-                    Applies immediately to the shared Sandbox. Sandbox0 derives
-                    CPU capacity from the configured memory ratio.
-                  </small>
+                  {billingSummary?.plan.memoryConfigurable === false ? (
+                    <small className="settings-plan-notice">
+                      The {billingSummary.plan.name} plan keeps Sandbox memory
+                      fixed at its current allocation.{" "}
+                      <a href="/preferences/?billing=plan">
+                        Review plans
+                        <ExternalLink size={11} aria-hidden="true" />
+                      </a>
+                    </small>
+                  ) : (
+                    <small>
+                      Applies immediately to the shared Sandbox. Sandbox0
+                      derives CPU capacity from the configured memory ratio.
+                    </small>
+                  )}
+                  {billingSummaryError ? (
+                    <small className="settings-inline-error" role="alert">
+                      {billingSummaryError}
+                    </small>
+                  ) : null}
                 </label>
                 <div className="settings-card workspace-backup-card">
                   <div className="workspace-backup-heading">
