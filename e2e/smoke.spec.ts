@@ -242,7 +242,9 @@ test("starts login from the anonymous account action", async ({ page }) => {
   expect(new URL(loginRequestUrl()!).searchParams.get("return_to")).toBe(appUrl);
 });
 
-test("offers Help & feedback to anonymous visitors", async ({ page }) => {
+test("offers Help & feedback without account-only links to anonymous visitors", async ({
+  page,
+}) => {
   await serveAnonymousBootstrap(page);
 
   await page.goto(
@@ -250,10 +252,10 @@ test("offers Help & feedback to anonymous visitors", async ({ page }) => {
   );
   await expect(
     page.getByRole("link", { name: "Sandpi GitHub repository" }),
-  ).toHaveAttribute("href", "https://github.com/sandbox0-ai/sandpi");
+  ).toHaveCount(0);
   await expect(
     page.getByText("iOS · Android · HarmonyOS coming soon"),
-  ).toBeVisible();
+  ).toHaveCount(0);
   await page.getByRole("button", { name: "Help & feedback" }).click();
 
   const dialog = page.getByRole("dialog", { name: "Help & feedback" });
@@ -1455,7 +1457,7 @@ test("serves the Preferences layout", async ({ page }) => {
   }
 });
 
-test("renders server-owned plan entitlements and submits only a plan id", async ({
+test("shows account usage and submits only a server-owned plan id", async ({
   page,
 }) => {
   let checkoutBody: unknown;
@@ -1537,6 +1539,42 @@ test("renders server-owned plan entitlements and submits only a plan id", async 
       });
     },
   );
+
+  await page.goto("/");
+
+  const accountMenuTrigger = page.getByRole("button", {
+    name: "Open account menu",
+  });
+  await expect(
+    accountMenuTrigger.locator(".account-menu-indicator"),
+  ).toHaveClass(/lucide-chevron-up/);
+  await expect(
+    page.getByRole("link", { name: "Sandpi GitHub repository" }),
+  ).toHaveCount(0);
+
+  await accountMenuTrigger.click();
+  const closeAccountMenuTrigger = page.getByRole("button", {
+    name: "Close account menu",
+  });
+  await expect(
+    closeAccountMenuTrigger.locator(".account-menu-indicator"),
+  ).toHaveClass(/lucide-chevron-down/);
+  const accountMenu = page.getByRole("menu", { name: "Account actions" });
+  await expect(accountMenu.getByText("Sandbox runtime")).toBeVisible();
+  await expect(accountMenu.getByText("0.5 / 1 GiB-hours")).toBeVisible();
+  await expect(
+    accountMenu.getByRole("menuitem", {
+      name: "Sandpi GitHub repository",
+    }),
+  ).toHaveAttribute("href", "https://github.com/sandbox0-ai/sandpi");
+  await expect(
+    accountMenu.getByText("iOS · Android · HarmonyOS coming soon"),
+  ).toBeVisible();
+
+  await closeAccountMenuTrigger.click();
+  await expect(
+    accountMenuTrigger.locator(".account-menu-indicator"),
+  ).toHaveClass(/lucide-chevron-up/);
 
   await page.goto("/preferences?billing=open");
 

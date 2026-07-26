@@ -568,17 +568,18 @@ guest composer message or choosing **Log in or sign up** in the lower-left
 account area. A submitted guest draft is kept in same-tab session storage and
 restored on the authenticated new-Session page. Direct visits to protected
 surfaces such as Preferences and the Web IDE still start OIDC immediately.
-Authenticated users can choose **Log out** from the lower-left account menu;
-Sandpi revokes the local OIDC Web session, or records an explicit signed-out
-choice in built-in administrator mode, and returns to the anonymous root
-without retaining Environment, Session or file coordinates in the URL.
 
-The same lower-left area links to the Sandpi GitHub repository and exposes
-**Help & feedback** for documentation, prefilled bug reports and product
-suggestions. Bug and feedback links include only the page origin/path and
-bounded browser user-agent, never Environment, Session or file query
-parameters. The UI also marks iOS, Android and HarmonyOS clients as coming
-soon.
+Authenticated users can open the lower-left account menu to review compact
+Sandbox runtime usage, open Preferences, visit the Sandpi GitHub repository,
+see the future iOS, Android and HarmonyOS clients, request help, or choose
+**Log out**. Sandpi revokes the local OIDC Web session, or records an explicit
+signed-out choice in built-in administrator mode, and returns to the anonymous
+root without retaining Environment, Session or file coordinates in the URL.
+
+Anonymous visitors retain a dedicated **Help & feedback** action. Documentation,
+prefilled bug reports and product-suggestion links include only the page
+origin/path and bounded browser user-agent, never Environment, Session or file
+query parameters.
 
 `SANDPI_OIDC_TOKEN_ENDPOINT_AUTH_METHOD` accepts `client_secret_post`,
 `client_secret_basic` or `none`. It defaults to `client_secret_post` when a

@@ -696,45 +696,6 @@ pre,
   border-top: 1px solid var(--line);
 }
 
-.sidebar-product-links {
-  display: grid;
-  gap: 3px;
-  padding: 4px 7px 7px;
-}
-
-.sidebar-product-links a,
-.sidebar-product-links p {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 7px;
-  margin: 0;
-  color: var(--ink-faint);
-  font-size: 9.5px;
-  line-height: 1.35;
-}
-
-.sidebar-product-links a {
-  border-radius: 5px;
-  text-decoration: none;
-}
-
-.sidebar-product-links a:hover,
-.sidebar-product-links a:focus-visible {
-  color: var(--ink);
-}
-
-.sidebar-product-links svg {
-  flex: 0 0 auto;
-}
-
-.sidebar-product-links span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .account-menu-trigger {
   display: flex;
   width: 100%;
@@ -799,6 +760,8 @@ pre,
   right: 8px;
   bottom: calc(100% + 5px);
   left: 8px;
+  max-height: calc(100vh - 80px);
+  overflow-y: auto;
   padding: 5px;
   border: 1px solid var(--line);
   border-radius: 9px;
@@ -824,6 +787,13 @@ pre,
   cursor: pointer;
 }
 
+.sidebar-account-menu a span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .sidebar-account-menu a:hover,
 .sidebar-account-menu button:hover,
 .sidebar-account-menu a:focus-visible,
@@ -835,6 +805,109 @@ pre,
 .sidebar-account-menu button:disabled {
   opacity: 0.55;
   cursor: wait;
+}
+
+.sidebar-account-usage {
+  margin: 1px 1px 6px;
+  padding: 9px;
+  border: 1px solid var(--line-soft);
+  border-radius: 7px;
+  background: var(--panel);
+}
+
+.sidebar-account-usage-heading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sidebar-account-usage-heading > span {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink-faint);
+  font-size: 9px;
+  font-weight: 680;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.sidebar-account-usage-heading svg {
+  flex: 0 0 auto;
+}
+
+.sidebar-account-usage-heading small {
+  overflow: hidden;
+  color: var(--ink-faint);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-account-usage > strong {
+  display: block;
+  margin-top: 7px;
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 670;
+}
+
+.sidebar-account-usage-state {
+  display: block;
+  margin-top: 7px;
+  color: var(--ink-faint);
+  font-size: 10px;
+}
+
+.sidebar-account-usage-meter {
+  height: 5px;
+  margin-top: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--selected);
+}
+
+.sidebar-account-usage-meter > span {
+  display: block;
+  height: 100%;
+  min-width: 2px;
+  border-radius: inherit;
+  background: var(--blue);
+}
+
+.sidebar-account-usage.is-exhausted .sidebar-account-usage-meter > span {
+  background: var(--red);
+}
+
+.sidebar-account-usage-meter.is-unlimited {
+  background: linear-gradient(
+    90deg,
+    var(--blue),
+    color-mix(in srgb, var(--blue) 20%, transparent)
+  );
+}
+
+.sidebar-account-platforms {
+  display: flex;
+  min-width: 0;
+  min-height: 30px;
+  align-items: center;
+  gap: 9px;
+  padding: 0 9px;
+  color: var(--ink-faint);
+  font-size: 9.5px;
+  line-height: 1.35;
+}
+
+.sidebar-account-platforms svg {
+  flex: 0 0 auto;
+}
+
+.sidebar-account-platforms span {
+  min-width: 0;
 }
 
 .sidebar-account-menu-divider {

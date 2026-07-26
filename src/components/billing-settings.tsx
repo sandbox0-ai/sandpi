@@ -12,10 +12,11 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
-import type {
-  SandpiAccountPlan,
-  SandpiBillingSummary,
-  SandpiCheckoutResult,
+import {
+  formatGiBHours,
+  type SandpiAccountPlan,
+  type SandpiBillingSummary,
+  type SandpiCheckoutResult,
 } from "@/lib/billing";
 import { createId } from "@/lib/id";
 import { formatUnixTimestamp } from "@/lib/time";
@@ -463,10 +464,4 @@ function PlanCard({
       </button>
     </article>
   );
-}
-
-function formatGiBHours(value: number) {
-  return new Intl.NumberFormat("en-US", {
-    maximumFractionDigits: value < 10 ? 2 : 1,
-  }).format(value);
 }

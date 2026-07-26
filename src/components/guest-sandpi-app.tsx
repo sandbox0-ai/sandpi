@@ -17,7 +17,6 @@ import { useEffect, useRef, useState } from "react";
 
 import { AppFrame, AppSidebar } from "@/components/app-frame";
 import { HelpFeedbackDialog } from "@/components/help-feedback-dialog";
-import { SidebarProductLinks } from "@/components/sidebar-primitives";
 import {
   newSessionAuthLoginUrl,
   storePendingGuestPrompt,
@@ -95,36 +94,30 @@ export function GuestSandpiApp({ loginUrl }: { loginUrl: string }) {
         </>
       }
       footer={
-        <div className={styles.sidebarFooter}>
-          <SidebarProductLinks
-            githubLabel={ui.sidebar.githubRepository}
-            mobileAppsLabel={ui.sidebar.mobileAppsComingSoon}
-          />
-          <div className={styles.sidebarFooterActions}>
-            <button
-              type="button"
-              className={`account-menu-trigger ${styles.signInButton}`}
-              aria-label={ui.guest.signInOrSignUp}
-              onClick={() => continueToLogin()}
-            >
-              <span className={`account-avatar ${styles.signInAvatar}`}>
-                <LogIn size={14} aria-hidden="true" />
-              </span>
-              <span className="account-copy">
-                <strong>{ui.guest.signInOrSignUp}</strong>
-                <small>{ui.guest.signInContext}</small>
-              </span>
-            </button>
-            <button
-              type="button"
-              className={styles.helpButton}
-              aria-label={ui.sidebar.help}
-              title={ui.sidebar.help}
-              onClick={() => setHelpFeedbackOpen(true)}
-            >
-              <CircleHelp size={17} aria-hidden="true" />
-            </button>
-          </div>
+        <div className={styles.sidebarFooterActions}>
+          <button
+            type="button"
+            className={`account-menu-trigger ${styles.signInButton}`}
+            aria-label={ui.guest.signInOrSignUp}
+            onClick={() => continueToLogin()}
+          >
+            <span className={`account-avatar ${styles.signInAvatar}`}>
+              <LogIn size={14} aria-hidden="true" />
+            </span>
+            <span className="account-copy">
+              <strong>{ui.guest.signInOrSignUp}</strong>
+              <small>{ui.guest.signInContext}</small>
+            </span>
+          </button>
+          <button
+            type="button"
+            className={styles.helpButton}
+            aria-label={ui.sidebar.help}
+            title={ui.sidebar.help}
+            onClick={() => setHelpFeedbackOpen(true)}
+          >
+            <CircleHelp size={17} aria-hidden="true" />
+          </button>
         </div>
       }
     >

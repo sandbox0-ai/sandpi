@@ -1,16 +1,27 @@
 "use client";
 
-import { ChevronUp, CircleHelp, LogOut, Settings } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronUp,
+  CircleHelp,
+  Gauge,
+  Github,
+  LogOut,
+  Settings,
+  Smartphone,
+} from "lucide-react";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 
 import { HelpFeedbackDialog } from "@/components/help-feedback-dialog";
-import {
-  SidebarAccountSummary,
-  SidebarProductLinks,
-} from "@/components/sidebar-primitives";
-import { apiFetch } from "@/lib/api-client";
+import { SidebarAccountSummary } from "@/components/sidebar-primitives";
+import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
 import { loggedOutHomeUrl } from "@/lib/auth-navigation";
+import {
+  formatGiBHours,
+  type SandpiBillingSummary,
+} from "@/lib/billing";
+import { SANDPI_GITHUB_REPOSITORY_URL } from "@/lib/help-feedback";
 import { getOperationUiCopy, type OperationLanguage } from "@/lib/operation-ui";
 import type { SandpiUser } from "@/lib/types";
 
@@ -30,6 +41,10 @@ export function SidebarAccountFooter({
   const [helpFeedbackOpen, setHelpFeedbackOpen] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
   const [accountActionError, setAccountActionError] = useState("");
+  const [billingSummary, setBillingSummary] =
+    useState<SandpiBillingSummary>();
+  const [usageLoading, setUsageLoading] = useState(false);
+  const [usageUnavailable, setUsageUnavailable] = useState(false);
   const accountMenuRef = useRef<HTMLDivElement>(null);
   const accountTriggerRef = useRef<HTMLButtonElement>(null);
 
@@ -64,6 +79,29 @@ export function SidebarAccountFooter({
       document.removeEventListener("pointerdown", handlePointerDown);
       document.removeEventListener("keydown", handleKeyDown);
     };
+  }, [accountMenuOpen]);
+
+  useEffect(() => {
+    if (!accountMenuOpen) return;
+
+    const controller = new AbortController();
+    setUsageLoading(true);
+    setUsageUnavailable(false);
+    void apiFetch<ApiEnvelope<SandpiBillingSummary>>(
+      "/api/v1/billing/summary",
+      { signal: controller.signal },
+    )
+      .then((response) => {
+        if (!controller.signal.aborted) setBillingSummary(response.data);
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setUsageUnavailable(true);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setUsageLoading(false);
+      });
+
+    return () => controller.abort();
   }, [accountMenuOpen]);
 
   function handleAccountMenuKeyDown(
@@ -111,17 +149,20 @@ export function SidebarAccountFooter({
     window.requestAnimationFrame(() => accountTriggerRef.current?.focus());
   }
 
+  const usagePercent =
+    billingSummary?.usage.percentUsed == null
+      ? undefined
+      : Math.min(100, Math.max(0, billingSummary.usage.percentUsed));
+
   return (
     <>
-      <SidebarProductLinks
-        githubLabel={ui.githubRepository}
-        mobileAppsLabel={ui.mobileAppsComingSoon}
-      />
       <button
         ref={accountTriggerRef}
         type="button"
         className={`account-menu-trigger ${accountMenuOpen ? "is-open" : ""}`}
-        aria-label={ui.accountMenu}
+        aria-label={
+          accountMenuOpen ? ui.closeAccountMenu : ui.accountMenu
+        }
         aria-haspopup="menu"
         aria-expanded={accountMenuOpen}
         onClick={() => {
@@ -139,11 +180,19 @@ export function SidebarAccountFooter({
         }}
       >
         <SidebarAccountSummary viewer={viewer} context={viewer.email} />
-        <ChevronUp
-          className="account-menu-indicator"
-          size={14}
-          aria-hidden="true"
-        />
+        {accountMenuOpen ? (
+          <ChevronDown
+            className="account-menu-indicator"
+            size={14}
+            aria-hidden="true"
+          />
+        ) : (
+          <ChevronUp
+            className="account-menu-indicator"
+            size={14}
+            aria-hidden="true"
+          />
+        )}
       </button>
       {accountMenuOpen ? (
         <div
@@ -153,6 +202,59 @@ export function SidebarAccountFooter({
           aria-label={ui.accountActions}
           onKeyDown={handleAccountMenuKeyDown}
         >
+          <div
+            className={`sidebar-account-usage ${
+              billingSummary?.usage.exhausted ? "is-exhausted" : ""
+            }`}
+            aria-busy={usageLoading}
+          >
+            <div className="sidebar-account-usage-heading">
+              <span>
+                <Gauge size={13} aria-hidden="true" />
+                {ui.sandboxRuntime}
+              </span>
+              {billingSummary ? <small>{billingSummary.plan.name}</small> : null}
+            </div>
+            {billingSummary ? (
+              <>
+                <strong>
+                  {formatGiBHours(billingSummary.usage.usedGiBHours)}
+                  {billingSummary.usage.limitGiBHours == null
+                    ? ` ${ui.gibHoursUsed}`
+                    : ` / ${formatGiBHours(
+                        billingSummary.usage.limitGiBHours,
+                      )} ${ui.gibHours}`}
+                </strong>
+                {usagePercent == null ? (
+                  <div
+                    className="sidebar-account-usage-meter is-unlimited"
+                    title={ui.unlimitedRuntime}
+                  />
+                ) : (
+                  <div
+                    className="sidebar-account-usage-meter"
+                    role="progressbar"
+                    aria-label={ui.billingUsage}
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={Math.round(usagePercent)}
+                  >
+                    <span style={{ width: `${usagePercent}%` }} />
+                  </div>
+                )}
+              </>
+            ) : (
+              <span
+                className="sidebar-account-usage-state"
+                aria-live="polite"
+              >
+                {usageLoading && !usageUnavailable
+                  ? ui.loadingUsage
+                  : ui.usageUnavailable}
+              </span>
+            )}
+          </div>
+          <span className="sidebar-account-menu-divider" role="separator" />
           {showPreferences ? (
             <Link
               href="/preferences"
@@ -174,6 +276,21 @@ export function SidebarAccountFooter({
             <CircleHelp size={15} aria-hidden="true" />
             {ui.help}
           </button>
+          <a
+            href={SANDPI_GITHUB_REPOSITORY_URL}
+            target="_blank"
+            rel="noreferrer"
+            role="menuitem"
+            aria-label={ui.githubRepository}
+            title={ui.githubRepository}
+          >
+            <Github size={15} aria-hidden="true" />
+            <span>github.com/sandbox0-ai/sandpi</span>
+          </a>
+          <div className="sidebar-account-platforms" role="presentation">
+            <Smartphone size={14} aria-hidden="true" />
+            <span>{ui.mobileAppsComingSoon}</span>
+          </div>
           <span className="sidebar-account-menu-divider" role="separator" />
           <button
             type="button"

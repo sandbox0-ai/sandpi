@@ -60,3 +60,9 @@ export interface SandpiCheckoutResult {
   kind: "checkout" | "subscription-updated";
   url?: string;
 }
+
+export function formatGiBHours(value: number) {
+  return new Intl.NumberFormat("en-US", {
+    maximumFractionDigits: value < 10 ? 2 : 1,
+  }).format(value);
+}
