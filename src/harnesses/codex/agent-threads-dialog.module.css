@@ -11,6 +11,16 @@
 }
 
 .dialog {
+  --agent-dialog-chrome: var(--panel-strong);
+  --agent-dialog-sidebar: var(--sidebar);
+  --agent-dialog-content: var(--panel-strong);
+  --agent-dialog-user-surface: var(--green-soft);
+  --agent-dialog-user-border: color-mix(
+    in srgb,
+    var(--green) 32%,
+    var(--line)
+  );
+
   display: grid;
   width: min(1120px, 100%);
   height: min(760px, calc(100dvh - 40px));
@@ -19,7 +29,7 @@
   border: 1px solid var(--line);
   border-radius: 14px;
   outline: 0;
-  background: var(--panel-strong);
+  background: var(--agent-dialog-content);
   box-shadow: 0 26px 80px rgb(24 24 20 / 26%);
 }
 
@@ -30,6 +40,7 @@
   gap: 11px;
   padding: 10px 12px 10px 17px;
   border-bottom: 1px solid var(--line);
+  background: var(--agent-dialog-chrome);
 }
 
 .headerIcon {
@@ -96,7 +107,7 @@
   min-height: 0;
   overflow-y: auto;
   border-right: 1px solid var(--line);
-  background: var(--sidebar);
+  background: var(--agent-dialog-sidebar);
   scrollbar-width: thin;
 }
 
@@ -110,7 +121,7 @@
   justify-content: space-between;
   padding: 0 13px;
   border-bottom: 1px solid var(--line-soft);
-  background: var(--sidebar);
+  background: var(--agent-dialog-sidebar);
   color: var(--ink-faint);
   font-size: 9px;
   font-weight: 700;
@@ -146,6 +157,8 @@
 .threadList > button.selected {
   background: var(--selected);
   color: var(--ink);
+  box-shadow: inset 0 0 0 1px
+    color-mix(in srgb, var(--ink-faint) 12%, transparent);
 }
 
 .status {
@@ -228,7 +241,7 @@
   min-width: 0;
   min-height: 0;
   grid-template-rows: auto minmax(0, 1fr);
-  background: var(--panel-strong);
+  background: var(--agent-dialog-content);
 }
 
 .detailHeader {
@@ -239,6 +252,7 @@
   gap: 16px;
   padding: 9px 18px;
   border-bottom: 1px solid var(--line-soft);
+  background: var(--agent-dialog-chrome);
 }
 
 .detailHeader > span:first-child {
@@ -368,9 +382,10 @@
 
 .transcriptMessage[data-role="user"] :global(.markdown-content) {
   padding: 10px 12px;
-  border: 1px solid #cbdcca;
+  border: 1px solid var(--agent-dialog-user-border);
   border-radius: 10px 10px 3px 10px;
-  background: #e8f2e7;
+  background: var(--agent-dialog-user-surface);
+  color: var(--ink);
 }
 
 .transcript :global(.message) {
@@ -431,7 +446,7 @@
   gap: 12px;
   padding: 7px 14px;
   border-top: 1px solid var(--line);
-  background: var(--sidebar);
+  background: var(--agent-dialog-sidebar);
   color: var(--ink-faint);
   font-size: 8.5px;
 }
@@ -439,6 +454,64 @@
 .footer code {
   color: var(--ink-soft);
   font-size: 8.5px;
+}
+
+:global(html[data-resolved-theme="dark"]) .backdrop {
+  background: rgb(0 0 0 / 58%);
+  backdrop-filter: blur(4px) saturate(0.72);
+}
+
+:global(html[data-resolved-theme="dark"]) .dialog {
+  --agent-dialog-chrome: color-mix(
+    in srgb,
+    var(--panel-strong) 88%,
+    var(--canvas)
+  );
+  --agent-dialog-sidebar: color-mix(
+    in srgb,
+    var(--sidebar) 86%,
+    var(--canvas)
+  );
+  --agent-dialog-content: color-mix(
+    in srgb,
+    var(--panel-strong) 94%,
+    var(--canvas)
+  );
+
+  border-color: color-mix(in srgb, var(--ink-faint) 28%, var(--line));
+  box-shadow:
+    0 30px 96px rgb(0 0 0 / 58%),
+    inset 0 1px 0 rgb(255 255 255 / 3%);
+}
+
+:global(html[data-resolved-theme="dark"]) .headerIcon {
+  border-color: color-mix(in srgb, var(--ink-faint) 22%, var(--line));
+  background: color-mix(
+    in srgb,
+    var(--agent-dialog-sidebar) 76%,
+    var(--panel-strong)
+  );
+  color: var(--ink-soft);
+}
+
+:global(html[data-resolved-theme="dark"]) .header > button:hover {
+  background: color-mix(in srgb, var(--hover) 82%, var(--panel-strong));
+}
+
+:global(html[data-resolved-theme="dark"]) .threadList > button.selected {
+  background: color-mix(in srgb, var(--selected) 88%, var(--blue-soft));
+  box-shadow: inset 0 0 0 1px
+    color-mix(in srgb, var(--blue) 18%, var(--line));
+}
+
+:global(html[data-resolved-theme="dark"]) .detailMeta b {
+  border: 1px solid color-mix(in srgb, var(--ink-faint) 16%, var(--line-soft));
+}
+
+:global(html[data-resolved-theme="dark"])
+  .transcriptMessage[data-role="user"]
+  :global(.markdown-content) {
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 4%);
 }
 
 @keyframes spin {

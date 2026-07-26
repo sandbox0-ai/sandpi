@@ -46,6 +46,22 @@ function useEnglishUi(bootstrap: SandpiBootstrap) {
   };
 }
 
+async function installDarkUiPreferences(page: Page) {
+  await page.addInitScript(() => {
+    window.localStorage.setItem(
+      "sandpi.preferences.v1",
+      JSON.stringify({
+        general: {
+          language: "en",
+          timeZone: "UTC",
+          sendShortcut: "enter",
+        },
+        appearance: { theme: "dark", density: "comfortable" },
+      }),
+    );
+  });
+}
+
 test.beforeEach(async ({ page }) => {
   await page.route("**/api/v1/bootstrap**", async (route) => {
     const response = await route.fetch();
@@ -1978,6 +1994,7 @@ test("maps Codex slash commands to Sandpi new and fork Session flows", async ({
   });
   page.on("pageerror", (error) => browserErrors.push(error.message));
 
+  await installDarkUiPreferences(page);
   await installControlledEventSource(page);
   await page.route("**/api/v1/**/models", async (route) => {
     await route.fulfill({
@@ -2133,6 +2150,21 @@ test("maps Codex slash commands to Sandpi new and fork Session flows", async ({
   await expect(
     agentDialog.getByText("Sub-agent result from its own native Thread."),
   ).toBeVisible();
+  await expect(page.locator("html")).toHaveAttribute(
+    "data-resolved-theme",
+    "dark",
+  );
+  const parentAgentMessage = agentDialog.locator(
+    'article[data-role="user"] .markdown-content',
+  );
+  await expect(parentAgentMessage).toHaveCSS(
+    "background-color",
+    "rgb(32, 56, 42)",
+  );
+  await expect(parentAgentMessage).toHaveCSS(
+    "color",
+    "rgb(240, 239, 233)",
+  );
   await page.reload();
   await emitControlledEvent(page, eventPath, "snapshot", snapshot);
   await expect(agentDialog).toBeVisible();
@@ -4688,19 +4720,7 @@ test("restores a new-Session deep link and keeps overlays usable in dark mode", 
     if (message.type() === "error") browserErrors.push(message.text());
   });
   page.on("pageerror", (error) => browserErrors.push(error.message));
-  await page.addInitScript(() => {
-    window.localStorage.setItem(
-      "sandpi.preferences.v1",
-      JSON.stringify({
-        general: {
-          language: "en",
-          timeZone: "UTC",
-          sendShortcut: "enter",
-        },
-        appearance: { theme: "dark", density: "comfortable" },
-      }),
-    );
-  });
+  await installDarkUiPreferences(page);
 
   await page.goto("/?environment=env-default&new=1");
   await expect(
