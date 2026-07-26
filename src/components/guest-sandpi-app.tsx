@@ -50,8 +50,21 @@ export function GuestSandpiApp({ loginUrl }: { loginUrl: string }) {
     return () => window.cancelAnimationFrame(focusFrame);
   }, []);
 
-  function continueToLogin(target = loginUrl) {
-    window.location.assign(target);
+  function continueToLogin() {
+    const hasPendingPrompt = Boolean(prompt.trim());
+    if (hasPendingPrompt) {
+      try {
+        storePendingGuestPrompt(window.sessionStorage, prompt);
+      } catch {
+        // Storage can be unavailable in restricted browser contexts. Login
+        // remains usable even when Sandpi cannot carry this draft across OIDC.
+      }
+    }
+    window.location.assign(
+      hasPendingPrompt
+        ? newSessionAuthLoginUrl(loginUrl, window.location.href)
+        : loginUrl,
+    );
   }
 
   function sendMessage() {
@@ -59,13 +72,7 @@ export function GuestSandpiApp({ loginUrl }: { loginUrl: string }) {
       promptRef.current?.focus();
       return;
     }
-    try {
-      storePendingGuestPrompt(window.sessionStorage, prompt);
-    } catch {
-      // Storage can be unavailable in restricted browser contexts. Login
-      // remains usable even when Sandpi cannot carry this draft across OIDC.
-    }
-    continueToLogin(newSessionAuthLoginUrl(loginUrl, window.location.href));
+    continueToLogin();
   }
 
   const sidebar = (

@@ -258,6 +258,33 @@ test("starts login from the anonymous account action", async ({ page }) => {
   expect(new URL(loginRequestUrl()!).searchParams.get("return_to")).toBe(appUrl);
 });
 
+test("keeps a guest draft when login starts from the account action", async ({
+  page,
+}) => {
+  await serveAnonymousBootstrap(page);
+  const loginRequestUrl = await captureLoginNavigation(page);
+
+  await page.goto("/");
+  const appUrl = page.url();
+  const pendingPrompt = "Keep this draft when I sign in";
+  await page
+    .getByPlaceholder("Ask Codex to work on something…")
+    .fill(pendingPrompt);
+  await page.getByRole("button", { name: "Log in or sign up" }).click();
+  await expect.poll(loginRequestUrl).toBeTruthy();
+
+  const loginRequest = new URL(loginRequestUrl()!);
+  expect(loginRequest.searchParams.get("return_to")).toBe(
+    new URL("/?new=1", appUrl).toString(),
+  );
+  expect(
+    await page.evaluate(
+      (key) => window.sessionStorage.getItem(key),
+      PENDING_GUEST_PROMPT_STORAGE_KEY,
+    ),
+  ).toBe(pendingPrompt);
+});
+
 test("offers Help & feedback without account-only links to anonymous visitors", async ({
   page,
 }) => {

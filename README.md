@@ -565,9 +565,11 @@ The workspace root remains an App-shaped anonymous landing surface. It does not
 load or expose Environment or Session data, and it does not redirect on page
 load. Login starts only after an explicit protected action, such as sending the
 guest composer message or choosing **Log in or sign up** in the lower-left
-account area. A submitted guest draft is kept in same-tab session storage and
-restored on the authenticated new-Session page. Direct visits to protected
-surfaces such as Preferences and the Web IDE still start OIDC immediately.
+account area. Any non-empty guest draft is kept in same-tab session storage when
+login starts from the anonymous App and restored on the authenticated
+new-Session page. Login without a draft retains its original return target.
+Direct visits to protected surfaces such as Preferences and the Web IDE still
+start OIDC immediately.
 
 Authenticated users can open the lower-left account menu to review compact
 Sandbox runtime usage, open Preferences, visit the Sandpi GitHub repository,
