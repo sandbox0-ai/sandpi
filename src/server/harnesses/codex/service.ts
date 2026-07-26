@@ -1750,18 +1750,7 @@ export class CodexService {
   ) {
     this.suspendEnvironmentWorker(environmentId);
     if (result.nativeRestored) {
-      this.forgetEnvironmentProtocolReadiness(environmentId);
-      this.nativeSessionAttachments.delete(environmentId);
-      this.rpcResponses.delete(environmentId);
-      this.rpcAnchors.delete(environmentId);
-      this.rejectEnvironmentRpcWaitersForEpochChange(environmentId);
-      const ownerPrefix = `${environmentId}\0`;
-      for (const key of this.nativeOwners.keys()) {
-        if (key.startsWith(ownerPrefix)) this.nativeOwners.delete(key);
-      }
-      for (const key of this.requestOwners.keys()) {
-        if (key.startsWith(ownerPrefix)) this.requestOwners.delete(key);
-      }
+      this.resetEnvironmentProtocolState(environmentId);
       await this.invalidateEnvironmentSessions(
         environmentId,
         "environment-workspace-restored",
@@ -3205,6 +3194,21 @@ export class CodexService {
     }
   }
 
+  private resetEnvironmentProtocolState(environmentId: string) {
+    this.forgetEnvironmentProtocolReadiness(environmentId);
+    this.nativeSessionAttachments.delete(environmentId);
+    this.rpcResponses.delete(environmentId);
+    this.rpcAnchors.delete(environmentId);
+    this.rejectEnvironmentRpcWaitersForEpochChange(environmentId);
+    const prefix = `${environmentId}\0`;
+    for (const key of this.nativeOwners.keys()) {
+      if (key.startsWith(prefix)) this.nativeOwners.delete(key);
+    }
+    for (const key of this.requestOwners.keys()) {
+      if (key.startsWith(prefix)) this.requestOwners.delete(key);
+    }
+  }
+
   private isCurrentExceptionalReconciliation(
     environmentId: string,
     reconciliation: ExceptionalSessionReconciliation,
@@ -3955,10 +3959,11 @@ export class CodexService {
   private async runWorker(environmentId: string, signal: AbortSignal) {
     let consecutiveFailures = 0;
     while (!signal.aborted) {
+      let stored: StoredEnvironmentRuntime | undefined;
       let stream:
         Awaited<ReturnType<RuntimeAdapter["watchCodexEvents"]>> | undefined;
       try {
-        let stored = await this.store.environmentRuntime(environmentId);
+        stored = await this.store.environmentRuntime(environmentId);
         if (stored.desiredState !== "running") break;
         if (!stored.supervisorSessionId) {
           throw new HttpError(
@@ -3995,10 +4000,36 @@ export class CodexService {
           consecutiveFailures = 0;
           continue;
         }
-        const earliest = expiredEventCursorEarliest(error);
-        if (earliest !== undefined) {
+        const rewindLatest = rewoundEventCursorLatest(error);
+        if (
+          stored &&
+          rewindLatest !== undefined &&
+          rewindLatest < stored.decoder.supervisorCursor
+        ) {
+          const previousCursor = stored.decoder.supervisorCursor;
           await this.store.resetEnvironmentDecoder(
             environmentId,
+            previousCursor,
+            rewindLatest,
+          );
+          this.resetEnvironmentProtocolState(environmentId);
+          await this.invalidateEnvironmentSessions(
+            environmentId,
+            "supervisor-journal-rewound",
+            "The Supervisor journal restarted behind Sandpi's cursor; reload the native Session snapshot.",
+          );
+          this.logger.warn(
+            { environmentId, previousCursor, latestCursor: rewindLatest },
+            "Codex Environment Supervisor journal rewound; decoder reset",
+          );
+          consecutiveFailures = 0;
+          continue;
+        }
+        const earliest = expiredEventCursorEarliest(error);
+        if (stored && earliest !== undefined) {
+          await this.store.resetEnvironmentDecoder(
+            environmentId,
+            stored.decoder.supervisorCursor,
             Math.max(0, earliest - 1),
           );
           await this.invalidateEnvironmentSessions(
@@ -5275,6 +5306,21 @@ function expiredEventCursorEarliest(error: unknown) {
   if (!match) return undefined;
   const earliest = Number(match[1]);
   return Number.isSafeInteger(earliest) && earliest > 0 ? earliest : undefined;
+}
+
+function rewoundEventCursorLatest(error: unknown) {
+  if (
+    !(error instanceof HttpError) ||
+    !error.code.startsWith("sandbox0_")
+  ) {
+    return undefined;
+  }
+  const match = error.message.match(
+    /event cursor must not be greater than latest sequence (\d+)/i,
+  );
+  if (!match) return undefined;
+  const latest = Number(match[1]);
+  return Number.isSafeInteger(latest) && latest >= 0 ? latest : undefined;
 }
 
 function codexBackgroundRequestCancelled() {

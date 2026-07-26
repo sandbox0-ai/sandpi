@@ -2051,13 +2051,19 @@ export class SandpiStore {
     }
   }
 
-  async resetEnvironmentDecoder(environmentId: string, cursor: number) {
-    await this.pool.query(
+  async resetEnvironmentDecoder(
+    environmentId: string,
+    expectedCursor: number,
+    cursor: number,
+  ) {
+    const result = await this.pool.query(
       `UPDATE environment_runtime
        SET supervisor_cursor = $2, stdout_tail = '', version = version + 1
-       WHERE environment_id = $1`,
-      [environmentId, Math.max(0, cursor)],
+       WHERE environment_id = $1 AND supervisor_cursor = $3
+       RETURNING environment_id`,
+      [environmentId, Math.max(0, cursor), Math.max(0, expectedCursor)],
     );
+    return Boolean(result.rowCount);
   }
 
   async setEnvironmentTerminalSession(

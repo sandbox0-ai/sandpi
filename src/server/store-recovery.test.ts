@@ -39,6 +39,31 @@ function transactionalStore(
   return { store: new SandpiStore(pool), calls };
 }
 
+test("resets a rewound decoder only from the observed cursor", async () => {
+  const fixture = transactionalStore((sql) => ({
+    rows: sql.includes("RETURNING environment_id")
+      ? [{ environment_id: "environment-one" }]
+      : [],
+    rowCount: 1,
+  }));
+
+  assert.equal(
+    await fixture.store.resetEnvironmentDecoder(
+      "environment-one",
+      3_333,
+      2_277,
+    ),
+    true,
+  );
+
+  const update = fixture.calls[0];
+  assert.ok(update);
+  assert.match(update.sql, /supervisor_cursor = \$2/);
+  assert.match(update.sql, /supervisor_cursor = \$3/);
+  assert.match(update.sql, /stdout_tail = ''/);
+  assert.deepEqual(update.values, ["environment-one", 2_277, 3_333]);
+});
+
 test("commits one shared decoder cursor and routes scalar turn state by native thread", async () => {
   const fixture = transactionalStore((sql) => ({
     rows: sql.includes("RETURNING environment_id")

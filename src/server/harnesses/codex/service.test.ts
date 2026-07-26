@@ -287,6 +287,8 @@ function fixture(
       recoveryAttemptCount?: number;
       reasoningEffort?: string;
     }>;
+    initialDecoder?: StoredEnvironmentRuntime["decoder"];
+    initialEventSequence?: number;
     streamErrors?: Error[];
     rpcTimeoutMs?: number;
     rpcSubmissionTimeoutMs?: number;
@@ -386,7 +388,7 @@ function fixture(
     attemptId: "attempt-environment-test",
     runtimeGeneration: 1,
     codexCredentialBindingCurrent: true,
-    decoder: {
+    decoder: input.initialDecoder ?? {
       supervisorCursor: 0,
       tailBase64: "",
       attemptId: "attempt-environment-test",
@@ -433,6 +435,7 @@ function fixture(
   };
   let newSessionSequence = 0;
   let childSequence = 0;
+  let eventSequence = input.initialEventSequence ?? 0;
   let lastStartedThreadId: string | undefined;
   let lastStartedTurnId: string | undefined;
 
@@ -440,7 +443,7 @@ function fixture(
     messages: Record<string, unknown>[],
     coordinates?: { attemptId: string; runtimeGeneration: number },
   ) => {
-    const seq = events.length + 1;
+    const seq = ++eventSequence;
     events.push({
       seq,
       runtimeGeneration:
@@ -756,7 +759,14 @@ function fixture(
       }
       return true;
     },
-    async resetEnvironmentDecoder(_environmentId: string, cursor: number) {
+    async resetEnvironmentDecoder(
+      _environmentId: string,
+      expectedCursor: number,
+      cursor: number,
+    ) {
+      if (environmentRuntime.decoder.supervisorCursor !== expectedCursor) {
+        return false;
+      }
       environmentRuntime = {
         ...environmentRuntime,
         decoder: {
@@ -765,6 +775,7 @@ function fixture(
           tailBase64: "",
         },
       };
+      return true;
     },
     async sessionIdForNativeThread(
       _environmentId: string,
@@ -5900,6 +5911,65 @@ test("recovers an expired Supervisor cursor before reconnecting", async () => {
     assert.equal(
       invalidation?.kind === "invalidation" ? invalidation.reason : undefined,
       "supervisor-journal-gap",
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("recovers when the Supervisor journal restarts behind the committed cursor", async () => {
+  const context = fixture({
+    initialDecoder: {
+      supervisorCursor: 3_333,
+      tailBase64: "",
+      attemptId: "attempt-before-journal-restart",
+      runtimeGeneration: 17,
+    },
+    initialEventSequence: 2_277,
+    streamErrors: [
+      new HttpError(
+        500,
+        "sandbox0_stream_session_events_failed",
+        "event cursor must not be greater than latest sequence 2277",
+      ),
+    ],
+    rpcTimeoutMs: 250,
+    onRequest(message) {
+      if (message.method !== "initialize") return undefined;
+      return {
+        id: message.id,
+        error: { code: -32600, message: "Already initialized" },
+      };
+    },
+  });
+  try {
+    assert.deepEqual(await context.service.listModels("user", "session-one"), {
+      data: [{ id: "gpt-test" }],
+    });
+    await eventually(
+      () => context.streamStarts.length >= 2,
+      "rewound event stream did not reconnect",
+    );
+
+    assert.deepEqual(context.streamStarts.slice(0, 2), [3_333, 2_277]);
+    assert.equal(
+      context
+        .service
+        .listLiveNotifications("session-one")
+        .some(
+          (update) =>
+            update.kind === "invalidation" &&
+            update.reason === "supervisor-journal-rewound",
+        ),
+      true,
+    );
+    assert.equal(
+      context.environmentRuntime().decoder.runtimeGeneration,
+      context.environmentRuntime().runtimeGeneration,
+    );
+    assert.equal(
+      context.environmentRuntime().decoder.attemptId,
+      context.environmentRuntime().attemptId,
     );
   } finally {
     await context.close();
