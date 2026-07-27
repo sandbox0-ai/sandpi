@@ -1,508 +1,159 @@
-# Sandpi
+<p align="center">
+  <img src="./src/app/icon.svg" alt="Sandpi logo" width="88" height="88">
+</p>
 
-Sandpi is an open-source, client/server coding-agent application built on
-[Sandbox0](https://github.com/sandbox0-ai/sandbox0). Its Web client follows a
-Codex-like interaction model, while the native coding-agent harness runs in a
-remote Sandbox0 Sandbox and survives browser disconnects.
+<h1 align="center">Sandpi</h1>
 
-The root route is the application itself; Sandpi has no marketing landing page.
-Codex is the first supported harness. Claude Code, OpenCode and Pi can be added
-later as independent harness integrations.
+<p align="center">
+  <strong>Your coding agent, running in a persistent cloud sandbox.</strong>
+</p>
 
-Sandpi is licensed under Apache-2.0. Sandpi and Sandbox0 are independent
-products: Sandpi consumes Sandbox0 only through the official JavaScript SDK and
-never reads a Sandbox0 database, internal metering endpoint or ClickHouse
-credential. The same Sandpi server supports optional Stripe subscriptions and
-product quota enforcement; self-hosted deployments keep that feature disabled
-by default.
+<p align="center">
+  <strong>English</strong> · <a href="./README.zh-CN.md">简体中文</a>
+</p>
 
-The hosted `sandpi.ai` deployment is built and rolled out to DigitalOcean
-Kubernetes by GitHub Actions. Its namespace-scoped deployment, retained
-PostgreSQL volume and ingress contract are documented in
-[`deploy/kubernetes`](deploy/kubernetes/README.md).
+<p align="center">
+  <a href="https://sandpi.ai">Open Sandpi</a> · <a href="https://github.com/sandbox0-ai/sandbox0">Sandbox0</a>
+</p>
 
-## Status
+Sandpi is an open-source [Sandbox0](https://github.com/sandbox0-ai/sandbox0)
+side project. It lets you run a native coding agent in a remote Sandbox0
+Sandbox and control it from the Web.
 
-This repository contains the runnable open-source Web application and Sandpi
-server. The current implementation includes PostgreSQL persistence,
-deployment-level identity configuration, Environment and Session APIs,
-Sandbox0 runtime wiring, Codex app-server event transport, native model
-discovery, image input, native Session/Turn branching, a live Web IDE,
-Environment terminal and runtime metrics.
+Your browser is only the client. The coding-agent harness, terminal and files
+live in the cloud, alongside a persistent Workspace Volume. You can close your
+laptop, switch devices or refresh the page without making the browser the
+lifetime of your coding session.
 
-Mobile clients, fine-grained Environment ACLs and additional native harness
-integrations remain future work. Sandpi's `/api/v1` contract is versioned, but
-the project is still pre-1.0 and may evolve it between releases.
+Codex is the first supported coding agent.
 
-## Architecture
+![Sandpi Web app showing multiple Environments and a Codex session](./docs/images/sandpi-web-app.png)
 
-```text
-Web today; iOS / Android / HarmonyOS later
-                    |
-             HTTPS / SSE / WebSocket
-                    |
-        +---------------------------+
-        | one Sandpi server         |
-        | Fastify API + static Web  |
-        +-------------+-------------+
-                      |
-             +--------+------------------+
-             |        |                  |
-        PostgreSQL  Stripe          Sandbox0 SDK
-       product and  subscription     public API
-       control state state                 |
-                            Environment Sandbox
-                      native Codex app-server with
-                      many Threads, /workspace, PTY
-```
+<p align="center">
+  <sub>The current Sandpi Web client, captured from the local application with public fixture data.</sub>
+</p>
 
-- **One backend:** every client uses the same versioned REST, SSE and WebSocket
-  service. Platform-specific clients must not reimplement orchestration rules.
-- **Client/server execution:** the browser is only an interaction client. A
-  coding agent runs through its native harness in a Sandbox0 Supervisor Session.
-- **Product and data boundary:** Sandbox0 owns Sandbox runtime and usage truth.
-  Sandpi owns its users, Environment attribution, plan entitlements and Stripe
-  subscription state. The server imports only authenticated-team usage windows
-  through `client.usage.listWindows()` in the official SDK. Its local runtime
-  segments are a timely admission projection, not a replacement usage ledger;
-  confirmed and projected totals are compared with `max`, never added together.
-  The browser talks only to Sandpi and receives neither a Sandbox0 API key nor a
-  direct Sandbox0 endpoint.
-- **Recoverable sessions:** every harness-native Session and rollout remains in
-  the Environment Workspace Volume, so closing the browser or losing the client
-  network does not terminate the coding agent. A reconnect reads a native
-  harness snapshot, then resumes from a bounded Supervisor/live notification
-  transport; Sandpi does not persist a parallel chat transcript. For Codex,
-  `thread/read(includeTurns: true)` is the conversation authority, while the
-  same native Thread's rollout JSONL supplies a sibling Activity read model
-  because historical `ThreadItem`s do not retain every tool execution. The
-  conversation snapshot is sent first; persisted Activity arrives in a
-  separate, revision-scoped SSE event so a slow Volume read cannot leave the
-  conversation loading. Environment recovery initializes only the shared
-  harness transport and never bulk-reads or attaches product Threads. A
-  reconnect reads only its selected persisted Thread; Codex attaches that
-  Thread lazily only when the Session starts or interrupts a Turn. Delayed
-  best-effort repair considers only non-archived Sessions whose scalar control
-  state is exceptionally still running, active or stale-pending. That repair
-  loads full native Turns only on that exceptional path, gives fresh pending
-  Turns a distributed grace, and follows the authoritative native Turn status.
-  An interrupted native Turn returns the product Session to waiting; Sandpi
-  never replays the original request or submits a replacement Turn. Repair is
-  abortable, retries
-  transient failures with capped backoff, and slowly rechecks exceptional active
-  state. Request submission is serialized with Environment lifecycle
-  transitions, but response waiting is non-blocking and cannot wake an
-  Environment that paused afterward. A Session can be archived only once its
-  control projection is idle, so hidden Sessions neither receive background
-  reads nor pin Environment idle pause. Startup recovery is likewise limited to
-  visible active or pending Session control state; ordinary waiting and archived
-  Sessions remain lazy.
-- **Native harness boundary:** shared code owns Sandbox lifecycle, durable
-  transport, files, terminal and metrics. Each harness owns its native Session
-  Activity, message/tool rendering, approvals, slash commands and model list;
-  Sandpi does not normalize different coding agents into a
-  lowest-common-denominator activity or chat protocol. The Codex adapter reads
-  `model/list` from the authenticated Environment-native app-server. Opening
-  New Session wakes that runtime and waits for the native catalog instead of
-  showing a Sandpi-owned default. The picker preserves each model's native
-  reasoning-effort options and sends the selected model and effort through
-  `thread/start`/`turn/start`; Sandpi does not publish or maintain a separate
-  Codex model or reasoning catalog. Repeated native entries are stably
-  deduplicated by their Codex model id before rendering, without a model-name
-  allowlist. Future harness adapters must follow the
-  same live capability-discovery rule and preserve unknown native option values
-  instead of adding shared Sandpi enums.
-  Browser-only UI choices use the versioned
-  `sandpi.local-ui-preferences.v1` store rather than the server-synchronized
-  account preference contract. Model and reasoning choices are scoped to their
-  Environment and Session, then reconciled against the next live native model
-  catalog so a coding-agent upgrade cannot revive a removed capability. The
-  same local store remembers device-specific sidebar and Inspector
-  open/collapsed state, Inspector tab, Terminal height, metric range and
-  activity filter controls without storing prompts, attachments or Workspace
-  content.
-  New Session and active conversation headers expose the same Environment
-  workspace operations: Terminal and Inspector. Before a native Session
-  exists, Inspector offers Files and Metrics; harness-owned Session Activity
-  appears only after a Session is selected. Environment settings remain in the
-  sidebar instead of replacing a workspace operation.
-  The Codex New Session and conversation composers also share one
-  harness-owned attachment toolbar. `@` discovery uses the harness-neutral
-  Environment Workspace search backed by Sandbox0. Matching Codex CLI file
-  completion, selecting a result replaces the active composer selection with
-  the user-visible Workspace-relative path, which remains part of the submitted
-  user text. The bounded runtime scan excludes hidden,
-  internal and dependency directories and does not maintain a persistent file
-  index or require a running coding-agent app-server.
-  Both Codex composers expose a harness-owned slash menu. One registry maps
-  Codex command spellings to stable browser intents, so aliases and GUI
-  execution cannot drift into separate dispatch paths. Commands map to real
-  browser product actions: `/new [name]` and `/clear [name]` open a named New
-  Session with the matching native start source, `/rename [name]` updates the
-  Sandpi Session title without mutating native Thread metadata, and `/fork` creates and selects
-  a child product Session. `/skills`, `/mcp [verbose]`, `/permissions`,
-  `/mention` and `/diff` open their existing Sandpi surfaces; verbose MCP also
-  shows the native tools, resources and templates. `/agent` opens a dedicated
-  native Agent Threads tree containing the main Agent and its spawned
-  subagents; this is separate from Session Activity. `/ide` opens the Workspace
-  Inspector, while `/logout` opens the Codex account connection
-  instead of logging out without confirmation. `/compact`, `/review` and
-  `/goal`, `/personality`, `/usage daily|weekly|cumulative`, `/memories`,
-  `/hooks`, `/ps` and `/stop` call the native Codex app-server. Goal supports
-  edit, pause, resume and clear from either command arguments or its dialog.
-  The Memories feature switch turns native memory use and generation on or off
-  together; either policy remains independently adjustable while enabled.
-  Inline review displays the native
-  wrapper result without exposing its private reviewer Turn as an interrupted
-  user Turn. `/plan` submits Codex's native Plan collaboration mode, and
-  the input toolbar exposes a Fast switch only when the selected model's live
-  metadata reports a Fast service tier. `/model`, `/fast` and `/status` are
-  omitted because model and Fast are visible composer controls and Session
-  status is already visible in the browser. `/side`, its `/btw` alias, and
-  `/resume` remain absent:
-  Codex implements side conversations and resume as TUI application behavior,
-  while Sandpi owns browser Session selection. Sandpi never forwards an unknown
-  slash command as ordinary agent text. Other terminal-only commands remain
-  absent.
-  Browser uploads are written through Sandbox0 into
-  `/workspace/.sandpi/uploads/{id}/` and referenced from there. Valid native
-  image formats become `localImage` inputs; other files insert their protected
-  Workspace-relative path into the visible composer text. Sandpi never appends
-  a hidden attachment instruction or other prompt text. The upload root stays
-  hidden from Workspace browsing and Workspace search, and arbitrary paths in
-  other Sandpi-managed `.sandpi` state cannot be submitted as local images.
-- **Runtime authority:** Sandbox0 is authoritative for the live Sandbox,
-  Supervisor attempt and runtime generation. PostgreSQL records only the last
-  credential-hydrated Codex epoch for recovery/CAS and keeps independent
-  decoder coordinates for Supervisor journal replay. Every native input is
-  fenced against Sandbox0's current epoch before it can be accepted. Workspace
-  and Terminal use a harness-neutral shared lifecycle admission and do not wait
-  for Codex initialization; warm access performs no extra recovery probe, while
-  a paused or disconnected runtime is repaired only after the native operation
-  reports it, with portal repair serialized under the exclusive lifecycle lock.
-  A live Terminal extends only an already-running idle deadline through a
-  throttled protocol heartbeat. Codex response timeouts begin after input
-  submission, and input delivery itself is bounded; an epoch loss after
-  delivery starts is reconciled from native state rather than replaying a
-  mutation.
-- **Time contract:** public API timestamps use Unix seconds, with fractional
-  seconds when the source has millisecond precision. Clients render all times
-  through the user's global time-zone preference; its default `auto` value uses
-  the current client/browser time zone.
-- **Live workspace contract:** the embedded file view and dedicated `/ide/`
-  workbench consume the same Sandpi API. The initial snapshot contains only the
-  direct children of `/workspace`; clients request one shallow directory page
-  when the user expands a folder and cache already loaded pages. User-owned
-  dot-files and dot-directories are visible, including Sandpi's internal
-  `/workspace/.sandpi` subtree; known generated dependency trees are omitted.
-  Sandpi-managed files are readable but remain read-only in the Web IDE and are
-  excluded from Git projections. File-tree context actions create empty files
-  or folders, rename an entry in place, or delete a file or folder recursively
-  through the Sandpi server. They reject existing names instead of replacing
-  them, protect the Workspace root plus `.sandpi` and `.git`, and confirm
-  destructive deletion including any open unsaved files. The client preserves
-  open drafts across a rename, closes affected tabs after deletion, refreshes
-  the parent directory and opens a newly created file. The
-  recursive Sandbox0 stream is used
-  only for invalidation. Loaded shallow pages
-  are reconciled while that native watch is connecting or unavailable, so files
-  created by a running agent do not remain hidden until Turn completion. Sandpi discovers
-  zero or more Git working trees beneath the visible tree, parses porcelain v2
-  per repository, and projects zero-context staged and working-tree diffs onto
-  current line numbers. Sandpi never creates or chooses a repository for the
-  user or agent. Every regular UTF-8 file remains editable as text, with Monaco
-  language highlighting for common code and configuration formats. Verified
-  image, audio and video containers plus PDF open as read-only browser previews;
-  the server derives their MIME type from the file signature rather than
-  trusting an extension. Text saves carry the revision that was opened; stale
-  writes return a conflict instead of silently replacing a newer file. The
-  browser never receives the deployment API key or a direct Sandbox0 endpoint.
-- **Environment grouping:** an Environment owns one Sandbox, one mounted
-  Workspace Volume, one harness process, official harness authentication,
-  egress credentials, template and network policy. Product Sessions are
-  lightweight references to native harness Sessions inside that runtime and
-  cannot switch harnesses. Network-policy and egress-credential edits are
-  composed into one complete desired Sandbox0 policy and applied to the running
-  Environment Sandbox rather than deferred to a future product Session. The
-  settings surface follows Sandbox0's two native fallback modes: `block-all`
-  adds domain allow exceptions, while `allow-all` adds domain deny exceptions.
-  Enabled credential destinations receive matching credential rules and, in
-  `block-all`, paired allow rules. An ordinary Network settings save therefore
-  cannot clear existing credential bindings.
-- **Native activity boundary:** the current Session's Inspector exposes
-  **Activity** as a harness-native execution record; each harness supplies its
-  own renderer instead of a normalized shared event model. Codex attributes
-  native tool activity by Thread id and reconstructs durable calls and every
-  recorded output from that Thread's bounded rollout JSONL (or its compressed
-  sibling); it does not use diagnostic logs SQLite. The Activity feed places
-  the newest Turn first while retaining native chronological action order
-  within each Turn. In the conversation, a live tool stays attached to the
-  Turn work disclosure that contains it. Empty Running states are
-  non-interactive, while meaningful live output opens directly and collapses
-  after completion instead of creating empty or nested detail controls. An
-  unavailable or partially parseable rollout is reported in Activity without
-  blocking the app-server conversation.
-- **Durable lifecycle:** Environment Sandboxes explicitly disable Sandbox0 soft
-  and hard TTLs. Each Environment configures its own idle auto-pause timeout,
-  defaulting to fifteen minutes; zero leaves no time-based expiration.
-  **Environment Settings → Sandbox** also persists the shared Sandbox memory
-  limit in MiB, defaulting to 1 GiB and offering 512 MiB, 1 GiB, 2 GiB, 4 GiB
-  and 8 GiB presets. Sandpi applies it both when claiming and when updating the
-  existing Sandbox. Runtime access and native `turn/completed` events calculate
-  the PostgreSQL deadline from that setting.
-  The same Sandbox settings surface can create native SandboxVolume Workspace
-  backups manually or on an hourly, 6-hour, 12-hour, daily or weekly schedule.
-  Scheduled backups are opt-in, retention defaults to seven and can keep 1, 3,
-  7, 14 or 30 backups. PostgreSQL stores the durable due/retry state plus an
-  ownership journal of Sandpi-created snapshot ids; backup bytes and storage
-  metering remain native Sandbox0 state, and retention never deletes snapshots
-  created outside Sandpi. A listed backup can be restored only after typing the
-  current Environment name. Sandpi rejects backup and restore while a Turn,
-  Session provisioning, fork or Environment runtime transition is active; restore
-  pauses the shared Sandbox, invokes Sandbox0's native Volume restore and
-  returns it to its previous running or paused state. Because Agent Harness
-  state is stored on the Workspace Volume, Sessions created after the selected
-  backup are retained as product records but marked unavailable.
-  Any Sandpi replica may scan it, but a per-Environment advisory lock elects
-  exactly one replica to pause after it rechecks that no Turn is active or
-  pending. Browser disconnection is irrelevant. Sandbox0 auto-resume
-  handles the next supported runtime access; Sandpi observes and retries the
-  native `waking up` transition but owns no parallel resume state machine.
-  PostgreSQL derives historical idle
-  pause intervals from the current runtime projection, and the Metrics API
-  returns overlapping intervals so charts shade intentional pause gaps instead
-  of presenting them as missing telemetry.
-- **Explicit deletion:** Environment settings require the persisted Environment
-  name before permanent deletion. Sandpi serializes deletion with Turn admission,
-  stops retained harness and login workers, deletes the Sandbox, Workspace Volume
-  and owned rootfs snapshot, deletes its known Sandbox0 egress credential sources,
-  then transactionally removes every active or archived Session, credential and
-  Environment row. Failed external cleanup retains its resource coordinates so
-  the operation can be retried safely.
-- **User-owned Environments:** every Environment belongs to exactly one user.
-  Only that user can list, use, configure or delete it. OIDC users receive
-  independent default Environments on first login; Sandpi has no shared tenant,
-  membership, invitation or role model.
-- **Subscription quota:** when Stripe mode is enabled, account-scoped plans
-  limit Environment count, Sandbox memory configuration and memory-weighted
-  runtime. Creation is serialized against the user limit in PostgreSQL.
-  Workspace, Terminal, Codex Turn admission, runtime repair and startup recovery
-  all recheck entitlement before they can wake or use a Sandbox. A background
-  SDK usage importer pauses running Environments that cross a limit and records
-  `quota` separately from ordinary idle pause. Disabling billing selects the
-  unlimited self-hosted entitlement and performs no usage import.
-- **Session attribution and personal pins:** every Session stays inside its
-  creator's Environment and shares that Environment runtime. Pinning is stored
-  for the owning user and persists across clients without becoming native
-  harness state.
-- **Credential boundaries:** coding-agent provider authentication belongs to an
-  Environment and is encrypted in PostgreSQL. The Environment runtime
-  materializes plaintext only in `/dev/shm`; its persistent Codex home contains
-  a link, so the Workspace Volume does not contain the credential while native
-  rollouts in `/workspace/.sandpi/harnesses/codex` survive runtime recovery.
-  Outbound-service credentials use a separate boundary: Sandbox0 owns their
-  write-only source material, while Sandpi stores only Environment ownership,
-  destination/projection rules and observed source version. The browser never
-  receives a source reference or stored secret.
-- **Native branching:** Session fork, Turn fork, edit and delete use Codex
-  `thread/fork` (or `thread/start` at the empty-history boundary). They never
-  copy or restore the shared Workspace. Edit/delete switch the product Session
-  to the candidate native Thread with a PostgreSQL compare-and-swap, while the
-  original native rollout remains harness-owned.
+## Why run a coding agent in a cloud sandbox?
 
-The detailed authority, reconnect and mutation invariants are documented in
-[Native coding-agent Session authority](docs/architecture/native-session-authority.md).
+| Need | What Sandpi gives you |
+| --- | --- |
+| Work from anywhere | Open the same cloud-hosted session from another browser or device. Your PC does not need to stay awake while the agent works. |
+| Durable sessions | Native session state and the Workspace live outside the browser. Refreshes, client disconnects and runtime recovery do not erase the session. |
+| Focused isolation | Create one Environment per project, task or concern. Each gets its own Sandbox, Workspace, coding-agent account, network policy and credentials. |
+| Multiple coding plans | Connect different Environments to different Codex/ChatGPT accounts, or keep work separated while using the same account. |
+| Controlled outbound access | Restrict sandbox egress by destination and inject supported credentials only into matching traffic, instead of placing service secrets in the repository or browser. |
+| Workspace protection | Create manual or scheduled Workspace backups with retention and restore them through Sandbox0 Volume snapshots. |
 
-The Sandpi database is authoritative for user ownership, every native Session
-reference, Sandbox and Volume. The deployment Sandbox0 key does not identify a
-Sandpi user, so every SDK operation must be authorized against Sandpi metadata
-first.
-
-### Environment, Session and Turn boundaries
+An Environment is deliberately larger than a chat:
 
 ```text
 Environment
-  coding-agent template + network policy + encrypted Codex Credential Source
-  + write-only Sandbox0 egress credential sources and bindings
-  + Sandbox + mounted Workspace Volume + native harness process
-       |
-       +-- Session A: native thread A
-       |
-       +-- Session B: native thread B
+├── Sandbox and persistent Workspace Volume
+├── one native coding-agent harness and provider account
+├── network policy and egress credentials
+├── runtime resources, terminal and metrics
+└── many native coding-agent Sessions
 ```
 
-Creating or forking a product Session does not allocate Sandbox0 resources.
-Sandpi asks the Environment's native harness to start or fork a Session and
-stores only its opaque id. File APIs, Web IDE, Terminal, signed Environment
-Audit and metrics are Environment resources, so switching between Sessions in
-one Environment does not switch shells or workspaces. Native agent Turns may
-therefore observe the same mutable files; clients must not present a Session as
-an isolated checkout. The Web IDE can also be addressed by Environment without
-an active Session.
+Use separate Environments when you want isolation or a different provider
+account. Use multiple Sessions inside one Environment when they should share the
+same files, tools and execution context.
 
-For edit/delete Sandpi creates a candidate native branch immediately before the
-selected Turn, optionally starts the replacement Turn, then atomically switches
-the product Session's opaque native id and history revision. A failed compare
-and-swap leaves only an unreferenced native branch; it never rolls back files
-belonging to other Sessions. Connected clients receive an SSE invalidation and
-reload the harness-native snapshot.
+## Design principles
 
-## Requirements
+1. **No invasive harness changes.** Sandpi is designed to run the official
+   coding-agent harness without forking, patching or replacing its
+   implementation. Integrations use the harness's native external interface;
+   the Codex adapter speaks the native app-server protocol.
+2. **Keep the native agent experience native.** The harness remains
+   authoritative for its Sessions, model catalog, reasoning options, history,
+   tools, Skills and MCP configuration. Sandpi does not flatten every coding
+   agent into a lowest-common-denominator chat protocol.
+3. **Make the Environment the isolation boundary.** Workspace, provider
+   identity, network and credentials move together. This makes an Environment
+   useful both for account separation and for keeping one piece of work focused.
+4. **Keep clients thin.** Web today—and future mobile clients—use the same
+   Sandpi server. A client disconnect must not become an instruction to stop the
+   coding agent.
+5. **Recover native state; do not guess or replay mutations.** Sandpi reconnects
+   to the persisted native Session and Workspace rather than maintaining a
+   second chat transcript or silently resubmitting an interrupted request.
+
+## What works today
+
+- Native Codex device login and Environment-scoped account connections
+- Native model and reasoning discovery, Session/Turn history and branching
+- Codex tools, Skills, MCP configuration, approvals and supported slash-command
+  surfaces
+- Persistent multi-Environment and multi-Session Web UI
+- Live Workspace file browser, Monaco editor, media previews and Git changes
+- Environment terminal, runtime metrics and configurable idle pause
+- Per-Environment network policy and Sandbox0-backed egress credential injection
+- Manual and scheduled Workspace backups, retention and restore
+- Built-in single-user identity or OIDC
+- Optional Stripe subscriptions and product quota enforcement
+
+Sandpi is pre-1.0. Codex is currently the only implemented harness, and the Web
+client is the only client shipped in this repository. Additional harnesses and
+native mobile clients can be added as independent integrations.
+
+## Quick start
+
+### Requirements
 
 - Node.js 24 and npm 11
 - PostgreSQL 15 or newer
-- A Sandbox0 deployment and deployment API key with Sandbox/Volume access and
+- A Sandbox0 deployment
+- A Sandbox0 deployment API key with Sandbox and Volume access plus
   `credentialsource:read`, `credentialsource:write` and
-  `credentialsource:delete`. Subscription quota mode additionally requires
-  `usage:read`.
-- A Sandbox0 `coding-agent` template; Sandpi mounts each Environment's
-  Workspace Volume at `/workspace`
+  `credentialsource:delete`
+- A Sandbox0 `coding-agent` template
 - Docker Engine with Compose v2 for the container workflow
 
-## Local development
+Optional subscription quota mode also requires `usage:read`.
 
-Create the local configuration first. The example listens on `172.16.100.2`,
-which makes the app reachable from devices on this workspace's HarmonyOS fusion
-network.
+### Local development
+
+Create a local configuration:
 
 ```bash
 cp .env.example .env
 chmod 600 .env
 ```
 
-Edit `.env` and replace `SANDBOX0_API_HOST` and `SANDBOX0_API_KEY`. They select
-one Sandbox0 deployment for the entire Sandpi installation. Generate the
-independent data-encryption key before connecting Codex:
+Set `SANDBOX0_API_HOST` and `SANDBOX0_API_KEY` in `.env`, then generate an
+independent key for encrypted coding-agent credentials:
 
 ```bash
 printf '\nSANDPI_SECRET_KEY=%s\n' "$(openssl rand -base64 32)" >> .env
 ```
 
-Start only PostgreSQL with Compose:
+Start PostgreSQL, install dependencies and run the Web and API development
+servers:
 
 ```bash
 docker compose up -d postgres
-```
 
-Then load the server variables and start the Web and API development servers:
-
-```bash
 set -a
 source .env
 set +a
+
 npm ci
 npm run dev
 ```
 
-Open <http://172.16.100.2:3000>. The Next.js development server listens on
-port 3000 and same-origin proxies API, health, SSE and WebSocket traffic to
-Fastify on port 3001. On startup, the API applies pending database migrations
-transactionally. Admin mode idempotently seeds the default deployment owner,
-and Environment; OIDC creates an independent default Environment on a user's
-first successful login.
+In this workspace the development servers intentionally listen on
+<http://172.16.100.2:3000>, so the app is reachable from the HarmonyOS fusion
+network. Adapt the development scripts for another host, or use the container
+workflow below.
 
-### Connect Codex
-
-After creating an Environment, select **Connect Codex** on its New Session page
-or open **Agent harness** from Environment settings. Sandpi does not open setup
-or an external page until the user chooses that action.
-Sandpi starts the official Codex device-login protocol in a short-lived
-`coding-agent` Sandbox and displays the native verification URL and user code.
-The resulting `auth.json` becomes an encrypted Environment-scoped Credential
-Source; the Environment records one Sandbox-scoped materialization binding.
-The page keeps polling the native login flow and refreshes the Environment as
-soon as Codex reports completion.
-
-Re-authentication creates a new Credential Source revision. Before any further
-native account or Session request, Sandpi replaces the Environment's live
-app-server attempt, initializes that process with the new native credential,
-and only then marks the Sandbox binding active. Account metadata and live usage
-therefore cannot come from different ChatGPT identities.
-
-Once connected, the same page shows the stored non-secret ChatGPT account
-metadata and reads current usage windows through Codex
-`account/rateLimits/read`. Rate-limit percentages and reset times are live
-provider state: Sandpi bounds them before returning them to the browser and
-does not persist them or mix them with a Sandpi-owned billing model. When Codex
-reports an available native reset credit, the Usage card can redeem it through
-`account/rateLimitResetCredit/consume`. The browser confirms the irreversible
-credit consumption, reuses one idempotency key for retries, and then refetches
-the provider-owned windows.
-
-For local development only, an existing native Codex login can be imported
-without copying it through the browser:
-
-```bash
-npm run codex:import-auth -- \
-  --environment env-default \
-  --file ~/.codex/auth.json
-```
-
-The command reads the native file locally, validates it, encrypts it with
-`SANDPI_SECRET_KEY`, and writes a new Environment Credential Source revision.
-It does not place the credential in the Environment Workspace Volume.
-
-### Configure MCP servers
-
-Codex native configuration is the only source of truth for MCP servers. Add or
-remove servers through Codex `config.toml` or the Codex CLI.
-Open **Environment Settings → MCP servers** to inspect the effective native
-inventory, refresh its runtime status, and enable or disable definitions from
-the Environment's user layer. A remote server that reports **Sign-in required**
-can start Codex's native OAuth flow from the same list. Project and admin
-definitions are visible but read-only, while their native OAuth connection
-remains available when required.
-
-Sandpi does not maintain an MCP catalog, copy definitions into PostgreSQL,
-store MCP API keys or OAuth tokens, or apply a separate MCP tool policy.
-Authentication and tool behavior remain native to Codex and the MCP provider.
-Sandpi starts Environment Codex runtimes with Apps and plugin discovery
-disabled: direct native Skills and MCP definitions are supported, while the
-host-only plugin install approval flow is intentionally unavailable.
-For a remote Environment, Sandpi publishes a constrained, rate-limited
-Sandbox0 callback route so the browser can return to Codex's listener. The
-callback cannot auto-resume a paused Environment and no OAuth flow or token is
-projected into Sandpi storage. Environment network settings continue to control
-ordinary sandbox egress.
-
-Local STDIO servers run beside Codex with access to the Environment Workspace.
-Treat their command and package as trusted code.
-
-### Configure Environment credentials
-
-Open **Environment Settings → Credentials** to attach outbound credentials to
-the Environment's shared Sandbox. This is separate from **Agent harness**,
-which continues to select and authenticate the coding agent used by the
+Sandpi applies pending PostgreSQL migrations on startup. The default
+`SANDPI_AUTH_MODE=admin` seeds one trusted local administrator and an initial
 Environment.
 
-The list intentionally resembles Skills: it shows only credentials owned by
-the current Environment, their destination, status and an enable switch.
-Sandpi supports HTTP-header and request-placeholder injection, mTLS client
-certificates, username/password protocols and SSH proxy keys. Every credential
-requires explicit domains, TCP ports, protocol and failure behavior. Disabled
-credentials remain stored but are removed from the Sandbox policy.
+### Container deployment
 
-Secret material is accepted only while creating or replacing a credential and
-is sent directly to Sandbox0. Sandpi PostgreSQL stores no token, password,
-certificate or private key, and the API never returns Sandbox0 source names.
-Sandpi also never lists deployment-wide credential sources: it authorizes the
-Environment owner first, then reads or mutates only a server-generated source
-reference already attached to that Environment. Deletion removes the binding
-before deleting the source; startup reconciliation repairs only known
-Environment records.
-
-See [Environment egress credentials](docs/architecture/environment-egress-credentials.md)
-for the ownership, lifecycle and network-composition invariants.
-
-
-If PostgreSQL already runs locally, set `DATABASE_URL` to that instance and
-skip the Compose command. The database user must be allowed to create and alter
-tables in the selected database.
-
-## Container deployment
-
-The included Compose file runs PostgreSQL and the same open-source Sandpi server
-used by local development:
+The included Compose file runs PostgreSQL and the same Sandpi server:
 
 ```bash
 cp .env.example .env
@@ -512,353 +163,98 @@ docker compose up -d --build
 docker compose ps
 ```
 
-Compose publishes Sandpi on port 3000 and PostgreSQL only on host loopback port
-55432. Set `SANDPI_PUBLIC_URL` to the externally reachable HTTPS origin before
-configuring OIDC. In production, terminate TLS at a trusted reverse proxy, keep
-PostgreSQL private, use a managed secret store, and replace the example database
-password.
+The container listens on port `3000`; PostgreSQL is published only on host
+loopback port `55432`. Set `SANDPI_PUBLIC_URL` to the externally reachable HTTPS
+origin before enabling OIDC.
 
-Health endpoints:
+For Kubernetes deployment, see
+[`deploy/kubernetes`](./deploy/kubernetes/README.md).
 
-- `GET /health/live` reports process liveness.
-- `GET /health/ready` verifies PostgreSQL connectivity and reports whether the
-  Sandbox0 runtime is configured.
+## Connect Codex
 
-The image runs the same bundled `sandpi/server` entrypoint that the package
-exports and includes the SQL migrations plus statically exported Web build.
+Create or open an Environment, then choose **Connect Codex** from the New
+Session page or **Environment Settings → Agent harness**. Sandpi starts Codex's
+native device-login flow and stores the resulting Environment-scoped credential
+encrypted at rest.
 
-## Identity modes
+For local development, an existing login can be imported without sending the
+file through the browser:
 
-### Built-in administrator (default)
-
-`SANDPI_AUTH_MODE=admin` is intended for a trusted, self-hosted single-user
-deployment. It skips the login flow and seeds one owner:
-
-- user: `admin@sandpi.local`
-- Environment: `Development`
-
-The seed is idempotent and does not overwrite later edits. This mode is not a
-substitute for authentication on a public or multi-user deployment; protect it
-at the network or reverse-proxy boundary.
-
-### OIDC
-
-Set `SANDPI_AUTH_MODE=oidc` for multi-user or private enterprise deployments.
-The following server-side settings are required:
-
-```dotenv
-SANDPI_AUTH_MODE=oidc
-SANDPI_COOKIE_SECRET=replace-with-at-least-32-random-characters
-SANDPI_SECRET_KEY=<at-least-32-random-characters>
-SANDPI_OIDC_ISSUER=https://identity.example.com/
-SANDPI_OIDC_CLIENT_ID=sandpi
-SANDPI_OIDC_CLIENT_SECRET=replace-if-the-client-is-confidential
-SANDPI_OIDC_TOKEN_ENDPOINT_AUTH_METHOD=client_secret_post
-SANDPI_OIDC_SCOPES=openid profile email
+```bash
+npm run codex:import-auth -- \
+  --environment env-default \
+  --file ~/.codex/auth.json
 ```
 
-Register this redirect URI with the provider:
+The persistent Workspace does not store the plaintext Codex credential. Sandpi
+materializes it into the running Environment's memory-backed filesystem when
+starting the native harness.
+
+## Architecture and trust boundaries
 
 ```text
-${SANDPI_PUBLIC_URL}/api/v1/auth/callback
+Web client
+    │ HTTPS / SSE / WebSocket
+    ▼
+Sandpi server ───────── PostgreSQL
+    │                   users, ownership and control state
+    │ official JavaScript SDK
+    ▼
+Sandbox0
+    ├── Sandbox + native Codex app-server
+    ├── persistent Workspace Volume
+    ├── terminal and runtime metrics
+    ├── network policy and credential injection
+    └── Workspace snapshots
 ```
 
-OIDC identifies a Sandpi user; it never authenticates Sandpi to Sandbox0. A
-private deployment may use any conforming OIDC provider. Sandpi Cloud supplies
-its hosted identity configuration through the same contract.
+- The browser talks only to Sandpi. It receives neither the Sandbox0 deployment
+  API key nor a direct Sandbox0 endpoint.
+- Sandpi uses Sandbox0 through the official JavaScript SDK; it does not read a
+  Sandbox0 database, internal metering endpoint or ClickHouse credential.
+- Sandbox0 owns Sandbox lifecycle, Volumes, network enforcement, credential
+  injection and usage truth. Sandpi owns its users, Environment attribution,
+  native Session references and optional product entitlements.
+- Native Codex Session history remains in the Environment Workspace. PostgreSQL
+  stores the opaque native reference and product control state, not a duplicate
+  conversation transcript.
+- Egress credential injection reduces secret exposure, but the coding agent can
+  still exercise any credential and destination explicitly granted to its
+  Environment. Treat allowed tools and destinations as part of the security
+  boundary.
 
-The workspace root remains an App-shaped anonymous landing surface. It does not
-load or expose Environment or Session data, and it does not redirect on page
-load. Login starts only after an explicit protected action, such as sending the
-guest composer message or choosing **Log in or sign up** in the lower-left
-account area. Any non-empty guest draft is kept in same-tab session storage when
-login starts from the anonymous App and restored on the authenticated
-new-Session page. Login without a draft retains its original return target.
-Direct visits to protected surfaces such as Preferences and the Web IDE still
-start OIDC immediately.
+## Current limits
 
-Authenticated users can open the lower-left account menu to review compact
-Sandbox runtime usage, open Preferences, visit the Sandpi GitHub repository,
-see the future iOS, Android and HarmonyOS clients, request help, or choose
-**Log out**. Sandpi revokes the local OIDC Web session, or records an explicit
-signed-out choice in built-in administrator mode, and returns to the anonymous
-root without retaining Environment, Session or file coordinates in the URL.
+- A hard Sandbox or harness failure does not erase the persisted Session or
+  Workspace. If it interrupts an active Codex Turn, that Turn may require a new
+  visible instruction; Sandpi intentionally does not replay it automatically
+  and risk duplicate mutations.
+- Sessions inside one Environment share one mutable Workspace and harness
+  account. They are not isolated checkouts. Use separate Environments when work
+  must not affect each other.
+- Built-in administrator mode is for a trusted single-user deployment. Use OIDC
+  and a proper network/TLS boundary for public or multi-user deployments.
+- The `/api/v1` contract is versioned but may still change between pre-1.0
+  releases.
 
-Anonymous visitors retain a dedicated **Help & feedback** action. Documentation,
-prefilled bug reports and product-suggestion links include only the page
-origin/path and bounded browser user-agent, never Environment, Session or file
-query parameters.
+## Documentation
 
-`SANDPI_OIDC_TOKEN_ENDPOINT_AUTH_METHOD` accepts `client_secret_post`,
-`client_secret_basic` or `none`. It defaults to `client_secret_post` when a
-client secret is set and `none` otherwise. The configured OIDC scopes must
-include `openid`.
-
-### Auth0 through CI
-
-The checked-in [`auth0/`](auth0/) directory declares `SandPi Cloud` as a
-standard Auth0 Regular Web Application. The `Sync Auth0 OIDC application`
-workflow validates the repository on pull requests and pushes. A manual
-workflow dispatch plans and applies the declaration through the protected
-`auth0` environment. It uses Auth0 Deploy CLI 8.35.0 and cannot delete tenant
-resources.
-
-Create a dedicated Auth0 Machine-to-Machine application for the workflow with
-only `read:clients`, `create:clients` and `update:clients` Management API
-permissions. Configure a protected GitHub Environment named `auth0` with:
-
-| Kind | Name | Value |
-| --- | --- | --- |
-| Variable | `AUTH0_DOMAIN` | Auth0 tenant hostname, without `https://` |
-| Variable | `SANDPI_PUBLIC_URL` | Deployed Sandpi origin, without a trailing slash |
-| Secret | `AUTH0_DEPLOY_CLIENT_ID` | Deploy M2M client ID |
-| Secret | `AUTH0_DEPLOY_CLIENT_SECRET` | Deploy M2M client secret |
-
-The Deploy M2M application and the Sandpi login application are separate
-clients. Copy the `SandPi Cloud` application client ID and secret into the
-Sandpi deployment as
-`SANDPI_OIDC_CLIENT_ID` and `SANDPI_OIDC_CLIENT_SECRET`; set
-`SANDPI_OIDC_ISSUER` to the issuer advertised by the Auth0 discovery document
-(this may use an Auth0 custom domain). Do not store either client secret in the
-repository.
-
-## Subscription, usage and quota
-
-`SANDPI_BILLING_MODE=disabled` is the self-hosted default. It selects one
-unlimited deployment entitlement, does not poll Sandbox0 usage and leaves
-Environment count and Sandbox memory configurable.
-
-Stripe mode enables the Sandpi product plans:
-
-| Plan | Price | Runtime allowance | Environments | Sandbox memory |
-| --- | ---: | ---: | ---: | --- |
-| Free | $0 | 1 GiB-hour per account month | 1 | not configurable |
-| Plus | $10/month | 168 GiB-hours per fixed week | 3 | configurable |
-| Pro | $25/month | 500 GiB-hours per fixed week | 10 | configurable |
-
-The Free period is anchored to account creation and clamps month-end
-anniversaries. A paid user's seven-day period is anchored on first paid
-activation rather than Stripe invoice boundaries. `past_due` retains paid
-entitlement for a fixed 72-hour grace period. Upgrades apply immediately;
-downgrades retain the current Sandpi entitlement until the saved subscription
-period end. Checkout, Customer Portal and webhook processing use server-side
-Stripe keys and durable event idempotency.
-
-Configure recurring monthly Stripe Prices and the signed webhook:
-
-```dotenv
-SANDPI_BILLING_MODE=stripe
-SANDPI_STRIPE_SECRET_KEY=sk_test_or_live
-SANDPI_STRIPE_WEBHOOK_SECRET=whsec_value
-SANDPI_STRIPE_PLUS_PRICE_ID=price_plus
-SANDPI_STRIPE_PRO_PRICE_ID=price_pro
-SANDPI_USAGE_POLL_INTERVAL_MS=15000
-```
-
-The webhook URL is:
-
-```text
-${SANDPI_PUBLIC_URL}/api/v1/billing/webhook
-```
-
-Subscribe it to `checkout.session.completed` and
-`customer.subscription.created`, `customer.subscription.updated`,
-`customer.subscription.deleted`, `customer.subscription.paused` and
-`customer.subscription.resumed`. The webhook is the only unauthenticated
-billing route and verifies Stripe's signature against the unmodified raw body.
-Summary, Checkout and Customer Portal routes require a Sandpi user session.
-
-Sandbox0 remains usage truth. Its PostgreSQL metering projection/outbox feeds
-the ClickHouse read model, and the deployment key's authenticated team scopes
-`GET /api/v1/usage/windows`. Sandpi calls that contract only through the
-official JavaScript SDK, persists the opaque cursor and imports immutable closed
-`sandbox.runtime_mib_milliseconds` windows attributed to its known Environment
-Sandbox ids. It never calls `/internal/v1/metering/*`, queries ClickHouse, or
-reads Sandbox0 PostgreSQL. Sandpi's local runtime segments cover the SDK
-projection delay for admission; they are consumer state and are reconciled by
-using the greater of confirmed and projected totals.
-
-Stripe mode fails at startup unless the installed `sandbox0` package exposes
-`client.usage.listWindows()`. Release and install that SDK contract before
-enabling billing; Sandpi does not fall back to raw HTTP when an older package is
-installed.
-
-See [Billing and Sandbox0 usage boundary](docs/architecture/billing-and-usage.md)
-for lifecycle, downgrade and failure-mode invariants.
-
-## Deployment configuration
-
-Configuration is server-owned. It must not appear in personal Preferences or
-Environment settings.
-
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `DATABASE_URL` | local PostgreSQL on `55432` | Sandpi application database |
-| `SANDPI_HOST` | `172.16.100.2` | HTTP bind address |
-| `SANDPI_PORT` | `3000` | HTTP port |
-| `SANDPI_PUBLIC_URL` | derived from host and port | External origin and OIDC callback base |
-| `SANDPI_WEB_DIR` | `./out` | Static exported Web assets |
-| `SANDPI_AUTH_MODE` | `admin` | `admin` or `oidc` |
-| `SANDPI_COOKIE_SECRET` | none | Signed session cookie secret; required by OIDC |
-| `SANDPI_SECRET_KEY` | none | Server-side encryption key; required by OIDC and coding-agent credential storage |
-| `SANDPI_OIDC_*` | none | Standard OIDC provider, client and token-endpoint authentication configuration |
-| `SANDBOX0_API_HOST` | none | Operator-selected Sandbox0 API endpoint |
-| `SANDBOX0_API_KEY` | none | Operator-selected Sandbox0 deployment key |
-| `SANDPI_BILLING_MODE` | `disabled` | `disabled` for unlimited self-hosted use or `stripe` for product plans |
-| `SANDPI_STRIPE_SECRET_KEY` | none | Server-side Stripe API key; required in Stripe mode |
-| `SANDPI_STRIPE_WEBHOOK_SECRET` | none | Stripe webhook signing secret; required in Stripe mode |
-| `SANDPI_STRIPE_PLUS_PRICE_ID` | none | Recurring monthly Plus Price id |
-| `SANDPI_STRIPE_PRO_PRICE_ID` | none | Recurring monthly Pro Price id |
-| `SANDPI_USAGE_POLL_INTERVAL_MS` | `15000` | Sandbox0 SDK usage import interval, from 5000 to 300000 ms |
-| `SANDPI_LOG_LEVEL` | `info` | Fastify/Pino log level |
-
-Keep `.env` out of version control and readable only by the service account.
-Prefer a platform secret mechanism in Kubernetes or another orchestrator. Never
-place a Sandbox0 API key in `NEXT_PUBLIC_*`, browser storage, an Environment
-record or a user preference.
-
-The server can boot without Sandbox0 configuration for UI and database
-inspection, but runtime operations return a clear
-`sandbox0_not_configured` error until both Sandbox0 variables are present.
-An admin-mode deployment may also boot without `SANDPI_SECRET_KEY`, but it must
-set one before connecting an Environment to Codex. Changing the key makes
-previously stored Environment credentials unreadable.
-
-Coding-agent authentication remains Environment-scoped. Only the Environment
-owner can use its agent, Workspace or Terminal and must be treated as capable of
-exporting the materialized provider credential, just as with a native harness
-host.
-
-### Credential materialization and refresh
-
-Codex receives the official native file at
-`/dev/shm/sandpi-codex-auth.json`. Its persistent `CODEX_HOME/auth.json` is a
-symlink from `/workspace/.sandpi/harnesses/codex` to that memory-backed file, so
-the Workspace Volume contains no provider tokens. Sandpi materializes the
-current Environment credential when starting or recovering the shared harness
-runtime and reconciles a native refresh during runtime recovery. The
-Environment owner has terminal and agent execution in that Sandbox and must be
-treated as able to export its provider credential.
-
-If Workspace or Supervisor repair pauses the Sandbox after an early credential
-write, Sandpi re-materializes the credential in Sandbox0's final runtime
-generation before initializing app-server.
-
-A changed Environment credential revision also replaces an otherwise healthy
-app-server attempt. Codex account identity is process-local; overwriting the
-ephemeral file is not considered a completed account switch. The credential
-binding remains stale until the replacement process answers native
-initialization, so warm-path requests cannot continue through the previous
-account.
-
-Sandpi never sends this credential to Sandbox0's deployment API as an API key;
-the Sandbox0 host and key remain independent deployment-level server secrets.
-
-## User ownership model
-
-- A user is the Sandpi authorization boundary. Every Environment has one owner,
-  and every Session belongs to an Environment owned by that same user.
-- Sandpi does not model shared tenants, memberships, invitations, roles,
-  organization switching or shared Environment visibility.
-- Sandpi plans and subscriptions are user-owned product state. They do not reuse
-  the Sandbox0 team, quota or billing model.
-- Provider accounts use the official authentication supported by the native
-  harness, allowing users to retain their own coding plan and provider limits.
-- Sandbox0 and Sandpi remain separate products with separate identity and
-  authorization boundaries. Sandpi's one deployment API key selects a
-  Sandbox0 team, while immutable Sandbox ids attribute that team usage back to
-  Sandpi users.
-
-## Repository layout
-
-```text
-db/migrations/       PostgreSQL schema migrations
-src/app/             Next.js Web routes and global styles
-src/components/      shared Web application UI
-src/harnesses/       harness-owned interaction implementations
-src/lib/             shared contracts and browser API client
-src/server/          Fastify API, identity, persistence and runtime adapters
-```
-
-The backend API is versioned under `/api/v1`. Web, future iOS, Android and
-HarmonyOS clients should depend on that service contract rather than database or
-Sandbox0 implementation details.
-
-## Runtime guarantees and current limits
-
-- One Environment owns one Sandbox, one mounted Workspace Volume, one Terminal
-  and one native harness process; all product Sessions in it share them.
-- Every Environment is provisioned from the fixed Sandbox0 `coding-agent`
-  template; product Sessions allocate only native harness Sessions.
-- The Environment Sandbox explicitly disables Sandbox0 soft and hard TTLs. Its
-  configurable idle pause defaults to fifteen minutes without a running Turn
-  following the latest activity; setting it to zero leaves no time-based
-  expiration. Deadlines and retries are PostgreSQL state, not process-local
-  timers.
-- Workspace backups use Sandbox0's native SandboxVolume snapshot checkpoint.
-  Automatic backups are disabled by default to avoid unexpected snapshot
-  storage usage; a user can still create one immediately from Environment
-  Settings. Creation, retention and restore share the Environment lifecycle
-  lock with pause, recovery and deletion. Failed backup operations remain
-  durable retries; restore is idempotently retryable against the same native
-  snapshot. The Web surface requires the current Environment name before
-  destructive restore and the server independently rechecks that no native
-  Turn or Session operation is active before pausing the Sandbox.
-- Supervisor output is the durable native transport. PostgreSQL stores replay
-  identity, cursors and scalar recovery coordinates, never a parallel Codex
-  transcript. One cursor-resumable Sandbox0 event stream per Environment
-  carries retained replay and live tool/file notifications without idle
-  polling; the browser may disconnect at any time without stopping Codex.
-- The Web terminal is resumable through a Supervisor Session. Its client stores
-  Supervisor sequence bookmarks for the last three submitted commands, so a
-  reopened renderer restores only that recent output. Historical bytes are
-  parsed with terminal input disabled until a captured journal head is reached,
-  preventing old device queries from writing replies into the live PTY. Live
-  input is forwarded in order, including xterm binary mouse reports. Every
-  writable frame is reauthorized against the Environment
-  fence; resize-only frames do not require write access.
-  The shell supplies Vim's native `EXINIT` fallback only when no user vimrc is
-  present, keeping arrow-key escape sequences usable in `vi` compatible mode
-  without overriding an Environment's editor configuration.
-  A bounded 4 MiB retained tail protects recovery when an older bookmark
-  expires. Web IDE opens regular files under `/workspace` up to 5 MiB. UTF-8
-  files are editable; PNG, JPEG, GIF, WebP, AVIF, BMP and ICO images, MP3, WAV,
-  Ogg/Opus, FLAC, AAC, AIFF, MIDI and MPEG-4/WebM audio, MP4, WebM, Ogg and
-  QuickTime video, and PDF are signature-verified read-only previews. Actual
-  playback still depends on browser codec support. Image previews provide
-  fit-relative 25–400% zoom controls, pixel dimensions and keyboard shortcuts.
-  Larger media is not fetched or streamed because the current Sandbox0 File API
-  exposes neither ranged reads nor a streaming URL. `.git`, symbolic links and
-  unsupported binary files remain read-only. The single file tree includes
-  staged, unstaged, untracked, renamed, deleted and conflicted Git state across
-  optional root or nested repositories. Right-click or `Shift+F10` opens the
-  file actions for opening, opening in a new tab, downloading, renaming,
-  deleting and path copying, and folder actions for creating files or folders,
-  renaming, recursively deleting, expanding, collapsing, refreshing and path
-  copying.
-  Workspace events refresh clean files automatically and turn external changes
-  to dirty files into an explicit
-  compare/reload/overwrite decision.
-- The OSS server currently expects one active server replica. PostgreSQL and
-  Supervisor replay make Sandpi process restart and scalar native-state repair
-  recoverable. An interrupted native Codex Turn still requires a new visible
-  user message. Multi-replica worker leadership is not yet part of the
-  supported deployment contract.
-- Sandpi's optional product plan projection is account-scoped and uses
-  memory-weighted Sandbox runtime from the Sandbox0 SDK. Coding-provider usage
-  remains a separate live, Environment-scoped projection and is never counted
-  as Sandpi Sandbox quota.
+- [Native Session authority and recovery](./docs/architecture/native-session-authority.md)
+- [Environment egress credentials](./docs/architecture/environment-egress-credentials.md)
+- [Billing and usage boundaries](./docs/architecture/billing-and-usage.md)
+- [Kubernetes deployment](./deploy/kubernetes/README.md)
+- [Complete configuration template](./.env.example)
 
 ## Verification
 
 ```bash
-npm run typecheck
 npm run lint
+npm run typecheck
 npm test
 npm run build
 npm run test:e2e
-docker compose config
 ```
 
-Copyright 2026 Sandpi contributors. Licensed under the Apache License, Version
-2.0; see [LICENSE](./LICENSE).
+## License
+
+Sandpi is licensed under [Apache-2.0](./LICENSE).
