@@ -1,14 +1,14 @@
-const TERMINAL_PING_INTERVAL_MS = 60_000;
-const TERMINAL_RUNTIME_TOUCH_INTERVAL_MS = 5 * 60_000;
+const DEFAULT_PING_INTERVAL_MS = 60_000;
+const DEFAULT_RUNTIME_TOUCH_INTERVAL_MS = 5 * 60_000;
 
-interface TerminalHeartbeatSocket {
+interface RuntimeWebSocketHeartbeatSocket {
   ping(): void;
   terminate(): void;
   on(event: "pong", listener: () => void): unknown;
   off(event: "pong", listener: () => void): unknown;
 }
 
-interface TerminalHeartbeatOptions {
+export interface RuntimeWebSocketHeartbeatOptions {
   pingIntervalMs?: number;
   touchIntervalMs?: number;
   now?: () => number;
@@ -18,10 +18,10 @@ interface TerminalHeartbeatOptions {
 }
 
 /**
- * Keeps a browser-owned Terminal connection honest and extends the idle
+ * Keeps a client-owned live runtime connection honest and extends the idle
  * deadline only after a protocol-level pong proves that the client is alive.
  */
-export class TerminalHeartbeat {
+export class RuntimeWebSocketHeartbeat {
   private readonly now: () => number;
   private readonly schedule: typeof setInterval;
   private readonly cancel: typeof clearInterval;
@@ -31,9 +31,9 @@ export class TerminalHeartbeat {
   private touchInFlight?: Promise<void>;
 
   constructor(
-    private readonly socket: TerminalHeartbeatSocket,
+    private readonly socket: RuntimeWebSocketHeartbeatSocket,
     private readonly touchRuntime: () => Promise<boolean>,
-    private readonly options: TerminalHeartbeatOptions = {},
+    private readonly options: RuntimeWebSocketHeartbeatOptions = {},
   ) {
     this.now = options.now ?? Date.now;
     this.schedule = options.setInterval ?? setInterval;
@@ -46,7 +46,7 @@ export class TerminalHeartbeat {
     this.socket.on("pong", this.handlePong);
     this.timer = this.schedule(
       this.tick,
-      this.options.pingIntervalMs ?? TERMINAL_PING_INTERVAL_MS,
+      this.options.pingIntervalMs ?? DEFAULT_PING_INTERVAL_MS,
     );
     this.timer.unref?.();
   }
@@ -79,7 +79,7 @@ export class TerminalHeartbeat {
     if (
       this.touchInFlight ||
       now - this.lastTouchAt <
-        (this.options.touchIntervalMs ?? TERMINAL_RUNTIME_TOUCH_INTERVAL_MS)
+        (this.options.touchIntervalMs ?? DEFAULT_RUNTIME_TOUCH_INTERVAL_MS)
     ) {
       return;
     }

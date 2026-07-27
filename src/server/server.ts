@@ -13,9 +13,11 @@ import Fastify, {
   type FastifyRequest,
 } from "fastify";
 import type { Pool } from "pg";
+import WebSocket, { type RawData } from "ws";
 import { ZodError, z } from "zod";
 
 import type { SandpiDeploymentSummary, SandpiPreferences } from "@/lib/types";
+import { sandboxLoopbackUrl } from "@/lib/environment-browser";
 import { BillingQuotaService } from "@/server/billing/quota-service";
 import { BillingRepository } from "@/server/billing/repository";
 import {
@@ -54,6 +56,12 @@ import { EnvironmentService } from "@/server/environments/service";
 import { EnvironmentLifecycleService } from "@/server/environments/lifecycle-service";
 import { EnvironmentRuntimeAccessService } from "@/server/environments/runtime-access-service";
 import {
+  EnvironmentBrowserService,
+  dashboardProxyPrefix,
+  dashboardRedirectLocation,
+  rewriteDashboardHtml,
+} from "@/server/environments/browser-service";
+import {
   EnvironmentScheduleService,
   type EnvironmentScheduleConfiguration,
 } from "@/server/environments/schedule-service";
@@ -81,13 +89,13 @@ import type { CodexRolloutActivityFeed } from "@/harnesses/codex/rollout-activit
 import { HttpError } from "@/server/http-error";
 import { createRuntime } from "@/server/runtime";
 import type { RuntimeAdapter } from "@/server/runtime/types";
+import { RuntimeWebSocketHeartbeat } from "@/server/runtime-websocket-heartbeat";
 import {
   allowedOrigins,
   validateApiRequestOrigin,
 } from "@/server/request-origin";
 import { SecretBox } from "@/server/secrets";
 import { SandpiStore } from "@/server/store";
-import { TerminalHeartbeat } from "@/server/terminal-heartbeat";
 import { TerminalInputQueue } from "@/server/terminal-input-queue";
 import { networkPolicySchema } from "@/server/network-policy-schema";
 
@@ -257,6 +265,7 @@ export async function createSandpiServer(
   const runtimeAccess = new EnvironmentRuntimeAccessService(store, runtime, {
     quotaGate: billingQuota,
   });
+  const browser = new EnvironmentBrowserService(runtimeAccess, runtime);
   const codex = new CodexService(store, runtime, app.log, codexAuth, {
     runtimeQuotaGate: billingQuota,
   });
@@ -372,6 +381,7 @@ export async function createSandpiServer(
     store,
     runtime,
     runtimeAccess,
+    browser,
     codex,
     codexAuth,
     environments,
@@ -514,6 +524,7 @@ function registerApiRoutes(
     store: SandpiStore;
     runtime: RuntimeAdapter;
     runtimeAccess: EnvironmentRuntimeAccessService;
+    browser: EnvironmentBrowserService;
     codex: CodexService;
     codexAuth: CodexEnvironmentAuthService;
     environments: EnvironmentService;
@@ -531,6 +542,7 @@ function registerApiRoutes(
       request.url.includes("/workspace-backups") ||
       request.url.includes("/schedules") ||
       request.url.includes("/egress-credentials") ||
+      request.url.includes("/browser") ||
       request.url.includes("/billing")
     ) {
       reply.header("Cache-Control", "no-store");
@@ -1773,6 +1785,87 @@ function registerApiRoutes(
       }
     },
   );
+  app.post<{ Params: { environmentId: string } }>(
+    "/api/v1/environments/:environmentId/browser/session",
+    async (request, reply) => {
+      await services.browser.ensureSession(
+        request.principal.userId,
+        request.params.environmentId,
+      );
+      return reply.status(204).send();
+    },
+  );
+  app.post<{ Params: { environmentId: string }; Body: unknown }>(
+    "/api/v1/environments/:environmentId/browser/open",
+    async (request, reply) => {
+      const input = z
+        .object({ url: z.string().trim().min(1).max(8_192) })
+        .strict()
+        .parse(request.body);
+      const url = sandboxLoopbackUrl(input.url);
+      if (!url) {
+        throw new HttpError(
+          400,
+          "invalid_environment_browser_url",
+          "Browser links must use HTTP or HTTPS on localhost, 127.0.0.1 or ::1.",
+        );
+      }
+      await services.browser.openUrl(
+        request.principal.userId,
+        request.params.environmentId,
+        url,
+      );
+      return reply.status(204).send();
+    },
+  );
+  app.get<{
+    Params: { environmentId: string; dashboardSocketId: string };
+  }>(
+    "/api/v1/environments/:environmentId/browser/ws/:dashboardSocketId",
+    { websocket: true },
+    async (socket, request) => {
+      await proxyEnvironmentBrowserWebSocket(
+        socket,
+        request,
+        services.browser,
+        () =>
+          services.runtimeAccess.touchRunningRuntime(
+            request.params.environmentId,
+          ),
+      );
+    },
+  );
+  app.get<{ Params: { environmentId: string } }>(
+    "/api/v1/environments/:environmentId/browser",
+    async (request, reply) =>
+      reply
+        .status(308)
+        .header(
+          "Location",
+          `${dashboardProxyPrefix(request.params.environmentId)}/`,
+        )
+        .send(),
+  );
+  app.get<{ Params: { environmentId: string } }>(
+    "/api/v1/environments/:environmentId/browser/",
+    async (request, reply) =>
+      proxyEnvironmentBrowserAsset(
+        services.browser,
+        request,
+        reply,
+        undefined,
+      ),
+  );
+  app.get<{ Params: { environmentId: string; "*": string } }>(
+    "/api/v1/environments/:environmentId/browser/*",
+    async (request, reply) =>
+      proxyEnvironmentBrowserAsset(
+        services.browser,
+        request,
+        reply,
+        request.params["*"],
+      ),
+  );
   app.get<{ Params: { environmentId: string } }>(
     "/api/v1/environments/:environmentId/metrics",
     async (request) => {
@@ -1823,7 +1916,7 @@ function registerApiRoutes(
         Awaited<ReturnType<RuntimeAdapter["openTerminal"]>> | undefined;
       let inputQueue:
         TerminalInputQueue<z.infer<typeof terminalInputSchema>> | undefined;
-      let heartbeat: TerminalHeartbeat | undefined;
+      let heartbeat: RuntimeWebSocketHeartbeat | undefined;
       let cleanedUp = false;
       const cleanup = () => {
         if (cleanedUp) return;
@@ -1909,7 +2002,7 @@ function registerApiRoutes(
             replayReset: terminal.replayReset,
           }),
         );
-        heartbeat = new TerminalHeartbeat(
+        heartbeat = new RuntimeWebSocketHeartbeat(
           socket,
           () =>
             services.runtimeAccess.touchRunningRuntime(
@@ -2223,6 +2316,216 @@ async function streamHarnessEvents(
     await codex.waitForSessionUpdate(sessionId, controller.signal);
   }
   if (!reply.raw.destroyed) reply.raw.end();
+}
+
+const BROWSER_DASHBOARD_PROXY_TIMEOUT_MS = 130_000;
+const BROWSER_DASHBOARD_MAX_ASSET_BYTES = 8 * 1024 * 1024;
+const BROWSER_DASHBOARD_MAX_QUEUED_WS_BYTES = 1024 * 1024;
+
+async function proxyEnvironmentBrowserAsset(
+  browser: EnvironmentBrowserService,
+  request: FastifyRequest<{ Params: { environmentId: string } }>,
+  reply: FastifyReply,
+  assetPath: string | undefined,
+) {
+  const environmentId = request.params.environmentId;
+  let upstream = await browser.httpUpstream(
+    request.principal.userId,
+    environmentId,
+    assetPath,
+  );
+  let response = await fetchBrowserDashboardAsset(upstream);
+  if (response.status === 401 || response.status === 403) {
+    browser.invalidate(environmentId);
+    upstream = await browser.httpUpstream(
+      request.principal.userId,
+      environmentId,
+      assetPath,
+    );
+    response = await fetchBrowserDashboardAsset(upstream);
+  }
+
+  const prefix = dashboardProxyPrefix(environmentId);
+  if (response.status >= 300 && response.status < 400) {
+    const location = dashboardRedirectLocation(
+      response.headers.get("location"),
+      prefix,
+    );
+    if (!location) {
+      throw new HttpError(
+        502,
+        "environment_browser_proxy_invalid",
+        "The Playwright Dashboard returned an invalid redirect.",
+      );
+    }
+    return reply.status(response.status).header("Location", location).send();
+  }
+
+  const contentLength = Number(response.headers.get("content-length") ?? 0);
+  if (
+    Number.isFinite(contentLength) &&
+    contentLength > BROWSER_DASHBOARD_MAX_ASSET_BYTES
+  ) {
+    throw new HttpError(
+      502,
+      "environment_browser_asset_too_large",
+      "The Playwright Dashboard asset is too large.",
+    );
+  }
+  const body = Buffer.from(await response.arrayBuffer());
+  if (body.byteLength > BROWSER_DASHBOARD_MAX_ASSET_BYTES) {
+    throw new HttpError(
+      502,
+      "environment_browser_asset_too_large",
+      "The Playwright Dashboard asset is too large.",
+    );
+  }
+
+  const contentType = response.headers.get("content-type");
+  if (contentType) reply.header("Content-Type", contentType);
+  const normalizedAssetPath = assetPath?.replace(/^\/+|\/+$/g, "");
+  const payload =
+    normalizedAssetPath === "index.html"
+      ? Buffer.from(rewriteDashboardHtml(body.toString("utf8"), prefix))
+      : body;
+  return reply.status(response.status).send(payload);
+}
+
+async function fetchBrowserDashboardAsset(upstream: {
+  url: string;
+  headers: Record<string, string>;
+}) {
+  try {
+    return await fetch(upstream.url, {
+      method: "GET",
+      headers: upstream.headers,
+      redirect: "manual",
+      signal: AbortSignal.timeout(BROWSER_DASHBOARD_PROXY_TIMEOUT_MS),
+    });
+  } catch {
+    throw new HttpError(
+      502,
+      "environment_browser_proxy_unavailable",
+      "The Playwright Dashboard is temporarily unavailable.",
+    );
+  }
+}
+
+async function proxyEnvironmentBrowserWebSocket(
+  socket: WebSocket,
+  request: FastifyRequest<{
+    Params: { environmentId: string; dashboardSocketId: string };
+  }>,
+  browser: EnvironmentBrowserService,
+  touchRuntime: () => Promise<boolean>,
+) {
+  const queued: Array<{ data: RawData; isBinary: boolean }> = [];
+  let queuedBytes = 0;
+  let upstream: WebSocket | undefined;
+  let downstreamClosed = false;
+  const heartbeat = new RuntimeWebSocketHeartbeat(socket, touchRuntime, {
+    // The UI permits a one-minute idle timeout, so the live Browser must
+    // establish activity before that shortest configured window elapses.
+    pingIntervalMs: 30_000,
+    touchIntervalMs: 30_000,
+    onTouchError: (error) => {
+      request.log.debug(
+        { err: error, environmentId: request.params.environmentId },
+        "Environment browser heartbeat could not extend idle access",
+      );
+    },
+  });
+  heartbeat.start();
+
+  socket.on("message", (data, isBinary) => {
+    if (upstream?.readyState === WebSocket.OPEN) {
+      upstream.send(data, { binary: isBinary });
+      return;
+    }
+    queuedBytes += websocketDataSize(data);
+    if (queuedBytes > BROWSER_DASHBOARD_MAX_QUEUED_WS_BYTES) {
+      socket.close(1009, "Dashboard connection queue exceeded");
+      return;
+    }
+    queued.push({ data, isBinary });
+  });
+  socket.once("close", () => {
+    downstreamClosed = true;
+    heartbeat.stop();
+    upstream?.close();
+  });
+  socket.once("error", () => {
+    heartbeat.stop();
+    upstream?.terminate();
+  });
+
+  try {
+    const target = await browser.websocketUpstream(
+      request.principal.userId,
+      request.params.environmentId,
+      request.params.dashboardSocketId,
+    );
+    if (downstreamClosed) return;
+    upstream = new WebSocket(target.url, {
+      headers: target.headers,
+      handshakeTimeout: BROWSER_DASHBOARD_PROXY_TIMEOUT_MS,
+    });
+    upstream.once("open", () => {
+      for (const message of queued) {
+        if (upstream?.readyState !== WebSocket.OPEN) break;
+        upstream.send(message.data, { binary: message.isBinary });
+      }
+      queued.length = 0;
+      queuedBytes = 0;
+    });
+    upstream.on("message", (data, isBinary) => {
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(data, { binary: isBinary });
+      }
+    });
+    upstream.once("close", (code, reason) => {
+      heartbeat.stop();
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.close(websocketCloseCode(code), reason.toString().slice(0, 123));
+      }
+    });
+    upstream.once("error", (error) => {
+      heartbeat.stop();
+      browser.invalidate(request.params.environmentId);
+      request.log.warn(
+        { err: error, environmentId: request.params.environmentId },
+        "Playwright Dashboard WebSocket upstream failed",
+      );
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.close(1011, "Dashboard upstream unavailable");
+      }
+    });
+  } catch (error) {
+    heartbeat.stop();
+    browser.invalidate(request.params.environmentId);
+    request.log.warn(
+      { err: error, environmentId: request.params.environmentId },
+      "Playwright Dashboard WebSocket setup failed",
+    );
+    if (socket.readyState === WebSocket.OPEN) {
+      socket.close(1011, "Dashboard unavailable");
+    }
+  }
+}
+
+function websocketDataSize(data: RawData) {
+  if (Array.isArray(data)) {
+    return data.reduce((size, chunk) => size + chunk.byteLength, 0);
+  }
+  return data.byteLength;
+}
+
+function websocketCloseCode(code: number) {
+  return code >= 1_000 &&
+    code < 5_000 &&
+    ![1_004, 1_005, 1_006, 1_015].includes(code)
+    ? code
+    : 1_011;
 }
 
 async function authenticateRequest(

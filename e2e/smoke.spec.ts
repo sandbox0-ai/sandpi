@@ -1055,6 +1055,25 @@ test("keeps New Session header operations aligned with the conversation", async 
       socket.send(JSON.stringify({ type: "ready", at: Date.now() / 1_000 }));
     },
   );
+  let browserSessionStarts = 0;
+  await page.route(
+    (url) =>
+      url.pathname.startsWith(
+        `/api/v1/environments/${encodeURIComponent(environment.id)}/browser`,
+      ),
+    async (route) => {
+      if (route.request().url().endsWith("/browser/session")) {
+        browserSessionStarts += 1;
+        await route.fulfill({ status: 204 });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "text/html",
+        body: "<!doctype html><p>Official Playwright Dashboard fixture</p>",
+      });
+    },
+  );
 
   await page.goto(
     `/?environment=${encodeURIComponent(environment.id)}&new=1`,
@@ -1086,12 +1105,25 @@ test("keeps New Session header operations aligned with the conversation", async 
   await expect(
     inspectorViews.getByRole("button", { name: "Metrics", exact: true }),
   ).toBeVisible();
+  const browserView = inspectorViews.getByRole("button", {
+    name: "Browser",
+    exact: true,
+  });
+  await expect(browserView).toBeVisible();
   await expect(
     inspectorViews.getByRole("button", { name: "Activity", exact: true }),
   ).toHaveCount(0);
   await expect(
     header.getByRole("button", { name: "Close inspector" }),
   ).toHaveAttribute("aria-pressed", "true");
+
+  await browserView.click();
+  await expect.poll(() => browserSessionStarts).toBe(1);
+  await expect(
+    page
+      .frameLocator('iframe[title="Shared Environment browser"]')
+      .getByText("Official Playwright Dashboard fixture"),
+  ).toBeVisible();
 
   await header.getByRole("button", { name: "Close inspector" }).click();
   await expect(inspectorViews).toBeHidden();
@@ -3402,15 +3434,28 @@ await Promise.all(jobs.map((job) => tools.exec_command(job.args)));`,
   expect(browserErrors).toEqual([]);
 });
 
-test("opens nested Agent file links and restores the selected file", async ({
+test("opens Environment file and loopback links in their native inspectors", async ({
   page,
-  request,
 }) => {
-  const workspace = await activeWorkspace(request);
-  test.skip(!workspace, "An active Session is required for this check.");
-  if (!workspace) return;
-  const { environment, session } = workspace;
+  const bootstrap = getMockBootstrap();
+  useEnglishUi(bootstrap);
+  const session = bootstrap.sessions.find(
+    (candidate) => candidate.harness === "codex" && !candidate.archived,
+  );
+  const environment = bootstrap.environments.find(
+    (candidate) => candidate.id === session?.environmentId,
+  );
+  test.skip(!session || !environment, "A Codex Session is required.");
+  if (!session || !environment) return;
   test.skip(session.harness !== "codex", "A Codex Session is required.");
+  bootstrap.selectedEnvironmentId = environment.id;
+  bootstrap.selectedSessionId = session.id;
+  await page.route(
+    (url) => url.pathname === "/api/v1/bootstrap",
+    async (route) => {
+      await route.fulfill({ json: { data: bootstrap } });
+    },
+  );
   const now = Date.now() / 1_000;
   const nativeThreadId = "thread-e2e-workspace-links";
   const nativeTurnId = "turn-e2e-workspace-links";
@@ -3418,6 +3463,7 @@ test("opens nested Agent file links and restores the selected file", async ({
   const pagePath = "/workspace/app/page.tsx";
   const directoryRequests: string[] = [];
   const fileRequests: string[] = [];
+  let browserOpenBody: unknown;
   const browserErrors: string[] = [];
   page.on("console", (message) => {
     if (message.type() === "error") browserErrors.push(message.text());
@@ -3469,7 +3515,8 @@ test("opens nested Agent file links and restores the selected file", async ({
               id: "workspace-links-agent",
               text:
                 `Open [globals.css](${globalsPath}) or ` +
-                `[page.tsx](${pagePath}).`,
+                `[page.tsx](${pagePath}), then inspect ` +
+                `[the app](localhost:3000/preview).`,
               phase: "final_answer",
               memoryCitation: null,
             },
@@ -3604,6 +3651,24 @@ test("opens nested Agent file links and restores the selected file", async ({
       socket.send(JSON.stringify({ type: "ready", at: now }));
     },
   );
+  await page.route(
+    (url) =>
+      url.pathname.startsWith(
+        `/api/v1/environments/${encodeURIComponent(environment.id)}/browser`,
+      ),
+    async (route) => {
+      if (route.request().url().endsWith("/browser/open")) {
+        browserOpenBody = route.request().postDataJSON();
+        await route.fulfill({ status: 204 });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "text/html",
+        body: "<!doctype html><p>Shared Browser fixture</p>",
+      });
+    },
+  );
 
   await page.goto(
     `/?environment=${encodeURIComponent(environment.id)}&session=${encodeURIComponent(session.id)}`,
@@ -3654,6 +3719,21 @@ test("opens nested Agent file links and restores the selected file", async ({
     .toBe(pagePath);
   await expect.poll(() => fileRequests).toContain(pagePath);
   expect(new Set(directoryRequests)).toEqual(new Set(["/workspace/app"]));
+
+  await page
+    .locator('[data-browser-url="http://localhost:3000/preview"]')
+    .click();
+  await expect.poll(() => browserOpenBody).toEqual({
+    url: "http://localhost:3000/preview",
+  });
+  await expect(
+    inspectorViews.getByRole("button", { name: "Browser", exact: true }),
+  ).toHaveClass(/is-active/);
+  await expect(
+    page
+      .frameLocator('iframe[title="Shared Environment browser"]')
+      .getByText("Shared Browser fixture"),
+  ).toBeVisible();
 
   await inspectorViews
     .getByRole("button", { name: "Activity", exact: true })

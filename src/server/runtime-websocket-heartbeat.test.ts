@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { TerminalHeartbeat } from "./terminal-heartbeat";
+import { RuntimeWebSocketHeartbeat } from "./runtime-websocket-heartbeat";
 
 function fixture() {
   let now = 0;
@@ -57,10 +57,10 @@ function fixture() {
   };
 }
 
-test("touches a running Environment from live Terminal pongs at a bounded rate", async () => {
+test("touches a running Environment from live client pongs at a bounded rate", async () => {
   const context = fixture();
   let touches = 0;
-  const heartbeat = new TerminalHeartbeat(
+  const heartbeat = new RuntimeWebSocketHeartbeat(
     context.socket,
     async () => {
       touches += 1;
@@ -99,9 +99,9 @@ test("touches a running Environment from live Terminal pongs at a bounded rate",
   assert.equal(context.hasPongListener(), false);
 });
 
-test("terminates a Terminal connection that misses its protocol pong", () => {
+test("terminates a connection that misses its protocol pong", () => {
   const context = fixture();
-  const heartbeat = new TerminalHeartbeat(
+  const heartbeat = new RuntimeWebSocketHeartbeat(
     context.socket,
     async () => true,
     context.options,
@@ -123,7 +123,7 @@ test("keeps one runtime touch in flight and retries a skipped touch", async () =
   const context = fixture();
   let resolveTouch: ((value: boolean) => void) | undefined;
   let touches = 0;
-  const heartbeat = new TerminalHeartbeat(
+  const heartbeat = new RuntimeWebSocketHeartbeat(
     context.socket,
     () => {
       touches += 1;

@@ -41,6 +41,15 @@ export interface RuntimeMcpOAuthCallbackService {
   publicUrl: string;
 }
 
+/**
+ * Server-only connection details for the official Playwright Dashboard.
+ * Sandpi API handlers must never serialize the protected upstream headers.
+ */
+export interface RuntimeBrowserDashboard {
+  publicUrl: string;
+  requestHeaders: Record<string, string>;
+}
+
 export interface ProvisionedEnvironment {
   sandboxId: string;
   workspaceVolumeId: string;
@@ -174,6 +183,16 @@ export interface RuntimeAdapter {
     runtime: EnvironmentRuntimeRecord,
     input: { port: number },
   ): Promise<RuntimeMcpOAuthCallbackService>;
+  ensureEnvironmentBrowserDashboard(
+    runtime: EnvironmentRuntimeRecord,
+  ): Promise<RuntimeBrowserDashboard>;
+  ensureEnvironmentBrowserSession(
+    runtime: EnvironmentRuntimeRecord,
+  ): Promise<void>;
+  openEnvironmentBrowserUrl(
+    runtime: EnvironmentRuntimeRecord,
+    url: string,
+  ): Promise<void>;
   createEnvironmentWorkspaceBackup(
     runtime: EnvironmentRuntimeRecord,
     input: { name: string; description: string },

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 import { zstdCompressSync } from "node:zlib";
 
@@ -707,6 +708,198 @@ test("preserves unrelated services and installs a constrained MCP OAuth callback
   ]);
   assert.equal(JSON.stringify(replacement).includes("publicUrl"), false);
   assert.equal(JSON.stringify(replacement).includes("publishable"), false);
+});
+
+test("publishes the official Dashboard behind a server-only hashed header", async () => {
+  let replacement: Array<Record<string, unknown>> = [];
+  const runtime = runtimeWithClient({
+    sandboxes: {
+      sandbox(sandboxId: string) {
+        assert.equal(sandboxId, "sandbox-environment");
+        return {
+          async getServices() {
+            return {
+              sandboxId,
+              services: [
+                {
+                  id: "preview",
+                  displayName: "Preview",
+                  port: 3000,
+                  runtime: { type: "manual" },
+                  ingress: {
+                    _public: true,
+                    routes: [{ id: "preview", pathPrefix: "/", resume: true }],
+                  },
+                  publishable: true,
+                  publicUrl: "https://preview.example.invalid",
+                },
+              ],
+            };
+          },
+          async updateServices(services: Array<Record<string, unknown>>) {
+            replacement = services;
+            return {
+              sandboxId,
+              services: services.map((service) => ({
+                ...service,
+                publishable: true,
+                publicUrl:
+                  service.id === "sandpi-browser-dashboard"
+                    ? "https://browser.example.invalid"
+                    : "https://preview.example.invalid",
+              })),
+            };
+          },
+        };
+      },
+    },
+  });
+  const coordinates: EnvironmentRuntimeRecord = {
+    id: environment.id,
+    sandboxId: environment.sandboxId,
+    workspaceVolumeId: environment.workspaceVolumeId,
+    runtimeGeneration: 1,
+    decoder: {
+      supervisorCursor: 0,
+      tailBase64: "",
+      runtimeGeneration: 1,
+    },
+  };
+
+  const dashboard =
+    await runtime.ensureEnvironmentBrowserDashboard(coordinates);
+
+  assert.equal(dashboard.publicUrl, "https://browser.example.invalid");
+  const requestToken = dashboard.requestHeaders["X-Sandpi-Browser-Proxy"];
+  assert.ok(requestToken);
+  const service = replacement.find(
+    (candidate) => candidate.id === "sandpi-browser-dashboard",
+  ) as {
+    port: number;
+    runtime: {
+      type: string;
+      command: string[];
+      cwd: string;
+      envVars: Record<string, string>;
+    };
+    ingress: {
+      _public: boolean;
+      routes: Array<{
+        methods: string[];
+        auth: {
+          mode: string;
+          headerName: string;
+          headerValueSha256: string;
+        };
+        resume: boolean;
+      }>;
+    };
+  };
+  assert.equal(service.port, 43_420);
+  assert.deepEqual(service.runtime.command, [
+    "playwright-cli",
+    "show",
+    "--host",
+    "0.0.0.0",
+    "--port",
+    "43420",
+  ]);
+  assert.equal(service.runtime.cwd, "/workspace");
+  assert.equal(service.runtime.envVars.PLAYWRIGHT_MCP_BROWSER, "chromium");
+  assert.equal(service.runtime.envVars.PLAYWRIGHT_MCP_ISOLATED, "false");
+  assert.equal(service.runtime.envVars.PLAYWRIGHT_MCP_SANDBOX, "false");
+  assert.equal(service.ingress._public, true);
+  assert.deepEqual(service.ingress.routes[0]?.methods, ["GET"]);
+  assert.equal(service.ingress.routes[0]?.resume, false);
+  assert.deepEqual(service.ingress.routes[0]?.auth, {
+    mode: "header",
+    headerName: "X-Sandpi-Browser-Proxy",
+    headerValueSha256: createHash("sha256")
+      .update(requestToken, "utf8")
+      .digest("hex"),
+  });
+  assert.equal(JSON.stringify(replacement).includes(requestToken), false);
+  assert.equal(replacement[0]?.id, "preview");
+});
+
+test("uses only official Playwright CLI commands for the shared browser", async () => {
+  const commands: Array<{
+    alias: string;
+    command: string[];
+    cwd: string;
+    envVars: Record<string, string>;
+  }> = [];
+  let browserOpen = false;
+  const runtime = runtimeWithClient({
+    sandboxes: {
+      sandbox() {
+        return {
+          async cmd(
+            alias: string,
+            options: {
+              command: string[];
+              cwd: string;
+              envVars: Record<string, string>;
+            },
+          ) {
+            commands.push({ alias, ...options });
+            const operation = options.command[1];
+            if (operation === "tab-list") {
+              return {
+                exitCode: browserOpen ? 0 : 1,
+                stdout: "",
+                stderr: "",
+              };
+            }
+            if (operation === "open") browserOpen = true;
+            return { exitCode: 0, stdout: "", stderr: "" };
+          },
+        };
+      },
+    },
+  });
+  const coordinates: EnvironmentRuntimeRecord = {
+    id: environment.id,
+    sandboxId: environment.sandboxId,
+    workspaceVolumeId: environment.workspaceVolumeId,
+    runtimeGeneration: 1,
+    decoder: {
+      supervisorCursor: 0,
+      tailBase64: "",
+      runtimeGeneration: 1,
+    },
+  };
+
+  await runtime.ensureEnvironmentBrowserSession(coordinates);
+  await runtime.openEnvironmentBrowserUrl(
+    coordinates,
+    "http://localhost:3000/",
+  );
+
+  assert.deepEqual(
+    commands.map((entry) => entry.command),
+    [
+      ["playwright-cli", "install", "--skills=agents"],
+      ["playwright-cli", "tab-list"],
+      [
+        "playwright-cli",
+        "open",
+        "about:blank",
+        "--browser",
+        "chromium",
+        "--persistent",
+      ],
+      ["playwright-cli", "install", "--skills=agents"],
+      ["playwright-cli", "tab-list"],
+      ["playwright-cli", "tab-new", "http://localhost:3000/"],
+    ],
+  );
+  for (const command of commands) {
+    assert.equal(command.alias, "playwright-cli");
+    assert.equal(command.cwd, "/workspace");
+    assert.equal(command.envVars.HOME, "/workspace");
+    assert.equal(command.envVars.PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD, "1");
+  }
 });
 
 test("creates, restores and deletes native snapshots for the Environment Workspace Volume", async () => {

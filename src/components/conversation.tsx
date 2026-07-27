@@ -1,6 +1,7 @@
 "use client";
 
 import type { InspectorTab } from "@/components/inspector";
+import type { EnvironmentBrowserNavigationRequest } from "@/components/environment-browser";
 import type {
   EnvironmentSettingsOpenOptions,
   EnvironmentSettingsTab,
@@ -35,8 +36,13 @@ interface ConversationProps {
   onOpenInspector: (tab: InspectorTab) => void;
   workspaceNavigationRequest?: WorkspaceFileNavigationRequest;
   onOpenWorkspacePath: (path: string) => void;
+  onOpenBrowserUrl: (url: string) => void;
   onWorkspaceNavigationHandled: (
     request: WorkspaceFileNavigationRequest,
+  ) => void;
+  browserNavigationRequest?: EnvironmentBrowserNavigationRequest;
+  onBrowserNavigationHandled: (
+    request: EnvironmentBrowserNavigationRequest,
   ) => void;
   onSessionChange: (session: CodingSession) => void;
   onDerivedSessionCreated: (session: CodingSession) => void;

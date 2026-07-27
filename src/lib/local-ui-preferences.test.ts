@@ -60,6 +60,15 @@ test("falls back safely for malformed local UI preferences", () => {
   );
 });
 
+test("keeps Browser as a durable Inspector tab", () => {
+  assert.equal(
+    normalizeLocalUiPreferences({
+      workspace: { inspectorTab: "browser" },
+    }).workspace.inspectorTab,
+    "browser",
+  );
+});
+
 test("keeps opaque live coding-agent choices scoped and deduplicated", () => {
   const preferences = normalizeLocalUiPreferences({
     codingAgentComposers: [

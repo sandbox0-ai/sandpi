@@ -20,9 +20,9 @@ Sandpi 是 [Sandbox0](https://github.com/sandbox0-ai/sandbox0) 的开源 side
 project。它让原生 coding agent 运行在远程 Sandbox0 Sandbox 中，并通过 Web
 进行操作。
 
-浏览器只是客户端。Coding-agent harness、终端和文件都在云端运行，并挂载持久化
-Workspace Volume。你可以关闭电脑、切换设备或刷新页面，而不必让浏览器决定 coding
-session 的生命周期。
+本地浏览器只是客户端。Coding-agent harness、终端、文件和共享 Playwright 浏览器都
+在云端运行，并挂载持久化 Workspace Volume。你可以关闭电脑、切换设备或刷新页面，
+而不必让本地浏览器决定 coding session 的生命周期。
 
 目前第一个支持的 coding agent 是 Codex。
 
@@ -40,6 +40,7 @@ session 的生命周期。
 | 持久化 Session | 原生 Session 状态和 Workspace 不在浏览器里。页面刷新、客户端断线和 runtime 恢复都不会让 Session 消失。 |
 | 更专注的隔离 | 可以按项目、任务或关注点创建独立 Environment。每个 Environment 都有自己的 Sandbox、Workspace、coding-agent 账号、网络策略和凭证。 |
 | 多个 coding plan | 不同 Environment 可以连接不同的 Codex/ChatGPT 订阅账号；即使使用同一个账号，也可以把不同工作彼此隔离。 |
+| 人与 Agent 共享浏览器 | Human 和 coding agent 使用同一个官方 Playwright browser session，共享 tab 和登录 profile。 |
 | 可控的出站访问 | 按目标限制 Sandbox 出站流量，并只向匹配的请求注入受支持的凭证，避免把服务密钥放进仓库或浏览器。 |
 | Workspace 防丢失 | 通过 Sandbox0 Volume snapshot 手动或定时备份 Workspace，设置保留数量并按需恢复。 |
 
@@ -50,7 +51,7 @@ Environment
 ├── Sandbox 和持久化 Workspace Volume
 ├── 一个原生 coding-agent harness 和 provider 账号
 ├── 网络策略和出站凭证
-├── runtime 资源、终端和指标
+├── runtime 资源、终端、共享 Browser 和指标
 └── 多个原生 coding-agent Session
 ```
 
@@ -84,6 +85,7 @@ Environment。如果多个 Session 本来就应该共享文件、工具和执行
 - Codex tools、Skills、MCP 配置、审批和已支持的 slash-command 界面
 - 持久化多 Environment、多 Session Web UI
 - 实时 Workspace 文件浏览器、Monaco 编辑器、媒体预览和 Git 变更
+- Human 与 coding agent 共用的官方 Playwright Browser
 - Environment 终端、runtime 指标和可配置 idle pause
 - 每个 Environment 独立的网络策略和 Sandbox0 出站凭证注入
 - Workspace 手动/定时备份、保留和恢复
@@ -104,7 +106,8 @@ harness 和客户端也可以作为独立集成逐步加入。
 - 具备 Sandbox、Volume 访问权限以及 `credentialsource:read`、
   `credentialsource:write`、`credentialsource:delete` 权限的 Sandbox0
   deployment API key
-- 一个 Sandbox0 `coding-agent` template
+- 一个包含官方 Playwright CLI 和 Chromium 的当前 Sandbox0
+  `coding-agent` template
 - 使用容器流程时需要 Docker Engine 和 Compose v2
 
 可选的订阅 quota 模式还需要 `usage:read`。
@@ -193,13 +196,15 @@ Sandpi server ───────── PostgreSQL
 Sandbox0
     ├── Sandbox + 原生 Codex app-server
     ├── 持久化 Workspace Volume
+    ├── 官方 Playwright CLI、Dashboard 和共享 profile
     ├── 终端和 runtime 指标
     ├── 网络策略和凭证注入
     └── Workspace snapshot
 ```
 
-- 浏览器只与 Sandpi 通信，不会收到 Sandbox0 deployment API key 或直接访问
-  Sandbox0 的 endpoint。
+- 本地浏览器只与 Sandpi 通信，不会收到 Sandbox0 deployment API key 或直接访问
+  Sandbox0 的 endpoint。Sandpi 对官方 Playwright Dashboard 的 HTTP 和
+  WebSocket 流量进行鉴权与代理。
 - Sandpi 只通过官方 JavaScript SDK 使用 Sandbox0，不读取 Sandbox0 数据库、内部
   metering endpoint 或 ClickHouse 凭证。
 - Sandbox0 负责 Sandbox 生命周期、Volume、网络执行、凭证注入和 usage truth。
@@ -218,6 +223,8 @@ Sandbox0
   不会在可能改变网络策略或凭证边界的情况下静默新建替代 Sandbox。
 - 同一个 Environment 中的 Session 共享可变 Workspace 和 harness 账号，它们不是互相
   隔离的 checkout。工作之间不能互相影响时，请创建不同 Environment。
+- Browser 依赖当前 Sandbox0 `coding-agent` image。旧 Environment 需要重新创建，
+  才能获得 Playwright CLI 和 Chromium 依赖。
 - 内置管理员模式只适用于受信任的单用户部署。公开或多用户部署应使用 OIDC，并配置
   正确的网络与 TLS 边界。
 - `/api/v1` 已经版本化，但 pre-1.0 版本之间仍可能调整契约。

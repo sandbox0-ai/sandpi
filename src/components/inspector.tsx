@@ -7,6 +7,7 @@ import {
   ChevronDown,
   FileCode2,
   Gauge,
+  Globe2,
   ListTree,
   Network,
   X,
@@ -17,6 +18,10 @@ import {
   InteractiveMetricChart,
   type MetricChartSeries,
 } from "@/components/metric-chart";
+import {
+  EnvironmentBrowser,
+  type EnvironmentBrowserNavigationRequest,
+} from "@/components/environment-browser";
 import {
   WorkspaceIde,
   type WorkspaceFileNavigationRequest,
@@ -38,7 +43,7 @@ import type {
   WorkspaceIdeSnapshot,
 } from "@/lib/types";
 
-export type InspectorTab = "files" | "activity" | "metrics";
+export type InspectorTab = "files" | "browser" | "activity" | "metrics";
 
 export interface InspectorSessionActivity {
   /** Harness-owned navigation copy; the shared Inspector never names the DTO. */
@@ -56,6 +61,10 @@ interface InspectorProps {
   workspaceNavigationRequest?: WorkspaceFileNavigationRequest;
   onWorkspaceNavigationHandled?: (
     request: WorkspaceFileNavigationRequest,
+  ) => void;
+  browserNavigationRequest?: EnvironmentBrowserNavigationRequest;
+  onBrowserNavigationHandled?: (
+    request: EnvironmentBrowserNavigationRequest,
   ) => void;
   activeTab: InspectorTab;
   onTabChange: (tab: InspectorTab) => void;
@@ -293,6 +302,8 @@ export function Inspector({
   sessionActivity,
   workspaceNavigationRequest,
   onWorkspaceNavigationHandled,
+  browserNavigationRequest,
+  onBrowserNavigationHandled,
   activeTab,
   onTabChange,
   onClose,
@@ -327,12 +338,12 @@ export function Inspector({
     metricRangeOptions.find(
       (option) => option.seconds === metricsRangeSeconds,
     ) ?? metricRangeOptions[1];
-  const requestKey =
-    activeTab === "activity"
-      ? ""
-      : `${environment.id}:${activeTab}:${
-          activeTab === "metrics" ? metricsRangeSeconds : "default"
-        }`;
+  const dataTab = activeTab === "files" || activeTab === "metrics";
+  const requestKey = dataTab
+    ? `${environment.id}:${activeTab}:${
+        activeTab === "metrics" ? metricsRangeSeconds : "default"
+      }`
+    : "";
   const [ideSnapshot, setIdeSnapshot] = useState<WorkspaceIdeSnapshot>();
   const [metrics, setMetrics] = useState<EnvironmentMetrics>(
     emptyEnvironmentMetrics,
@@ -343,13 +354,11 @@ export function Inspector({
     message: string;
   } | null>(null);
   const currentLoadError =
-    activeTab !== "activity" && loadError?.requestKey === requestKey
+    dataTab && loadError?.requestKey === requestKey
       ? loadError.message
       : "";
   const loading =
-    activeTab !== "activity" &&
-    resolvedRequestKey !== requestKey &&
-    !currentLoadError;
+    dataTab && resolvedRequestKey !== requestKey && !currentLoadError;
   const cpuNow = lastMetricValue(metrics.cpuUtilization);
   const memoryNow = lastMetricValue(metrics.memoryWorkingSet);
   const networkReceiveNow = lastMetricValue(metrics.networkReceive);
@@ -378,7 +387,7 @@ export function Inspector({
   }, [activeTab, onTabChange, sessionActivity]);
 
   useEffect(() => {
-    if (activeTab === "activity") {
+    if (!dataTab) {
       setLoadError(null);
       return;
     }
@@ -417,7 +426,7 @@ export function Inspector({
       });
 
     return () => controller.abort();
-  }, [activeTab, environment.id, metricsRangeSeconds, requestKey]);
+  }, [activeTab, dataTab, environment.id, metricsRangeSeconds, requestKey]);
 
   return (
     <aside className="inspector" aria-label={ui.label}>
@@ -429,6 +438,13 @@ export function Inspector({
             onClick={() => onTabChange("files")}
           >
             <FileCode2 size={14} /> {ui.files}
+          </button>
+          <button
+            type="button"
+            className={activeTab === "browser" ? "is-active" : ""}
+            onClick={() => onTabChange("browser")}
+          >
+            <Globe2 size={14} /> {ui.browser}
           </button>
           {sessionActivity ? (
             <button
@@ -467,6 +483,22 @@ export function Inspector({
       {activeTab === "activity" && sessionActivity
         ? sessionActivity.content
         : null}
+
+      {activeTab === "browser" ? (
+        <div className="inspector-panel browser-panel">
+          <EnvironmentBrowser
+            key={environment.id}
+            environmentId={environment.id}
+            navigationRequest={browserNavigationRequest}
+            onNavigationHandled={onBrowserNavigationHandled}
+            copy={{
+              title: ui.browserTitle,
+              starting: ui.browserStarting,
+              retry: ui.browserRetry,
+            }}
+          />
+        </div>
+      ) : null}
 
       {loading ? (
         <InspectorSkeleton

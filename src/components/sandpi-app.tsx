@@ -17,6 +17,7 @@ import {
   type EnvironmentSettingsOpenOptions,
   type EnvironmentSettingsTab,
 } from "@/components/environment-settings";
+import type { EnvironmentBrowserNavigationRequest } from "@/components/environment-browser";
 import { Inspector, type InspectorTab } from "@/components/inspector";
 import { NewEnvironmentDialog } from "@/components/new-environment-dialog";
 import { NewSessionWorkspace } from "@/components/new-session-workspace";
@@ -103,12 +104,15 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [workspaceNavigationRequest, setWorkspaceNavigationRequest] =
     useState<WorkspaceFileNavigationRequest>();
+  const [browserNavigationRequest, setBrowserNavigationRequest] =
+    useState<EnvironmentBrowserNavigationRequest>();
   const localUiPreferences = useLocalUiPreferences();
   const inspectorTab = localUiPreferences.workspace.inspectorTab;
   const sidebarCollapsed = localUiPreferences.workspace.sidebarCollapsed;
   const storedInspectorOpen = localUiPreferences.workspace.inspectorOpen;
   const storedTerminalHeight = localUiPreferences.workspace.terminalHeight;
   const workspaceNavigationRequestIdRef = useRef(0);
+  const browserNavigationRequestIdRef = useRef(0);
   const restoredWorkspaceNavigationRef = useRef(false);
 
   const hydrateSession = useCallback(async (sessionId: string) => {
@@ -246,8 +250,45 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
     [],
   );
 
+  const openBrowserUrl = useCallback(
+    (url: string) => {
+      if (!selectedEnvironment) return;
+      browserNavigationRequestIdRef.current += 1;
+      setBrowserNavigationRequest({
+        id: browserNavigationRequestIdRef.current,
+        environmentId: selectedEnvironment.id,
+        url,
+      });
+      updateLocalUiPreferences((current) => ({
+        ...current,
+        workspace: {
+          ...current.workspace,
+          inspectorOpen: true,
+          inspectorTab: "browser",
+        },
+      }));
+      setInspectorOpen(true);
+    },
+    [selectedEnvironment],
+  );
+
+  const handleBrowserNavigationHandled = useCallback(
+    (handled: EnvironmentBrowserNavigationRequest) => {
+      setBrowserNavigationRequest((current) =>
+        current?.environmentId === handled.environmentId &&
+        current.id === handled.id
+          ? undefined
+          : current,
+      );
+    },
+    [],
+  );
+
   useEffect(() => {
     setWorkspaceNavigationRequest((current) =>
+      current?.environmentId === selectedEnvironment?.id ? current : undefined,
+    );
+    setBrowserNavigationRequest((current) =>
       current?.environmentId === selectedEnvironment?.id ? current : undefined,
     );
   }, [selectedEnvironment?.id]);
@@ -812,6 +853,10 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
     <AppFrame
       as="main"
       className={`app-shell ${showInspector ? "inspector-is-open" : ""} ${
+        showInspector && inspectorTab === "browser"
+          ? "browser-inspector-is-open"
+          : ""
+      } ${
         showTerminal ? "terminal-is-open" : ""
       } ${sidebarOpen ? "sidebar-is-open" : ""} ${
         sidebarCollapsed ? "sidebar-is-collapsed" : ""
@@ -862,7 +907,10 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
           }}
           workspaceNavigationRequest={workspaceNavigationRequest}
           onOpenWorkspacePath={openWorkspacePath}
+          onOpenBrowserUrl={openBrowserUrl}
           onWorkspaceNavigationHandled={handleWorkspaceNavigationHandled}
+          browserNavigationRequest={browserNavigationRequest}
+          onBrowserNavigationHandled={handleBrowserNavigationHandled}
           onSessionChange={handleSessionChange}
           onDerivedSessionCreated={handleSessionCreated}
         />
@@ -898,6 +946,8 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
           environment={selectedEnvironment}
           workspaceNavigationRequest={workspaceNavigationRequest}
           onWorkspaceNavigationHandled={handleWorkspaceNavigationHandled}
+          browserNavigationRequest={browserNavigationRequest}
+          onBrowserNavigationHandled={handleBrowserNavigationHandled}
           activeTab={inspectorTab === "activity" ? "files" : inspectorTab}
           onTabChange={handleInspectorTabChange}
           onClose={() => handleInspectorOpenChange(false)}

@@ -1,12 +1,18 @@
 "use client";
 
 import React from "react";
-import ReactMarkdown, { type Components } from "react-markdown";
+import ReactMarkdown, {
+  type Components,
+  defaultUrlTransform,
+} from "react-markdown";
 import remarkGfm from "remark-gfm";
+
+import { sandboxLoopbackUrl } from "@/lib/environment-browser";
 
 interface MarkdownContentProps {
   content: string;
   onOpenWorkspacePath?: (path: string) => void;
+  onOpenBrowserUrl?: (url: string) => void;
 }
 
 const remarkPlugins = [remarkGfm];
@@ -28,10 +34,22 @@ function isExternalHref(href: string | undefined) {
   return Boolean(href && /^(?:https?:|mailto:)/i.test(href));
 }
 
+function markdownUrlTransform(
+  value: string,
+  key: string,
+  allowLoopbackLinks: boolean,
+) {
+  if (allowLoopbackLinks && key === "href" && sandboxLoopbackUrl(value)) {
+    return value;
+  }
+  return defaultUrlTransform(value);
+}
+
 /** Shared presentation only; each harness still owns its native message model. */
 export function MarkdownContent({
   content,
   onOpenWorkspacePath,
+  onOpenBrowserUrl,
 }: MarkdownContentProps) {
   const components: Components = {
     a({ href, children, title }) {
@@ -44,6 +62,20 @@ export function MarkdownContent({
             title={title ?? workspacePath}
             data-workspace-path={workspacePath}
             onClick={() => onOpenWorkspacePath(workspacePath)}
+          >
+            {children}
+          </button>
+        );
+      }
+      const browserUrl = sandboxLoopbackUrl(href);
+      if (browserUrl && onOpenBrowserUrl) {
+        return (
+          <button
+            type="button"
+            className="markdown-browser-link"
+            title={title ?? browserUrl}
+            data-browser-url={browserUrl}
+            onClick={() => onOpenBrowserUrl(browserUrl)}
           >
             {children}
           </button>
@@ -87,6 +119,9 @@ export function MarkdownContent({
       <ReactMarkdown
         remarkPlugins={remarkPlugins}
         components={components}
+        urlTransform={(value, key) =>
+          markdownUrlTransform(value, key, Boolean(onOpenBrowserUrl))
+        }
         skipHtml
       >
         {content}

@@ -31,6 +31,7 @@ import {
 
 import { Inspector, type InspectorTab } from "@/components/inspector";
 import { MarkdownContent } from "@/components/markdown-content";
+import type { EnvironmentBrowserNavigationRequest } from "@/components/environment-browser";
 import type { WorkspaceFileNavigationRequest } from "@/components/workspace-ide";
 import {
   CodexComposerLocalImages,
@@ -157,8 +158,13 @@ interface ConversationProps {
   onOpenInspector: (tab: InspectorTab) => void;
   workspaceNavigationRequest?: WorkspaceFileNavigationRequest;
   onOpenWorkspacePath: (path: string) => void;
+  onOpenBrowserUrl: (url: string) => void;
   onWorkspaceNavigationHandled: (
     request: WorkspaceFileNavigationRequest,
+  ) => void;
+  browserNavigationRequest?: EnvironmentBrowserNavigationRequest;
+  onBrowserNavigationHandled: (
+    request: EnvironmentBrowserNavigationRequest,
   ) => void;
   onSessionChange: (session: CodexSession) => void;
   onDerivedSessionCreated: (session: CodexSession) => void;
@@ -222,7 +228,10 @@ export function CodexConversation({
   onOpenInspector,
   workspaceNavigationRequest,
   onOpenWorkspacePath,
+  onOpenBrowserUrl,
   onWorkspaceNavigationHandled,
+  browserNavigationRequest,
+  onBrowserNavigationHandled,
   onSessionChange,
   onDerivedSessionCreated,
 }: ConversationProps) {
@@ -1684,6 +1693,7 @@ export function CodexConversation({
             <MarkdownContent
               content={message.content}
               onOpenWorkspacePath={openMarkdownWorkspacePath}
+              onOpenBrowserUrl={onOpenBrowserUrl}
             />
           ) : message.streaming ? (
             <div
@@ -2256,6 +2266,10 @@ export function CodexConversation({
             closeAgentThreads();
             onOpenWorkspacePath(path);
           }}
+          onOpenBrowserUrl={(url) => {
+            closeAgentThreads();
+            onOpenBrowserUrl(url);
+          }}
           onOpenFiles={() => {
             closeAgentThreads();
             onOpenInspector("files");
@@ -2272,6 +2286,8 @@ export function CodexConversation({
           activeTab={inspectorTab}
           workspaceNavigationRequest={workspaceNavigationRequest}
           onWorkspaceNavigationHandled={onWorkspaceNavigationHandled}
+          browserNavigationRequest={browserNavigationRequest}
+          onBrowserNavigationHandled={onBrowserNavigationHandled}
           onTabChange={onInspectorTabChange}
           onClose={onToggleInspector}
           sessionActivity={{

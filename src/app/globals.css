@@ -125,6 +125,13 @@ pre,
     var(--sidebar-width) minmax(400px, 1fr) clamp(600px, 46vw, 780px);
 }
 
+@media (min-width: 1281px) {
+  .app-shell.inspector-is-open.browser-inspector-is-open {
+    grid-template-columns:
+      var(--sidebar-width) minmax(400px, 1fr) clamp(680px, 55vw, 1000px);
+  }
+}
+
 .app-shell.terminal-is-open {
   grid-template-rows: minmax(220px, 1fr) var(--terminal-height, 320px);
 }
@@ -1291,6 +1298,7 @@ pre,
 
 .markdown-content a,
 .markdown-workspace-link,
+.markdown-browser-link,
 .markdown-image-link {
   color: var(--blue);
   text-decoration: underline;
@@ -1300,11 +1308,13 @@ pre,
 
 .markdown-content a:hover,
 .markdown-workspace-link:hover,
+.markdown-browser-link:hover,
 .markdown-image-link:hover {
   text-decoration-color: currentColor;
 }
 
-.markdown-workspace-link {
+.markdown-workspace-link,
+.markdown-browser-link {
   display: inline;
   padding: 0;
   border: 0;
@@ -3619,6 +3629,76 @@ code.codex-compact-activity-subject {
 .files-panel.ide-panel {
   display: block;
   overflow: hidden;
+}
+
+.browser-panel {
+  overflow: hidden;
+  background: #fff;
+}
+
+.environment-browser {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.environment-browser-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #fff;
+}
+
+.environment-browser-state {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 10px;
+  padding: 28px;
+  color: var(--ink-soft);
+  text-align: center;
+  inset: 0;
+}
+
+.environment-browser-state.is-error {
+  color: var(--red);
+}
+
+.environment-browser-state button {
+  display: inline-flex;
+  height: 30px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel-strong);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.environment-browser-spinner {
+  animation: spin 0.9s linear infinite;
+}
+
+.environment-browser-busy {
+  position: absolute;
+  top: 9px;
+  right: 9px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  box-shadow: 0 3px 12px rgb(20 20 18 / 10%);
+  color: var(--ink-soft);
+  font-size: 10px;
 }
 
 .file-workbench {

@@ -20,10 +20,10 @@ Sandpi is an open-source [Sandbox0](https://github.com/sandbox0-ai/sandbox0)
 side project. It lets you run a native coding agent in a remote Sandbox0
 Sandbox and control it from the Web.
 
-Your browser is only the client. The coding-agent harness, terminal and files
-live in the cloud, alongside a persistent Workspace Volume. You can close your
-laptop, switch devices or refresh the page without making the browser the
-lifetime of your coding session.
+Your browser is only the client. The coding-agent harness, terminal, files and
+shared Playwright browser live in the cloud, alongside a persistent Workspace
+Volume. You can close your laptop, switch devices or refresh the page without
+making the local browser the lifetime of your coding session.
 
 Codex is the first supported coding agent.
 
@@ -41,6 +41,7 @@ Codex is the first supported coding agent.
 | Durable sessions | Native session state and the Workspace live outside the browser. Refreshes, client disconnects and runtime recovery do not erase the session. |
 | Focused isolation | Create one Environment per project, task or concern. Each gets its own Sandbox, Workspace, coding-agent account, network policy and credentials. |
 | Multiple coding plans | Connect different Environments to different Codex/ChatGPT accounts, or keep work separated while using the same account. |
+| Shared browser debugging | A human and coding agent use the same official Playwright browser session, including its tabs and login profile. |
 | Controlled outbound access | Restrict sandbox egress by destination and inject supported credentials only into matching traffic, instead of placing service secrets in the repository or browser. |
 | Workspace protection | Create manual or scheduled Workspace backups with retention and restore them through Sandbox0 Volume snapshots. |
 | Durable Automation | Schedule a long Codex prompt once or with a time-zone-aware cron expression. Sandpi persists run intent outside the Sandbox and reconciles native Turn completion after server or runtime recovery. |
@@ -52,7 +53,7 @@ Environment
 ├── Sandbox and persistent Workspace Volume
 ├── one native coding-agent harness and provider account
 ├── network policy and egress credentials
-├── runtime resources, terminal and metrics
+├── runtime resources, terminal, shared Browser and metrics
 ├── durable Automation Schedules
 └── many native coding-agent Sessions
 ```
@@ -94,6 +95,7 @@ same files, tools and execution context.
   surfaces
 - Persistent multi-Environment and multi-Session Web UI
 - Live Workspace file browser, Monaco editor, media previews and Git changes
+- Shared official Playwright Browser for human and coding-agent debugging
 - Environment terminal, runtime metrics and configurable idle pause
 - Environment Schedules with one-time or five-field cron timing, IANA time
   zones, durable run history and overlap skipping
@@ -117,7 +119,8 @@ can be added as independent integrations.
 - A Sandbox0 deployment API key with Sandbox and Volume access plus
   `credentialsource:read`, `credentialsource:write` and
   `credentialsource:delete`
-- A Sandbox0 `coding-agent` template
+- A current Sandbox0 `coding-agent` template with the official Playwright CLI
+  and Chromium
 - Docker Engine with Compose v2 for the container workflow
 
 Optional subscription quota mode also requires `usage:read`.
@@ -213,13 +216,15 @@ Sandpi server ───────── PostgreSQL
 Sandbox0
     ├── Sandbox + native Codex app-server
     ├── persistent Workspace Volume
+    ├── official Playwright CLI, Dashboard and shared profile
     ├── terminal and runtime metrics
     ├── network policy and credential injection
     └── Workspace snapshots
 ```
 
 - The browser talks only to Sandpi. It receives neither the Sandbox0 deployment
-  API key nor a direct Sandbox0 endpoint.
+  API key nor a direct Sandbox0 endpoint. Sandpi authenticates and proxies the
+  official Playwright Dashboard's HTTP and WebSocket traffic.
 - Sandpi uses Sandbox0 through the official JavaScript SDK; it does not read a
   Sandbox0 database, internal metering endpoint or ClickHouse credential.
 - Sandbox0 owns Sandbox lifecycle, Volumes, network enforcement, credential
@@ -249,6 +254,8 @@ Sandbox0
 - Sessions inside one Environment share one mutable Workspace and harness
   account. They are not isolated checkouts. Use separate Environments when work
   must not affect each other.
+- The Browser requires the current Sandbox0 `coding-agent` image. Recreate an
+  older Environment to pick up the Playwright CLI and Chromium dependency.
 - Built-in administrator mode is for a trusted single-user deployment. Use OIDC
   and a proper network/TLS boundary for public or multi-user deployments.
 - The `/api/v1` contract is versioned but may still change between pre-1.0

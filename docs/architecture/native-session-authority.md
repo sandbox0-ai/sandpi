@@ -163,22 +163,59 @@ exhausted restart window. Recovery ownership remains held while a newly observed
 attempt races initialization, so a `session is not running` response is
 reconciled again instead of leaving a terminal event stream idle.
 
-Files, the Web IDE, its watcher and Terminal are Environment capabilities rather
-than Codex capabilities. They enter a shared PostgreSQL advisory lock keyed by
-Environment, which permits concurrent user access while excluding pause,
-delete and harness recovery. Their warm path executes the requested native
-operation directly with no health probe. Only a native wake-up or disconnected
-Workspace portal invokes harness-neutral Sandbox recovery and one retry. A
-Workspace portal repair releases shared admission and owns the exclusive
-lifecycle lock because rebuilding FUSE can pause the Sandbox.
+Files, the Web IDE, its watcher, Terminal and Browser are Environment
+capabilities rather than Codex capabilities. They enter a shared PostgreSQL
+advisory lock keyed by Environment, which permits concurrent user access while
+excluding pause, delete and harness recovery. Their warm path executes the
+requested native operation directly with no health probe. Only a native wake-up
+or disconnected Workspace portal invokes harness-neutral Sandbox recovery and
+one retry. A Workspace portal repair releases shared admission and owns the
+exclusive lifecycle lock because rebuilding FUSE can pause the Sandbox.
 Successful access records a fresh idle window but never changes the
 credential-hydrated Codex epoch. It therefore cannot start a Supervisor or wait
-for app-server initialization. A live Terminal uses protocol ping/pong and a
-throttled shared-lock heartbeat to extend only an already-running
-Environment; it cannot project a paused Sandbox back to running. The UI also
-changes its long-running
+for app-server initialization. Live Terminal and Browser WebSockets use
+protocol ping/pong and throttled shared-lock heartbeats to extend only an
+already-running Environment; neither can project a paused Sandbox back to
+running. The UI also changes its long-running
 conversation status after two seconds to explain that an idle checkpoint may
 be restoring and that Files and Terminal remain independently available.
+
+## Shared Environment browser
+
+The Browser Inspector embeds the official Playwright Dashboard. Playwright
+remains authoritative for browser processes, pages, tabs, snapshots,
+interaction and profiles; Sandpi does not define an MCP browser tool, CDP
+contract, general automation RPC or replacement CLI. Sandpi invokes only the
+official `playwright-cli` to materialize its bundled Agent Skill, initialize
+the default persistent session and open an explicitly selected loopback URL.
+The coding agent can use that same command directly.
+
+The default Playwright session is shared at Environment scope. The coding-agent
+template sets `HOME=/workspace`, so Playwright's official daemon registry and
+persistent profile live on the Environment Workspace Volume. Human Dashboard
+interaction and agent CLI commands therefore observe the same tabs, cookies
+and authenticated sites. Sandpi stores no browser history, cookies, storage
+state or page model in PostgreSQL. Workspace backups do include the persistent
+browser profile, so access to those snapshots must be treated as access to the
+Environment's logged-in browser credentials.
+
+An authenticated chat link using HTTP or HTTPS on `localhost`, `127.0.0.1` or
+`::1` opens in a new tab in that remote browser, where loopback resolves inside
+the Sandbox rather than on the user's device. Scheme-less Markdown link targets
+for those exact hosts are normalized to HTTP. The Dashboard address bar remains
+an official Playwright surface and can navigate elsewhere subject to the
+Environment's network policy.
+
+Sandbox0 currently exposes the Dashboard through an app-service ingress rather
+than a private port-tunnel API. That public DNS name is transport, not the user
+authorization boundary: Sandpi derives a per-Sandbox HMAC request token,
+Sandbox0 stores only its SHA-256 verifier, and the route cannot auto-resume a
+paused Environment. The upstream URL and request token remain server-only.
+Every Dashboard asset and WebSocket upgrade first crosses Sandpi login,
+ownership and lifecycle admission, then Sandpi forwards it with the protected
+header. The client receives only the authenticated Sandpi proxy path. Static
+paths and Dashboard socket identifiers are allowlisted, and a live downstream
+WebSocket heartbeat keeps the already-running Environment active.
 
 ## Start, resume and event routing
 

@@ -1,5 +1,5 @@
 import { isUtf8 } from "node:buffer";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomUUID } from "node:crypto";
 import path from "node:path";
 import { promisify } from "node:util";
 import { zstdDecompress } from "node:zlib";
@@ -61,6 +61,7 @@ import {
   type RecoveredCodexEnvironmentRuntime,
   type RuntimeCredentialSourceMetadata,
   type RuntimeAdapter,
+  type RuntimeBrowserDashboard,
   type RuntimeCodexEventStreamHandle,
   type RuntimeUsageWindowPage,
   type RuntimeEnvironmentEgressCredential,
@@ -108,6 +109,19 @@ const MCP_OAUTH_CALLBACK_SERVICE_ID = "sandpi-codex-mcp-oauth";
 const MCP_OAUTH_CALLBACK_ROUTE_ID = "oauth-callback";
 const MCP_OAUTH_CALLBACK_RATE_LIMIT_RPS = 5;
 const MCP_OAUTH_CALLBACK_RATE_LIMIT_BURST = 10;
+const BROWSER_DASHBOARD_SERVICE_ID = "sandpi-browser-dashboard";
+const BROWSER_DASHBOARD_ROUTE_ID = "dashboard";
+const BROWSER_DASHBOARD_PORT = 43_420;
+const BROWSER_DASHBOARD_AUTH_HEADER = "X-Sandpi-Browser-Proxy";
+const PLAYWRIGHT_CLI_TIMEOUT_SECONDS = 120;
+const PLAYWRIGHT_CLI_ENVIRONMENT = {
+  HOME: "/workspace",
+  PLAYWRIGHT_BROWSERS_PATH: "/opt/ms-playwright",
+  PLAYWRIGHT_MCP_BROWSER: "chromium",
+  PLAYWRIGHT_MCP_ISOLATED: "false",
+  PLAYWRIGHT_MCP_SANDBOX: "false",
+  PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1",
+} as const;
 const DEVICE_CODEX_HOME = "/dev/shm/sandpi-codex-device";
 const DEVICE_CODEX_AUTH_FILE = `${DEVICE_CODEX_HOME}/auth.json`;
 const CODEX_AUTH_MAX_BYTES = 4 * 1024 * 1024;
@@ -153,8 +167,13 @@ const decompressZstd = promisify(zstdDecompress);
 export class Sandbox0Runtime implements RuntimeAdapter {
   readonly mode = "sandbox0" as const;
   private readonly client: Client;
+  private readonly browserProxyKey: Buffer;
 
   constructor(options: { apiHost: string; apiKey: string }) {
+    this.browserProxyKey = createHash("sha256")
+      .update("sandpi/browser-dashboard/v1\0", "utf8")
+      .update(options.apiKey, "utf8")
+      .digest();
     this.client = new Client({
       token: options.apiKey,
       baseUrl: options.apiHost,
@@ -423,6 +442,94 @@ export class Sandbox0Runtime implements RuntimeAdapter {
         port: input.port,
         publicUrl: callback.publicUrl,
       };
+    } catch (error) {
+      if (error instanceof HttpError) throw error;
+      throw translateSandbox0Error(error);
+    }
+  }
+
+  async ensureEnvironmentBrowserDashboard(
+    runtime: EnvironmentRuntimeRecord,
+  ): Promise<RuntimeBrowserDashboard> {
+    const requestToken = createHmac("sha256", this.browserProxyKey)
+      .update(runtime.sandboxId, "utf8")
+      .digest("base64url");
+    try {
+      const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
+      const existing = await sandbox.getServices();
+      const services = existing.services
+        .filter((service) => service.id !== BROWSER_DASHBOARD_SERVICE_ID)
+        .map(sandboxAppServiceFromView);
+      services.push(browserDashboardService(requestToken));
+      const updated = await sandbox.updateServices(services);
+      const dashboard = updated.services.find(
+        (service) => service.id === BROWSER_DASHBOARD_SERVICE_ID,
+      );
+      if (!dashboard?.publicUrl) {
+        throw new HttpError(
+          503,
+          "environment_browser_exposure_unavailable",
+          "Sandbox0 did not publish the protected Playwright Dashboard service.",
+        );
+      }
+      return {
+        publicUrl: dashboard.publicUrl,
+        requestHeaders: {
+          [BROWSER_DASHBOARD_AUTH_HEADER]: requestToken,
+        },
+      };
+    } catch (error) {
+      if (error instanceof HttpError) throw error;
+      throw translateSandbox0Error(error);
+    }
+  }
+
+  async ensureEnvironmentBrowserSession(
+    runtime: EnvironmentRuntimeRecord,
+  ): Promise<void> {
+    try {
+      const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
+      await preparePlaywrightWorkspace(sandbox);
+      const tabs = await runPlaywrightCli(sandbox, ["tab-list"]);
+      if (tabs.exitCode === 0) return;
+      requirePlaywrightCliSuccess(
+        await runPlaywrightCli(sandbox, [
+          "open",
+          "about:blank",
+          "--browser",
+          "chromium",
+          "--persistent",
+        ]),
+      );
+    } catch (error) {
+      if (error instanceof HttpError) throw error;
+      throw translateSandbox0Error(error);
+    }
+  }
+
+  async openEnvironmentBrowserUrl(
+    runtime: EnvironmentRuntimeRecord,
+    url: string,
+  ): Promise<void> {
+    try {
+      const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
+      await preparePlaywrightWorkspace(sandbox);
+      const tabs = await runPlaywrightCli(sandbox, ["tab-list"]);
+      if (tabs.exitCode === 0) {
+        requirePlaywrightCliSuccess(
+          await runPlaywrightCli(sandbox, ["tab-new", url]),
+        );
+        return;
+      }
+      requirePlaywrightCliSuccess(
+        await runPlaywrightCli(sandbox, [
+          "open",
+          url,
+          "--browser",
+          "chromium",
+          "--persistent",
+        ]),
+      );
     } catch (error) {
       if (error instanceof HttpError) throw error;
       throw translateSandbox0Error(error);
@@ -2172,6 +2279,79 @@ function sandboxAppServiceFromView(
     },
     healthCheck: service.healthCheck ? { ...service.healthCheck } : undefined,
   };
+}
+
+function browserDashboardService(requestToken: string): Sandbox0AppService {
+  return {
+    id: BROWSER_DASHBOARD_SERVICE_ID,
+    displayName: "Sandpi Browser",
+    port: BROWSER_DASHBOARD_PORT,
+    runtime: {
+      type: models.SandboxAppServiceRuntimeTypeEnum.Cmd,
+      command: [
+        "playwright-cli",
+        "show",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        String(BROWSER_DASHBOARD_PORT),
+      ],
+      cwd: "/workspace",
+      envVars: { ...PLAYWRIGHT_CLI_ENVIRONMENT },
+    },
+    ingress: {
+      _public: true,
+      routes: [
+        {
+          id: BROWSER_DASHBOARD_ROUTE_ID,
+          pathPrefix: "/",
+          methods: ["GET"],
+          auth: {
+            mode: models.SandboxAppServiceRouteAuthModeEnum.Header,
+            headerName: BROWSER_DASHBOARD_AUTH_HEADER,
+            headerValueSha256: createHash("sha256")
+              .update(requestToken, "utf8")
+              .digest("hex"),
+          },
+          resume: false,
+        },
+      ],
+    },
+    healthCheck: { path: "/" },
+  };
+}
+
+async function preparePlaywrightWorkspace(
+  sandbox: ReturnType<Client["sandboxes"]["sandbox"]>,
+) {
+  requirePlaywrightCliSuccess(
+    await runPlaywrightCli(sandbox, ["install", "--skills=agents"]),
+  );
+}
+
+function runPlaywrightCli(
+  sandbox: ReturnType<Client["sandboxes"]["sandbox"]>,
+  args: string[],
+) {
+  return sandbox.cmd("playwright-cli", {
+    command: ["playwright-cli", ...args],
+    cwd: "/workspace",
+    envVars: { ...PLAYWRIGHT_CLI_ENVIRONMENT },
+    wait: true,
+    ttlSec: PLAYWRIGHT_CLI_TIMEOUT_SECONDS,
+  });
+}
+
+function requirePlaywrightCliSuccess(result: {
+  exitCode?: number;
+  stderr: string;
+}) {
+  if (result.exitCode === 0) return;
+  throw new HttpError(
+    503,
+    "environment_browser_unavailable",
+    "The official Playwright browser is unavailable in this Environment. Recreate it with the current coding-agent template.",
+  );
 }
 
 function mcpOAuthCallbackService(port: number): Sandbox0AppService {
