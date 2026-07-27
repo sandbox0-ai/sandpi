@@ -7,12 +7,18 @@ import { apiFetch, apiUrl } from "@/lib/api-client";
 import {
   BROWSER_DASHBOARD_THEME_MESSAGE,
   BROWSER_DASHBOARD_THEME_TOKEN_MAP,
+  BROWSER_DASHBOARD_VIEWPORT_APPLIED_MESSAGE,
   type BrowserDashboardResolvedTheme,
   type BrowserDashboardTheme,
   type BrowserDashboardThemeMessage,
+  type BrowserDashboardViewport,
+  type BrowserDashboardViewportAppliedMessage,
   isBrowserDashboardReadyMessage,
   isBrowserDashboardSessionReadyMessage,
+  isBrowserDashboardViewportMessage,
 } from "@/lib/environment-browser";
+
+const BROWSER_VIEWPORT_RESIZE_DEBOUNCE_MS = 150;
 
 export interface EnvironmentBrowserNavigationRequest {
   id: number;
@@ -43,6 +49,7 @@ export function EnvironmentBrowser({
   const [dashboardReady, setDashboardReady] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [viewportError, setViewportError] = useState("");
   const [retry, setRetry] = useState(0);
   const dashboardFrame = useRef<HTMLIFrameElement>(null);
   const completedNavigationId = useRef<number | undefined>(undefined);
@@ -84,17 +91,74 @@ export function EnvironmentBrowser({
 
   useEffect(() => {
     const root = document.documentElement;
+    let active = true;
+    let resizeTimer: ReturnType<typeof setTimeout> | undefined;
+    let queuedViewport: BrowserDashboardViewport | undefined;
+    let resizeInFlight = false;
+    const sendViewportApplied = (viewport: BrowserDashboardViewport) => {
+      const frame = dashboardFrame.current;
+      if (!frame?.contentWindow) return;
+      const message: BrowserDashboardViewportAppliedMessage = {
+        type: BROWSER_DASHBOARD_VIEWPORT_APPLIED_MESSAGE,
+        ...viewport,
+      };
+      const targetOrigin = new URL(frame.src, window.location.href).origin;
+      frame.contentWindow.postMessage(message, targetOrigin);
+    };
+    const flushViewport = async () => {
+      if (!active || resizeInFlight || !queuedViewport) return;
+      const viewport = queuedViewport;
+      queuedViewport = undefined;
+      resizeInFlight = true;
+      try {
+        await apiFetch<void>(
+          `/api/v1/environments/${encodeURIComponent(environmentId)}/browser/viewport`,
+          {
+            method: "POST",
+            body: JSON.stringify(viewport),
+          },
+        );
+        if (!active) return;
+        setViewportError("");
+        sendViewportApplied(viewport);
+      } catch (cause) {
+        if (active) {
+          setViewportError(
+            cause instanceof Error
+              ? cause.message
+              : "The Environment browser viewport could not be resized.",
+          );
+        }
+      } finally {
+        resizeInFlight = false;
+        if (active && queuedViewport) {
+          resizeTimer = setTimeout(() => {
+            resizeTimer = undefined;
+            void flushViewport();
+          }, BROWSER_VIEWPORT_RESIZE_DEBOUNCE_MS);
+        }
+      }
+    };
+    const queueViewport = (viewport: BrowserDashboardViewport) => {
+      queuedViewport = viewport;
+      if (resizeTimer) clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => {
+        resizeTimer = undefined;
+        void flushViewport();
+      }, BROWSER_VIEWPORT_RESIZE_DEBOUNCE_MS);
+    };
     const handleDashboardMessage = (event: MessageEvent<unknown>) => {
-      if (
-        event.source === dashboardFrame.current?.contentWindow &&
-        isBrowserDashboardReadyMessage(event.data)
-      ) {
+      if (event.source !== dashboardFrame.current?.contentWindow) return;
+      if (isBrowserDashboardReadyMessage(event.data)) {
         sendDashboardTheme();
       }
-      if (
-        event.source === dashboardFrame.current?.contentWindow &&
-        isBrowserDashboardSessionReadyMessage(event.data)
-      ) {
+      if (isBrowserDashboardViewportMessage(event.data)) {
+        queueViewport({
+          width: event.data.width,
+          height: event.data.height,
+        });
+      }
+      if (isBrowserDashboardSessionReadyMessage(event.data)) {
         setDashboardReady(true);
       }
     };
@@ -105,10 +169,12 @@ export function EnvironmentBrowser({
     });
     window.addEventListener("message", handleDashboardMessage);
     return () => {
+      active = false;
+      if (resizeTimer) clearTimeout(resizeTimer);
       observer.disconnect();
       window.removeEventListener("message", handleDashboardMessage);
     };
-  }, [sendDashboardTheme]);
+  }, [environmentId, sendDashboardTheme]);
 
   useEffect(() => {
     if (!requestedNavigation && ready) return;
@@ -124,6 +190,7 @@ export function EnvironmentBrowser({
       : `session:${environmentId}:${retry}`;
     setBusy(true);
     setError("");
+    setViewportError("");
     let request = pendingRequest.current;
     if (!request || request.key !== requestKey) {
       request = {
@@ -177,6 +244,8 @@ export function EnvironmentBrowser({
     retry,
   ]);
 
+  const visibleError = error || viewportError;
+
   return (
     <div className="environment-browser">
       {ready ? (
@@ -192,12 +261,12 @@ export function EnvironmentBrowser({
           onLoad={sendDashboardTheme}
         />
       ) : null}
-      {!ready || !dashboardReady || error ? (
+      {!ready || !dashboardReady || visibleError ? (
         <div
-          className={`environment-browser-state ${error ? "is-error" : ""}`}
-          role={error ? "alert" : "status"}
+          className={`environment-browser-state ${visibleError ? "is-error" : ""}`}
+          role={visibleError ? "alert" : "status"}
         >
-          {error ? (
+          {visibleError ? (
             <TriangleAlert size={22} aria-hidden="true" />
           ) : (
             <LoaderCircle
@@ -206,16 +275,25 @@ export function EnvironmentBrowser({
               aria-hidden="true"
             />
           )}
-          <span>{error || copy.starting}</span>
-          {error ? (
-            <button type="button" onClick={() => setRetry((value) => value + 1)}>
+          <span>{visibleError || copy.starting}</span>
+          {visibleError ? (
+            <button
+              type="button"
+              onClick={() => {
+                setReady(false);
+                setDashboardReady(false);
+                setError("");
+                setViewportError("");
+                setRetry((value) => value + 1);
+              }}
+            >
               <RefreshCw size={13} aria-hidden="true" />
               {copy.retry}
             </button>
           ) : null}
         </div>
       ) : null}
-      {busy && ready && dashboardReady && !error ? (
+      {busy && ready && dashboardReady && !visibleError ? (
         <span className="environment-browser-busy" role="status">
           <LoaderCircle
             className="environment-browser-spinner"

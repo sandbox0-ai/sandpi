@@ -201,14 +201,21 @@ Environment's logged-in browser credentials.
 
 Sandpi adapts only the embedded Dashboard shell: it binds the Dashboard to the
 shared `default` session explicitly, hides Playwright's redundant session
-sidebar and theme control, stretches the browser viewport to the Inspector
-bounds, and projects Sandpi's system/light/dark theme tokens into the frame.
-Playwright's `show --session default` reveal applies only to the Dashboard
-connection present when that command runs, so every newly embedded connection
-also selects the first tab in `default` after Playwright publishes it. Sandpi
-keeps its loading surface above the frame until the selected tab has delivered
-a live screencast image; users never need to operate the hidden session picker.
-Playwright continues to own the browser toolbar, pages and interaction behavior.
+sidebar and theme control, and projects Sandpi's system/light/dark theme tokens
+into the frame. The embedded shell measures the Dashboard's live screen bounds
+and sends bounded, debounced updates through Sandpi's authenticated API. Sandpi
+then uses the official `playwright-cli resize` command to match the real remote
+viewport to the Inspector's available width and height, preserving page layout
+without stretching, cropping or letterboxing the screencast. Playwright's
+`show --session default` reveal applies only to the Dashboard connection
+present when that command runs, so every newly embedded connection also selects
+the first tab in `default` after Playwright publishes it. Sandpi keeps its
+loading surface above the frame until the selected tab has delivered a live
+screencast image matching the applied viewport aspect ratio. The aspect-ratio
+check preserves this readiness guarantee when Playwright downscales a large
+screencast for transport. Users never need to operate the hidden session
+picker. Playwright continues to own the browser toolbar, pages and interaction
+behavior.
 
 An Environment resume can terminate Chromium while leaving its persistent
 profile's `Singleton*` symlinks on the Workspace Volume. If Playwright reports

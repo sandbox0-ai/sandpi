@@ -4,6 +4,9 @@ import {
   BROWSER_DASHBOARD_SESSION_READY_MESSAGE,
   BROWSER_DASHBOARD_THEME_MESSAGE,
   BROWSER_DASHBOARD_THEME_TOKEN_MAP,
+  BROWSER_DASHBOARD_VIEWPORT_APPLIED_MESSAGE,
+  BROWSER_DASHBOARD_VIEWPORT_LIMITS,
+  BROWSER_DASHBOARD_VIEWPORT_MESSAGE,
 } from "@/lib/environment-browser";
 
 export const BROWSER_DASHBOARD_EMBED_MARKER =
@@ -62,6 +65,9 @@ const browserDashboardEmbedConfig = scriptJson({
   sessionReadyMessage: BROWSER_DASHBOARD_SESSION_READY_MESSAGE,
   themeMessage: BROWSER_DASHBOARD_THEME_MESSAGE,
   tokenMap: BROWSER_DASHBOARD_THEME_TOKEN_MAP,
+  viewportAppliedMessage: BROWSER_DASHBOARD_VIEWPORT_APPLIED_MESSAGE,
+  viewportLimits: BROWSER_DASHBOARD_VIEWPORT_LIMITS,
+  viewportMessage: BROWSER_DASHBOARD_VIEWPORT_MESSAGE,
 });
 
 export const BROWSER_DASHBOARD_EMBED_SCRIPT = `
@@ -71,7 +77,30 @@ export const BROWSER_DASHBOARD_EMBED_SCRIPT = `
     const root = document.documentElement;
     root.classList.add("sandpi-browser-dashboard");
     let selectedDefaultTab;
+    let observedScreen;
+    let desiredViewport;
+    let appliedViewport;
     let sessionReady = false;
+
+    const liveFrameMatchesViewport = (liveFrame, viewport) => {
+      const naturalWidth = liveFrame?.naturalWidth ?? 0;
+      const naturalHeight = liveFrame?.naturalHeight ?? 0;
+      if (naturalWidth <= 0 || naturalHeight <= 0) return false;
+      const crossProductDifference = Math.abs(
+        naturalWidth * viewport.height -
+          naturalHeight * viewport.width,
+      );
+      return (
+        crossProductDifference <=
+        2 *
+          Math.max(
+            naturalWidth,
+            naturalHeight,
+            viewport.width,
+            viewport.height,
+          )
+      );
+    };
 
     const selectDefaultSession = () => {
       if (sessionReady) return;
@@ -89,12 +118,27 @@ export const BROWSER_DASHBOARD_EMBED_SCRIPT = `
       const liveFrame = document.querySelector("#display");
       if (
         selectedTab &&
-        liveFrame?.getAttribute("src")?.startsWith("data:image/")
+        desiredViewport &&
+        appliedViewport &&
+        desiredViewport.width === appliedViewport.width &&
+        desiredViewport.height === appliedViewport.height &&
+        liveFrame?.getAttribute("src")?.startsWith("data:image/") &&
+        liveFrame.complete &&
+        liveFrameMatchesViewport(liveFrame, appliedViewport)
       ) {
         sessionReady = true;
         sessionObserver.disconnect();
+        sessionObserver.observe(root, {
+          childList: true,
+          subtree: true,
+        });
+        document.removeEventListener("load", selectDefaultSession, true);
         window.parent.postMessage(
-          { type: config.sessionReadyMessage },
+          {
+            type: config.sessionReadyMessage,
+            width: appliedViewport.width,
+            height: appliedViewport.height,
+          },
           "*",
         );
         return;
@@ -107,14 +151,65 @@ export const BROWSER_DASHBOARD_EMBED_SCRIPT = `
       }
     };
 
-    const sessionObserver = new MutationObserver(selectDefaultSession);
+    const clampViewportDimension = (value, minimum, maximum) =>
+      Math.min(maximum, Math.max(minimum, Math.round(value)));
+
+    const reportViewport = () => {
+      if (!observedScreen) return;
+      const bounds = observedScreen.getBoundingClientRect();
+      if (bounds.width <= 0 || bounds.height <= 0) return;
+      const viewport = {
+        width: clampViewportDimension(
+          bounds.width,
+          config.viewportLimits.minWidth,
+          config.viewportLimits.maxWidth,
+        ),
+        height: clampViewportDimension(
+          bounds.height,
+          config.viewportLimits.minHeight,
+          config.viewportLimits.maxHeight,
+        ),
+      };
+      if (
+        desiredViewport?.width === viewport.width &&
+        desiredViewport?.height === viewport.height
+      ) {
+        return;
+      }
+      desiredViewport = viewport;
+      window.parent.postMessage(
+        { type: config.viewportMessage, ...viewport },
+        "*",
+      );
+      selectDefaultSession();
+    };
+
+    const viewportObserver = new ResizeObserver(reportViewport);
+    const observeScreen = () => {
+      const screen = document.querySelector(".screen");
+      if (screen === observedScreen) return;
+      if (observedScreen) viewportObserver.unobserve(observedScreen);
+      observedScreen = screen;
+      if (observedScreen) {
+        viewportObserver.observe(observedScreen);
+        reportViewport();
+      }
+    };
+
+    const updateDashboardState = () => {
+      observeScreen();
+      selectDefaultSession();
+    };
+
+    const sessionObserver = new MutationObserver(updateDashboardState);
     sessionObserver.observe(root, {
       attributes: true,
       attributeFilter: ["aria-selected", "src"],
       childList: true,
       subtree: true,
     });
-    queueMicrotask(selectDefaultSession);
+    document.addEventListener("load", selectDefaultSession, true);
+    queueMicrotask(updateDashboardState);
 
     const applyTheme = (message) => {
       if (
@@ -154,9 +249,31 @@ export const BROWSER_DASHBOARD_EMBED_SCRIPT = `
       }
     };
 
+    const applyViewport = (message) => {
+      if (
+        !message ||
+        message.type !== config.viewportAppliedMessage ||
+        !Number.isInteger(message.width) ||
+        message.width < config.viewportLimits.minWidth ||
+        message.width > config.viewportLimits.maxWidth ||
+        !Number.isInteger(message.height) ||
+        message.height < config.viewportLimits.minHeight ||
+        message.height > config.viewportLimits.maxHeight
+      ) {
+        return;
+      }
+      appliedViewport = {
+        width: message.width,
+        height: message.height,
+      };
+      selectDefaultSession();
+    };
+
     window.addEventListener("message", (event) => {
-      if (event.source === window.parent)
+      if (event.source === window.parent) {
         applyTheme(event.data);
+        applyViewport(event.data);
+      }
     });
     window.parent.postMessage({ type: config.readyMessage }, "*");
   })();

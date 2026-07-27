@@ -140,6 +140,47 @@ test("restarts the Dashboard only after the shared browser is restarted", async 
   assert.deepEqual(dashboardRevisions, [1, 2]);
 });
 
+test("resizes the shared browser through protected runtime access", async () => {
+  const calls: Array<{
+    runtime: EnvironmentRuntimeRecord;
+    width: number;
+    height: number;
+  }> = [];
+  const runtimeAccess = {
+    async withRuntimeAccess(
+      userId: string,
+      environmentId: string,
+      operation: (runtime: EnvironmentRuntimeRecord) => Promise<unknown>,
+    ) {
+      assert.equal(userId, "user-browser");
+      assert.equal(environmentId, runtimeRecord.id);
+      return operation(runtimeRecord);
+    },
+  } as unknown as EnvironmentRuntimeAccessService;
+  const runtime = {
+    async resizeEnvironmentBrowserViewport(
+      runtime: EnvironmentRuntimeRecord,
+      viewport: { width: number; height: number },
+    ) {
+      calls.push({ runtime, ...viewport });
+    },
+  } as unknown as RuntimeAdapter;
+  const service = new EnvironmentBrowserService(runtimeAccess, runtime);
+
+  await service.resizeViewport("user-browser", runtimeRecord.id, {
+    width: 519,
+    height: 759,
+  });
+
+  assert.deepEqual(calls, [
+    {
+      runtime: runtimeRecord,
+      width: 519,
+      height: 759,
+    },
+  ]);
+});
+
 test("maps only official Dashboard static paths", () => {
   assert.equal(dashboardAssetPath(undefined), "/");
   assert.equal(dashboardAssetPath("index.html"), "/index.html");

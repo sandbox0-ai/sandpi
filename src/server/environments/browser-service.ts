@@ -5,6 +5,7 @@ import type {
   RuntimeAdapter,
   RuntimeBrowserDashboard,
 } from "@/server/runtime/types";
+import type { BrowserDashboardViewport } from "@/lib/environment-browser";
 
 export interface BrowserDashboardUpstream {
   url: string;
@@ -47,6 +48,19 @@ export class EnvironmentBrowserService {
       (runtime) => this.runtime.openEnvironmentBrowserUrl(runtime, url),
     );
     if (restarted) this.restartDashboard(environmentId);
+  }
+
+  async resizeViewport(
+    userId: string,
+    environmentId: string,
+    viewport: BrowserDashboardViewport,
+  ) {
+    await this.runtimeAccess.withRuntimeAccess(
+      userId,
+      environmentId,
+      (runtime) =>
+        this.runtime.resizeEnvironmentBrowserViewport(runtime, viewport),
+    );
   }
 
   async httpUpstream(

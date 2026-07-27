@@ -6,8 +6,12 @@ import {
   BROWSER_DASHBOARD_SESSION_NAME,
   BROWSER_DASHBOARD_SESSION_READY_MESSAGE,
   BROWSER_DASHBOARD_THEME_TOKEN_MAP,
+  BROWSER_DASHBOARD_VIEWPORT_LIMITS,
+  BROWSER_DASHBOARD_VIEWPORT_MESSAGE,
   isBrowserDashboardReadyMessage,
   isBrowserDashboardSessionReadyMessage,
+  isBrowserDashboardViewport,
+  isBrowserDashboardViewportMessage,
   sandboxLoopbackUrl,
 } from "./environment-browser";
 
@@ -45,6 +49,55 @@ test("recognizes only the embedded Dashboard ready message", () => {
     "--color-border-default",
     "--vscode-panel-border",
   ]);
+});
+
+test("accepts only bounded integer Dashboard viewport messages", () => {
+  assert.equal(
+    isBrowserDashboardViewportMessage({
+      type: BROWSER_DASHBOARD_VIEWPORT_MESSAGE,
+      width: 519,
+      height: 759,
+    }),
+    true,
+  );
+  assert.equal(
+    isBrowserDashboardViewport({
+      width: BROWSER_DASHBOARD_VIEWPORT_LIMITS.minWidth,
+      height: BROWSER_DASHBOARD_VIEWPORT_LIMITS.minHeight,
+    }),
+    true,
+  );
+  assert.equal(
+    isBrowserDashboardViewport({
+      width: BROWSER_DASHBOARD_VIEWPORT_LIMITS.maxWidth,
+      height: BROWSER_DASHBOARD_VIEWPORT_LIMITS.maxHeight,
+    }),
+    true,
+  );
+  assert.equal(
+    isBrowserDashboardViewportMessage({
+      type: BROWSER_DASHBOARD_VIEWPORT_MESSAGE,
+      width: 518.5,
+      height: 759,
+    }),
+    false,
+  );
+  assert.equal(
+    isBrowserDashboardViewportMessage({
+      type: BROWSER_DASHBOARD_VIEWPORT_MESSAGE,
+      width: BROWSER_DASHBOARD_VIEWPORT_LIMITS.maxWidth + 1,
+      height: 759,
+    }),
+    false,
+  );
+  assert.equal(
+    isBrowserDashboardViewportMessage({
+      type: BROWSER_DASHBOARD_READY_MESSAGE,
+      width: 519,
+      height: 759,
+    }),
+    false,
+  );
 });
 
 test("accepts HTTP loopback URLs that the Environment browser can reach", () => {

@@ -17,7 +17,10 @@ import WebSocket, { type RawData } from "ws";
 import { ZodError, z } from "zod";
 
 import type { SandpiDeploymentSummary, SandpiPreferences } from "@/lib/types";
-import { sandboxLoopbackUrl } from "@/lib/environment-browser";
+import {
+  BROWSER_DASHBOARD_VIEWPORT_LIMITS,
+  sandboxLoopbackUrl,
+} from "@/lib/environment-browser";
 import { BillingQuotaService } from "@/server/billing/quota-service";
 import { BillingRepository } from "@/server/billing/repository";
 import {
@@ -109,6 +112,20 @@ const CODEX_IMAGE_BODY_LIMIT_BYTES = 36 * 1024 * 1024;
 const CODEX_UPLOAD_BODY_LIMIT_BYTES =
   MAX_CODEX_COMPOSER_UPLOAD_BASE64_LENGTH + 64 * 1024;
 const WORKSPACE_FILE_BODY_LIMIT_BYTES = 7 * 1024 * 1024;
+const environmentBrowserViewportSchema = z
+  .object({
+    width: z
+      .number()
+      .int()
+      .min(BROWSER_DASHBOARD_VIEWPORT_LIMITS.minWidth)
+      .max(BROWSER_DASHBOARD_VIEWPORT_LIMITS.maxWidth),
+    height: z
+      .number()
+      .int()
+      .min(BROWSER_DASHBOARD_VIEWPORT_LIMITS.minHeight)
+      .max(BROWSER_DASHBOARD_VIEWPORT_LIMITS.maxHeight),
+  })
+  .strict();
 const workspaceFileSearchQuerySchema = z
   .string()
   .trim()
@@ -1818,6 +1835,18 @@ function registerApiRoutes(
         request.principal.userId,
         request.params.environmentId,
         url,
+      );
+      return reply.status(204).send();
+    },
+  );
+  app.post<{ Params: { environmentId: string }; Body: unknown }>(
+    "/api/v1/environments/:environmentId/browser/viewport",
+    async (request, reply) => {
+      const viewport = environmentBrowserViewportSchema.parse(request.body);
+      await services.browser.resizeViewport(
+        request.principal.userId,
+        request.params.environmentId,
+        viewport,
       );
       return reply.status(204).send();
     },

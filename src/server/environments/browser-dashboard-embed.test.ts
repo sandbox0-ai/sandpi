@@ -42,4 +42,27 @@ test("selects the shared default session before announcing a live frame", () => 
     BROWSER_DASHBOARD_EMBED_SCRIPT,
     /sandpi:browser-dashboard-session-ready/,
   );
+  assert.match(BROWSER_DASHBOARD_EMBED_SCRIPT, /sessionObserver\.disconnect/);
+  assert.match(BROWSER_DASHBOARD_EMBED_SCRIPT, /liveFrameMatchesViewport/);
+  assert.match(BROWSER_DASHBOARD_EMBED_SCRIPT, /crossProductDifference/);
+});
+
+test("reports the live screen bounds and waits for the resized frame", () => {
+  assert.match(BROWSER_DASHBOARD_EMBED_SCRIPT, /new ResizeObserver/);
+  assert.match(
+    BROWSER_DASHBOARD_EMBED_SCRIPT,
+    /observedScreen\.getBoundingClientRect\(\)/,
+  );
+  assert.match(
+    BROWSER_DASHBOARD_EMBED_SCRIPT,
+    /sandpi:browser-dashboard-viewport/,
+  );
+  assert.match(
+    BROWSER_DASHBOARD_EMBED_SCRIPT,
+    /sandpi:browser-dashboard-viewport-applied/,
+  );
+  assert.match(
+    BROWSER_DASHBOARD_EMBED_SCRIPT,
+    /desiredViewport\.width === appliedViewport\.width/,
+  );
 });

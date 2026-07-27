@@ -14,6 +14,7 @@ import type {
   EnvironmentCredentialResolverKind,
   EnvironmentEgressCredential,
 } from "@/lib/environment-credentials";
+import type { BrowserDashboardViewport } from "@/lib/environment-browser";
 import type { UnixTimestamp } from "@/lib/time";
 import type {
   CodexDecoderState,
@@ -195,6 +196,10 @@ export interface RuntimeAdapter {
     runtime: EnvironmentRuntimeRecord,
     url: string,
   ): Promise<boolean>;
+  resizeEnvironmentBrowserViewport(
+    runtime: EnvironmentRuntimeRecord,
+    viewport: BrowserDashboardViewport,
+  ): Promise<void>;
   createEnvironmentWorkspaceBackup(
     runtime: EnvironmentRuntimeRecord,
     input: { name: string; description: string },

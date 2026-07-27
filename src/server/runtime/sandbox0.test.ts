@@ -978,6 +978,10 @@ test("uses only official Playwright CLI commands for the shared browser", async 
     ),
     false,
   );
+  await runtime.resizeEnvironmentBrowserViewport(coordinates, {
+    width: 519,
+    height: 759,
+  });
 
   assert.deepEqual(
     commands.map((entry) => entry.command),
@@ -995,6 +999,7 @@ test("uses only official Playwright CLI commands for the shared browser", async 
       ["playwright-cli", "install", "--skills=agents"],
       ["playwright-cli", "tab-list"],
       ["playwright-cli", "tab-new", "http://localhost:3000/"],
+      ["playwright-cli", "resize", "519", "759"],
     ],
   );
   for (const command of commands) {

@@ -10,7 +10,17 @@ export const BROWSER_DASHBOARD_SESSION_READY_MESSAGE =
   "sandpi:browser-dashboard-session-ready";
 export const BROWSER_DASHBOARD_THEME_MESSAGE =
   "sandpi:browser-dashboard-theme";
+export const BROWSER_DASHBOARD_VIEWPORT_MESSAGE =
+  "sandpi:browser-dashboard-viewport";
+export const BROWSER_DASHBOARD_VIEWPORT_APPLIED_MESSAGE =
+  "sandpi:browser-dashboard-viewport-applied";
 export const BROWSER_DASHBOARD_SESSION_NAME = "default";
+export const BROWSER_DASHBOARD_VIEWPORT_LIMITS = {
+  minWidth: 320,
+  maxWidth: 3_840,
+  minHeight: 240,
+  maxHeight: 2_160,
+} as const;
 
 export const BROWSER_DASHBOARD_THEME_TOKEN_MAP = {
   "--canvas": ["--color-canvas-default"],
@@ -43,6 +53,50 @@ export interface BrowserDashboardThemeMessage {
   theme: BrowserDashboardTheme;
   resolvedTheme: BrowserDashboardResolvedTheme;
   tokens: Record<string, string>;
+}
+
+export interface BrowserDashboardViewport {
+  width: number;
+  height: number;
+}
+
+export interface BrowserDashboardViewportMessage
+  extends BrowserDashboardViewport {
+  type: typeof BROWSER_DASHBOARD_VIEWPORT_MESSAGE;
+}
+
+export interface BrowserDashboardViewportAppliedMessage
+  extends BrowserDashboardViewport {
+  type: typeof BROWSER_DASHBOARD_VIEWPORT_APPLIED_MESSAGE;
+}
+
+export function isBrowserDashboardViewport(
+  value: unknown,
+): value is BrowserDashboardViewport {
+  if (typeof value !== "object" || value === null) return false;
+  const viewport = value as Record<string, unknown>;
+  return (
+    typeof viewport.width === "number" &&
+    Number.isInteger(viewport.width) &&
+    viewport.width >= BROWSER_DASHBOARD_VIEWPORT_LIMITS.minWidth &&
+    viewport.width <= BROWSER_DASHBOARD_VIEWPORT_LIMITS.maxWidth &&
+    typeof viewport.height === "number" &&
+    Number.isInteger(viewport.height) &&
+    viewport.height >= BROWSER_DASHBOARD_VIEWPORT_LIMITS.minHeight &&
+    viewport.height <= BROWSER_DASHBOARD_VIEWPORT_LIMITS.maxHeight
+  );
+}
+
+export function isBrowserDashboardViewportMessage(
+  value: unknown,
+): value is BrowserDashboardViewportMessage {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "type" in value &&
+    value.type === BROWSER_DASHBOARD_VIEWPORT_MESSAGE &&
+    isBrowserDashboardViewport(value)
+  );
 }
 
 export function isBrowserDashboardReadyMessage(

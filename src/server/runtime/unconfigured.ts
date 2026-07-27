@@ -26,6 +26,7 @@ export class UnconfiguredRuntime implements RuntimeAdapter {
   ensureEnvironmentBrowserDashboard = unavailable;
   ensureEnvironmentBrowserSession = unavailable;
   openEnvironmentBrowserUrl = unavailable;
+  resizeEnvironmentBrowserViewport = unavailable;
   createEnvironmentWorkspaceBackup = unavailable;
   deleteEnvironmentWorkspaceBackup = unavailable;
   restoreEnvironmentWorkspaceBackup = unavailable;

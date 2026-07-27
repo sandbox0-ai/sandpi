@@ -15,6 +15,10 @@ import {
   type SandboxMetrics,
 } from "sandbox0";
 
+import {
+  BROWSER_DASHBOARD_SESSION_NAME,
+  type BrowserDashboardViewport,
+} from "@/lib/environment-browser";
 import type {
   Environment,
   EnvironmentResourceMetrics,
@@ -27,7 +31,6 @@ import type {
   WorkspaceIdeFile,
   WorkspaceLineChange,
 } from "@/lib/types";
-import { BROWSER_DASHBOARD_SESSION_NAME } from "@/lib/environment-browser";
 import type {
   EnvironmentCredentialMaterial,
   EnvironmentCredentialResolverKind,
@@ -534,6 +537,25 @@ export class Sandbox0Runtime implements RuntimeAdapter {
       }
       await openPlaywrightBrowser(sandbox, url);
       return true;
+    } catch (error) {
+      if (error instanceof HttpError) throw error;
+      throw translateSandbox0Error(error);
+    }
+  }
+
+  async resizeEnvironmentBrowserViewport(
+    runtime: EnvironmentRuntimeRecord,
+    viewport: BrowserDashboardViewport,
+  ): Promise<void> {
+    try {
+      const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
+      requirePlaywrightCliSuccess(
+        await runPlaywrightCli(sandbox, [
+          "resize",
+          String(viewport.width),
+          String(viewport.height),
+        ]),
+      );
     } catch (error) {
       if (error instanceof HttpError) throw error;
       throw translateSandbox0Error(error);
