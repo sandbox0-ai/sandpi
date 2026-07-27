@@ -2660,12 +2660,69 @@ test("keeps an optimistic prompt ahead of native Activity without duplicating it
     exitCode: 0,
     durationMs: 250,
   };
-  const finalMessage: CodexThreadItem = {
+  await emitControlledEvent(
+    page,
+    eventPath,
+    "notification",
+    envelope({
+      method: "item/completed",
+      params: {
+        threadId: nativeThreadId,
+        turnId: nativeTurnId,
+        item: completedCommand,
+        completedAtMs: now * 1_000 + 250,
+      },
+    }),
+  );
+  const finalMessageText = "## The ordering is stable.\n\n- Streamed Markdown";
+  const streamingFinalMessage: CodexThreadItem = {
     type: "agentMessage",
     id: "native-final-e2e-order",
-    text: "The ordering is stable.",
-    phase: "final_answer",
+    text: "",
+    phase: null,
     memoryCitation: null,
+  };
+  await emitControlledEvent(
+    page,
+    eventPath,
+    "notification",
+    envelope({
+      method: "item/started",
+      params: {
+        threadId: nativeThreadId,
+        turnId: nativeTurnId,
+        item: streamingFinalMessage,
+        startedAtMs: now * 1_000 + 300,
+      },
+    }),
+  );
+  await emitControlledEvent(
+    page,
+    eventPath,
+    "notification",
+    envelope({
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: nativeThreadId,
+        turnId: nativeTurnId,
+        itemId: streamingFinalMessage.id,
+        delta: finalMessageText,
+      },
+    }),
+  );
+  const streamingAssistant = page.locator(
+    ".message-column > .message-assistant",
+  );
+  await expect(streamingAssistant.locator("h2")).toHaveText(
+    "The ordering is stable.",
+  );
+  await expect(
+    activityDetails.locator(".message-assistant"),
+  ).toHaveCount(0);
+
+  const finalMessage: CodexThreadItem = {
+    ...streamingFinalMessage,
+    text: finalMessageText,
   };
   const completedTurn: CodexTurn = {
     ...runningTurn,
@@ -2691,7 +2748,10 @@ test("keeps an optimistic prompt ahead of native Activity without duplicating it
 
   await expect(page.getByText(submittedPrompt, { exact: true })).toHaveCount(1);
   await expect(
-    page.getByText("The ordering is stable.", { exact: true }),
+    page.getByRole("heading", {
+      name: "The ordering is stable.",
+      exact: true,
+    }),
   ).toBeVisible();
   await expect(activityDetails).not.toHaveAttribute("open", "");
   const completedActivityHeight = await activityDetails.evaluate(

@@ -64,8 +64,25 @@ export function groupCodexTimelineByTurn(
     const explicitFinal = assistantMessages.findLast(
       (message) => message.phase === "final_answer",
     );
+    const liveTail = entries.at(-1);
+    const activeTurn =
+      projection.activeTurn?.turnId === turnId
+        ? projection.activeTurn
+        : undefined;
+    // Native providers may leave AgentMessage.phase null. While that tail item
+    // is the work currently responding, render it as the answer instead of
+    // nesting its streamed Markdown inside the Turn Activity disclosure.
+    const implicitLiveFinal =
+      activeTurn &&
+      (activeTurn.state === "responding" || activeTurn.state === "working") &&
+      liveTail?.kind === "message" &&
+      liveTail.role === "assistant" &&
+      liveTail.phase !== "commentary"
+        ? liveTail
+        : undefined;
     const finalMessage =
       explicitFinal ??
+      implicitLiveFinal ??
       (turn?.status !== "inProgress" ? assistantMessages.at(-1) : undefined);
     const blocks: CodexTurnTimelineBlock[] = [];
     let activityEntries: CodexTimelineEntry[] = [];

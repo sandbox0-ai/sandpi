@@ -229,6 +229,102 @@ test("groups completed Codex work behind its prompt and final answer", () => {
   assert.equal(group.turn?.durationMs, 12_000);
 });
 
+test("keeps a phase-less live answer outside completed tool activity", () => {
+  const turnId = "turn-with-live-phase-less-answer";
+  const startedAt = timestamp("2026-07-12T02:00:00Z");
+  const userMessage: CodexThreadItem = {
+    type: "userMessage",
+    id: "live-answer-user",
+    clientId: "client-live-answer-user",
+    content: [
+      {
+        type: "text",
+        text: "Inspect the project",
+        text_elements: [],
+      },
+    ],
+  };
+  const completedCommand: CodexThreadItem = {
+    type: "commandExecution",
+    id: "live-answer-command",
+    command: "rg --files",
+    cwd: "/workspace",
+    processId: null,
+    source: "agent",
+    status: "completed",
+    commandActions: [
+      { type: "listFiles", command: "rg --files", path: "/workspace" },
+    ],
+    aggregatedOutput: "app/page.tsx\n",
+    exitCode: 0,
+    durationMs: 80,
+  };
+  const streamingAnswer: CodexThreadItem = {
+    type: "agentMessage",
+    id: "live-answer-message",
+    text: "",
+    phase: null,
+    memoryCitation: null,
+  };
+  const projection = projectCodexTimeline(undefined, [
+    nativeEvent(1, {
+      method: "turn/started",
+      params: {
+        threadId: "thread-with-live-phase-less-answer",
+        turn: liveTurn(turnId, "inProgress", [
+          userMessage,
+          completedCommand,
+        ]),
+      },
+    }),
+    nativeEvent(2, {
+      method: "item/started",
+      params: {
+        threadId: "thread-with-live-phase-less-answer",
+        turnId,
+        item: streamingAnswer,
+        startedAtMs: startedAt * 1_000,
+      },
+    }),
+    nativeEvent(3, {
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "thread-with-live-phase-less-answer",
+        turnId,
+        itemId: streamingAnswer.id,
+        delta: "## Result\n\n- ready",
+      },
+    }),
+  ]);
+  const liveMessage = projection.entries.find(
+    (entry) => entry.id === streamingAnswer.id,
+  );
+  assert.ok(liveMessage?.kind === "message");
+  assert.equal(liveMessage.phase, undefined);
+  assert.equal(liveMessage.streaming, true);
+
+  const [group] = groupCodexTimelineByTurn(projection);
+  assert.ok(group);
+  assert.deepEqual(
+    group.blocks.map((block) =>
+      block.kind === "message"
+        ? `message:${block.entry.role}:${block.entry.id}`
+        : block.kind,
+    ),
+    [
+      `message:user:${userMessage.id}`,
+      "activity",
+      `message:assistant:${streamingAnswer.id}`,
+    ],
+  );
+  const activity = group.blocks[1];
+  assert.ok(activity?.kind === "activity");
+  assert.deepEqual(
+    activity.entries.map((entry) => entry.id),
+    [completedCommand.id],
+  );
+});
+
 test("preserves steering messages between native activity blocks", () => {
   const steeredTurn: CodexTurn = {
     id: "turn-with-steering",
