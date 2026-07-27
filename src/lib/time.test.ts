@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   dateFromUnixTimestamp,
   formatUnixTimestamp,
+  resolveTimeZone,
   toUnixTimestamp,
   unixTimestampToIso,
 } from "./time";
@@ -39,4 +40,9 @@ test("uses the browser time zone for auto and an explicit global zone otherwise"
       timeZone: "Asia/Shanghai",
     }).format(date),
   );
+  assert.equal(
+    resolveTimeZone("auto"),
+    Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+  );
+  assert.equal(resolveTimeZone("Asia/Shanghai"), "Asia/Shanghai");
 });

@@ -28,6 +28,15 @@ export function unixTimestampToIso(value: UnixTimestamp) {
   return dateFromUnixTimestamp(value).toISOString();
 }
 
+export function resolveTimeZone(timeZone: string) {
+  if (timeZone && timeZone !== "auto") return timeZone;
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  } catch {
+    return "UTC";
+  }
+}
+
 export function formatUnixTimestamp(
   value: UnixTimestamp,
   locale: string,

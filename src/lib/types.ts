@@ -92,6 +92,68 @@ export interface EnvironmentWorkspaceBackup {
   createdAt: UnixTimestamp;
 }
 
+export type EnvironmentScheduleTiming =
+  | {
+      kind: "once";
+      runAt: UnixTimestamp;
+    }
+  | {
+      kind: "cron";
+      expression: string;
+      timeZone: string;
+    };
+
+export type EnvironmentScheduleTarget =
+  | { kind: "newSession" }
+  | { kind: "session"; sessionId: string };
+
+export type EnvironmentScheduleRunStatus =
+  | "claimed"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "skipped";
+
+/**
+ * A durable user-authored Automation definition. Its prompt is not a copy of
+ * native conversation history; each accepted run submits it as one native Turn.
+ */
+export interface EnvironmentSchedule {
+  id: string;
+  environmentId: string;
+  name: string;
+  prompt: string;
+  timing: EnvironmentScheduleTiming;
+  target: EnvironmentScheduleTarget;
+  overlapPolicy: "skip";
+  enabled: boolean;
+  title?: string;
+  modelId?: string;
+  reasoningEffort?: string;
+  collaborationMode?: "plan";
+  serviceTier?: string;
+  nextRunAt?: UnixTimestamp;
+  lastScheduledFor?: UnixTimestamp;
+  lastRunStatus?: EnvironmentScheduleRunStatus;
+  lastError?: string;
+  createdAt: UnixTimestamp;
+  updatedAt: UnixTimestamp;
+}
+
+export interface EnvironmentScheduleRun {
+  id: string;
+  scheduleId: string;
+  scheduledFor: UnixTimestamp;
+  status: EnvironmentScheduleRunStatus;
+  sessionId?: string;
+  nativeTurnId?: string;
+  error?: string;
+  startedAt?: UnixTimestamp;
+  finishedAt?: UnixTimestamp;
+  createdAt: UnixTimestamp;
+  updatedAt: UnixTimestamp;
+}
+
 export interface Environment {
   id: string;
   /** Immutable user ownership; never inferred from the Sandbox0 API key. */

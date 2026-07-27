@@ -923,6 +923,11 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
           initialMcpVerbose={settingsTarget?.mcpVerbose}
           language={preferences.general.language}
           timeZone={preferences.general.timeZone}
+          sessions={sessions.filter(
+            (session) =>
+              session.environmentId === settingsEnvironment.id &&
+              !session.archived,
+          )}
           archivedSessions={sessions
             .filter(
               (session) =>

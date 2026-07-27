@@ -822,6 +822,34 @@ function fixture(
       });
       return id;
     },
+    async ensureScheduledSessionMetadata(options: {
+      sessionId: string;
+      scheduleRunId: string;
+      userId: string;
+      environment: Environment;
+      title: string;
+      modelId?: string;
+      reasoningEffort?: string;
+    }) {
+      const existing = sessions.get(options.sessionId);
+      if (existing) {
+        assert.equal(existing.environmentId, options.environment.id);
+        assert.equal(existing.owner, null);
+        return;
+      }
+      sessions.set(
+        options.sessionId,
+        {
+          ...session(options.sessionId, "", "paused"),
+          title: options.title,
+        },
+      );
+      sessionRuntimes.set(options.sessionId, {
+        ...sessionRuntime(options.sessionId, undefined),
+        modelId: options.modelId,
+        reasoningEffort: options.reasoningEffort,
+      });
+    },
     async createForkSessionMetadata(options: {
       source: CodingSession;
       title?: string;
@@ -1047,6 +1075,38 @@ function fixture(
         pendingTurnPhase: "submitted",
         pendingTurnAttemptId: attemptId,
         pendingTurnRuntimeGeneration: runtimeGeneration,
+        version: current.version + 1,
+      });
+      return true;
+    },
+    async prepareDurableTurnReplay(options: {
+      sessionId: string;
+      submission: {
+        requestId: string;
+        clientMessageId: string;
+        stableInputId: string;
+      };
+      environmentAttemptId?: string;
+      environmentRuntimeGeneration: number;
+    }) {
+      const current = sessionRuntimes.get(options.sessionId)!;
+      if (
+        current.pendingTurnRequestId !== options.submission.requestId ||
+        current.pendingTurnClientMessageId !==
+          options.submission.clientMessageId ||
+        current.pendingTurnStableInputId !== options.submission.stableInputId ||
+        current.pendingTurnPhase !== "submitted" ||
+        (current.pendingTurnAttemptId === options.environmentAttemptId &&
+          current.pendingTurnRuntimeGeneration ===
+            options.environmentRuntimeGeneration)
+      ) {
+        return false;
+      }
+      sessionRuntimes.set(options.sessionId, {
+        ...current,
+        pendingTurnPhase: "prepared",
+        pendingTurnAttemptId: undefined,
+        pendingTurnRuntimeGeneration: undefined,
         version: current.version + 1,
       });
       return true;
@@ -4735,6 +4795,339 @@ test("does not replay a Turn after its submitted runtime epoch is lost", async (
         context.writes.some(({ message }) => message.method === "thread/read"),
       "ambiguous Turn delivery did not schedule native reconciliation",
     );
+  } finally {
+    await context.close();
+  }
+});
+
+test("does not replay a durable Turn while its ambiguous submission epoch is current", async () => {
+  const context = fixture({
+    sessions: [
+      {
+        id: "session-one",
+        nativeSessionId: "thread-one",
+        status: "running",
+        pendingTurnPhase: "submitted",
+        pendingTurnAttemptId: "attempt-environment-test",
+        pendingTurnRuntimeGeneration: 1,
+      },
+    ],
+  });
+  try {
+    const result = await context.service.startTurn({
+      userId: "user",
+      sessionId: "session-one",
+      text: "Run exactly once",
+      images: [],
+      durableSubmission: {
+        requestId: "request-session-one",
+        clientMessageId: "message-session-one",
+        stableInputId: "input-session-one",
+      },
+    });
+
+    assert.equal(result.nativeTurnId, undefined);
+    assert.equal(
+      context.writes.filter(({ message }) => message.method === "turn/start")
+        .length,
+      0,
+    );
+    assert.equal(
+      context.sessionRuntimes.get("session-one")?.pendingTurnPhase,
+      "submitted",
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("replays one absent durable Turn after its submission epoch is replaced", async () => {
+  const context = fixture({
+    sessions: [
+      {
+        id: "session-one",
+        nativeSessionId: "thread-one",
+        status: "running",
+        pendingTurnPhase: "submitted",
+        pendingTurnAttemptId: "attempt-before-restart",
+        pendingTurnRuntimeGeneration: 0,
+      },
+    ],
+  });
+  try {
+    const result = await context.service.startTurn({
+      userId: "user",
+      sessionId: "session-one",
+      text: "Run exactly once",
+      images: [],
+      durableSubmission: {
+        requestId: "request-session-one",
+        clientMessageId: "message-session-one",
+        stableInputId: "input-session-one",
+      },
+    });
+
+    assert.equal(result.nativeTurnId, "turn-new-1");
+    const starts = context.writes.filter(
+      ({ message }) => message.method === "turn/start",
+    );
+    assert.equal(starts.length, 1);
+    assert.deepEqual(starts[0]?.message.params, {
+      threadId: "thread-one",
+      clientUserMessageId: "message-session-one",
+      input: [
+        {
+          type: "text",
+          text: "Run exactly once",
+          text_elements: [],
+        },
+      ],
+    });
+    assert.equal(starts[0]?.message.id, "request-session-one");
+  } finally {
+    await context.close();
+  }
+});
+
+test("reconciles a durable Turn by client message id without replaying it", async () => {
+  const context = fixture({
+    sessions: [
+      {
+        id: "session-one",
+        nativeSessionId: "thread-one",
+        status: "running",
+        pendingTurnPhase: "submitted",
+        pendingTurnAttemptId: "attempt-before-restart",
+        pendingTurnRuntimeGeneration: 0,
+      },
+    ],
+    onRequest(message) {
+      if (message.method !== "thread/read") return undefined;
+      return {
+        id: message.id,
+        result: {
+          thread: {
+            id: "thread-one",
+            status: { type: "idle" },
+            turns: [
+              {
+                ...completedTurn("turn-scheduled"),
+                items: [
+                  {
+                    type: "userMessage",
+                    id: "user-message-scheduled",
+                    clientId: "message-session-one",
+                    content: [],
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      };
+    },
+  });
+  try {
+    const result = await context.service.startTurn({
+      userId: "user",
+      sessionId: "session-one",
+      text: "Run exactly once",
+      images: [],
+      durableSubmission: {
+        requestId: "request-session-one",
+        clientMessageId: "message-session-one",
+        stableInputId: "input-session-one",
+      },
+    });
+
+    assert.equal(result.nativeTurnId, "turn-scheduled");
+    assert.equal(result.nativeTurnStatus, "completed");
+    assert.equal(
+      context.writes.filter(({ message }) => message.method === "turn/start")
+        .length,
+      0,
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("creates one deterministic native Session for a scheduled run retry", async () => {
+  const context = fixture({ sessions: [] });
+  try {
+    const input = {
+      userId: "user",
+      environment,
+      sessionId: "session-scheduled",
+      scheduleRunId: "run-scheduled",
+      title: "Nightly maintenance",
+      modelId: "gpt-test",
+    };
+    assert.equal(
+      await context.service.ensureScheduledSession(input),
+      "session-scheduled",
+    );
+    assert.equal(
+      await context.service.ensureScheduledSession(input),
+      "session-scheduled",
+    );
+    assert.equal(
+      context.writes.filter(({ message }) => message.method === "thread/start")
+        .length,
+      1,
+    );
+    assert.equal(
+      context.sessions.get("session-scheduled")?.title,
+      "Nightly maintenance",
+    );
+    assert.equal(
+      context.sessionRuntimes.get("session-scheduled")?.nativeSessionId,
+      "thread-new-1",
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("treats an unmaterialized empty scheduled Thread as having no delivered Turn", async () => {
+  const context = fixture({
+    onRequest(message) {
+      if (message.method !== "thread/read") return undefined;
+      return {
+        id: message.id,
+        error: {
+          code: -32602,
+          message:
+            "thread thread-one is not materialized yet; includeTurns is unavailable before first user message",
+        },
+      };
+    },
+  });
+  try {
+    assert.deepEqual(
+      await context.service.readScheduledTurnStatus({
+        userId: "user",
+        sessionId: "session-one",
+        clientMessageId: "sandpi-schedule:run-empty",
+      }),
+      { status: "absent" },
+    );
+    const submitted = await context.service.startTurn({
+      userId: "user",
+      sessionId: "session-one",
+      text: "Materialize this scheduled Thread",
+      images: [],
+      durableSubmission: {
+        requestId: "schedule-turn:run-empty",
+        clientMessageId: "sandpi-schedule:run-empty",
+        stableInputId: "schedule-turn-input:run-empty",
+      },
+    });
+    assert.equal(submitted.nativeTurnId, "turn-new-1");
+    assert.equal(
+      context.writes.filter(({ message }) => message.method === "thread/resume")
+        .length,
+      0,
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("keeps a scheduled run active while an old-epoch interruption enters native recovery", async () => {
+  const scheduledClientMessageId = "sandpi-schedule:run-interrupted";
+  const context = fixture({
+    sessions: [
+      {
+        id: "session-one",
+        nativeSessionId: "thread-one",
+        status: "running",
+        activeNativeTurnId: "turn-scheduled",
+        activeTurnAttemptId: "attempt-before-restart",
+        activeTurnRuntimeGeneration: 0,
+        pendingTurnClientMessageId: scheduledClientMessageId,
+        pendingTurnPhase: "accepted",
+        pendingTurnNativeTurnId: "turn-scheduled",
+        pendingTurnAttemptId: "attempt-before-restart",
+        pendingTurnRuntimeGeneration: 0,
+      },
+    ],
+    exceptionalSessionRecoveryDelayMs: 0,
+    onRequest(message) {
+      if (message.method !== "thread/read") return undefined;
+      return {
+        id: message.id,
+        result: {
+          thread: {
+            id: "thread-one",
+            status: { type: "idle" },
+            turns: [
+              interruptedTurn("turn-scheduled", scheduledClientMessageId),
+            ],
+          },
+        },
+      };
+    },
+  });
+  try {
+    const result = await context.service.readScheduledTurnStatus({
+      userId: "user",
+      sessionId: "session-one",
+      clientMessageId: scheduledClientMessageId,
+    });
+    assert.deepEqual(result, {
+      status: "running",
+      nativeTurnId: "turn-scheduled",
+    });
+  } finally {
+    await context.close();
+  }
+});
+
+test("adopts the completed recovery Turn for an interrupted scheduled run", async () => {
+  const scheduledClientMessageId = "sandpi-schedule:run-recovered";
+  const recoveryClientMessageId =
+    `${CODEX_RUNTIME_RECOVERY_CLIENT_ID_PREFIX}` +
+    `${encodeURIComponent("session-one")}:` +
+    `${encodeURIComponent("turn-scheduled")}:persisted`;
+  const context = fixture({
+    onRequest(message) {
+      if (message.method !== "thread/read") return undefined;
+      return {
+        id: message.id,
+        result: {
+          thread: {
+            id: "thread-one",
+            status: { type: "idle" },
+            turns: [
+              interruptedTurn("turn-scheduled", scheduledClientMessageId),
+              {
+                ...completedTurn("turn-recovery"),
+                items: [
+                  {
+                    type: "userMessage",
+                    id: "user-message-recovery",
+                    clientId: recoveryClientMessageId,
+                    content: [],
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      };
+    },
+  });
+  try {
+    const result = await context.service.readScheduledTurnStatus({
+      userId: "user",
+      sessionId: "session-one",
+      clientMessageId: scheduledClientMessageId,
+    });
+    assert.deepEqual(result, {
+      status: "succeeded",
+      nativeTurnId: "turn-recovery",
+    });
   } finally {
     await context.close();
   }

@@ -28,8 +28,10 @@ Environment
   model, history revision, active native Turn id, delivery runtime epoch and
   explicit interrupt marker. A claimed runtime recovery also stores only its
   source Turn id, prompt version and bounded attempt count. PostgreSQL never
-  stores message, reasoning, tool-call, delta, recovery-prompt text or JSON-RPC
-  payloads.
+  stores interactive message, reasoning, tool-call, delta, recovery-prompt text
+  or JSON-RPC payloads. Environment Automation is the deliberate exception:
+  [Schedules](./environment-schedules.md) persist a future user-authored prompt
+  and immutable run-delivery snapshot outside conversation history.
 - The Supervisor journal is a durable transport, not conversation storage. One
   Environment worker holds a cursor-resumable Sandbox0 event stream, consumes
   retained replay followed by live events, decodes the journal once and routes
@@ -189,8 +191,10 @@ sufficient.
 `threadSource`. Codex persists that source before answering. If the response is
 lost, Sandpi searches the native Thread store for the exact source and binds the
 single result instead of replaying creation. Zero matches fail closed; multiple
-matches are an integrity error. The original prompt is still not stored in
-PostgreSQL.
+matches are an integrity error. The original interactive prompt is still not
+stored in PostgreSQL. Scheduled input follows the separate durable-delivery
+contract described in
+[Environment Schedules](./environment-schedules.md).
 
 The browser allocates `clientUserMessageId` before submitting a Turn and may
 render that prompt as an ephemeral pending row while HTTP admission and native

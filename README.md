@@ -43,6 +43,7 @@ Codex is the first supported coding agent.
 | Multiple coding plans | Connect different Environments to different Codex/ChatGPT accounts, or keep work separated while using the same account. |
 | Controlled outbound access | Restrict sandbox egress by destination and inject supported credentials only into matching traffic, instead of placing service secrets in the repository or browser. |
 | Workspace protection | Create manual or scheduled Workspace backups with retention and restore them through Sandbox0 Volume snapshots. |
+| Durable Automation | Schedule a long Codex prompt once or with a time-zone-aware cron expression. Sandpi persists run intent outside the Sandbox and reconciles native Turn completion after server or runtime recovery. |
 
 An Environment is deliberately larger than a chat:
 
@@ -52,6 +53,7 @@ Environment
 ├── one native coding-agent harness and provider account
 ├── network policy and egress credentials
 ├── runtime resources, terminal and metrics
+├── durable Automation Schedules
 └── many native coding-agent Sessions
 ```
 
@@ -93,6 +95,8 @@ same files, tools and execution context.
 - Persistent multi-Environment and multi-Session Web UI
 - Live Workspace file browser, Monaco editor, media previews and Git changes
 - Environment terminal, runtime metrics and configurable idle pause
+- Environment Schedules with one-time or five-field cron timing, IANA time
+  zones, durable run history and overlap skipping
 - Per-Environment network policy and Sandbox0-backed egress credential injection
 - Manual and scheduled Workspace backups, retention and restore
 - Built-in single-user identity or OIDC
@@ -223,7 +227,10 @@ Sandbox0
   native Session references and optional product entitlements.
 - Native Codex Session history remains in the Environment Workspace. PostgreSQL
   stores the opaque native reference and product control state, not a duplicate
-  conversation transcript.
+  conversation transcript. Environment Schedule definitions are an explicit
+  exception for future user-authored input: Sandpi stores their prompt and an
+  immutable active-run snapshot, while the resulting native Thread remains the
+  only conversation authority.
 - Egress credential injection reduces secret exposure, but the coding agent can
   still exercise any credential and destination explicitly granted to its
   Environment. Treat allowed tools and destinations as part of the security
@@ -250,6 +257,7 @@ Sandbox0
 ## Documentation
 
 - [Native Session authority and recovery](./docs/architecture/native-session-authority.md)
+- [Environment Schedules](./docs/architecture/environment-schedules.md)
 - [Environment egress credentials](./docs/architecture/environment-egress-credentials.md)
 - [Billing and usage boundaries](./docs/architecture/billing-and-usage.md)
 - [Kubernetes deployment](./deploy/kubernetes/README.md)

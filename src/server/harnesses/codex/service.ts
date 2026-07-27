@@ -15,6 +15,7 @@ import {
   type CodexNativeSnapshot,
   type CodexServerNotification,
   type CodexThread,
+  type CodexTurn,
 } from "@/harnesses/codex/types";
 import {
   CODEX_RUNTIME_RECOVERY_CLIENT_ID_PREFIX,
@@ -71,6 +72,7 @@ import {
   type CodexControlTransition,
   type StoredEnvironmentRuntime,
   type StoredSessionRuntime,
+  type TurnSubmissionCoordinates,
 } from "@/server/store";
 import {
   decodeCodexSupervisorEvents,
@@ -386,92 +388,11 @@ export class CodexService {
     );
     const sessionId = await this.store.createSessionMetadata(input);
     try {
-      const threadSource = nativeThreadCreationSource(sessionId);
-      const request = {
-        method: "thread/start",
-        id: rpcId("thread-start", sessionId),
-        params: {
-          ...threadConfiguration(
-            {
-              modelId: input.modelId,
-              reasoningEffort: input.reasoningEffort,
-              collaborationMode: input.collaborationMode,
-              serviceTier: input.serviceTier,
-            },
-            input.sessionStartSource,
-          ),
-          threadSource,
-        },
-      };
-      let response: Record<string, unknown> | undefined;
-      let nativeSessionId: string | undefined;
-      let nativeSessionAttached = false;
-      let nativeRuntime = environmentRuntime;
-      try {
-        const submitted = await this.requestCodexWithRuntime(
-          input.environment.id,
-          environmentRuntime,
-          request,
-          sessionId,
-          nativeThreadCreationStableInputId(sessionId),
-        );
-        response = submitted.response;
-        nativeRuntime = submitted.runtime;
-      } catch (error) {
-        const recovered = await this.findNativeThreadByCreationSource(
-          input.environment.id,
-          environmentRuntime,
-          sessionId,
-          threadSource,
-        );
-        nativeSessionId = recovered.nativeSessionId;
-        nativeRuntime = recovered.runtime;
-        if (!nativeSessionId) throw error;
-      }
-      if (!response && !nativeSessionId) {
-        throw new HttpError(
-          502,
-          "codex_thread_failed",
-          "Codex did not create a recoverable native Session.",
-        );
-      }
-      if (response?.error) {
-        throw new HttpError(
-          502,
-          "codex_thread_failed",
-          rpcErrorMessage(response.error),
-        );
-      }
-      if (response) {
-        nativeSessionId = threadIdFromRpcResponse(response);
-        nativeSessionAttached = nativeSessionId !== undefined;
-        if (!nativeSessionId) {
-          const recovered = await this.findNativeThreadByCreationSource(
-            input.environment.id,
-            nativeRuntime,
-            sessionId,
-            threadSource,
-          );
-          nativeSessionId = recovered.nativeSessionId;
-          nativeRuntime = recovered.runtime;
-        }
-      }
-      if (!nativeSessionId) {
-        throw new HttpError(
-          502,
-          "codex_thread_failed",
-          "Codex did not return its native Session id.",
-        );
-      }
-      await this.store.markSessionNativeReady(sessionId, nativeSessionId);
-      this.rememberNativeOwner(
-        input.environment.id,
-        nativeSessionId,
+      await this.ensureNativeSessionCreated(
+        input,
         sessionId,
+        environmentRuntime,
       );
-      if (nativeSessionAttached) {
-        this.rememberNativeSessionAttached(nativeRuntime, nativeSessionId);
-      }
       await this.startTurn({
         userId: input.userId,
         sessionId,
@@ -489,6 +410,145 @@ export class CodexService {
       await this.store.markSessionFailed(sessionId, errorMessage(error));
       throw error;
     }
+  }
+
+  async ensureScheduledSession(input: {
+    userId: string;
+    environment: Environment;
+    sessionId: string;
+    scheduleRunId: string;
+    title: string;
+    modelId?: string;
+    reasoningEffort?: string;
+    collaborationMode?: "plan";
+    serviceTier?: string;
+  }) {
+    const environmentRuntime = await this.ensureEnvironmentRuntimeForUser(
+      input.userId,
+      input.environment,
+    );
+    await this.store.ensureScheduledSessionMetadata(input);
+    await this.ensureNativeSessionCreated(
+      input,
+      input.sessionId,
+      environmentRuntime,
+    );
+    this.ensureEnvironmentWorker(input.environment.id);
+    return input.sessionId;
+  }
+
+  private async ensureNativeSessionCreated(
+    input: {
+      userId: string;
+      environment: Environment;
+      modelId?: string;
+      reasoningEffort?: string;
+      collaborationMode?: "plan";
+      serviceTier?: string;
+      sessionStartSource?: "startup" | "clear";
+    },
+    sessionId: string,
+    environmentRuntime: StoredEnvironmentRuntime,
+  ) {
+    const existing = await this.store.getSessionRuntime(
+      input.userId,
+      sessionId,
+    );
+    if (existing.nativeSessionId) {
+      this.rememberNativeOwner(
+        input.environment.id,
+        existing.nativeSessionId,
+        sessionId,
+      );
+      return {
+        nativeSessionId: existing.nativeSessionId,
+        runtime: environmentRuntime,
+      };
+    }
+
+    const threadSource = nativeThreadCreationSource(sessionId);
+    const request = {
+      method: "thread/start",
+      id: rpcId("thread-start", sessionId),
+      params: {
+        ...threadConfiguration(
+          {
+            modelId: input.modelId,
+            reasoningEffort: input.reasoningEffort,
+            collaborationMode: input.collaborationMode,
+            serviceTier: input.serviceTier,
+          },
+          input.sessionStartSource,
+        ),
+        threadSource,
+      },
+    };
+    let response: Record<string, unknown> | undefined;
+    let nativeSessionId: string | undefined;
+    let nativeSessionAttached = false;
+    let nativeRuntime = environmentRuntime;
+    try {
+      const submitted = await this.requestCodexWithRuntime(
+        input.environment.id,
+        environmentRuntime,
+        request,
+        sessionId,
+        nativeThreadCreationStableInputId(sessionId),
+      );
+      response = submitted.response;
+      nativeRuntime = submitted.runtime;
+    } catch (error) {
+      const recovered = await this.findNativeThreadByCreationSource(
+        input.environment.id,
+        environmentRuntime,
+        sessionId,
+        threadSource,
+      );
+      nativeSessionId = recovered.nativeSessionId;
+      nativeRuntime = recovered.runtime;
+      if (!nativeSessionId) throw error;
+    }
+    if (!response && !nativeSessionId) {
+      throw new HttpError(
+        502,
+        "codex_thread_failed",
+        "Codex did not create a recoverable native Session.",
+      );
+    }
+    if (response?.error) {
+      throw new HttpError(
+        502,
+        "codex_thread_failed",
+        rpcErrorMessage(response.error),
+      );
+    }
+    if (response) {
+      nativeSessionId = threadIdFromRpcResponse(response);
+      nativeSessionAttached = nativeSessionId !== undefined;
+      if (!nativeSessionId) {
+        const recovered = await this.findNativeThreadByCreationSource(
+          input.environment.id,
+          nativeRuntime,
+          sessionId,
+          threadSource,
+        );
+        nativeSessionId = recovered.nativeSessionId;
+        nativeRuntime = recovered.runtime;
+      }
+    }
+    if (!nativeSessionId) {
+      throw new HttpError(
+        502,
+        "codex_thread_failed",
+        "Codex did not return its native Session id.",
+      );
+    }
+    await this.store.markSessionNativeReady(sessionId, nativeSessionId);
+    this.rememberNativeOwner(input.environment.id, nativeSessionId, sessionId);
+    if (nativeSessionAttached) {
+      this.rememberNativeSessionAttached(nativeRuntime, nativeSessionId);
+    }
+    return { nativeSessionId, runtime: nativeRuntime };
   }
 
   async forkSession(input: {
@@ -1713,6 +1773,7 @@ export class CodexService {
     clientMessageId?: string;
     collaborationMode?: "plan";
     serviceTier?: string;
+    durableSubmission?: TurnSubmissionCoordinates;
   }) {
     const sessionRuntime = await this.requireNativeSessionRuntime(
       input.userId,
@@ -1721,21 +1782,37 @@ export class CodexService {
     const releaseInteractiveOperation =
       this.retainInteractiveEnvironmentOperation(sessionRuntime.environmentId);
     try {
-      const submission = turnSubmissionCoordinates(
-        input.sessionId,
-        input.clientMessageId,
-      );
+      const submission =
+        input.durableSubmission ??
+        turnSubmissionCoordinates(input.sessionId, input.clientMessageId);
       // Persist pending delivery while holding the same Environment advisory
       // lock used by idle pause. If pause won first, the following native
       // runtime access auto-resumes it; if Turn admission won first, pause
       // observes work.
-      await this.store.beginSessionTurn(
-        input.userId,
-        input.sessionId,
-        input.modelId,
-        submission,
-        input.reasoningEffort,
-      );
+      let resumedDelivery: StoredSessionRuntime | undefined;
+      try {
+        await this.store.beginSessionTurn(
+          input.userId,
+          input.sessionId,
+          input.modelId,
+          submission,
+          input.reasoningEffort,
+        );
+      } catch (error) {
+        if (
+          !input.durableSubmission ||
+          !(error instanceof HttpError) ||
+          error.code !== "session_turn_in_progress"
+        ) {
+          throw error;
+        }
+        const current = await this.store.getSessionRuntime(
+          input.userId,
+          input.sessionId,
+        );
+        if (!sessionRuntimeHasSubmission(current, submission)) throw error;
+        resumedDelivery = current;
+      }
       const turnRuntime = {
         ...sessionRuntime,
         modelId: input.modelId ?? sessionRuntime.modelId,
@@ -1755,6 +1832,67 @@ export class CodexService {
           input.sessionId,
         );
         await this.ensureNativeSessionAttached(environmentRuntime, turnRuntime);
+        if (resumedDelivery) {
+          const observed = await this.readTurnDeliveryByClientMessage(
+            turnRuntime,
+            environmentRuntime,
+            submission.clientMessageId,
+          );
+          environmentRuntime = observed.runtime;
+          if (observed.turn) {
+            if (observed.turn.status === "inProgress") {
+              await this.store.markTurnAccepted(
+                input.sessionId,
+                submission.requestId,
+                observed.turn.id,
+                environmentRuntime.attemptId,
+                environmentRuntime.runtimeGeneration,
+              );
+            }
+            this.ensureEnvironmentWorker(sessionRuntime.environmentId);
+            return {
+              requestId: submission.requestId,
+              clientMessageId: submission.clientMessageId,
+              nativeTurnId: observed.turn.id,
+              nativeTurnStatus: observed.turn.status,
+            };
+          }
+          if (resumedDelivery.pendingTurnPhase === "accepted") {
+            return {
+              requestId: submission.requestId,
+              clientMessageId: submission.clientMessageId,
+              nativeTurnId: resumedDelivery.pendingTurnNativeTurnId,
+            };
+          }
+          if (resumedDelivery.pendingTurnPhase === "submitted") {
+            const submittedInCurrentEpoch =
+              resumedDelivery.pendingTurnAttemptId ===
+                environmentRuntime.attemptId &&
+              resumedDelivery.pendingTurnRuntimeGeneration ===
+                environmentRuntime.runtimeGeneration;
+            if (submittedInCurrentEpoch) {
+              this.ensureEnvironmentWorker(sessionRuntime.environmentId);
+              return {
+                requestId: submission.requestId,
+                clientMessageId: submission.clientMessageId,
+              };
+            }
+            const replayPrepared =
+              await this.store.prepareDurableTurnReplay({
+                sessionId: input.sessionId,
+                submission,
+                environmentAttemptId: environmentRuntime.attemptId,
+                environmentRuntimeGeneration:
+                  environmentRuntime.runtimeGeneration,
+              });
+            if (!replayPrepared) {
+              return {
+                requestId: submission.requestId,
+                clientMessageId: submission.clientMessageId,
+              };
+            }
+          }
+        }
         const markedSubmitted = await this.store.markTurnSubmitted(
           input.sessionId,
           submission.requestId,
@@ -2021,6 +2159,149 @@ export class CodexService {
       cursor = page.nextCursor;
     } while (cursor);
     return { data };
+  }
+
+  async readScheduledTurnStatus(input: {
+    userId: string;
+    sessionId: string;
+    clientMessageId: string;
+  }) {
+    const sessionRuntime = await this.requireNativeSessionRuntime(
+      input.userId,
+      input.sessionId,
+    );
+    const environmentRuntime = await this.environmentRuntimeForSession(
+      input.userId,
+      input.sessionId,
+    );
+    const observed = await this.readTurnDeliveryByClientMessage(
+      sessionRuntime,
+      environmentRuntime,
+      input.clientMessageId,
+    );
+    const turn = observed.turn;
+    if (!turn) return { status: "absent" as const };
+    if (turn.status === "inProgress") {
+      return {
+        status: "running" as const,
+        nativeTurnId: turn.id,
+      };
+    }
+    if (turn.status === "completed") {
+      return {
+        status: "succeeded" as const,
+        nativeTurnId: turn.id,
+      };
+    }
+    if (turn.status === "interrupted") {
+      const recoveryTurn = nativeRuntimeRecoveryTurn(
+        observed.thread!,
+        sessionRuntime.sessionId,
+        turn.id,
+      );
+      if (recoveryTurn) {
+        if (recoveryTurn.status === "inProgress") {
+          return {
+            status: "running" as const,
+            nativeTurnId: recoveryTurn.id,
+          };
+        }
+        if (recoveryTurn.status === "completed") {
+          return {
+            status: "succeeded" as const,
+            nativeTurnId: recoveryTurn.id,
+          };
+        }
+        return {
+          status: "failed" as const,
+          nativeTurnId: recoveryTurn.id,
+          error:
+            recoveryTurn.error?.message ??
+            "The scheduled Codex recovery Turn did not complete.",
+        };
+      }
+      if (
+        sessionRuntime.recoverySourceNativeTurnId === turn.id ||
+        scheduledTurnNeedsRuntimeRecovery(
+          sessionRuntime,
+          turn,
+          input.clientMessageId,
+          observed.runtime,
+        )
+      ) {
+        await this.scheduleSessionControlStateRepair(input.sessionId);
+        return {
+          status: "running" as const,
+          nativeTurnId: turn.id,
+        };
+      }
+    }
+    return {
+      status: "failed" as const,
+      nativeTurnId: turn.id,
+      error:
+        turn.error?.message ??
+        (turn.status === "interrupted"
+          ? "The scheduled Codex Turn was interrupted."
+          : "The scheduled Codex Turn failed."),
+    };
+  }
+
+  private async readTurnDeliveryByClientMessage(
+    sessionRuntime: StoredSessionRuntime,
+    environmentRuntime: StoredEnvironmentRuntime,
+    clientMessageId: string,
+  ): Promise<{
+    runtime: StoredEnvironmentRuntime;
+    thread?: CodexThread;
+    turn?: CodexTurn;
+  }> {
+    if (!sessionRuntime.nativeSessionId) {
+      throw new HttpError(
+        409,
+        "native_session_not_ready",
+        "The native Session is not ready.",
+      );
+    }
+    const submitted = await this.requestCodexWithRuntime(
+      sessionRuntime.environmentId,
+      environmentRuntime,
+      {
+        method: "thread/read",
+        id: rpcId("turn-delivery-read", sessionRuntime.sessionId),
+        params: {
+          threadId: sessionRuntime.nativeSessionId,
+          includeTurns: true,
+        },
+      },
+      sessionRuntime.sessionId,
+    );
+    if (submitted.response.error) {
+      if (isUnmaterializedNativeThreadError(submitted.response.error)) {
+        // thread/read reached the current app-server and recognized this
+        // ephemeral pre-first-message Thread. It has no rollout to resume, but
+        // turn/start may use it directly even after the Sandpi server restarted.
+        this.rememberNativeSessionAttached(
+          submitted.runtime,
+          sessionRuntime.nativeSessionId,
+        );
+        return { runtime: submitted.runtime };
+      }
+      throw nativeSessionUnavailable(submitted.response.error);
+    }
+    const thread = threadFromRpcResponse(submitted.response);
+    if (!thread || thread.id !== sessionRuntime.nativeSessionId) {
+      throw new HttpError(
+        502,
+        "codex_thread_read_failed",
+        "Codex returned an invalid native Session snapshot.",
+      );
+    }
+    return {
+      runtime: submitted.runtime,
+      thread,
+      turn: nativeTurnForClientMessage(thread, clientMessageId),
+    };
   }
 
   async readNativeSnapshot(userId: string, sessionId: string) {
@@ -3165,6 +3446,7 @@ export class CodexService {
     ) {
       const submission = runtimeRecoveryTurnSubmissionCoordinates(
         session.sessionId,
+        projectedTurn.turn.id,
       );
       const claimed = await this.store.claimInterruptedTurnRecovery({
         sessionId: session.sessionId,
@@ -5102,6 +5384,14 @@ function canFallbackFromAgentThreadHistoryError(error: unknown) {
   );
 }
 
+function isUnmaterializedNativeThreadError(error: unknown) {
+  const message = rpcErrorMessage(error).toLowerCase();
+  return (
+    message.includes("not materialized yet") &&
+    message.includes("before first user message")
+  );
+}
+
 function turnIdFromRpcResponse(response: Record<string, unknown>) {
   return objectString(objectRecord(objectRecord(response.result)?.turn), "id");
 }
@@ -6133,10 +6423,54 @@ function turnSubmissionCoordinates(
   };
 }
 
-function runtimeRecoveryTurnSubmissionCoordinates(sessionId: string) {
+function sessionRuntimeHasSubmission(
+  runtime: StoredSessionRuntime,
+  submission: TurnSubmissionCoordinates,
+) {
+  return (
+    runtime.pendingTurnRequestId === submission.requestId &&
+    runtime.pendingTurnClientMessageId === submission.clientMessageId &&
+    runtime.pendingTurnStableInputId === submission.stableInputId &&
+    runtime.pendingTurnPhase !== undefined
+  );
+}
+
+function runtimeRecoveryTurnSubmissionCoordinates(
+  sessionId: string,
+  sourceNativeTurnId: string,
+) {
   return turnSubmissionCoordinates(
     sessionId,
-    `${CODEX_RUNTIME_RECOVERY_CLIENT_ID_PREFIX}${sessionId}:${randomUUID()}`,
+    `${runtimeRecoveryClientMessagePrefix(
+      sessionId,
+      sourceNativeTurnId,
+    )}${randomUUID()}`,
+  );
+}
+
+function runtimeRecoveryClientMessagePrefix(
+  sessionId: string,
+  sourceNativeTurnId: string,
+) {
+  return `${CODEX_RUNTIME_RECOVERY_CLIENT_ID_PREFIX}${encodeURIComponent(
+    sessionId,
+  )}:${encodeURIComponent(sourceNativeTurnId)}:`;
+}
+
+function nativeRuntimeRecoveryTurn(
+  thread: CodexThread,
+  sessionId: string,
+  sourceNativeTurnId: string,
+) {
+  const prefix = runtimeRecoveryClientMessagePrefix(
+    sessionId,
+    sourceNativeTurnId,
+  );
+  return visibleCodexTurns(thread.turns).findLast((turn) =>
+    turn.items.some(
+      (item) =>
+        item.type === "userMessage" && item.clientId?.startsWith(prefix),
+    ),
   );
 }
 
@@ -6210,6 +6544,32 @@ function nativeTurnBelongsToReplacedRuntime(
     coordinates.runtimeGeneration === undefined ||
     coordinates.attemptId !== runtime.attemptId ||
     coordinates.runtimeGeneration !== runtime.runtimeGeneration
+  );
+}
+
+function scheduledTurnNeedsRuntimeRecovery(
+  session: StoredSessionRuntime,
+  turn: CodexTurn,
+  clientMessageId: string,
+  runtime: StoredEnvironmentRuntime,
+) {
+  if (
+    session.interruptRequestedNativeTurnId === turn.id ||
+    session.recoveryAttemptCount >= AUTOMATIC_TURN_RECOVERY_MAX_ATTEMPTS
+  ) {
+    return false;
+  }
+  const projection: NativeTurnProjection | undefined =
+    session.activeNativeTurnId === turn.id
+      ? { turn, matchedBy: "activeTurn" }
+      : session.pendingTurnNativeTurnId === turn.id
+        ? { turn, matchedBy: "pendingTurn" }
+        : session.pendingTurnClientMessageId === clientMessageId
+          ? { turn, matchedBy: "clientMessage" }
+          : undefined;
+  return Boolean(
+    projection &&
+      nativeTurnBelongsToReplacedRuntime(session, projection, runtime),
   );
 }
 

@@ -36,7 +36,7 @@ import {
   DEFAULT_ENVIRONMENT_METRIC_RANGE_SECONDS,
   isEnvironmentMetricRangeSeconds,
 } from "@/lib/environment-metrics";
-import { toUnixTimestamp } from "@/lib/time";
+import { dateFromUnixTimestamp, toUnixTimestamp } from "@/lib/time";
 import { WORKSPACE_ROOT } from "@/lib/workspace-path-policy";
 import { OidcIdentityService } from "@/server/auth/oidc";
 import type { Principal } from "@/server/auth/principal";
@@ -53,6 +53,11 @@ import { EnvironmentEgressCredentialService } from "@/server/environments/egress
 import { EnvironmentService } from "@/server/environments/service";
 import { EnvironmentLifecycleService } from "@/server/environments/lifecycle-service";
 import { EnvironmentRuntimeAccessService } from "@/server/environments/runtime-access-service";
+import {
+  EnvironmentScheduleService,
+  type EnvironmentScheduleConfiguration,
+} from "@/server/environments/schedule-service";
+import { EnvironmentScheduleStore } from "@/server/environments/schedule-store";
 import { EnvironmentWorkspaceBackupService } from "@/server/environments/workspace-backup-service";
 import { CodexEnvironmentAuthService } from "@/server/harnesses/codex/auth-service";
 import { CodexAuthStore } from "@/server/harnesses/codex/auth-store";
@@ -131,6 +136,37 @@ const codexRateLimitResetSchema = z
       .min(16)
       .max(128)
       .refine((value) => !/[\u0000\r\n]/.test(value)),
+  })
+  .strict();
+const environmentScheduleSchema = z
+  .object({
+    name: z.string().trim().min(1).max(80),
+    prompt: z.string().trim().min(1).max(100_000),
+    timing: z.discriminatedUnion("kind", [
+      z.object({
+        kind: z.literal("once"),
+        runAt: z.number().positive(),
+      }),
+      z.object({
+        kind: z.literal("cron"),
+        expression: z.string().trim().min(1).max(200),
+        timeZone: z.string().trim().min(1).max(100),
+      }),
+    ]),
+    target: z.discriminatedUnion("kind", [
+      z.object({ kind: z.literal("newSession") }),
+      z.object({
+        kind: z.literal("session"),
+        sessionId: z.string().trim().min(1).max(200),
+      }),
+    ]),
+    overlapPolicy: z.literal("skip").default("skip"),
+    enabled: z.boolean().default(true),
+    title: z.string().trim().min(1).max(200).optional(),
+    modelId: z.string().trim().min(1).max(200).optional(),
+    reasoningEffort: codexReasoningEffortSchema.optional(),
+    collaborationMode: z.literal("plan").optional(),
+    serviceTier: z.string().trim().min(1).max(100).optional(),
   })
   .strict();
 export interface SandpiServerOptions {
@@ -224,6 +260,12 @@ export async function createSandpiServer(
   const codex = new CodexService(store, runtime, app.log, codexAuth, {
     runtimeQuotaGate: billingQuota,
   });
+  const schedules = new EnvironmentScheduleService(
+    new EnvironmentScheduleStore(pool),
+    store,
+    codex,
+    app.log,
+  );
   const environments = new EnvironmentService(
     store,
     runtime,
@@ -337,6 +379,7 @@ export async function createSandpiServer(
     stripeBilling,
     egressCredentials,
     workspaceBackups,
+    schedules,
   });
 
   if (existsSync(config.webDir)) {
@@ -356,6 +399,7 @@ export async function createSandpiServer(
 
   app.addHook("onClose", async () => {
     await sandboxUsage?.close();
+    await schedules.close();
     await workspaceBackups.close();
     await lifecycle.close();
     await codexAuth.close();
@@ -376,6 +420,7 @@ export async function createSandpiServer(
   void codex.resumeWorkers().catch((error) => {
     app.log.warn({ err: error }, "Codex Environment recovery deferred");
   });
+  await schedules.start();
 
   return {
     app,
@@ -476,6 +521,7 @@ function registerApiRoutes(
     stripeBilling: StripeBillingService;
     egressCredentials: EnvironmentEgressCredentialService;
     workspaceBackups: EnvironmentWorkspaceBackupService;
+    schedules: EnvironmentScheduleService;
   },
 ) {
   const deployment = deploymentSummary(services.config, services.runtime);
@@ -483,6 +529,7 @@ function registerApiRoutes(
     if (
       request.url.includes("/harnesses/codex/mcp") ||
       request.url.includes("/workspace-backups") ||
+      request.url.includes("/schedules") ||
       request.url.includes("/egress-credentials") ||
       request.url.includes("/billing")
     ) {
@@ -708,6 +755,71 @@ function registerApiRoutes(
         ),
       };
     },
+  );
+  app.get<{ Params: { environmentId: string } }>(
+    "/api/v1/environments/:environmentId/schedules",
+    async (request) => ({
+      data: await services.schedules.list(
+        request.principal.userId,
+        request.params.environmentId,
+      ),
+    }),
+  );
+  app.post<{ Params: { environmentId: string }; Body: unknown }>(
+    "/api/v1/environments/:environmentId/schedules",
+    async (request, reply) => {
+      const body = environmentScheduleSchema.parse(request.body);
+      return reply.status(201).send({
+        data: await services.schedules.create(
+          request.principal.userId,
+          request.params.environmentId,
+          environmentScheduleConfiguration(body),
+        ),
+      });
+    },
+  );
+  app.put<{
+    Params: { environmentId: string; scheduleId: string };
+    Body: unknown;
+  }>(
+    "/api/v1/environments/:environmentId/schedules/:scheduleId",
+    async (request) => {
+      const body = environmentScheduleSchema.parse(request.body);
+      return {
+        data: await services.schedules.update(
+          request.principal.userId,
+          request.params.environmentId,
+          request.params.scheduleId,
+          environmentScheduleConfiguration(body),
+        ),
+      };
+    },
+  );
+  app.delete<{
+    Params: { environmentId: string; scheduleId: string };
+  }>(
+    "/api/v1/environments/:environmentId/schedules/:scheduleId",
+    async (request) => {
+      await services.schedules.delete(
+        request.principal.userId,
+        request.params.environmentId,
+        request.params.scheduleId,
+      );
+      return { data: { id: request.params.scheduleId } };
+    },
+  );
+  app.get<{
+    Params: { environmentId: string; scheduleId: string };
+  }>(
+    "/api/v1/environments/:environmentId/schedules/:scheduleId/runs",
+    async (request) => ({
+      data: await services.schedules.listRuns(
+        request.principal.userId,
+        request.params.environmentId,
+        request.params.scheduleId,
+        boundedIntegerQuery(request, "limit", 50, 1, 100),
+      ),
+    }),
   );
   app.delete<{ Params: { environmentId: string } }>(
     "/api/v1/environments/:environmentId",
@@ -2225,6 +2337,53 @@ function queryString(request: FastifyRequest, name: string) {
   if (!query || typeof query !== "object" || !(name in query)) return undefined;
   const value = (query as Record<string, unknown>)[name];
   return typeof value === "string" ? value : undefined;
+}
+
+function boundedIntegerQuery(
+  request: FastifyRequest,
+  name: string,
+  defaultValue: number,
+  minimum: number,
+  maximum: number,
+) {
+  const value = queryString(request, name);
+  if (value === undefined) return defaultValue;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < minimum || parsed > maximum) {
+    throw new HttpError(
+      400,
+      "invalid_request",
+      `${name} must be an integer between ${minimum} and ${maximum}.`,
+    );
+  }
+  return parsed;
+}
+
+function environmentScheduleConfiguration(
+  input: z.infer<typeof environmentScheduleSchema>,
+): EnvironmentScheduleConfiguration {
+  return {
+    name: input.name,
+    prompt: input.prompt,
+    timing:
+      input.timing.kind === "once"
+        ? {
+            kind: "once",
+            runAt: dateFromUnixTimestamp(input.timing.runAt),
+          }
+        : input.timing,
+    target: input.target,
+    enabled: input.enabled,
+    ...(input.title ? { title: input.title } : {}),
+    ...(input.modelId ? { modelId: input.modelId } : {}),
+    ...(input.reasoningEffort
+      ? { reasoningEffort: input.reasoningEffort }
+      : {}),
+    ...(input.collaborationMode
+      ? { collaborationMode: input.collaborationMode }
+      : {}),
+    ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
+  };
 }
 
 function normalizeError(error: unknown): HttpError {

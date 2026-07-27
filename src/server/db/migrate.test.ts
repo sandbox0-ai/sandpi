@@ -76,6 +76,8 @@ test("migration history contains every durable Sandpi boundary", async () => {
       "0049_environment_resource_defaults",
       "0050_retire_codex_automatic_turn_recovery",
       "0051_restore_codex_fault_recovery",
+      "0052_environment_schedules",
+      "0053_disable_schedules_for_archived_sessions",
     ],
   );
 
@@ -735,5 +737,41 @@ test("migration history contains every durable Sandpi boundary", async () => {
   assert.doesNotMatch(
     environmentEgressCredentialsSql,
     /\b(?:secret|password|private_key|certificate|ciphertext)\s+(?:TEXT|BYTEA|JSONB)\b/i,
+  );
+
+  const environmentSchedulesSql = migrations[51]?.sql ?? "";
+  assert.match(
+    environmentSchedulesSql,
+    /CREATE TABLE environment_schedules\b/,
+  );
+  assert.match(
+    environmentSchedulesSql,
+    /CREATE TABLE environment_schedule_runs\b/,
+  );
+  assert.match(
+    environmentSchedulesSql,
+    /UNIQUE \(schedule_id, scheduled_for\)/,
+  );
+  assert.match(
+    environmentSchedulesSql,
+    /client_message_id TEXT NOT NULL[\s\S]+UNIQUE \(client_message_id\)/,
+  );
+  assert.match(
+    environmentSchedulesSql,
+    /lease_expires_at TIMESTAMPTZ/,
+  );
+  assert.match(
+    environmentSchedulesSql,
+    /prompt TEXT NOT NULL CHECK \(char_length\(prompt\) BETWEEN 1 AND 100000\)/,
+  );
+
+  const archivedScheduleTargetSql = migrations[52]?.sql ?? "";
+  assert.match(
+    archivedScheduleTargetSql,
+    /BEFORE UPDATE OF archived ON sessions/,
+  );
+  assert.match(
+    archivedScheduleTargetSql,
+    /SET enabled = FALSE,[\s\S]+next_run_at = NULL/,
   );
 });

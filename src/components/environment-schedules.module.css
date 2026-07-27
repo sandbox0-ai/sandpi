@@ -1,0 +1,365 @@
+.root {
+  display: grid;
+  gap: 16px;
+}
+
+.toolbar {
+  align-items: flex-start;
+  display: flex;
+  gap: 20px;
+  justify-content: space-between;
+}
+
+.toolbar p {
+  color: var(--ink-faint);
+  font-size: 13px;
+  line-height: 1.55;
+  margin: 0;
+  max-width: 640px;
+}
+
+.toolbar button {
+  flex: 0 0 auto;
+}
+
+.list {
+  display: grid;
+  gap: 12px;
+}
+
+.card,
+.editor {
+  background: color-mix(in srgb, var(--panel-strong) 82%, transparent);
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  padding: 16px;
+}
+
+.cardHeader,
+.editorHeader {
+  align-items: flex-start;
+  display: flex;
+  gap: 14px;
+  justify-content: space-between;
+}
+
+.cardTitle {
+  align-items: flex-start;
+  display: flex;
+  gap: 10px;
+  min-width: 0;
+}
+
+.cardTitle > div,
+.editorHeader > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.cardTitle strong,
+.editorHeader strong {
+  color: var(--ink);
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cardTitle span,
+.editorHeader span {
+  color: var(--ink-faint);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.statusDot {
+  background: var(--ink-faint);
+  border-radius: 999px;
+  flex: 0 0 auto;
+  height: 8px;
+  margin-top: 5px;
+  width: 8px;
+}
+
+.statusDot.enabled {
+  background: #39a86b;
+  box-shadow: 0 0 0 3px color-mix(in srgb, #39a86b 16%, transparent);
+}
+
+.badge {
+  background: var(--panel);
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  color: var(--ink-faint);
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 4px 8px;
+  text-transform: uppercase;
+}
+
+.badgeEnabled {
+  background: color-mix(in srgb, #39a86b 10%, var(--panel));
+  border-color: color-mix(in srgb, #39a86b 35%, var(--line-soft));
+  color: #2f925c;
+}
+
+.prompt {
+  color: var(--ink-soft);
+  display: -webkit-box;
+  font-size: 13px;
+  line-height: 1.55;
+  margin: 14px 0;
+  overflow: hidden;
+  white-space: pre-wrap;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.facts {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0;
+}
+
+.facts div {
+  display: grid;
+  gap: 3px;
+}
+
+.facts dt {
+  color: var(--ink-faint);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.facts dd {
+  color: var(--ink-soft);
+  font-size: 12px;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.actions {
+  align-items: center;
+  border-top: 1px solid var(--line-soft);
+  display: flex;
+  gap: 4px;
+  justify-content: flex-end;
+  margin-top: 14px;
+  padding-top: 10px;
+}
+
+.actions button:first-child {
+  margin-right: auto;
+}
+
+.deletePrompt {
+  color: var(--ink-faint);
+  font-size: 11px;
+}
+
+.dangerButton {
+  background: color-mix(in srgb, #c83d4c 9%, transparent);
+  border: 1px solid color-mix(in srgb, #c83d4c 38%, var(--line-soft));
+  border-radius: 6px;
+  color: #c83d4c;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 5px 9px;
+}
+
+.dangerButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.runError {
+  color: #c83d4c;
+  font-size: 12px;
+  margin: 10px 0 0;
+}
+
+.history {
+  background: color-mix(in srgb, var(--panel) 66%, transparent);
+  border-radius: 7px;
+  color: var(--ink-faint);
+  display: grid;
+  font-size: 12px;
+  gap: 1px;
+  margin-top: 10px;
+  padding: 8px;
+}
+
+.run {
+  align-items: flex-start;
+  border-bottom: 1px solid var(--line-soft);
+  display: flex;
+  gap: 9px;
+  padding: 8px;
+}
+
+.run:last-child {
+  border-bottom: 0;
+}
+
+.run svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+.run > div {
+  display: grid;
+  gap: 2px;
+}
+
+.run strong {
+  color: var(--ink-soft);
+  font-size: 11px;
+  text-transform: capitalize;
+}
+
+.run span,
+.run small {
+  color: var(--ink-faint);
+  font-size: 11px;
+}
+
+.success {
+  color: #2f925c !important;
+}
+
+.failure {
+  color: #c83d4c !important;
+}
+
+.skipped {
+  color: #a16f1a !important;
+}
+
+.empty {
+  align-items: center;
+  border: 1px dashed var(--line-soft);
+  border-radius: 10px;
+  color: var(--ink-faint);
+  display: grid;
+  gap: 6px;
+  justify-items: center;
+  min-height: 150px;
+  padding: 28px;
+  text-align: center;
+}
+
+.empty strong {
+  color: var(--ink-soft);
+  font-size: 14px;
+}
+
+.empty span {
+  font-size: 12px;
+}
+
+.editor {
+  border-color: color-mix(in srgb, var(--blue) 28%, var(--line-soft));
+  display: grid;
+  gap: 16px;
+}
+
+.grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.grid label,
+.fullField {
+  color: var(--ink-soft);
+  display: grid;
+  font-size: 12px;
+  font-weight: 650;
+  gap: 7px;
+}
+
+.grid small,
+.fullField small {
+  color: var(--ink-faint);
+  font-size: 10px;
+  font-weight: 400;
+}
+
+.fullField textarea {
+  font-family: inherit;
+  line-height: 1.55;
+  min-height: 150px;
+  resize: vertical;
+}
+
+.fullField > small:last-child {
+  justify-self: end;
+}
+
+.choiceField {
+  align-items: center;
+  border: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  margin: 0;
+  padding: 0;
+}
+
+.choiceField legend {
+  color: var(--ink-soft);
+  float: left;
+  font-size: 12px;
+  font-weight: 650;
+  margin-right: 20px;
+}
+
+.choiceField label,
+.enabledField {
+  align-items: center;
+  color: var(--ink-soft);
+  display: flex;
+  font-size: 12px;
+  gap: 7px;
+}
+
+.choiceField input,
+.enabledField input {
+  accent-color: var(--blue);
+  margin: 0;
+}
+
+.enabledField {
+  width: fit-content;
+}
+
+.editorActions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+@media (max-width: 720px) {
+  .toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .facts,
+  .grid {
+    grid-template-columns: 1fr;
+  }
+
+  .actions {
+    align-items: flex-end;
+    flex-wrap: wrap;
+  }
+}

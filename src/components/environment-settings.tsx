@@ -4,6 +4,7 @@ import {
   Archive,
   Box,
   Cable,
+  CalendarClock,
   Check,
   Copy,
   ExternalLink,
@@ -29,6 +30,7 @@ import {
 } from "react";
 
 import { EnvironmentEgressCredentials } from "@/components/environment-egress-credentials";
+import { EnvironmentSchedules } from "@/components/environment-schedules";
 import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
 import type { SandpiBillingSummary } from "@/lib/billing";
 import { copyTextToClipboard } from "@/lib/clipboard";
@@ -75,6 +77,7 @@ export type EnvironmentSettingsTab =
   | "sandbox"
   | "archived-sessions"
   | "credentials"
+  | "schedules"
   | "skills"
   | "mcp"
   | "egress-credentials"
@@ -90,6 +93,7 @@ interface EnvironmentSettingsProps {
   initialMcpVerbose?: boolean;
   language: OperationLanguage;
   timeZone: string;
+  sessions: CodingSession[];
   archivedSessions: CodingSession[];
   onChange: (environment: Environment) => void;
   onWorkspaceRestore: (environment: Environment) => void;
@@ -130,6 +134,7 @@ const tabs: Array<{
   { id: "sandbox", label: "Sandbox", icon: Box },
   { id: "archived-sessions", label: "Archived sessions", icon: Archive },
   { id: "credentials", label: "Agent harness", icon: KeyRound },
+  { id: "schedules", label: "Schedules", icon: CalendarClock },
   { id: "skills", label: "Skills", icon: Sparkles },
   { id: "mcp", label: "MCP servers", icon: Cable },
   { id: "egress-credentials", label: "Credentials", icon: ShieldCheck },
@@ -219,6 +224,7 @@ export function EnvironmentSettings({
   initialMcpVerbose = false,
   language,
   timeZone,
+  sessions,
   archivedSessions,
   onChange,
   onWorkspaceRestore,
@@ -2087,6 +2093,21 @@ export function EnvironmentSettings({
               </SettingsSection>
             ) : null}
 
+            {activeTab === "schedules" ? (
+              <SettingsSection
+                eyebrow="Environment Automation"
+                title="Schedules"
+                description="Run a durable Codex prompt once or on a recurring wall-clock schedule. Definitions and run state stay in Sandpi, outside the Sandbox."
+              >
+                <EnvironmentSchedules
+                  environmentId={draft.id}
+                  sessions={sessions}
+                  language={language}
+                  timeZone={timeZone}
+                />
+              </SettingsSection>
+            ) : null}
+
             {activeTab === "mcp" ? (
               <SettingsSection
                 eyebrow={`${draft.codingAgent.label} native capabilities`}
@@ -2332,6 +2353,8 @@ export function EnvironmentSettings({
               <>Confirm or cancel the pending Network mode change.</>
             ) : activeTab === "egress-credentials" ? (
               <>Credential changes are applied immediately.</>
+            ) : activeTab === "schedules" ? (
+              <>Schedule changes are persisted and applied immediately.</>
             ) : activeTab === "skills" || activeTab === "mcp" ? (
               <>{draft.codingAgent.label} changes are saved immediately.</>
             ) : activeTab === "network" ? (
@@ -2343,7 +2366,8 @@ export function EnvironmentSettings({
           <div>
             {activeTab === "skills" ||
             activeTab === "mcp" ||
-            activeTab === "egress-credentials" ? (
+            activeTab === "egress-credentials" ||
+            activeTab === "schedules" ? (
               <button type="button" className="button-primary" onClick={onClose}>
                 Done
               </button>

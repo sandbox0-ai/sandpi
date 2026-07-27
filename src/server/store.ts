@@ -2169,6 +2169,95 @@ export class SandpiStore {
     return this.insertSessionMetadata({ ...input, kind: "environment" });
   }
 
+  /**
+   * Creates the deterministic product Session reserved by one Schedule run.
+   * Retrying the same run returns its existing row; another owner or run can
+   * never adopt that id.
+   */
+  async ensureScheduledSessionMetadata(input: {
+    sessionId: string;
+    scheduleRunId: string;
+    userId: string;
+    environment: Environment;
+    title: string;
+    modelId?: string;
+    reasoningEffort?: string;
+  }) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const inserted = await client.query(
+        `INSERT INTO sessions (
+           id, environment_id, created_by_user_id, title, status,
+           harness, harness_state, metadata, environment_revision,
+           origin_kind, origin_label
+         ) VALUES (
+           $1, $2, $3, $4, 'provisioning', 'codex', $5::JSONB,
+           $6::JSONB, $7, 'environment', $8
+         )
+         ON CONFLICT (id) DO NOTHING
+         RETURNING id`,
+        [
+          input.sessionId,
+          input.environment.id,
+          input.userId,
+          input.title,
+          JSON.stringify({ protocol: "codex-app-server" }),
+          JSON.stringify({
+            modelId: input.modelId ?? null,
+            reasoningEffort: input.reasoningEffort ?? null,
+            scheduleRunId: input.scheduleRunId,
+          }),
+          input.environment.revision,
+          input.environment.name,
+        ],
+      );
+      if (inserted.rowCount) {
+        await client.query(
+          `INSERT INTO session_runtime (
+             session_id, model_id, reasoning_effort
+           ) VALUES ($1, $2, $3)`,
+          [
+            input.sessionId,
+            input.modelId ?? null,
+            input.reasoningEffort ?? null,
+          ],
+        );
+      } else {
+        const existing = await client.query(
+          `SELECT session.id
+           FROM sessions session
+           JOIN environments environment
+             ON environment.id = session.environment_id
+           JOIN session_runtime runtime ON runtime.session_id = session.id
+           WHERE session.id = $1 AND session.environment_id = $2
+             AND session.created_by_user_id = $3
+             AND environment.created_by_user_id = $3
+             AND session.metadata ->> 'scheduleRunId' = $4`,
+          [
+            input.sessionId,
+            input.environment.id,
+            input.userId,
+            input.scheduleRunId,
+          ],
+        );
+        if (!existing.rowCount) {
+          throw conflict(
+            "environment_schedule_session_conflict",
+            "The Schedule run Session id belongs to another resource.",
+          );
+        }
+      }
+      await client.query("COMMIT");
+      return input.sessionId;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async createForkSessionMetadata(input: {
     userId: string;
     environment: Environment;
@@ -2693,6 +2782,45 @@ export class SandpiStore {
          AND pending_turn_phase = 'prepared'
          AND interrupt_requested_native_turn_id IS NULL`,
       [sessionId, requestId, attemptId ?? null, runtimeGeneration],
+    );
+    return Boolean(result.rowCount);
+  }
+
+  /**
+   * A durable user-authored delivery may be retried only after the Supervisor
+   * epoch that received its ambiguous submission has been replaced and native
+   * Thread state has already proved the input absent.
+   */
+  async prepareDurableTurnReplay(input: {
+    sessionId: string;
+    submission: TurnSubmissionCoordinates;
+    environmentAttemptId?: string;
+    environmentRuntimeGeneration: number;
+  }) {
+    const result = await this.pool.query(
+      `UPDATE session_runtime
+       SET pending_turn_phase = 'prepared',
+           pending_turn_attempt_id = NULL,
+           pending_turn_runtime_generation = NULL,
+           version = version + 1
+       WHERE session_id = $1
+         AND pending_turn_request_id = $2
+         AND pending_turn_client_message_id = $3
+         AND pending_turn_stable_input_id = $4
+         AND pending_turn_phase = 'submitted'
+         AND (
+           pending_turn_attempt_id IS DISTINCT FROM $5
+           OR pending_turn_runtime_generation IS DISTINCT FROM $6
+         )
+       RETURNING session_id`,
+      [
+        input.sessionId,
+        input.submission.requestId,
+        input.submission.clientMessageId,
+        input.submission.stableInputId,
+        input.environmentAttemptId ?? null,
+        input.environmentRuntimeGeneration,
+      ],
     );
     return Boolean(result.rowCount);
   }
