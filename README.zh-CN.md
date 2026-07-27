@@ -68,8 +68,8 @@ Environment。如果多个 Session 本来就应该共享文件、工具和执行
    压平成能力最小公分母式的聊天协议。
 3. **以 Environment 作为隔离边界。** Workspace、provider 身份、网络和凭证作为
    一个整体存在。因此 Environment 既能隔离账号，也能让一件具体工作保持专注。
-4. **客户端保持轻量。** 当前 Web 客户端以及未来的移动客户端都使用同一个 Sandpi
-   server。客户端断线不等于要求 coding agent 停止工作。
+4. **客户端保持轻量。** 当前 Web 客户端以及规划中的 iOS、Android 和 OpenHarmony
+   客户端都使用同一个 Sandpi server。客户端断线不等于要求 coding agent 停止工作。
 5. **恢复原生状态，不猜测或重放写操作。** Sandpi 会重新连接持久化的原生 Session
    和 Workspace，而不是维护第二份聊天记录，或在中断后静默重复提交请求。
 
@@ -87,7 +87,8 @@ Environment。如果多个 Session 本来就应该共享文件、工具和执行
 - 可选 Stripe 订阅和产品 quota enforcement
 
 Sandpi 仍处于 pre-1.0 阶段。目前只实现了 Codex harness，本仓库也只提供 Web
-客户端。其他 harness 和原生移动客户端可以作为独立集成逐步加入。
+客户端。原生 iOS、Android 和 OpenHarmony 客户端计划在后续版本中发布；其他
+harness 和客户端也可以作为独立集成逐步加入。
 
 ## 快速开始
 

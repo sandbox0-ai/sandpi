@@ -72,9 +72,9 @@ same files, tools and execution context.
 3. **Make the Environment the isolation boundary.** Workspace, provider
    identity, network and credentials move together. This makes an Environment
    useful both for account separation and for keeping one piece of work focused.
-4. **Keep clients thin.** Web today—and future mobile clients—use the same
-   Sandpi server. A client disconnect must not become an instruction to stop the
-   coding agent.
+4. **Keep clients thin.** The Web client today—and planned iOS, Android and
+   OpenHarmony clients—use the same Sandpi server. A client disconnect must not
+   become an instruction to stop the coding agent.
 5. **Recover native state; do not guess or replay mutations.** Sandpi reconnects
    to the persisted native Session and Workspace rather than maintaining a
    second chat transcript or silently resubmitting an interrupted request.
@@ -94,8 +94,9 @@ same files, tools and execution context.
 - Optional Stripe subscriptions and product quota enforcement
 
 Sandpi is pre-1.0. Codex is currently the only implemented harness, and the Web
-client is the only client shipped in this repository. Additional harnesses and
-native mobile clients can be added as independent integrations.
+client is the only client available today. Native clients for iOS, Android and
+OpenHarmony are planned for future releases. Additional harnesses and clients
+can be added as independent integrations.
 
 ## Quick start
 
