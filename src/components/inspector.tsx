@@ -636,6 +636,15 @@ export function Inspector({
               title: ui.browserTitle,
               starting: ui.browserStarting,
               retry: ui.browserRetry,
+              tabs: ui.browserTabs,
+              newTab: ui.browserNewTab,
+              closeTab: ui.browserCloseTab,
+              untitledTab: ui.browserUntitledTab,
+              loading: ui.browserLoading,
+              viewport: ui.browserViewport,
+              viewportDesktop: ui.browserViewportDesktop,
+              viewportResponsive: ui.browserViewportResponsive,
+              viewportMobile: ui.browserViewportMobile,
             }}
           />
         </div>

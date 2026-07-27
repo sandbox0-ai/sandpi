@@ -7,6 +7,10 @@ import {
   DEFAULT_INSPECTOR_WIDTH_RATIO,
   normalizeInspectorWidthRatio,
 } from "./workspace-layout";
+import {
+  DEFAULT_BROWSER_DASHBOARD_VIEWPORT_MODE,
+  type BrowserDashboardViewportMode,
+} from "./environment-browser";
 
 export const LOCAL_UI_PREFERENCES_STORAGE_KEY =
   "sandpi.local-ui-preferences.v1";
@@ -32,6 +36,7 @@ export interface SandpiLocalUiPreferences {
     inspectorOpen: boolean;
     inspectorTab: LocalInspectorTab;
     inspectorWidthRatio: number;
+    browserViewportMode: BrowserDashboardViewportMode;
     metricsRangeSeconds: EnvironmentMetricRangeSeconds;
     terminalHeight: number;
   };
@@ -47,6 +52,7 @@ export const DEFAULT_LOCAL_UI_PREFERENCES: SandpiLocalUiPreferences = {
     inspectorOpen: false,
     inspectorTab: "files",
     inspectorWidthRatio: DEFAULT_INSPECTOR_WIDTH_RATIO,
+    browserViewportMode: DEFAULT_BROWSER_DASHBOARD_VIEWPORT_MODE,
     metricsRangeSeconds: DEFAULT_ENVIRONMENT_METRIC_RANGE_SECONDS,
     terminalHeight: 320,
   },
@@ -60,6 +66,11 @@ let cachedRawPreferences: string | null | undefined;
 let cachedPreferences = DEFAULT_LOCAL_UI_PREFERENCES;
 
 const INSPECTOR_TABS = ["files", "browser", "activity", "metrics"] as const;
+const BROWSER_VIEWPORT_MODES = [
+  "desktop",
+  "responsive",
+  "mobile",
+] as const;
 const CODEX_SESSION_ACTIVITY_FILTERS = [
   "all",
   "issues",
@@ -213,6 +224,11 @@ export function normalizeLocalUiPreferences(
       ),
       inspectorWidthRatio: normalizeInspectorWidthRatio(
         workspace.inspectorWidthRatio,
+      ),
+      browserViewportMode: oneOf(
+        BROWSER_VIEWPORT_MODES,
+        workspace.browserViewportMode,
+        DEFAULT_LOCAL_UI_PREFERENCES.workspace.browserViewportMode,
       ),
       metricsRangeSeconds: isEnvironmentMetricRangeSeconds(metricsRangeSeconds)
         ? metricsRangeSeconds

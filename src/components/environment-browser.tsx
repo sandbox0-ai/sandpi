@@ -1,22 +1,38 @@
 "use client";
 
-import { LoaderCircle, RefreshCw, TriangleAlert } from "lucide-react";
+import {
+  LoaderCircle,
+  Plus,
+  RefreshCw,
+  TriangleAlert,
+  X,
+} from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { apiFetch, apiUrl } from "@/lib/api-client";
 import {
+  BROWSER_DASHBOARD_COMMAND_MESSAGE,
+  BROWSER_DASHBOARD_VIEWPORT_MODE_MESSAGE,
   BROWSER_DASHBOARD_THEME_MESSAGE,
   BROWSER_DASHBOARD_THEME_TOKEN_MAP,
   BROWSER_DASHBOARD_VIEWPORT_APPLIED_MESSAGE,
+  type BrowserDashboardCommandMessage,
   type BrowserDashboardResolvedTheme,
+  type BrowserDashboardTab,
   type BrowserDashboardTheme,
   type BrowserDashboardThemeMessage,
   type BrowserDashboardViewport,
   type BrowserDashboardViewportAppliedMessage,
+  type BrowserDashboardViewportModeMessage,
+  isBrowserDashboardLoadingMessage,
   isBrowserDashboardReadyMessage,
   isBrowserDashboardSessionReadyMessage,
+  isBrowserDashboardTabsMessage,
   isBrowserDashboardViewportMessage,
+  isBrowserDashboardViewportMode,
 } from "@/lib/environment-browser";
+import { updateLocalUiPreferences } from "@/lib/local-ui-preferences";
+import { useLocalUiPreferences } from "@/lib/use-local-ui-preferences";
 
 const BROWSER_VIEWPORT_RESIZE_DEBOUNCE_MS = 150;
 
@@ -36,7 +52,27 @@ interface EnvironmentBrowserProps {
     title: string;
     starting: string;
     retry: string;
+    tabs: string;
+    newTab: string;
+    closeTab: (title: string) => string;
+    untitledTab: string;
+    loading: string;
+    viewport: string;
+    viewportDesktop: string;
+    viewportResponsive: string;
+    viewportMobile: string;
   };
+}
+
+function browserTabTitle(tab: BrowserDashboardTab, fallback: string) {
+  if (tab.title && tab.title !== "about:blank") return tab.title;
+  try {
+    const url = new URL(tab.url);
+    if (url.hostname) return url.hostname;
+  } catch {
+    // Browser-internal URLs intentionally fall back to a neutral tab name.
+  }
+  return fallback;
 }
 
 export function EnvironmentBrowser({
@@ -47,11 +83,17 @@ export function EnvironmentBrowser({
 }: EnvironmentBrowserProps) {
   const [ready, setReady] = useState(false);
   const [dashboardReady, setDashboardReady] = useState(false);
+  const [dashboardIntegrated, setDashboardIntegrated] = useState(false);
+  const [tabs, setTabs] = useState<BrowserDashboardTab[]>([]);
+  const [remoteLoading, setRemoteLoading] = useState(false);
+  const [viewport, setViewport] = useState<BrowserDashboardViewport>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [viewportError, setViewportError] = useState("");
   const [retry, setRetry] = useState(0);
   const dashboardFrame = useRef<HTMLIFrameElement>(null);
+  const tabsRef = useRef<BrowserDashboardTab[]>([]);
+  const pendingExternalTabBaseline = useRef<number | undefined>(undefined);
   const completedNavigationId = useRef<number | undefined>(undefined);
   const pendingRequest = useRef<{
     key: string;
@@ -61,11 +103,26 @@ export function EnvironmentBrowser({
     navigationRequest?.environmentId === environmentId
       ? navigationRequest
       : undefined;
+  const viewportMode =
+    useLocalUiPreferences().workspace.browserViewportMode;
+
+  const postDashboardMessage = useCallback(
+    (
+      message:
+        | BrowserDashboardThemeMessage
+        | BrowserDashboardViewportAppliedMessage
+        | BrowserDashboardViewportModeMessage
+        | BrowserDashboardCommandMessage,
+    ) => {
+      const frame = dashboardFrame.current;
+      if (!frame?.contentWindow) return;
+      const targetOrigin = new URL(frame.src, window.location.href).origin;
+      frame.contentWindow.postMessage(message, targetOrigin);
+    },
+    [],
+  );
 
   const sendDashboardTheme = useCallback(() => {
-    const frame = dashboardFrame.current;
-    if (!frame?.contentWindow) return;
-
     const root = document.documentElement;
     const theme: BrowserDashboardTheme =
       root.dataset.theme === "light" || root.dataset.theme === "dark"
@@ -85,9 +142,26 @@ export function EnvironmentBrowser({
       resolvedTheme,
       tokens,
     };
-    const targetOrigin = new URL(frame.src, window.location.href).origin;
-    frame.contentWindow.postMessage(message, targetOrigin);
-  }, []);
+    postDashboardMessage(message);
+  }, [postDashboardMessage]);
+
+  const sendDashboardViewportMode = useCallback(() => {
+    postDashboardMessage({
+      type: BROWSER_DASHBOARD_VIEWPORT_MODE_MESSAGE,
+      mode: viewportMode,
+    });
+  }, [postDashboardMessage, viewportMode]);
+
+  const sendDashboardCommand = useCallback(
+    (action: BrowserDashboardCommandMessage["action"], index?: number) => {
+      postDashboardMessage({
+        type: BROWSER_DASHBOARD_COMMAND_MESSAGE,
+        action,
+        ...(index === undefined ? {} : { index }),
+      });
+    },
+    [postDashboardMessage],
+  );
 
   useEffect(() => {
     const root = document.documentElement;
@@ -96,14 +170,11 @@ export function EnvironmentBrowser({
     let queuedViewport: BrowserDashboardViewport | undefined;
     let resizeInFlight = false;
     const sendViewportApplied = (viewport: BrowserDashboardViewport) => {
-      const frame = dashboardFrame.current;
-      if (!frame?.contentWindow) return;
       const message: BrowserDashboardViewportAppliedMessage = {
         type: BROWSER_DASHBOARD_VIEWPORT_APPLIED_MESSAGE,
         ...viewport,
       };
-      const targetOrigin = new URL(frame.src, window.location.href).origin;
-      frame.contentWindow.postMessage(message, targetOrigin);
+      postDashboardMessage(message);
     };
     const flushViewport = async () => {
       if (!active || resizeInFlight || !queuedViewport) return;
@@ -151,8 +222,13 @@ export function EnvironmentBrowser({
       if (event.source !== dashboardFrame.current?.contentWindow) return;
       if (isBrowserDashboardReadyMessage(event.data)) {
         sendDashboardTheme();
+        sendDashboardViewportMode();
       }
       if (isBrowserDashboardViewportMessage(event.data)) {
+        setViewport({
+          width: event.data.width,
+          height: event.data.height,
+        });
         queueViewport({
           width: event.data.width,
           height: event.data.height,
@@ -160,6 +236,19 @@ export function EnvironmentBrowser({
       }
       if (isBrowserDashboardSessionReadyMessage(event.data)) {
         setDashboardReady(true);
+      }
+      if (isBrowserDashboardTabsMessage(event.data)) {
+        tabsRef.current = event.data.tabs;
+        setTabs(event.data.tabs);
+        setDashboardIntegrated(event.data.integrated);
+        const baseline = pendingExternalTabBaseline.current;
+        if (baseline !== undefined && event.data.tabs.length > baseline) {
+          pendingExternalTabBaseline.current = undefined;
+          sendDashboardCommand("select", event.data.tabs.length - 1);
+        }
+      }
+      if (isBrowserDashboardLoadingMessage(event.data)) {
+        setRemoteLoading(event.data.loading);
       }
     };
     const observer = new MutationObserver(sendDashboardTheme);
@@ -174,7 +263,17 @@ export function EnvironmentBrowser({
       observer.disconnect();
       window.removeEventListener("message", handleDashboardMessage);
     };
-  }, [environmentId, sendDashboardTheme]);
+  }, [
+    environmentId,
+    postDashboardMessage,
+    sendDashboardCommand,
+    sendDashboardTheme,
+    sendDashboardViewportMode,
+  ]);
+
+  useEffect(() => {
+    if (ready) sendDashboardViewportMode();
+  }, [ready, sendDashboardViewportMode]);
 
   useEffect(() => {
     if (!requestedNavigation && ready) return;
@@ -191,6 +290,9 @@ export function EnvironmentBrowser({
     setBusy(true);
     setError("");
     setViewportError("");
+    if (requestedNavigation) {
+      pendingExternalTabBaseline.current = tabsRef.current.length;
+    }
     let request = pendingRequest.current;
     if (!request || request.key !== requestKey) {
       request = {
@@ -222,6 +324,7 @@ export function EnvironmentBrowser({
         }
       })
       .catch((cause) => {
+        pendingExternalTabBaseline.current = undefined;
         if (active) {
           setError(
             cause instanceof Error
@@ -245,64 +348,160 @@ export function EnvironmentBrowser({
   ]);
 
   const visibleError = error || viewportError;
+  const loading = busy || remoteLoading;
 
   return (
     <div className="environment-browser">
-      {ready ? (
-        <iframe
-          ref={dashboardFrame}
-          className="environment-browser-frame"
-          src={apiUrl(
-            `/api/v1/environments/${encodeURIComponent(environmentId)}/browser/?embed=1`,
-          )}
-          title={copy.title}
-          referrerPolicy="no-referrer"
-          sandbox="allow-forms allow-same-origin allow-scripts"
-          onLoad={sendDashboardTheme}
-        />
-      ) : null}
-      {!ready || !dashboardReady || visibleError ? (
-        <div
-          className={`environment-browser-state ${visibleError ? "is-error" : ""}`}
-          role={visibleError ? "alert" : "status"}
-        >
-          {visibleError ? (
-            <TriangleAlert size={22} aria-hidden="true" />
-          ) : (
-            <LoaderCircle
-              className="environment-browser-spinner"
-              size={22}
-              aria-hidden="true"
-            />
-          )}
-          <span>{visibleError || copy.starting}</span>
-          {visibleError ? (
+      <div
+        className={`environment-browser-toolbar ${loading ? "is-loading" : ""}`}
+      >
+        {dashboardIntegrated ? (
+          <div
+            className="environment-browser-tabs"
+            role="tablist"
+            aria-label={copy.tabs}
+          >
+            {tabs.map((tab) => {
+              const title = browserTabTitle(tab, copy.untitledTab);
+              return (
+                <div
+                  className={`environment-browser-tab ${tab.selected ? "is-selected" : ""}`}
+                  key={`${tab.index}:${tab.url}`}
+                >
+                  <button
+                    type="button"
+                    className="environment-browser-tab-select"
+                    role="tab"
+                    aria-selected={tab.selected}
+                    title={tab.url ? `${title}\n${tab.url}` : title}
+                    onClick={() => sendDashboardCommand("select", tab.index)}
+                  >
+                    <span>{title}</span>
+                  </button>
+                  {tabs.length > 1 ? (
+                    <button
+                      type="button"
+                      className="environment-browser-tab-close"
+                      aria-label={copy.closeTab(title)}
+                      onClick={() => sendDashboardCommand("close", tab.index)}
+                    >
+                      <X size={12} aria-hidden="true" />
+                    </button>
+                  ) : null}
+                </div>
+              );
+            })}
             <button
               type="button"
-              onClick={() => {
-                setReady(false);
-                setDashboardReady(false);
-                setError("");
-                setViewportError("");
-                setRetry((value) => value + 1);
-              }}
+              className="environment-browser-new-tab"
+              aria-label={copy.newTab}
+              title={copy.newTab}
+              onClick={() => sendDashboardCommand("new")}
             >
-              <RefreshCw size={13} aria-hidden="true" />
-              {copy.retry}
+              <Plus size={14} aria-hidden="true" />
             </button>
+          </div>
+        ) : (
+          <span className="environment-browser-toolbar-title">
+            {copy.title}
+          </span>
+        )}
+        <span
+          className={`environment-browser-loading ${loading ? "is-visible" : ""}`}
+          role="status"
+          aria-live="polite"
+        >
+          {loading ? (
+            <LoaderCircle
+              className="environment-browser-spinner"
+              size={13}
+              aria-hidden="true"
+            />
           ) : null}
-        </div>
-      ) : null}
-      {busy && ready && dashboardReady && !visibleError ? (
-        <span className="environment-browser-busy" role="status">
-          <LoaderCircle
-            className="environment-browser-spinner"
-            size={14}
-            aria-hidden="true"
-          />
-          {copy.starting}
+          <span>{loading ? copy.loading : ""}</span>
         </span>
-      ) : null}
+        {viewport ? (
+          <span className="environment-browser-viewport-size">
+            {viewport.width} × {viewport.height}
+          </span>
+        ) : null}
+        <label className="environment-browser-viewport-mode">
+          <span className="sr-only">{copy.viewport}</span>
+          <select
+            aria-label={copy.viewport}
+            value={viewportMode}
+            onChange={(event) => {
+              const mode = event.target.value;
+              if (!isBrowserDashboardViewportMode(mode)) return;
+              updateLocalUiPreferences((current) => ({
+                ...current,
+                workspace: {
+                  ...current.workspace,
+                  browserViewportMode: mode,
+                },
+              }));
+            }}
+          >
+            <option value="desktop">{copy.viewportDesktop}</option>
+            <option value="responsive">{copy.viewportResponsive}</option>
+            <option value="mobile">{copy.viewportMobile}</option>
+          </select>
+        </label>
+      </div>
+      <div className="environment-browser-stage">
+        {ready ? (
+          <iframe
+            ref={dashboardFrame}
+            className="environment-browser-frame"
+            src={apiUrl(
+              `/api/v1/environments/${encodeURIComponent(environmentId)}/browser/?embed=1`,
+            )}
+            title={copy.title}
+            referrerPolicy="no-referrer"
+            sandbox="allow-forms allow-same-origin allow-scripts"
+            onLoad={() => {
+              sendDashboardTheme();
+              sendDashboardViewportMode();
+            }}
+          />
+        ) : null}
+        {!ready || !dashboardReady || visibleError ? (
+          <div
+            className={`environment-browser-state ${visibleError ? "is-error" : ""}`}
+            role={visibleError ? "alert" : "status"}
+          >
+            {visibleError ? (
+              <TriangleAlert size={22} aria-hidden="true" />
+            ) : (
+              <LoaderCircle
+                className="environment-browser-spinner"
+                size={22}
+                aria-hidden="true"
+              />
+            )}
+            <span>{visibleError || copy.starting}</span>
+            {visibleError ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setReady(false);
+                  setDashboardReady(false);
+                  setDashboardIntegrated(false);
+                  setTabs([]);
+                  tabsRef.current = [];
+                  setRemoteLoading(false);
+                  setError("");
+                  setViewportError("");
+                  setRetry((value) => value + 1);
+                }}
+              >
+                <RefreshCw size={13} aria-hidden="true" />
+                {copy.retry}
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }

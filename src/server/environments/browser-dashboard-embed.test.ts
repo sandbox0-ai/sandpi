@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   BROWSER_DASHBOARD_EMBED_MARKER,
   BROWSER_DASHBOARD_EMBED_SCRIPT,
+  BROWSER_DASHBOARD_EMBED_STYLE,
   embedBrowserDashboard,
 } from "./browser-dashboard-embed";
 
@@ -42,12 +43,13 @@ test("selects the shared default session before announcing a live frame", () => 
     BROWSER_DASHBOARD_EMBED_SCRIPT,
     /sandpi:browser-dashboard-session-ready/,
   );
-  assert.match(BROWSER_DASHBOARD_EMBED_SCRIPT, /sessionObserver\.disconnect/);
   assert.match(BROWSER_DASHBOARD_EMBED_SCRIPT, /liveFrameMatchesViewport/);
   assert.match(BROWSER_DASHBOARD_EMBED_SCRIPT, /crossProductDifference/);
+  assert.match(BROWSER_DASHBOARD_EMBED_SCRIPT, /setTimeout\(\(\) => \{/);
+  assert.match(BROWSER_DASHBOARD_EMBED_SCRIPT, /5_000/);
 });
 
-test("reports the live screen bounds and waits for the resized frame", () => {
+test("reports a mode-aware viewport and waits for the resized frame", () => {
   assert.match(BROWSER_DASHBOARD_EMBED_SCRIPT, /new ResizeObserver/);
   assert.match(
     BROWSER_DASHBOARD_EMBED_SCRIPT,
@@ -64,5 +66,37 @@ test("reports the live screen bounds and waits for the resized frame", () => {
   assert.match(
     BROWSER_DASHBOARD_EMBED_SCRIPT,
     /desiredViewport\.width === appliedViewport\.width/,
+  );
+  assert.match(BROWSER_DASHBOARD_EMBED_SCRIPT, /desktopMinimumWidth/);
+  assert.match(BROWSER_DASHBOARD_EMBED_SCRIPT, /viewportMode === "mobile"/);
+  assert.match(
+    BROWSER_DASHBOARD_EMBED_SCRIPT,
+    /sandpi:browser-dashboard-viewport-mode/,
+  );
+});
+
+test("adapts native tabs and loading without patching Playwright assets", () => {
+  assert.match(BROWSER_DASHBOARD_EMBED_SCRIPT, /collectTabs/);
+  assert.match(BROWSER_DASHBOARD_EMBED_SCRIPT, /sandpi:browser-dashboard-tabs/);
+  assert.match(
+    BROWSER_DASHBOARD_EMBED_SCRIPT,
+    /sandpi:browser-dashboard-command/,
+  );
+  assert.match(
+    BROWSER_DASHBOARD_EMBED_SCRIPT,
+    /sandpi:browser-dashboard-loading/,
+  );
+  assert.match(BROWSER_DASHBOARD_EMBED_SCRIPT, /finishLoadingAfterFrame/);
+  assert.match(BROWSER_DASHBOARD_EMBED_SCRIPT, /target\.click\(\)/);
+});
+
+test("hides the native sidebar only after compatibility is detected", () => {
+  assert.match(
+    BROWSER_DASHBOARD_EMBED_STYLE,
+    /\.sandpi-browser-dashboard-integrated/,
+  );
+  assert.match(
+    BROWSER_DASHBOARD_EMBED_SCRIPT,
+    /root\.classList\.toggle\([\s\S]*sandpi-browser-dashboard-integrated/,
   );
 });

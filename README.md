@@ -95,7 +95,8 @@ same files, tools and execution context.
   surfaces
 - Persistent multi-Environment and multi-Session Web UI
 - Live Workspace file browser, Monaco editor, media previews and Git changes
-- Shared official Playwright Browser for human and coding-agent debugging
+- Shared official Playwright Browser with multi-tab controls, loading feedback
+  and persisted desktop-fit, responsive and mobile viewport modes
 - Environment terminal, runtime metrics and configurable idle pause
 - Environment Schedules with one-time or human-friendly recurring timing,
   Advanced cron, IANA time zones, upcoming-run previews, durable run history

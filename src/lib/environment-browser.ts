@@ -14,7 +14,21 @@ export const BROWSER_DASHBOARD_VIEWPORT_MESSAGE =
   "sandpi:browser-dashboard-viewport";
 export const BROWSER_DASHBOARD_VIEWPORT_APPLIED_MESSAGE =
   "sandpi:browser-dashboard-viewport-applied";
+export const BROWSER_DASHBOARD_VIEWPORT_MODE_MESSAGE =
+  "sandpi:browser-dashboard-viewport-mode";
+export const BROWSER_DASHBOARD_TABS_MESSAGE =
+  "sandpi:browser-dashboard-tabs";
+export const BROWSER_DASHBOARD_COMMAND_MESSAGE =
+  "sandpi:browser-dashboard-command";
+export const BROWSER_DASHBOARD_LOADING_MESSAGE =
+  "sandpi:browser-dashboard-loading";
 export const BROWSER_DASHBOARD_SESSION_NAME = "default";
+export const DEFAULT_BROWSER_DASHBOARD_VIEWPORT_MODE = "desktop";
+export const BROWSER_DASHBOARD_DESKTOP_MIN_WIDTH = 1_280;
+export const BROWSER_DASHBOARD_MOBILE_VIEWPORT = {
+  width: 390,
+  height: 844,
+} as const;
 export const BROWSER_DASHBOARD_VIEWPORT_LIMITS = {
   minWidth: 320,
   maxWidth: 3_840,
@@ -47,6 +61,11 @@ export const BROWSER_DASHBOARD_THEME_TOKEN_MAP = {
 
 export type BrowserDashboardTheme = "system" | "light" | "dark";
 export type BrowserDashboardResolvedTheme = "light" | "dark";
+export type BrowserDashboardViewportMode =
+  | "desktop"
+  | "responsive"
+  | "mobile";
+export type BrowserDashboardCommandAction = "new" | "select" | "close";
 
 export interface BrowserDashboardThemeMessage {
   type: typeof BROWSER_DASHBOARD_THEME_MESSAGE;
@@ -68,6 +87,91 @@ export interface BrowserDashboardViewportMessage
 export interface BrowserDashboardViewportAppliedMessage
   extends BrowserDashboardViewport {
   type: typeof BROWSER_DASHBOARD_VIEWPORT_APPLIED_MESSAGE;
+}
+
+export interface BrowserDashboardViewportModeMessage {
+  type: typeof BROWSER_DASHBOARD_VIEWPORT_MODE_MESSAGE;
+  mode: BrowserDashboardViewportMode;
+}
+
+export interface BrowserDashboardTab {
+  index: number;
+  title: string;
+  url: string;
+  selected: boolean;
+}
+
+export interface BrowserDashboardTabsMessage {
+  type: typeof BROWSER_DASHBOARD_TABS_MESSAGE;
+  integrated: boolean;
+  tabs: BrowserDashboardTab[];
+}
+
+export interface BrowserDashboardCommandMessage {
+  type: typeof BROWSER_DASHBOARD_COMMAND_MESSAGE;
+  action: BrowserDashboardCommandAction;
+  index?: number;
+}
+
+export interface BrowserDashboardLoadingMessage {
+  type: typeof BROWSER_DASHBOARD_LOADING_MESSAGE;
+  loading: boolean;
+}
+
+export function isBrowserDashboardViewportMode(
+  value: unknown,
+): value is BrowserDashboardViewportMode {
+  return (
+    value === "desktop" || value === "responsive" || value === "mobile"
+  );
+}
+
+export function resolveBrowserDashboardViewport(
+  bounds: BrowserDashboardViewport,
+  mode: BrowserDashboardViewportMode,
+): BrowserDashboardViewport {
+  if (mode === "mobile") return { ...BROWSER_DASHBOARD_MOBILE_VIEWPORT };
+
+  const clamp = (value: number, minimum: number, maximum: number) =>
+    Math.min(maximum, Math.max(minimum, Math.round(value)));
+  if (mode === "responsive") {
+    return {
+      width: clamp(
+        bounds.width,
+        BROWSER_DASHBOARD_VIEWPORT_LIMITS.minWidth,
+        BROWSER_DASHBOARD_VIEWPORT_LIMITS.maxWidth,
+      ),
+      height: clamp(
+        bounds.height,
+        BROWSER_DASHBOARD_VIEWPORT_LIMITS.minHeight,
+        BROWSER_DASHBOARD_VIEWPORT_LIMITS.maxHeight,
+      ),
+    };
+  }
+
+  const width = Math.max(1, bounds.width);
+  const height = Math.max(1, bounds.height);
+  const desiredScale = Math.max(
+    1,
+    BROWSER_DASHBOARD_DESKTOP_MIN_WIDTH / width,
+  );
+  const maximumScale = Math.min(
+    BROWSER_DASHBOARD_VIEWPORT_LIMITS.maxWidth / width,
+    BROWSER_DASHBOARD_VIEWPORT_LIMITS.maxHeight / height,
+  );
+  const scale = Math.min(desiredScale, maximumScale);
+  return {
+    width: clamp(
+      width * scale,
+      BROWSER_DASHBOARD_VIEWPORT_LIMITS.minWidth,
+      BROWSER_DASHBOARD_VIEWPORT_LIMITS.maxWidth,
+    ),
+    height: clamp(
+      height * scale,
+      BROWSER_DASHBOARD_VIEWPORT_LIMITS.minHeight,
+      BROWSER_DASHBOARD_VIEWPORT_LIMITS.maxHeight,
+    ),
+  };
 }
 
 export function isBrowserDashboardViewport(
@@ -118,6 +222,49 @@ export function isBrowserDashboardSessionReadyMessage(
     value !== null &&
     "type" in value &&
     value.type === BROWSER_DASHBOARD_SESSION_READY_MESSAGE
+  );
+}
+
+export function isBrowserDashboardTabsMessage(
+  value: unknown,
+): value is BrowserDashboardTabsMessage {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("type" in value) ||
+    value.type !== BROWSER_DASHBOARD_TABS_MESSAGE ||
+    !("integrated" in value) ||
+    typeof value.integrated !== "boolean" ||
+    !("tabs" in value) ||
+    !Array.isArray(value.tabs) ||
+    value.tabs.length > 100
+  ) {
+    return false;
+  }
+  return value.tabs.every((candidate, index) => {
+    if (typeof candidate !== "object" || candidate === null) return false;
+    const tab = candidate as Record<string, unknown>;
+    return (
+      tab.index === index &&
+      typeof tab.title === "string" &&
+      tab.title.length <= 2_000 &&
+      typeof tab.url === "string" &&
+      tab.url.length <= 8_192 &&
+      typeof tab.selected === "boolean"
+    );
+  });
+}
+
+export function isBrowserDashboardLoadingMessage(
+  value: unknown,
+): value is BrowserDashboardLoadingMessage {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "type" in value &&
+    value.type === BROWSER_DASHBOARD_LOADING_MESSAGE &&
+    "loading" in value &&
+    typeof value.loading === "boolean"
   );
 }
 

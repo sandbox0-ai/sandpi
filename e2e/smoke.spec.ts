@@ -1100,6 +1100,7 @@ test("keeps New Session header operations aligned with the conversation", async 
     },
   );
   let browserSessionStarts = 0;
+  const browserViewports: Array<{ width: number; height: number }> = [];
   await page.route(
     (url) =>
       url.pathname.startsWith(
@@ -1111,10 +1112,82 @@ test("keeps New Session header operations aligned with the conversation", async 
         await route.fulfill({ status: 204 });
         return;
       }
+      if (route.request().url().endsWith("/browser/viewport")) {
+        browserViewports.push(
+          route.request().postDataJSON() as {
+            width: number;
+            height: number;
+          },
+        );
+        await route.fulfill({ status: 204 });
+        return;
+      }
       await route.fulfill({
         status: 200,
         contentType: "text/html",
-        body: "<!doctype html><p>Official Playwright Dashboard fixture</p>",
+        body: `<!doctype html>
+          <p>Official Playwright Dashboard fixture</p>
+          <script>
+            let tabs = [{
+              index: 0,
+              title: "Fixture tab",
+              url: "https://example.test/",
+              selected: true,
+            }];
+            const post = (message) => parent.postMessage(message, "*");
+            const postTabs = () => post({
+              type: "sandpi:browser-dashboard-tabs",
+              integrated: true,
+              tabs,
+            });
+            const finishActivity = () => setTimeout(() => post({
+              type: "sandpi:browser-dashboard-loading",
+              loading: false,
+            }), 400);
+            addEventListener("message", (event) => {
+              const message = event.data;
+              if (message?.type === "sandpi:browser-dashboard-viewport-mode") {
+                const viewport = message.mode === "mobile"
+                  ? { width: 390, height: 844 }
+                  : message.mode === "responsive"
+                    ? { width: 640, height: 700 }
+                    : { width: 1280, height: 800 };
+                post({
+                  type: "sandpi:browser-dashboard-viewport",
+                  ...viewport,
+                });
+              }
+              if (message?.type !== "sandpi:browser-dashboard-command") return;
+              post({
+                type: "sandpi:browser-dashboard-loading",
+                loading: true,
+              });
+              if (message.action === "new") {
+                tabs = tabs.map((tab) => ({ ...tab, selected: false }));
+                tabs.push({
+                  index: tabs.length,
+                  title: "New Tab",
+                  url: "about:blank",
+                  selected: true,
+                });
+              } else if (message.action === "select") {
+                tabs = tabs.map((tab) => ({
+                  ...tab,
+                  selected: tab.index === message.index,
+                }));
+              } else if (message.action === "close" && tabs.length > 1) {
+                const selected = tabs[message.index]?.selected;
+                tabs.splice(message.index, 1);
+                tabs = tabs.map((tab, index) => ({ ...tab, index }));
+                if (selected) tabs[0].selected = true;
+              }
+              postTabs();
+              finishActivity();
+            });
+            post({ type: "sandpi:browser-dashboard-ready" });
+            post({ type: "sandpi:browser-dashboard-session-ready" });
+            postTabs();
+          </script>`,
       });
     },
   );
@@ -1168,6 +1241,49 @@ test("keeps New Session header operations aligned with the conversation", async 
       .frameLocator('iframe[title="Shared Environment browser"]')
       .getByText("Official Playwright Dashboard fixture"),
   ).toBeVisible();
+  await expect(
+    page.getByRole("tab", { name: "Fixture tab", exact: true }),
+  ).toHaveAttribute("aria-selected", "true");
+  await expect(
+    page.getByRole("combobox", { name: "Browser viewport" }),
+  ).toHaveValue("desktop");
+  await expect.poll(() => browserViewports.at(-1)).toEqual({
+    width: 1280,
+    height: 800,
+  });
+
+  await page.getByRole("button", { name: "New tab", exact: true }).click();
+  await expect(page.getByRole("tab", { name: "New Tab" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(page.locator(".environment-browser-toolbar")).toHaveClass(
+    /is-loading/,
+  );
+  await page.getByRole("tab", { name: "Fixture tab", exact: true }).click();
+  await expect(
+    page.getByRole("tab", { name: "Fixture tab", exact: true }),
+  ).toHaveAttribute("aria-selected", "true");
+  await page.getByRole("button", { name: "Close New Tab" }).click();
+  await expect(page.getByRole("tab", { name: "New Tab" })).toHaveCount(0);
+
+  await page
+    .getByRole("combobox", { name: "Browser viewport" })
+    .selectOption("responsive");
+  await expect.poll(() => browserViewports.at(-1)).toEqual({
+    width: 640,
+    height: 700,
+  });
+  await expect
+    .poll(() =>
+      page.evaluate(
+        (key) =>
+          JSON.parse(window.localStorage.getItem(key) ?? "{}").workspace
+            ?.browserViewportMode,
+        LOCAL_UI_PREFERENCES_STORAGE_KEY,
+      ),
+    )
+    .toBe("responsive");
 
   await header.getByRole("button", { name: "Close inspector" }).click();
   await expect(inspectorViews).toBeHidden();

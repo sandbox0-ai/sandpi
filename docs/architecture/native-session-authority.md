@@ -200,22 +200,39 @@ browser profile, so access to those snapshots must be treated as access to the
 Environment's logged-in browser credentials.
 
 Sandpi adapts only the embedded Dashboard shell: it binds the Dashboard to the
-shared `default` session explicitly, hides Playwright's redundant session
-sidebar and theme control, and projects Sandpi's system/light/dark theme tokens
-into the frame. The embedded shell measures the Dashboard's live screen bounds
-and sends bounded, debounced updates through Sandpi's authenticated API. Sandpi
-then uses the official `playwright-cli resize` command to match the real remote
-viewport to the Inspector's available width and height, preserving page layout
-without stretching, cropping or letterboxing the screencast. Playwright's
-`show --session default` reveal applies only to the Dashboard connection
-present when that command runs, so every newly embedded connection also selects
-the first tab in `default` after Playwright publishes it. Sandpi keeps its
-loading surface above the frame until the selected tab has delivered a live
-screencast image matching the applied viewport aspect ratio. The aspect-ratio
-check preserves this readiness guarantee when Playwright downscales a large
-screencast for transport. Users never need to operate the hidden session
-picker. Playwright continues to own the browser toolbar, pages and interaction
-behavior.
+shared `default` session explicitly, projects the current Sandpi theme tokens
+into the frame, and exposes the upstream tabs as a compact horizontal tab
+strip. Tab selection, creation and closing still invoke Dashboard-owned
+controls; Sandpi projects but does not persist an independent page or tab
+model. Navigation and tab activity produce a non-blocking loading indicator
+until the next live frame.
+
+The embedded shell measures the Dashboard's live screen bounds and sends
+bounded, debounced updates through Sandpi's authenticated API. The default
+`Desktop fit` mode preserves that aspect ratio while targeting a minimum
+1280 CSS-pixel width within bounded viewport limits.
+This keeps desktop sites out of mobile breakpoints while still filling the
+available screen without stretching or cropping. `Responsive` uses the
+Inspector screen at 1:1 CSS pixels, while `Mobile` uses a fixed 390 by 844
+viewport. The selected mode is a browser-local UI preference. Sandpi applies
+all three modes through the official `playwright-cli resize` command.
+
+Playwright's `show --session default` reveal applies only to the Dashboard
+connection present when that command runs, so every newly embedded connection
+also selects the first tab in `default` after Playwright publishes it. Sandpi
+keeps its startup surface above the frame until the selected tab has delivered
+a live screencast image matching the applied viewport aspect ratio. The
+aspect-ratio check preserves this readiness guarantee when Playwright
+downscales a large screencast for transport. Users never need to operate the
+session picker.
+
+The adapter is injected by Sandpi's authenticated HTML proxy; it does not edit
+the coding-agent template or the installed Playwright package. Hiding the
+native sidebar is capability-gated. If a future Dashboard no longer exposes
+the expected accessible tab controls, Sandpi leaves the official sidebar
+visible and stops presenting the compact tab strip, so the upstream UI remains
+usable after an image upgrade. Playwright continues to own the browser toolbar,
+pages, profiles and interaction behavior.
 
 An Environment resume can terminate Chromium while leaving its persistent
 profile's `Singleton*` symlinks on the Workspace Volume. If Playwright reports
