@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { publicAuthPath, validateBillingRuntime } from "./server";
+import {
+  AUTH_COOKIE_CLEAR_PATHS,
+  AUTH_COOKIE_PATH,
+  authCookieAttributes,
+  publicAuthPath,
+  validateBillingRuntime,
+} from "./server";
 
 test("only Stripe webhook and OIDC entry routes bypass user authentication", () => {
   assert.equal(publicAuthPath("/api/v1/auth/login"), true);
@@ -46,5 +52,24 @@ test("Stripe mode refuses to start without the official SDK usage resource", () 
       },
       { supportsUsageWindows: () => true },
     ),
+  );
+});
+
+test("authentication cookies are scoped to the API boundary", () => {
+  assert.equal(AUTH_COOKIE_PATH, "/api/v1");
+  assert.deepEqual(AUTH_COOKIE_CLEAR_PATHS, ["/api/v1", "/"]);
+  assert.deepEqual(
+    authCookieAttributes({ publicUrl: new URL("https://sandpi.ai") }),
+    {
+      path: "/api/v1",
+      httpOnly: true,
+      sameSite: "lax",
+      secure: true,
+    },
+  );
+  assert.equal(
+    authCookieAttributes({ publicUrl: new URL("http://localhost:3000") })
+      .secure,
+    false,
   );
 });

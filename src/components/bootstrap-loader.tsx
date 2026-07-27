@@ -120,16 +120,20 @@ function BootstrapBoundary({
           </>
         ) : (
           <>
-            <LoaderCircle
-              className={styles.spinner}
-              size={22}
-              aria-hidden="true"
-            />
-            <p>
-              {state.status === "redirecting"
-                ? "Redirecting to sign in…"
-                : "Loading Sandpi…"}
-            </p>
+            <h1>Sandpi</h1>
+            <p>Remote coding agents that keep working when you disconnect.</p>
+            <div className={styles.status}>
+              <LoaderCircle
+                className={styles.spinner}
+                size={18}
+                aria-hidden="true"
+              />
+              <span>
+                {state.status === "redirecting"
+                  ? "Redirecting to sign in…"
+                  : "Loading your workspace…"}
+              </span>
+            </div>
           </>
         )}
       </section>
