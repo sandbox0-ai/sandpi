@@ -34,6 +34,7 @@ import {
   MAX_CODEX_COMPOSER_UPLOAD_FILES,
   MAX_CODEX_COMPOSER_UPLOAD_BYTES,
 } from "@/harnesses/codex/types";
+import { EnvironmentResourceStatus } from "@/components/environment-resource-status";
 import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
 import type { OperationLanguage } from "@/lib/operation-ui";
 import type { WorkspaceFileSearchResult } from "@/lib/types";
@@ -580,6 +581,10 @@ export function CodexComposerToolbar({
         </span>
       </div>
       <div className="composer-send-area">
+        <EnvironmentResourceStatus
+          environmentId={environmentId}
+          language={language}
+        />
         {contextUsedPercent !== null &&
         contextUsedPercent !== undefined ? (
           <span

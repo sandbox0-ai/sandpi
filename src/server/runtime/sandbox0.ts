@@ -17,6 +17,7 @@ import {
 
 import type {
   Environment,
+  EnvironmentResourceMetrics,
   RuntimeMetricSeries,
   RuntimeMetrics,
   WorkspaceDirectoryListing,
@@ -2019,23 +2020,84 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     return result.stdout;
   }
 
+  private async getResourceGaugeMetrics(
+    runtime: EnvironmentRuntimeRecord,
+    window: { startedAt: Date; endedAt: Date },
+    statistic: "average" | "last",
+    maxPoints: number,
+  ) {
+    return this.client.sandboxes.sandbox(runtime.sandboxId).getMetrics({
+      startTime: window.startedAt,
+      endTime: window.endedAt,
+      metrics: [
+        SandboxRuntimeMetricName.SandboxCpuUtilization,
+        SandboxRuntimeMetricName.SandboxMemoryWorkingSet,
+        SandboxRuntimeMetricName.SandboxMemoryLimit,
+      ],
+      statistic,
+      maxPoints,
+    });
+  }
+
+  async getResourceMetrics(
+    runtime: EnvironmentRuntimeRecord,
+    window: { startedAt: Date; endedAt: Date },
+  ): Promise<EnvironmentResourceMetrics> {
+    try {
+      const gauges = await this.getResourceGaugeMetrics(
+        runtime,
+        window,
+        SandboxRuntimeMetricStatistic.Last,
+        4,
+      );
+      const cpuUtilization = latestMetricValue(
+        requireMetric(
+          gauges.series,
+          SandboxRuntimeMetricName.SandboxCpuUtilization,
+        ),
+      );
+      const memoryWorkingSet = latestMetricValue(
+        requireMetric(
+          gauges.series,
+          SandboxRuntimeMetricName.SandboxMemoryWorkingSet,
+        ),
+      );
+      const memoryLimit = latestMetricValue(
+        requireMetric(
+          gauges.series,
+          SandboxRuntimeMetricName.SandboxMemoryLimit,
+        ),
+      );
+      return {
+        cpuUtilization:
+          cpuUtilization !== null && cpuUtilization >= 0
+            ? cpuUtilization
+            : null,
+        memoryUtilization:
+          memoryWorkingSet !== null &&
+          memoryWorkingSet >= 0 &&
+          memoryLimit !== null &&
+          memoryLimit > 0
+            ? memoryWorkingSet / memoryLimit
+            : null,
+      };
+    } catch (error) {
+      throw translateMetricsError(error);
+    }
+  }
+
   async getMetrics(
     runtime: EnvironmentRuntimeRecord,
     window: { startedAt: Date; endedAt: Date },
   ): Promise<RuntimeMetrics> {
     try {
       const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
-      const gauges = await sandbox.getMetrics({
-        startTime: window.startedAt,
-        endTime: window.endedAt,
-        metrics: [
-          SandboxRuntimeMetricName.SandboxCpuUtilization,
-          SandboxRuntimeMetricName.SandboxMemoryWorkingSet,
-          SandboxRuntimeMetricName.SandboxMemoryLimit,
-        ],
-        statistic: SandboxRuntimeMetricStatistic.Average,
-        maxPoints: 120,
-      });
+      const gauges = await this.getResourceGaugeMetrics(
+        runtime,
+        window,
+        SandboxRuntimeMetricStatistic.Average,
+        120,
+      );
       const network = await sandbox.getMetrics({
         startTime: window.startedAt,
         endTime: window.endedAt,
@@ -2969,6 +3031,11 @@ function requireMetric(
         candidate.dimensions?.direction === direction),
   );
   return value ?? emptyMetric(metric, direction);
+}
+
+function latestMetricValue(series: SdkRuntimeMetricSeries) {
+  const value = series.segments.at(-1)?.points.at(-1)?.value;
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function emptyMetric(

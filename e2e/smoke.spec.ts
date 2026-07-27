@@ -244,6 +244,21 @@ test("shows live native context usage inside the Session composer", async ({
       await route.fulfill({ json: { data: bootstrap } });
     },
   );
+  await page.route(
+    (url) =>
+      url.pathname ===
+      `/api/v1/environments/${environment.id}/metrics/current`,
+    async (route) => {
+      await route.fulfill({
+        json: {
+          data: {
+            cpuUtilization: 0.075,
+            memoryUtilization: 0.42,
+          },
+        },
+      });
+    },
+  );
 
   const nativeSessionId = codexSession.harnessState.threadId;
   const snapshot: CodexNativeSnapshot = {
@@ -316,6 +331,14 @@ test("shows live native context usage inside the Session composer", async ({
     tokenUsage: restoredUsage,
   });
   const composer = page.locator(".composer-shell");
+  const cpuMeter = composer.getByRole("meter", {
+    name: "Sandbox CPU utilization: 7.5%",
+  });
+  const memoryMeter = composer.getByRole("meter", {
+    name: "Sandbox memory utilization: 42%",
+  });
+  await expect(cpuMeter).toContainText("CPU 7.5%");
+  await expect(memoryMeter).toContainText("MEM 42%");
   await expect(
     composer.getByRole("meter", {
       name: "25% of the current context is used",
@@ -347,16 +370,36 @@ test("shows live native context usage inside the Session composer", async ({
   });
   await expect(meter).toContainText("Context 50%");
 
-  const [composerBox, meterBox] = await Promise.all([
+  const [composerBox, cpuMeterBox, memoryMeterBox, meterBox] = await Promise.all([
     composer.boundingBox(),
+    cpuMeter.boundingBox(),
+    memoryMeter.boundingBox(),
     meter.boundingBox(),
   ]);
   expect(composerBox).not.toBeNull();
-  expect(meterBox).not.toBeNull();
-  expect(meterBox!.x).toBeGreaterThanOrEqual(composerBox!.x);
-  expect(meterBox!.x + meterBox!.width).toBeLessThanOrEqual(
-    composerBox!.x + composerBox!.width,
-  );
+  for (const statusBox of [cpuMeterBox, memoryMeterBox, meterBox]) {
+    expect(statusBox).not.toBeNull();
+    expect(statusBox!.x).toBeGreaterThanOrEqual(composerBox!.x);
+    expect(statusBox!.x + statusBox!.width).toBeLessThanOrEqual(
+      composerBox!.x + composerBox!.width,
+    );
+  }
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  const [mobileComposerBox, ...mobileStatusBoxes] = await Promise.all([
+    composer.boundingBox(),
+    cpuMeter.boundingBox(),
+    memoryMeter.boundingBox(),
+    meter.boundingBox(),
+  ]);
+  expect(mobileComposerBox).not.toBeNull();
+  for (const statusBox of mobileStatusBoxes) {
+    expect(statusBox).not.toBeNull();
+    expect(statusBox!.x).toBeGreaterThanOrEqual(mobileComposerBox!.x);
+    expect(statusBox!.x + statusBox!.width).toBeLessThanOrEqual(
+      mobileComposerBox!.x + mobileComposerBox!.width,
+    );
+  }
 });
 
 test("keeps anonymous visitors on the app home until they send a message", async ({

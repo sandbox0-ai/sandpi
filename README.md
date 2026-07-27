@@ -90,7 +90,7 @@ same files, tools and execution context.
 - Native Codex device login and Environment-scoped account connections
 - Native model and reasoning discovery, Session/Turn history and branching
 - Sandbox/Codex process self-recovery with a bounded visible continuation
-- Live native context-window usage in the active Session composer
+- Live native context-window and Sandbox CPU/memory usage in the composer
 - Codex tools, Skills, MCP configuration, approvals and supported slash-command
   surfaces
 - Persistent multi-Environment and multi-Session Web UI

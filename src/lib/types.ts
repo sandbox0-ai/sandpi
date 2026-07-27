@@ -388,6 +388,12 @@ export interface RuntimeMetrics {
   networkTransmit: RuntimeMetricSeries;
 }
 
+/** Best-effort latest Sandbox resource ratios for compact live UI surfaces. */
+export interface EnvironmentResourceMetrics {
+  cpuUtilization: number | null;
+  memoryUtilization: number | null;
+}
+
 export interface EnvironmentMetricWindow {
   startedAt: UnixTimestamp;
   endedAt: UnixTimestamp;

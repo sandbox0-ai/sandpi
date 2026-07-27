@@ -585,6 +585,98 @@ test("updates the existing Environment Sandbox memory", async () => {
   ]);
 });
 
+test("queries only the latest Sandbox CPU and memory gauges for compact UI", async () => {
+  const calls: unknown[] = [];
+  const runtime = runtimeWithClient({
+    sandboxes: {
+      sandbox(sandboxId: string) {
+        assert.equal(sandboxId, "sandbox-environment");
+        return {
+          async getMetrics(options: unknown) {
+            calls.push(options);
+            return {
+              series: [
+                {
+                  metric: "sandbox.cpu.utilization",
+                  segments: [
+                    {
+                      points: [
+                        {
+                          time: new Date("2026-07-28T01:00:45.000Z"),
+                          value: 0.075,
+                        },
+                      ],
+                    },
+                  ],
+                },
+                {
+                  metric: "sandbox.memory.working_set",
+                  segments: [
+                    {
+                      points: [
+                        {
+                          time: new Date("2026-07-28T01:00:45.000Z"),
+                          value: 512 * 1024 * 1024,
+                        },
+                      ],
+                    },
+                  ],
+                },
+                {
+                  metric: "sandbox.memory.limit",
+                  segments: [
+                    {
+                      points: [
+                        {
+                          time: new Date("2026-07-28T01:00:45.000Z"),
+                          value: 2 * 1024 * 1024 * 1024,
+                        },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            };
+          },
+        };
+      },
+    },
+  });
+  const coordinates: EnvironmentRuntimeRecord = {
+    id: environment.id,
+    sandboxId: environment.sandboxId,
+    workspaceVolumeId: environment.workspaceVolumeId,
+    runtimeGeneration: 1,
+    decoder: {
+      supervisorCursor: 0,
+      tailBase64: "",
+      runtimeGeneration: 1,
+    },
+  };
+  const window = {
+    startedAt: new Date("2026-07-28T01:00:00.000Z"),
+    endedAt: new Date("2026-07-28T01:01:00.000Z"),
+  };
+
+  assert.deepEqual(await runtime.getResourceMetrics(coordinates, window), {
+    cpuUtilization: 0.075,
+    memoryUtilization: 0.25,
+  });
+  assert.deepEqual(calls, [
+    {
+      startTime: window.startedAt,
+      endTime: window.endedAt,
+      metrics: [
+        "sandbox.cpu.utilization",
+        "sandbox.memory.working_set",
+        "sandbox.memory.limit",
+      ],
+      statistic: "last",
+      maxPoints: 4,
+    },
+  ]);
+});
+
 test("preserves unrelated services and installs a constrained MCP OAuth callback", async () => {
   assert.equal(CODEX_MCP_OAUTH_CALLBACK_BASE_PATH, "/callback");
   let replacement: unknown;

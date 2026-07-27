@@ -404,6 +404,13 @@ the native text input, not a filesystem-shaped app/plugin `mention`. Future
 coding-agent harnesses reuse the same Workspace search contract and own their
 corresponding visible composer and native input mapping.
 
+The shared toolbar also mounts an Environment-owned, read-only resource status.
+It polls a compact current-metrics endpoint at Sandbox0's 15-second collection
+cadence and displays the latest CPU and memory utilization beside native context
+usage. The endpoint requests only the latest CPU, memory working-set and memory
+limit gauges; it does not load network series, historical pause intervals or
+billing usage, and the client silently omits unavailable metrics.
+
 Their page headers also share the Environment-owned Terminal and Inspector
 operations. New Session can inspect Files and Metrics without creating a native
 Thread; the Activity tab is added only when a selected Session supplies its

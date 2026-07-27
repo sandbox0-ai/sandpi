@@ -55,5 +55,6 @@ export class UnconfiguredRuntime implements RuntimeAdapter {
   deleteWorkspaceIdeEntry = unavailable;
   watchWorkspaceFiles = unavailable;
   getMetrics = unavailable;
+  getResourceMetrics = unavailable;
   openTerminal = unavailable;
 }

@@ -1,5 +1,6 @@
 import type {
   Environment,
+  EnvironmentResourceMetrics,
   NetworkPolicy,
   RuntimeMetrics,
   WorkspaceDirectoryListing,
@@ -328,6 +329,10 @@ export interface RuntimeAdapter {
     runtime: EnvironmentRuntimeRecord,
     window: RuntimeMetricWindow,
   ): Promise<RuntimeMetrics>;
+  getResourceMetrics(
+    runtime: EnvironmentRuntimeRecord,
+    window: RuntimeMetricWindow,
+  ): Promise<EnvironmentResourceMetrics>;
   openTerminal(
     runtime: EnvironmentRuntimeRecord,
     after?: number,

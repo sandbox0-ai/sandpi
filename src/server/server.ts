@@ -36,6 +36,7 @@ import {
 } from "@/lib/environment-workspace-backup";
 import {
   DEFAULT_ENVIRONMENT_METRIC_RANGE_SECONDS,
+  ENVIRONMENT_RESOURCE_METRIC_LOOKBACK_SECONDS,
   isEnvironmentMetricRangeSeconds,
 } from "@/lib/environment-metrics";
 import { dateFromUnixTimestamp, toUnixTimestamp } from "@/lib/time";
@@ -1865,6 +1866,26 @@ function registerApiRoutes(
         reply,
         request.params["*"],
       ),
+  );
+  app.get<{ Params: { environmentId: string } }>(
+    "/api/v1/environments/:environmentId/metrics/current",
+    async (request) => {
+      const runtime = await services.store.getEnvironmentRuntime(
+        request.principal.userId,
+        request.params.environmentId,
+      );
+      const endedAt = new Date();
+      const startedAt = new Date(
+        endedAt.getTime() -
+          ENVIRONMENT_RESOURCE_METRIC_LOOKBACK_SECONDS * 1_000,
+      );
+      return {
+        data: await services.runtime.getResourceMetrics(runtime, {
+          startedAt,
+          endedAt,
+        }),
+      };
+    },
   );
   app.get<{ Params: { environmentId: string } }>(
     "/api/v1/environments/:environmentId/metrics",

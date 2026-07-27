@@ -3268,6 +3268,13 @@ code.codex-compact-activity-subject {
   gap: 10px;
 }
 
+.composer-resource-metrics {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.composer-resource-metric,
 .composer-context-usage {
   display: inline-flex;
   align-items: center;
