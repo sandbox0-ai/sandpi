@@ -46,14 +46,13 @@ Environment
   explicitly as unavailable or partial, but does not invalidate a successfully
   restored conversation.
 
-## Project guidance and `AGENTS.md`
+## Workspace `AGENTS.md`
 
-Project guidance remains ordinary Environment Workspace state. The Project
-guidance surface reads, creates and opens `/workspace/AGENTS.md` and
-`/workspace/AGENTS.override.md` through the same Workspace APIs as every other
-user file. Sandpi does not copy their contents into PostgreSQL, maintain a
-second instruction model, inject a hidden Turn prompt or ask Codex to reload
-them.
+Codex project instructions remain ordinary Environment Workspace state. The
+header shortcut opens `/workspace/AGENTS.md`, creating an empty file through
+the normal Workspace API when it is missing. Sandpi does not copy its contents
+into PostgreSQL, maintain a second instruction model, inject a hidden Turn
+prompt or ask Codex to reload it.
 
 Instruction discovery is fixed for the lifetime of a native Session. Editing,
 creating, deleting or renaming an `AGENTS.md` file does not mutate an existing

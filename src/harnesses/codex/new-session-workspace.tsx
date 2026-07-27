@@ -66,6 +66,7 @@ import {
   type CodexNativeDialogMode,
 } from "@/harnesses/codex/native-command-dialog";
 import { parseCodexTokenUsageView } from "@/harnesses/codex/token-usage";
+import { ensureWorkspaceAgentsFile } from "@/harnesses/codex/workspace-agents";
 import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
 import { consumePendingGuestPrompt } from "@/lib/auth-navigation";
 import {
@@ -136,6 +137,7 @@ export function CodexNewSessionWorkspace({
   const [modelCatalogError, setModelCatalogError] = useState("");
   const [creating, setCreating] = useState(false);
   const [retryingEnvironment, setRetryingEnvironment] = useState(false);
+  const [openingAgentsFile, setOpeningAgentsFile] = useState(false);
   const [error, setError] = useState("");
   const [commandNotice, setCommandNotice] = useState<{
     tone: "info" | "error";
@@ -311,6 +313,24 @@ export function CodexNewSessionWorkspace({
   function clearComposerPrompt() {
     setPrompt("");
     window.requestAnimationFrame(() => promptRef.current?.focus());
+  }
+
+  async function openAgentsFile() {
+    if (openingAgentsFile) return;
+    setOpeningAgentsFile(true);
+    setCommandNotice(null);
+    try {
+      const path = await ensureWorkspaceAgentsFile(environment.id);
+      onOpenWorkspacePath(path);
+    } catch (error) {
+      setCommandNotice({
+        tone: "error",
+        message:
+          error instanceof Error ? error.message : ui.openAgentsFileFailed,
+      });
+    } finally {
+      setOpeningAgentsFile(false);
+    }
   }
 
   async function executeSlashCommand(
@@ -598,15 +618,18 @@ export function CodexNewSessionWorkspace({
         <div className={styles.headerActions}>
           <button
             type="button"
-            className={`${styles.guidanceButton} ${
-              nativeDialog?.mode === "guidance" ? styles.active : ""
-            }`}
-            aria-label={ui.projectGuidance}
-            title={ui.projectGuidance}
-            disabled={environment.status !== "ready"}
-            onClick={() => setNativeDialog({ mode: "guidance" })}
+            className={styles.agentsButton}
+            aria-label={ui.openAgentsFile}
+            aria-busy={openingAgentsFile}
+            title={ui.openAgentsFile}
+            disabled={environment.status !== "ready" || openingAgentsFile}
+            onClick={() => void openAgentsFile()}
           >
-            <BookOpenText size={17} aria-hidden="true" />
+            {openingAgentsFile ? (
+              <span className="activity-spinner" aria-hidden="true" />
+            ) : (
+              <BookOpenText size={17} aria-hidden="true" />
+            )}
           </button>
           <button
             type="button"
@@ -942,10 +965,6 @@ export function CodexNewSessionWorkspace({
           language={language}
           environmentId={environment.id}
           initialUsageView={nativeDialog.usageView}
-          onOpenWorkspacePath={(path) => {
-            setNativeDialog(undefined);
-            onOpenWorkspacePath(path);
-          }}
           onClose={() => setNativeDialog(undefined)}
         />
       ) : null}

@@ -75,7 +75,7 @@
 
 .desktopExpandButton,
 .mobileMenuButton,
-.guidanceButton,
+.agentsButton,
 .terminalButton,
 .inspectorButton {
   display: inline-flex;
@@ -106,21 +106,20 @@
 
 .desktopExpandButton:hover,
 .mobileMenuButton:hover,
-.guidanceButton:hover:not(:disabled),
+.agentsButton:hover:not(:disabled),
 .terminalButton:hover:not(:disabled),
 .inspectorButton:hover {
   background: var(--hover);
   color: var(--ink);
 }
 
-.guidanceButton.active,
 .terminalButton.active,
 .inspectorButton.active {
   background: var(--selected);
   color: var(--ink);
 }
 
-.guidanceButton:disabled,
+.agentsButton:disabled,
 .terminalButton:disabled {
   opacity: 0.42;
   cursor: not-allowed;

@@ -1062,10 +1062,15 @@ pre,
   cursor: pointer;
 }
 
-.header-action-button:hover {
+.header-action-button:hover:not(:disabled) {
   border-color: var(--line);
   background: var(--panel);
   color: var(--ink);
+}
+
+.header-action-button:disabled {
+  opacity: 0.5;
+  cursor: wait;
 }
 
 .header-action-button.is-active {

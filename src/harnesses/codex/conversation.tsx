@@ -81,6 +81,7 @@ import {
   type CodexNativeDialogMode,
 } from "@/harnesses/codex/native-command-dialog";
 import { parseCodexTokenUsageView } from "@/harnesses/codex/token-usage";
+import { ensureWorkspaceAgentsFile } from "@/harnesses/codex/workspace-agents";
 import { normalizeCodexRolloutActivityFeed } from "@/harnesses/codex/rollout-activity";
 import {
   groupCodexTimelineByTurn,
@@ -272,6 +273,7 @@ export function CodexConversation({
   const [mentionOpenRequest, setMentionOpenRequest] = useState(0);
   const [sending, setSending] = useState(false);
   const [interrupting, setInterrupting] = useState(false);
+  const [openingAgentsFile, setOpeningAgentsFile] = useState(false);
   const [forkingMessageId, setForkingMessageId] = useState<string | null>(null);
   const [modelCatalogUnavailable, setModelCatalogUnavailable] = useState("");
   const [nativeSnapshot, setNativeSnapshot] =
@@ -1525,6 +1527,24 @@ export function CodexConversation({
     onOpenWorkspacePath(path);
   }
 
+  async function openAgentsFile() {
+    if (openingAgentsFile) return;
+    setOpeningAgentsFile(true);
+    setCommandNotice(null);
+    try {
+      const path = await ensureWorkspaceAgentsFile(environment.id);
+      onOpenWorkspacePath(path);
+    } catch (error) {
+      setCommandNotice({
+        tone: "error",
+        message:
+          error instanceof Error ? error.message : ui.openAgentsFileFailed,
+      });
+    } finally {
+      setOpeningAgentsFile(false);
+    }
+  }
+
   function renderTimelineEntry(entry: CodexTimelineEntry) {
     if (entry.kind === "command") {
       return (
@@ -1808,15 +1828,19 @@ export function CodexConversation({
           <div className="conversation-header-actions">
             <button
               type="button"
-              className={`header-action-button ${
-                nativeDialog?.mode === "guidance" ? "is-active" : ""
-              }`}
-              aria-label={ui.projectGuidance}
-              title={ui.projectGuidance}
-              onClick={() => setNativeDialog({ mode: "guidance" })}
+              className="header-action-button"
+              aria-label={ui.openAgentsFile}
+              aria-busy={openingAgentsFile}
+              title={ui.openAgentsFile}
+              disabled={openingAgentsFile}
+              onClick={() => void openAgentsFile()}
             >
-              <BookOpenText size={15} aria-hidden="true" />
-              <span>{ui.projectGuidance}</span>
+              {openingAgentsFile ? (
+                <span className="activity-spinner" aria-hidden="true" />
+              ) : (
+                <BookOpenText size={15} aria-hidden="true" />
+              )}
+              <span translate="no">AGENTS.md</span>
             </button>
             <button
               type="button"
@@ -2172,10 +2196,6 @@ export function CodexConversation({
           initialUsageView={nativeDialog.usageView}
           editGoalImmediately={nativeDialog.editGoalImmediately}
           onSessionChange={onSessionChange}
-          onOpenWorkspacePath={(path) => {
-            setNativeDialog(undefined);
-            onOpenWorkspacePath(path);
-          }}
           onClose={() => setNativeDialog(undefined)}
         />
       ) : null}

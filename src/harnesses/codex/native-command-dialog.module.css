@@ -101,98 +101,6 @@
   gap: 12px;
 }
 
-.guidanceStack {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.guidanceStack > .error {
-  grid-column: 1 / -1;
-}
-
-.guidanceSection {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 11px;
-  padding: 14px;
-  border: 1px solid var(--line-soft);
-  border-radius: 11px;
-  background: var(--panel);
-}
-
-.guidanceHeading,
-.guidanceHeading > span {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 5px;
-}
-
-.guidanceHeading strong {
-  color: var(--ink);
-  font-size: 12px;
-}
-
-.guidanceHeading small {
-  color: var(--ink-faint);
-  font-size: 9px;
-  line-height: 1.5;
-}
-
-.guidanceFileList {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 7px;
-}
-
-.guidanceSourceRow {
-  display: flex;
-  min-width: 0;
-  min-height: 54px;
-  align-items: center;
-  gap: 8px;
-  padding: 9px 10px;
-  border: 1px solid var(--line-soft);
-  border-radius: 8px;
-  background: var(--panel-strong);
-}
-
-.guidanceSourceRow > span {
-  display: flex;
-  min-width: 0;
-  flex: 1;
-  flex-direction: column;
-  gap: 5px;
-}
-
-.guidanceSourceRow code {
-  overflow: hidden;
-  color: var(--ink-soft);
-  font-family: "SFMono-Regular", Consolas, monospace;
-  font-size: 9px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.guidanceSourceRow small {
-  color: var(--ink-faint);
-  font-size: 8px;
-}
-
-.guidanceSourceRow em {
-  padding: 3px 6px;
-  border: 1px solid color-mix(in srgb, var(--green) 30%, var(--line));
-  border-radius: 999px;
-  background: var(--green-soft);
-  color: var(--green);
-  font-size: 8px;
-  font-style: normal;
-  white-space: nowrap;
-}
-
 .choiceGrid {
   display: grid;
   gap: 9px;
@@ -688,10 +596,6 @@
 
   .summaryGrid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .guidanceStack {
-    grid-template-columns: minmax(0, 1fr);
   }
 
   .hookRow,
