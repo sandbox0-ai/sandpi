@@ -85,12 +85,10 @@ Web today; iOS / Android / HarmonyOS later
   best-effort repair considers only non-archived Sessions whose scalar control
   state is exceptionally still running, active or stale-pending. That repair
   loads full native Turns only on that exceptional path, gives fresh pending
-  Turns a distributed grace, and uses the recorded runtime epoch to distinguish
-  a replaced-Sandbox interruption from a user interrupt. For the former, Sandpi
-  claims at most one visible Recovery Turn on the same native Thread. The
-  versioned instruction makes Codex inspect persisted conversation, Workspace,
-  Git and external state before continuing; Sandpi never replays the original
-  prompt or stores either prompt in PostgreSQL. Repair is abortable, retries
+  Turns a distributed grace, and follows the authoritative native Turn status.
+  An interrupted native Turn returns the product Session to waiting; Sandpi
+  never replays the original request or submits a replacement Turn. Repair is
+  abortable, retries
   transient failures with capped backoff, and slowly rechecks exceptional active
   state. Request submission is serialized with Environment lifecycle
   transitions, but response waiting is non-blocking and cannot wake an
@@ -139,25 +137,31 @@ Web today; iOS / Android / HarmonyOS later
   Both Codex composers expose a harness-owned slash menu. One registry maps
   Codex command spellings to stable browser intents, so aliases and GUI
   execution cannot drift into separate dispatch paths. Commands map to real
-  browser product actions: `/new` and `/clear` open New Session, `/fork`
-  creates and selects a child product Session, and `/skills`, `/mcp`,
-  `/permissions`, `/usage`, `/model`, `/mention` and `/diff` open their existing
-  Sandpi surfaces. `/agent` and its Codex compatibility spelling `/subagents`
+  browser product actions: `/new [name]` and `/clear [name]` open a named New
+  Session with the matching native start source, `/rename [name]` updates the
+  Sandpi Session title without mutating native Thread metadata, and `/fork` creates and selects
+  a child product Session. `/skills`, `/mcp [verbose]`, `/permissions`,
+  `/model`, `/mention` and `/diff` open their existing Sandpi surfaces; verbose
+  MCP also shows the native tools, resources and templates. `/agent` and its
+  Codex compatibility spelling `/subagents`
   open a dedicated native Agent Threads tree and transcript viewer; this is
   separate from Session Activity. `/ide` opens the Workspace Inspector, while
   `/logout` opens the Codex account connection
   instead of logging out without confirmation. `/compact`, `/review` and
-  `/goal` call the native Codex app-server. Inline review displays the native
+  `/goal`, `/personality`, `/usage daily|weekly|cumulative`, `/memories`,
+  `/hooks`, `/ps` and `/stop` call the native Codex app-server. Goal supports
+  edit, pause, resume and clear from either command arguments or its dialog.
+  Inline review displays the native
   wrapper result without exposing its private reviewer Turn as an interrupted
   user Turn. `/plan` submits Codex's native Plan collaboration mode, and
   the input toolbar exposes a Fast switch only when the selected model's live
   metadata reports a Fast service tier. `/fast` and `/status` are omitted
   because Fast is a visible composer control and Session status is already
-  visible in the browser. Sandpi never
-  forwards an unknown slash command as ordinary agent text. Terminal-only
-  commands are absent, and `/resume`, `/side` and `/btw` are deliberately not
-  registered because Sandpi already owns Session selection and does not expose
-  a side-thread composer.
+  visible in the browser. `/side`, its `/btw` alias, and `/resume` remain absent:
+  Codex implements side conversations and resume as TUI application behavior,
+  while Sandpi owns browser Session selection. Sandpi never forwards an unknown
+  slash command as ordinary agent text. Other terminal-only commands remain
+  absent.
   Browser uploads are written through Sandbox0 into
   `/workspace/.sandpi/uploads/{id}/` and referenced from there. Valid native
   image formats become `localImage` inputs; other files insert their protected
@@ -252,7 +256,7 @@ Web today; iOS / Android / HarmonyOS later
   metering remain native Sandbox0 state, and retention never deletes snapshots
   created outside Sandpi. A listed backup can be restored only after typing the
   current Environment name. Sandpi rejects backup and restore while a Turn,
-  Session provisioning, fork or runtime-recovery operation is active; restore
+  Session provisioning, fork or Environment runtime transition is active; restore
   pauses the shared Sandbox, invokes Sandbox0's native Volume restore and
   returns it to its previous running or paused state. Because Agent Harness
   state is stored on the Workspace Volume, Sessions created after the selected
@@ -833,11 +837,11 @@ Sandbox0 implementation details.
   Workspace events refresh clean files automatically and turn external changes
   to dirty files into an explicit
   compare/reload/overwrite decision.
-- The OSS server currently expects one active server replica. PostgreSQL,
-  Supervisor replay and the fenced Recovery Turn claim make both Sandpi process
-  restart and interrupted Sandbox runtime continuation recoverable, but
-  multi-replica worker leadership is not yet part of the supported deployment
-  contract.
+- The OSS server currently expects one active server replica. PostgreSQL and
+  Supervisor replay make Sandpi process restart and scalar native-state repair
+  recoverable. An interrupted native Codex Turn still requires a new visible
+  user message. Multi-replica worker leadership is not yet part of the
+  supported deployment contract.
 - Sandpi's optional product plan projection is account-scoped and uses
   memory-weighted Sandbox runtime from the Sandbox0 SDK. Coding-provider usage
   remains a separate live, Environment-scoped projection and is never counted

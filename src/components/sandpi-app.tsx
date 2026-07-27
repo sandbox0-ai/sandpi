@@ -14,6 +14,7 @@ import { Conversation } from "@/components/conversation";
 import { AppFrame } from "@/components/app-frame";
 import {
   EnvironmentSettings,
+  type EnvironmentSettingsOpenOptions,
   type EnvironmentSettingsTab,
 } from "@/components/environment-settings";
 import { Inspector, type InspectorTab } from "@/components/inspector";
@@ -87,6 +88,11 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
   const [settingsTarget, setSettingsTarget] = useState<{
     environmentId: string;
     initialTab: EnvironmentSettingsTab;
+    mcpVerbose?: boolean;
+  } | null>(null);
+  const [newSessionPreset, setNewSessionPreset] = useState<{
+    title?: string;
+    source?: "startup" | "clear";
   } | null>(null);
   const [newEnvironmentOpen, setNewEnvironmentOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
@@ -345,6 +351,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
     (
       environmentId: string,
       initialTab: EnvironmentSettingsTab = "general",
+      options: EnvironmentSettingsOpenOptions = {},
     ) => {
       const environment = environments.find(
         (candidate) => candidate.id === environmentId,
@@ -353,6 +360,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
         setSettingsTarget({
           environmentId,
           initialTab,
+          mcpVerbose: options.mcpVerbose,
         });
       }
     },
@@ -387,13 +395,17 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
         setSelectedSessionId("");
         replaceWorkspaceUrl(environmentId);
       }
+      setNewSessionPreset(null);
       setSidebarOpen(false);
     },
     [environments, hydrateSession, sessions],
   );
 
   const handleNewSession = useCallback(
-    (environmentId: string) => {
+    (
+      environmentId: string,
+      options?: { title?: string; source?: "startup" | "clear" },
+    ) => {
       if (
         !environments.some(
           (environment) => environment.id === environmentId,
@@ -403,6 +415,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
       }
       setSelectedEnvironmentId(environmentId);
       setSelectedSessionId("");
+      setNewSessionPreset(options ?? null);
       replaceWorkspaceUrl(environmentId);
       setSidebarOpen(false);
     },
@@ -524,6 +537,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
       ]);
       setSelectedEnvironmentId(session.environmentId);
       setSelectedSessionId(session.id);
+      setNewSessionPreset(null);
       replaceWorkspaceUrl(session.environmentId, session.id);
       setTerminalOpen(false);
     },
@@ -836,9 +850,11 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
           onToggleInspector={() => handleInspectorOpenChange(!showInspector)}
           onInspectorTabChange={handleInspectorTabChange}
           onToggleTerminal={() => setTerminalOpen((open) => !open)}
-          onNewSession={() => handleNewSession(selectedEnvironment.id)}
-          onOpenEnvironmentSettings={(tab) =>
-            openEnvironmentSettings(selectedEnvironment.id, tab)
+          onNewSession={(options) =>
+            handleNewSession(selectedEnvironment.id, options)
+          }
+          onOpenEnvironmentSettings={(tab, options) =>
+            openEnvironmentSettings(selectedEnvironment.id, tab, options)
           }
           onOpenInspector={(tab) => {
             handleInspectorTabChange(tab);
@@ -858,11 +874,13 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
           canManageEnvironment={canManageEnvironment(selectedEnvironment)}
           onEnvironmentChange={handleEnvironmentChange}
           onCreated={handleSessionCreated}
+          initialTitle={newSessionPreset?.title}
+          sessionStartSource={newSessionPreset?.source}
           onOpenAgentHarnessSettings={() =>
             openEnvironmentSettings(selectedEnvironment.id, "credentials")
           }
-          onOpenEnvironmentSettings={(tab) =>
-            openEnvironmentSettings(selectedEnvironment.id, tab)
+          onOpenEnvironmentSettings={(tab, options) =>
+            openEnvironmentSettings(selectedEnvironment.id, tab, options)
           }
           onToggleSidebar={handleToggleNavigation}
           inspectorOpen={showInspector}
@@ -899,6 +917,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
           key={settingsEnvironment.id}
           environment={settingsEnvironment}
           initialTab={settingsTarget?.initialTab}
+          initialMcpVerbose={settingsTarget?.mcpVerbose}
           language={preferences.general.language}
           timeZone={preferences.general.timeZone}
           archivedSessions={sessions

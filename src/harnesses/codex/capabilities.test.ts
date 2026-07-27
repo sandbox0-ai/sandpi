@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { codexTurnCapabilitySets } from "./capabilities";
+import {
+  canInterruptCodexSession,
+  codexTurnCapabilitySets,
+} from "./capabilities";
 import type { CodexNativeSnapshot } from "./types";
 
 const snapshot = {
@@ -18,4 +21,36 @@ test("projects Codex Turn fork capabilities", () => {
 test("starts with no fork capability before the native snapshot", () => {
   const capabilities = codexTurnCapabilitySets(null);
   assert.equal(capabilities.forkableTurnIds.size, 0);
+});
+
+test("keeps server-running Sessions interruptible before a native snapshot arrives", () => {
+  assert.equal(
+    canInterruptCodexSession({
+      nativeActiveTurnId: "turn-active",
+      sessionRunning: true,
+      localTurnPending: true,
+    }),
+    true,
+  );
+  assert.equal(
+    canInterruptCodexSession({
+      sessionRunning: true,
+      localTurnPending: false,
+    }),
+    true,
+  );
+  assert.equal(
+    canInterruptCodexSession({
+      sessionRunning: true,
+      localTurnPending: true,
+    }),
+    false,
+  );
+  assert.equal(
+    canInterruptCodexSession({
+      sessionRunning: false,
+      localTurnPending: false,
+    }),
+    false,
+  );
 });

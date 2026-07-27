@@ -6,11 +6,12 @@ import type {
 import type { CodexRolloutActivityFeed } from "./rollout-activity";
 
 /**
- * Hand-maintained subset of the Codex app-server v2 schema used by the current UI and mock
- * fixtures. Production packaging should generate the exact TypeScript schema from the Codex
- * binary pinned to the Environment with
- * `codex app-server generate-ts --out <dir>`. Keeping the native method and item names here is
- * intentional: Sandpi must not translate them into a cross-harness chat or tool-call model.
+ * Hand-maintained subset of the Codex app-server v2 schema used by the current
+ * UI and mock fixtures. Keep it aligned with the Sandbox0-pinned
+ * @openai/codex 0.144.1 binary. Production packaging should generate the exact
+ * TypeScript schema with `codex app-server generate-ts --out <dir>`. Keeping
+ * the native method and item names here is intentional: Sandpi must not
+ * translate them into a cross-harness chat or tool-call model.
  */
 export type CodexUserInput =
   | { type: "text"; text: string; text_elements: [] }

@@ -16,12 +16,6 @@ import {
   type CodexServerNotification,
   type CodexThread,
 } from "@/harnesses/codex/types";
-import {
-  CODEX_RUNTIME_RECOVERY_CLIENT_ID_PREFIX,
-  CODEX_RUNTIME_RECOVERY_PROMPT_VERSION,
-  codexRuntimeRecoveryPrompt,
-  isCodexRuntimeRecoveryClientMessageId,
-} from "@/harnesses/codex/runtime-recovery";
 import type {
   CodexAccountPlanType,
   CodexAccountRateLimits,
@@ -40,6 +34,18 @@ import type {
   CodexSkillsInventory,
   CodexSpendControlSnapshot,
 } from "@/harnesses/codex/environment-tools";
+import type {
+  CodexBackgroundTerminal,
+  CodexBackgroundTerminals,
+  CodexHook,
+  CodexHookIssue,
+  CodexHooksInventory,
+  CodexMemoriesSettings,
+  CodexPersonality,
+  CodexPersonalitySelection,
+  CodexPersonalitySettings,
+  CodexTokenUsage,
+} from "@/harnesses/codex/native-capabilities";
 import type { Environment } from "@/lib/types";
 import { toUnixTimestamp } from "@/lib/time";
 import { HttpError } from "@/server/http-error";
@@ -84,7 +90,6 @@ const EXCEPTIONAL_SESSION_RETRY_BASE_MS = 1_000;
 const EXCEPTIONAL_SESSION_RETRY_MAX_MS = 30_000;
 const EXCEPTIONAL_SESSION_ACTIVE_RECHECK_MS = 30_000;
 const EXCEPTIONAL_SESSION_REQUEST_TIMEOUT_MS = 5_000;
-const AUTOMATIC_TURN_RECOVERY_MAX_ATTEMPTS = 1;
 const MAX_RPC_RESPONSES_PER_ENVIRONMENT = 512;
 const MAX_LIVE_NOTIFICATIONS_PER_SESSION = 1_000;
 const CODEX_ENVIRONMENT_CWD = "/workspace";
@@ -102,6 +107,25 @@ const CODEX_APPLY_PATCH_STREAMING_CONFIG =
   "features.apply_patch_streaming_events";
 const CODEX_AGENT_THREAD_PAGE_LIMIT = 100;
 const MAX_CODEX_AGENT_THREADS = 1_000;
+const CODEX_BACKGROUND_TERMINAL_PAGE_LIMIT = 100;
+const MAX_CODEX_BACKGROUND_TERMINALS = 1_000;
+const CODEX_PERSONALITIES = new Set<CodexPersonality>([
+  "friendly",
+  "pragmatic",
+  "none",
+]);
+const CODEX_PERSONALITY_SELECTIONS = new Set<CodexPersonalitySelection>([
+  "friendly",
+  "pragmatic",
+]);
+const CODEX_GOAL_STATUSES = new Set([
+  "active",
+  "paused",
+  "blocked",
+  "usageLimited",
+  "budgetLimited",
+  "complete",
+]);
 const CODEX_ACCOUNT_PLAN_TYPES = new Set<CodexAccountPlanType>([
   "free",
   "go",
@@ -340,6 +364,7 @@ export class CodexService {
     reasoningEffort?: string;
     collaborationMode?: "plan";
     serviceTier?: string;
+    sessionStartSource?: "startup" | "clear";
   }) {
     const environmentRuntime = await this.ensureEnvironmentRuntimeForUser(
       input.userId,
@@ -358,7 +383,7 @@ export class CodexService {
             reasoningEffort: input.reasoningEffort,
             collaborationMode: input.collaborationMode,
             serviceTier: input.serviceTier,
-          }),
+          }, input.sessionStartSource),
         },
         sessionId,
       );
@@ -507,16 +532,36 @@ export class CodexService {
   async setSessionGoal(input: {
     userId: string;
     sessionId: string;
-    objective: string;
+    objective?: string;
+    status?: string;
   }) {
+    if (input.objective === undefined && input.status === undefined) {
+      throw new HttpError(
+        400,
+        "codex_goal_update_required",
+        "A Codex goal objective or status update is required.",
+      );
+    }
+    if (
+      input.status !== undefined &&
+      !CODEX_GOAL_STATUSES.has(input.status)
+    ) {
+      throw new HttpError(
+        400,
+        "codex_goal_status_invalid",
+        "The requested Codex goal status is invalid.",
+      );
+    }
     const response = await this.requestNativeSessionRpc({
       userId: input.userId,
       sessionId: input.sessionId,
       method: "thread/goal/set",
       requestKind: "thread-goal-set",
       params: {
-        objective: input.objective,
-        status: "active",
+        ...(input.objective !== undefined
+          ? { objective: input.objective }
+          : {}),
+        ...(input.status !== undefined ? { status: input.status } : {}),
       },
     });
     if (response.error) {
@@ -543,6 +588,404 @@ export class CodexService {
       );
     }
     return { goal: null };
+  }
+
+  async readSessionPersonality(input: {
+    userId: string;
+    sessionId: string;
+  }): Promise<CodexPersonalitySettings> {
+    const sessionRuntime = await this.requireNativeSessionRuntime(
+      input.userId,
+      input.sessionId,
+    );
+    const runtime = await this.environmentRuntimeForSession(
+      input.userId,
+      input.sessionId,
+    );
+    const [config, models] = await Promise.all([
+      this.readEnvironmentCodexConfig(sessionRuntime.environmentId, runtime),
+      this.listModelsFromRuntime(
+        sessionRuntime.environmentId,
+        runtime,
+        input.sessionId,
+        input.sessionId,
+      ),
+    ]);
+    return {
+      personality: codexPersonality(config.config.personality),
+      supported: modelSupportsPersonality(
+        models.data,
+        sessionRuntime.modelId,
+      ),
+    };
+  }
+
+  async readEnvironmentPersonality(
+    userId: string,
+    environmentId: string,
+  ): Promise<CodexPersonalitySettings> {
+    const runtime = await this.environmentRuntimeForEnvironment(
+      userId,
+      environmentId,
+    );
+    const config = await this.readEnvironmentCodexConfig(
+      environmentId,
+      runtime,
+    );
+    return {
+      personality: codexPersonality(config.config.personality),
+      supported: true,
+    };
+  }
+
+  async setSessionPersonality(input: {
+    userId: string;
+    sessionId: string;
+    personality: CodexPersonalitySelection;
+  }): Promise<CodexPersonalitySettings> {
+    requireCodexPersonality(input.personality);
+    const sessionRuntime = await this.requireNativeSessionRuntime(
+      input.userId,
+      input.sessionId,
+    );
+    const runtime = await this.environmentRuntimeForSession(
+      input.userId,
+      input.sessionId,
+    );
+    const models = await this.listModelsFromRuntime(
+      sessionRuntime.environmentId,
+      runtime,
+      input.sessionId,
+      input.sessionId,
+    );
+    if (!modelSupportsPersonality(models.data, sessionRuntime.modelId)) {
+      throw new HttpError(
+        409,
+        "codex_personality_unsupported",
+        "The current Codex model does not support personalities.",
+      );
+    }
+    await this.writeCodexConfigValue(sessionRuntime.environmentId, runtime, {
+      keyPath: "personality",
+      value: input.personality,
+    });
+    const effectiveConfig = await this.readEnvironmentCodexConfig(
+      sessionRuntime.environmentId,
+      runtime,
+    );
+    const personality = codexPersonality(effectiveConfig.config.personality);
+    const response = await this.requestNativeSessionRpc({
+      userId: input.userId,
+      sessionId: input.sessionId,
+      method: "thread/settings/update",
+      requestKind: "thread-personality-update",
+      params: { personality },
+    });
+    if (response.error) {
+      throw new HttpError(
+        502,
+        "codex_personality_update_failed",
+        rpcErrorMessage(response.error),
+      );
+    }
+    return { personality, supported: true };
+  }
+
+  async setEnvironmentPersonality(input: {
+    userId: string;
+    environmentId: string;
+    personality: CodexPersonalitySelection;
+  }): Promise<CodexPersonalitySettings> {
+    requireCodexPersonality(input.personality);
+    const runtime = await this.environmentRuntimeForEnvironment(
+      input.userId,
+      input.environmentId,
+    );
+    await this.writeCodexConfigValue(input.environmentId, runtime, {
+      keyPath: "personality",
+      value: input.personality,
+    });
+    const config = await this.readEnvironmentCodexConfig(
+      input.environmentId,
+      runtime,
+    );
+    return {
+      personality: codexPersonality(config.config.personality),
+      supported: true,
+    };
+  }
+
+  async accountTokenUsageForEnvironment(
+    userId: string,
+    environmentId: string,
+  ): Promise<CodexTokenUsage> {
+    const runtime = await this.environmentRuntimeForEnvironment(
+      userId,
+      environmentId,
+    );
+    const response = await this.requestCodex(environmentId, runtime, {
+      method: "account/usage/read",
+      id: rpcId("account-token-usage", environmentId),
+    });
+    const result = requireSafeRpcResult(
+      response,
+      "codex_account_usage_read_failed",
+      "Codex could not read account token activity.",
+    );
+    return codexTokenUsage(result);
+  }
+
+  async readEnvironmentMemories(
+    userId: string,
+    environmentId: string,
+  ): Promise<CodexMemoriesSettings> {
+    const runtime = await this.environmentRuntimeForEnvironment(
+      userId,
+      environmentId,
+    );
+    const config = await this.readEnvironmentCodexConfig(
+      environmentId,
+      runtime,
+    );
+    return codexMemoriesSettings(config.config);
+  }
+
+  async setEnvironmentMemories(input: {
+    userId: string;
+    environmentId: string;
+    settings: CodexMemoriesSettings;
+  }): Promise<CodexMemoriesSettings> {
+    const runtime = await this.environmentRuntimeForEnvironment(
+      input.userId,
+      input.environmentId,
+    );
+    return this.writeEnvironmentMemorySettings(
+      input.environmentId,
+      runtime,
+      input.settings,
+    );
+  }
+
+  async readSessionMemories(input: {
+    userId: string;
+    sessionId: string;
+  }): Promise<CodexMemoriesSettings> {
+    const session = await this.requireNativeSessionRuntime(
+      input.userId,
+      input.sessionId,
+    );
+    return this.readEnvironmentMemories(input.userId, session.environmentId);
+  }
+
+  async setSessionMemories(input: {
+    userId: string;
+    sessionId: string;
+    settings: CodexMemoriesSettings;
+  }): Promise<CodexMemoriesSettings> {
+    const session = await this.requireNativeSessionRuntime(
+      input.userId,
+      input.sessionId,
+    );
+    const runtime = await this.environmentRuntimeForSession(
+      input.userId,
+      input.sessionId,
+    );
+    const settings = await this.writeEnvironmentMemorySettings(
+      session.environmentId,
+      runtime,
+      input.settings,
+    );
+    const response = await this.requestNativeSessionRpc({
+      userId: input.userId,
+      sessionId: input.sessionId,
+      method: "thread/memoryMode/set",
+      requestKind: "thread-memory-mode-set",
+      params: {
+        mode:
+          settings.featureEnabled &&
+          settings.generateMemories
+            ? "enabled"
+            : "disabled",
+      },
+    });
+    if (response.error) {
+      throw new HttpError(
+        502,
+        "codex_memory_mode_update_failed",
+        rpcErrorMessage(response.error),
+      );
+    }
+    return settings;
+  }
+
+  async resetEnvironmentMemories(userId: string, environmentId: string) {
+    const runtime = await this.environmentRuntimeForEnvironment(
+      userId,
+      environmentId,
+    );
+    const response = await this.requestCodex(environmentId, runtime, {
+      method: "memory/reset",
+      id: rpcId("memory-reset", environmentId),
+    });
+    requireRpcResult(
+      response,
+      "codex_memory_reset_failed",
+      "Codex could not reset Environment memories.",
+    );
+    return { reset: true };
+  }
+
+  async listEnvironmentHooks(
+    userId: string,
+    environmentId: string,
+  ): Promise<CodexHooksInventory> {
+    const runtime = await this.environmentRuntimeForEnvironment(
+      userId,
+      environmentId,
+    );
+    return this.readEnvironmentHooks(environmentId, runtime);
+  }
+
+  async updateEnvironmentHook(input: {
+    userId: string;
+    environmentId: string;
+    key: string;
+    enabled?: boolean;
+    trustedHash?: string;
+  }): Promise<CodexHooksInventory> {
+    const runtime = await this.environmentRuntimeForEnvironment(
+      input.userId,
+      input.environmentId,
+    );
+    const inventory = await this.readEnvironmentHooks(
+      input.environmentId,
+      runtime,
+    );
+    const hook = inventory.hooks.find((candidate) => candidate.key === input.key);
+    if (!hook) {
+      throw new HttpError(
+        404,
+        "codex_hook_not_found",
+        "The Codex hook is no longer available in this Environment.",
+      );
+    }
+    if (hook.isManaged) {
+      throw new HttpError(
+        409,
+        "codex_hook_managed",
+        "Managed Codex hooks cannot be changed by the user.",
+      );
+    }
+    if (
+      input.trustedHash !== undefined &&
+      input.trustedHash !== hook.currentHash
+    ) {
+      throw new HttpError(
+        409,
+        "codex_hook_definition_changed",
+        "The Codex hook changed before it could be trusted. Refresh and review it again.",
+      );
+    }
+    const state: Record<string, unknown> = {};
+    if (input.enabled !== undefined) state.enabled = input.enabled;
+    if (input.trustedHash !== undefined) {
+      state.trusted_hash = input.trustedHash;
+    }
+    const response = await this.requestCodex(input.environmentId, runtime, {
+      method: "config/batchWrite",
+      id: rpcId("hooks-config-write", input.environmentId),
+      params: {
+        edits: [
+          {
+            keyPath: "hooks.state",
+            value: { [hook.key]: state },
+            mergeStrategy: "upsert",
+          },
+        ],
+        reloadUserConfig: true,
+      },
+    });
+    requireEffectiveConfigWrite(
+      response,
+      "codex_hook_update_failed",
+      "Codex could not update the hook.",
+    );
+    return this.readEnvironmentHooks(input.environmentId, runtime);
+  }
+
+  async listSessionBackgroundTerminals(input: {
+    userId: string;
+    sessionId: string;
+  }): Promise<CodexBackgroundTerminals> {
+    const terminals: CodexBackgroundTerminal[] = [];
+    let cursor: string | undefined;
+    do {
+      const response = await this.requestNativeSessionRpc({
+        userId: input.userId,
+        sessionId: input.sessionId,
+        method: "thread/backgroundTerminals/list",
+        requestKind: "background-terminals-list",
+        params: {
+          limit: CODEX_BACKGROUND_TERMINAL_PAGE_LIMIT,
+          ...(cursor ? { cursor } : {}),
+        },
+      });
+      const result = requireRpcResult(
+        response,
+        "codex_background_terminals_list_failed",
+        "Codex could not list background terminals.",
+      );
+      const page = codexBackgroundTerminalsPage(result);
+      terminals.push(...page.data);
+      if (terminals.length > MAX_CODEX_BACKGROUND_TERMINALS) {
+        throw new HttpError(
+          502,
+          "codex_background_terminals_list_failed",
+          "Codex returned too many background terminals.",
+        );
+      }
+      cursor = page.nextCursor;
+    } while (cursor);
+    return { terminals };
+  }
+
+  async cleanSessionBackgroundTerminals(input: {
+    userId: string;
+    sessionId: string;
+  }) {
+    const response = await this.requestNativeSessionRpc({
+      ...input,
+      method: "thread/backgroundTerminals/clean",
+      requestKind: "background-terminals-clean",
+    });
+    if (response.error) {
+      throw new HttpError(
+        502,
+        "codex_background_terminals_clean_failed",
+        rpcErrorMessage(response.error),
+      );
+    }
+    return { cleaned: true };
+  }
+
+  async terminateSessionBackgroundTerminal(input: {
+    userId: string;
+    sessionId: string;
+    processId: string;
+  }) {
+    const response = await this.requestNativeSessionRpc({
+      userId: input.userId,
+      sessionId: input.sessionId,
+      method: "thread/backgroundTerminals/terminate",
+      requestKind: "background-terminal-terminate",
+      params: { processId: input.processId },
+    });
+    const result = requireRpcResult(
+      response,
+      "codex_background_terminal_terminate_failed",
+      "Codex could not terminate the background terminal.",
+    );
+    return { terminated: objectBoolean(result, "terminated") === true };
   }
 
   /**
@@ -771,12 +1214,13 @@ export class CodexService {
   async listEnvironmentMcpServers(
     userId: string,
     environmentId: string,
+    detail: "full" | "toolsAndAuthOnly" = "toolsAndAuthOnly",
   ): Promise<CodexMcpInventory> {
     const runtime = await this.environmentRuntimeForEnvironment(
       userId,
       environmentId,
     );
-    return this.readEnvironmentMcpInventory(environmentId, runtime);
+    return this.readEnvironmentMcpInventory(environmentId, runtime, detail);
   }
 
   async setEnvironmentMcpServerEnabled(input: {
@@ -892,7 +1336,7 @@ export class CodexService {
         },
       },
     );
-    requireMcpRpcResult(
+    requireEffectiveConfigWrite(
       configResponse,
       "codex_mcp_oauth_config_failed",
       "Codex could not configure the MCP OAuth callback.",
@@ -930,6 +1374,7 @@ export class CodexService {
   private async readEnvironmentMcpInventory(
     environmentId: string,
     runtime: StoredEnvironmentRuntime,
+    detail: "full" | "toolsAndAuthOnly" = "toolsAndAuthOnly",
   ): Promise<CodexMcpInventory> {
     const config = await this.readEnvironmentCodexConfig(
       environmentId,
@@ -942,7 +1387,7 @@ export class CodexService {
         method: "mcpServerStatus/list",
         id: rpcId("mcp-status-list", environmentId),
         params: {
-          detail: "toolsAndAuthOnly",
+          detail,
           ...(cursor ? { cursor } : {}),
         },
       });
@@ -1026,9 +1471,68 @@ export class CodexService {
     });
     const userConfig = objectRecord(objectRecord(userLayer)?.config);
     return {
+      config,
       effectiveServers,
       userServers: objectRecord(userConfig?.mcp_servers) ?? {},
     };
+  }
+
+  private async writeEnvironmentMemorySettings(
+    environmentId: string,
+    runtime: StoredEnvironmentRuntime,
+    settings: CodexMemoriesSettings,
+  ) {
+    const response = await this.requestCodex(environmentId, runtime, {
+      method: "config/batchWrite",
+      id: rpcId("memories-config-write", environmentId),
+      params: {
+        edits: [
+          {
+            keyPath: "features.memories",
+            value: settings.featureEnabled,
+            mergeStrategy: "replace",
+          },
+          {
+            keyPath: "memories.use_memories",
+            value: settings.useMemories,
+            mergeStrategy: "replace",
+          },
+          {
+            keyPath: "memories.generate_memories",
+            value: settings.generateMemories,
+            mergeStrategy: "replace",
+          },
+        ],
+        reloadUserConfig: true,
+      },
+    });
+    requireEffectiveConfigWrite(
+      response,
+      "codex_memories_update_failed",
+      "Codex could not update memory settings.",
+    );
+    const config = await this.readEnvironmentCodexConfig(
+      environmentId,
+      runtime,
+    );
+    return codexMemoriesSettings(config.config);
+  }
+
+  private async readEnvironmentHooks(
+    environmentId: string,
+    runtime: StoredEnvironmentRuntime,
+  ): Promise<CodexHooksInventory> {
+    const response = await this.requestCodex(environmentId, runtime, {
+      method: "hooks/list",
+      id: rpcId("hooks-list", environmentId),
+      params: { cwds: [CODEX_ENVIRONMENT_CWD] },
+    });
+    const result = requireRpcResult(
+      response,
+      "codex_hooks_list_failed",
+      "Codex could not list Environment hooks.",
+    );
+    return codexHooksInventory(result);
   }
 
   private async writeCodexConfigValue(
@@ -1044,7 +1548,7 @@ export class CodexService {
         mergeStrategy: "replace",
       },
     });
-    requireMcpRpcResult(
+    requireEffectiveConfigWrite(
       response,
       "codex_config_write_failed",
       "Codex could not update the Environment configuration.",
@@ -1485,10 +1989,8 @@ export class CodexService {
       thread,
       sessionRuntime,
     );
-    const requiresExceptionalTurnResolution = Boolean(
-      sessionRuntime.recoverySourceNativeTurnId ||
-      projectedTurn?.turn.status === "interrupted",
-    );
+    const requiresExceptionalTurnResolution =
+      projectedTurn?.status === "interrupted";
     const nativeSettled = ["idle", "notLoaded", "systemError"].includes(
       thread.status.type,
     );
@@ -2349,8 +2851,7 @@ export class CodexService {
       if (
         session.pendingTurnPhase &&
         !targetedPendingTurn &&
-        !session.activeNativeTurnId &&
-        !session.recoverySourceNativeTurnId
+        !session.activeNativeTurnId
       ) {
         // Process-local interactive leases do not cover another Sandpi
         // replica. Defer fresh DB delivery state unless this process owns the
@@ -2494,99 +2995,9 @@ export class CodexService {
       return;
     }
 
-    if (
-      thread.status.type === "systemError" &&
-      session.recoverySourceNativeTurnId
-    ) {
-      await this.settleExceptionalSession(
-        latestRuntime,
-        reconciliation,
-        session,
-        nativeSessionId,
-        true,
-        true,
-        "automatic_turn_recovery_native_unavailable",
-      );
-      return;
-    }
-
-    if (session.recoverySourceNativeTurnId) {
-      await this.reconcileClaimedTurnRecovery(
-        latestRuntime,
-        reconciliation,
-        session,
-        nativeSessionId,
-        thread,
-      );
-      return;
-    }
-
     const projectedTurn = nativeTurnForSessionProjection(thread, session);
-    const runtimeInterrupted =
-      thread.status.type !== "systemError" &&
-      projectedTurn?.turn.status === "interrupted" &&
-      nativeTurnBelongsToReplacedRuntime(session, projectedTurn, latestRuntime);
-    if (
-      runtimeInterrupted &&
-      projectedTurn &&
-      session.interruptRequestedNativeTurnId !== projectedTurn.turn.id &&
-      session.recoveryAttemptCount < AUTOMATIC_TURN_RECOVERY_MAX_ATTEMPTS
-    ) {
-      const submission = runtimeRecoveryTurnSubmissionCoordinates(
-        session.sessionId,
-      );
-      const claimed = await this.store.claimInterruptedTurnRecovery({
-        sessionId: session.sessionId,
-        nativeSessionId,
-        historyRevision: session.historyRevision,
-        runtimeVersion: session.version,
-        environmentId: latestRuntime.id,
-        environmentSupervisorSessionId: latestRuntime.supervisorSessionId,
-        environmentAttemptId: latestRuntime.attemptId,
-        environmentRuntimeGeneration: latestRuntime.runtimeGeneration,
-        sourceNativeTurnId: projectedTurn.turn.id,
-        sourcePendingClientMessageId:
-          projectedTurn.matchedBy === "clientMessage"
-            ? session.pendingTurnClientMessageId
-            : undefined,
-        submission,
-        promptVersion: CODEX_RUNTIME_RECOVERY_PROMPT_VERSION,
-      });
-      if (!claimed) {
-        this.requestExceptionalSessionRetry(reconciliation);
-        return;
-      }
-      const claimedSession: StoredSessionRuntime = {
-        ...session,
-        activeNativeTurnId: undefined,
-        activeTurnAttemptId: undefined,
-        activeTurnRuntimeGeneration: undefined,
-        pendingTurnRequestId: submission.requestId,
-        pendingTurnClientMessageId: submission.clientMessageId,
-        pendingTurnStableInputId: submission.stableInputId,
-        pendingTurnPhase: "prepared",
-        pendingTurnNativeTurnId: undefined,
-        pendingTurnStartedAt: new Date(),
-        pendingTurnAttemptId: undefined,
-        pendingTurnRuntimeGeneration: undefined,
-        interruptRequestedNativeTurnId: undefined,
-        recoverySourceNativeTurnId: projectedTurn.turn.id,
-        recoveryPromptVersion: CODEX_RUNTIME_RECOVERY_PROMPT_VERSION,
-        recoveryAttemptCount: session.recoveryAttemptCount + 1,
-        runtimeErrorCode: undefined,
-        sessionStatus: "running",
-        version: session.version + 1,
-      };
-      await this.startClaimedTurnRecovery(
-        latestRuntime,
-        reconciliation,
-        claimedSession,
-      );
-      return;
-    }
-
     const terminalProjection = Boolean(
-      projectedTurn && projectedTurn.turn.status !== "inProgress",
+      projectedTurn && projectedTurn.status !== "inProgress",
     );
     await this.settleExceptionalSession(
       latestRuntime,
@@ -2598,277 +3009,6 @@ export class CodexService {
     );
   }
 
-  private async reconcileClaimedTurnRecovery(
-    runtime: StoredEnvironmentRuntime,
-    reconciliation: ExceptionalSessionReconciliation,
-    session: StoredSessionRuntime,
-    nativeSessionId: string,
-    thread: CodexThread,
-  ) {
-    if (
-      session.interruptRequestedNativeTurnId ===
-      session.recoverySourceNativeTurnId
-    ) {
-      await this.settleExceptionalSession(
-        runtime,
-        reconciliation,
-        session,
-        nativeSessionId,
-        true,
-        true,
-      );
-      return;
-    }
-    if (
-      !isCodexRuntimeRecoveryClientMessageId(session.pendingTurnClientMessageId)
-    ) {
-      this.requestExceptionalSessionRetry(reconciliation);
-      return;
-    }
-    if (thread.status.type === "notLoaded") {
-      await this.ensureNativeSessionAttached(runtime, {
-        ...session,
-        nativeSessionId,
-      });
-      this.requestExceptionalSessionRerun(reconciliation, 0);
-      return;
-    }
-    const recoveryTurn =
-      session.pendingTurnNativeTurnId &&
-      session.pendingTurnNativeTurnId !== session.recoverySourceNativeTurnId
-        ? thread.turns.find(
-            (turn) => turn.id === session.pendingTurnNativeTurnId,
-          )
-        : session.pendingTurnClientMessageId
-          ? nativeTurnForClientMessage(
-              thread,
-              session.pendingTurnClientMessageId,
-            )
-          : undefined;
-    if (recoveryTurn) {
-      if (recoveryTurn.status === "inProgress") {
-        if (session.pendingTurnRequestId) {
-          await this.store.markTurnAccepted(
-            session.sessionId,
-            session.pendingTurnRequestId,
-            recoveryTurn.id,
-            runtime.attemptId,
-            runtime.runtimeGeneration,
-          );
-        }
-        this.requestExceptionalSessionRerun(
-          reconciliation,
-          this.options.exceptionalSessionActiveRecheckMs ??
-            EXCEPTIONAL_SESSION_ACTIVE_RECHECK_MS,
-        );
-        return;
-      }
-      await this.settleExceptionalSession(
-        runtime,
-        reconciliation,
-        session,
-        nativeSessionId,
-        true,
-        true,
-        recoveryTurn.status === "interrupted"
-          ? "automatic_turn_recovery_exhausted"
-          : undefined,
-      );
-      return;
-    }
-
-    if (
-      session.pendingTurnPhase === "prepared" &&
-      session.pendingTurnRequestId &&
-      session.pendingTurnClientMessageId &&
-      session.pendingTurnStableInputId
-    ) {
-      await this.startClaimedTurnRecovery(runtime, reconciliation, session);
-      return;
-    }
-
-    if (
-      session.pendingTurnPhase === "submitted" &&
-      session.pendingTurnRequestId
-    ) {
-      const submittedInCurrentEpoch =
-        session.pendingTurnAttemptId === runtime.attemptId &&
-        session.pendingTurnRuntimeGeneration === runtime.runtimeGeneration;
-      if (submittedInCurrentEpoch) {
-        const delayMs = exceptionalPendingTurnDelayMs(
-          session.pendingTurnStartedAt,
-          this.options.exceptionalPendingTurnGraceMs ??
-            EXCEPTIONAL_PENDING_TURN_GRACE_MS,
-        );
-        if (delayMs > 0) {
-          this.requestExceptionalSessionRerun(reconciliation, delayMs);
-          return;
-        }
-        await this.store.failInterruptedTurnRecovery(
-          session.sessionId,
-          session.pendingTurnRequestId,
-          "automatic_turn_recovery_timeout",
-        );
-        this.publishInvalidation(
-          session.sessionId,
-          "automatic-turn-recovery-failed",
-          {
-            message:
-              "Sandpi could not confirm that the automatic continuation started.",
-          },
-        );
-        return;
-      }
-      const prepared = await this.store.prepareInterruptedTurnRecoveryReplay({
-        sessionId: session.sessionId,
-        nativeSessionId,
-        runtimeVersion: session.version,
-        requestId: session.pendingTurnRequestId,
-        environmentAttemptId: runtime.attemptId,
-        environmentRuntimeGeneration: runtime.runtimeGeneration,
-      });
-      if (!prepared) {
-        this.requestExceptionalSessionRetry(reconciliation);
-        return;
-      }
-      await this.startClaimedTurnRecovery(runtime, reconciliation, {
-        ...session,
-        pendingTurnPhase: "prepared",
-        pendingTurnAttemptId: undefined,
-        pendingTurnRuntimeGeneration: undefined,
-        version: session.version + 1,
-      });
-      return;
-    }
-
-    this.requestExceptionalSessionRetry(reconciliation);
-  }
-
-  private async startClaimedTurnRecovery(
-    runtime: StoredEnvironmentRuntime,
-    reconciliation: ExceptionalSessionReconciliation,
-    session: StoredSessionRuntime,
-  ) {
-    if (
-      !session.nativeSessionId ||
-      !session.pendingTurnRequestId ||
-      !session.pendingTurnClientMessageId ||
-      !session.pendingTurnStableInputId ||
-      !session.recoverySourceNativeTurnId
-    ) {
-      this.requestExceptionalSessionRetry(reconciliation);
-      return;
-    }
-    try {
-      await this.ensureNativeSessionAttached(runtime, {
-        ...session,
-        nativeSessionId: session.nativeSessionId,
-      });
-      const deliveryRuntime = await this.store.environmentRuntime(runtime.id);
-      if (
-        environmentRuntimeEpoch(deliveryRuntime) !==
-          environmentRuntimeEpoch(runtime) ||
-        deliveryRuntime.desiredState !== "running" ||
-        deliveryRuntime.observedState !== "running"
-      ) {
-        this.handoffExceptionalSessionReconciliation(
-          deliveryRuntime,
-          reconciliation,
-        );
-        return;
-      }
-      const markedSubmitted = await this.store.markTurnSubmitted(
-        session.sessionId,
-        session.pendingTurnRequestId,
-        deliveryRuntime.attemptId,
-        deliveryRuntime.runtimeGeneration,
-      );
-      if (!markedSubmitted) {
-        this.requestExceptionalSessionRetry(reconciliation);
-        return;
-      }
-      const { response, runtime: submittedRuntime } =
-        await this.requestCodexWithRuntime(
-          session.environmentId,
-          deliveryRuntime,
-          {
-            method: "turn/start",
-            id: session.pendingTurnRequestId,
-            params: {
-              threadId: session.nativeSessionId,
-              clientUserMessageId: session.pendingTurnClientMessageId,
-              input: nativeCodexTurnInput(
-                codexRuntimeRecoveryPrompt(
-                  session.recoveryPromptVersion ??
-                    CODEX_RUNTIME_RECOVERY_PROMPT_VERSION,
-                ),
-                [],
-                [],
-              ),
-              ...(session.modelId ? { model: session.modelId } : {}),
-              ...(session.reasoningEffort
-                ? { effort: session.reasoningEffort }
-                : {}),
-            },
-          },
-          session.sessionId,
-          session.pendingTurnStableInputId,
-          false,
-        );
-      if (response.error) {
-        await this.store.failInterruptedTurnRecovery(
-          session.sessionId,
-          session.pendingTurnRequestId,
-          "automatic_turn_recovery_rejected",
-        );
-        this.publishInvalidation(
-          session.sessionId,
-          "automatic-turn-recovery-failed",
-          {
-            message: "Codex rejected the automatic continuation Turn.",
-          },
-        );
-        return;
-      }
-      const nativeTurnId = turnIdFromRpcResponse(response);
-      if (!nativeTurnId) {
-        this.requestExceptionalSessionRetry(reconciliation);
-        return;
-      }
-      await this.store.markTurnAccepted(
-        session.sessionId,
-        session.pendingTurnRequestId,
-        nativeTurnId,
-        submittedRuntime.attemptId,
-        submittedRuntime.runtimeGeneration,
-      );
-      this.ensureEnvironmentWorker(session.environmentId);
-      this.requestExceptionalSessionRerun(
-        reconciliation,
-        this.options.exceptionalSessionActiveRecheckMs ??
-          EXCEPTIONAL_SESSION_ACTIVE_RECHECK_MS,
-      );
-      this.publishInvalidation(
-        session.sessionId,
-        "automatic-turn-recovery-accepted",
-        {
-          message:
-            "Codex accepted Sandpi's automatic continuation after the Sandbox restart.",
-        },
-      );
-    } catch (error) {
-      this.requestExceptionalSessionRetry(reconciliation);
-      this.logger.warn(
-        {
-          environmentId: session.environmentId,
-          sessionId: session.sessionId,
-          error: errorMessage(error),
-        },
-        "Automatic Codex Turn recovery deferred",
-      );
-    }
-  }
-
   private async settleExceptionalSession(
     runtime: StoredEnvironmentRuntime,
     reconciliation: ExceptionalSessionReconciliation,
@@ -2876,13 +3016,11 @@ export class CodexService {
     nativeSessionId: string,
     targetedPendingTurn: boolean,
     terminalProjection: boolean,
-    recoveryErrorCode?: string,
   ) {
     const projectionChanged =
       session.activeNativeTurnId !== undefined ||
       Boolean(session.pendingTurnPhase) ||
       Boolean(session.interruptRequestedNativeTurnId) ||
-      Boolean(session.recoverySourceNativeTurnId) ||
       session.sessionStatus !== "waiting";
     const reconciled = await this.store.reconcileNativeSessionState({
       sessionId: session.sessionId,
@@ -2907,20 +3045,14 @@ export class CodexService {
                 (this.options.exceptionalPendingTurnGraceMs ??
                   EXCEPTIONAL_PENDING_TURN_GRACE_MS),
             ),
-      clearRecoveryState: terminalProjection,
-      recoveryErrorCode,
       requireUnarchived: true,
     });
     if (reconciled && projectionChanged) {
       this.publishInvalidation(
         session.sessionId,
-        recoveryErrorCode
-          ? "automatic-turn-recovery-failed"
-          : "native-session-state-reconciled",
+        "native-session-state-reconciled",
         {
-          message: recoveryErrorCode
-            ? "The automatic continuation was interrupted again; the Session is waiting for you."
-            : "Codex execution state was repaired from the native Thread.",
+          message: "Codex execution state was repaired from the native Thread.",
         },
       );
     } else if (!reconciled) {
@@ -2929,7 +3061,7 @@ export class CodexService {
   }
 
   /**
-   * Serializes only the native read submission with pause/delete/recovery.
+   * Serializes the native read submission with Environment lifecycle changes.
    * Waiting for app-server must stay outside the lifecycle lock so a missing
    * response cannot block an Environment transition.
    */
@@ -4264,7 +4396,7 @@ function threadConfiguration(input: {
   reasoningEffort?: string;
   collaborationMode?: "plan";
   serviceTier?: string;
-}) {
+}, sessionStartSource?: "startup" | "clear") {
   return {
     ...(input.modelId ? { model: input.modelId } : {}),
     config: {
@@ -4279,9 +4411,10 @@ function threadConfiguration(input: {
       input.reasoningEffort,
     ),
     ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
-    cwd: "/workspace",
+    cwd: CODEX_ENVIRONMENT_CWD,
     approvalPolicy: "never",
     sandbox: "danger-full-access",
+    ...(sessionStartSource ? { sessionStartSource } : {}),
   };
 }
 
@@ -4462,6 +4595,27 @@ function requireMcpRpcResult(
   message: string,
 ) {
   return requireSafeRpcResult(response, code, message);
+}
+
+function requireEffectiveConfigWrite(
+  response: Record<string, unknown>,
+  code: string,
+  message: string,
+) {
+  const result = requireSafeRpcResult(response, code, message);
+  const status = objectString(result, "status");
+  if (status === "ok") return result;
+  if (status === "okOverridden") {
+    throw new HttpError(
+      409,
+      "codex_config_overridden",
+      "A higher-priority Codex configuration layer overrides this setting.",
+    );
+  }
+  throw invalidCodexResponse(
+    code,
+    "Codex returned an invalid configuration write result.",
+  );
 }
 
 function invalidCodexResponse(code: string, message: string) {
@@ -4858,6 +5012,38 @@ function codexMcpServer(
     runtimeStatus,
     serverTitle:
       objectString(serverInfo, "title") ?? objectString(serverInfo, "name"),
+    authStatus,
+    tools: tools ? Object.keys(tools).sort() : [],
+    resources: resources.flatMap((value) => {
+      const resource = objectRecord(value);
+      const name = objectString(resource, "name");
+      const uri = objectString(resource, "uri");
+      if (!name || !uri) return [];
+      return [
+        {
+          name,
+          ...(objectString(resource, "title")
+            ? { title: objectString(resource, "title") }
+            : {}),
+          uri,
+        },
+      ];
+    }),
+    resourceTemplates: resourceTemplates.flatMap((value) => {
+      const template = objectRecord(value);
+      const name = objectString(template, "name");
+      const uriTemplate = objectString(template, "uriTemplate");
+      if (!name || !uriTemplate) return [];
+      return [
+        {
+          name,
+          ...(objectString(template, "title")
+            ? { title: objectString(template, "title") }
+            : {}),
+          uriTemplate,
+        },
+      ];
+    }),
     toolCount: tools ? Object.keys(tools).length : 0,
     resourceCount: resources.length + resourceTemplates.length,
   };
@@ -4870,6 +5056,305 @@ function codexMcpAuthStatus(value: string | undefined): CodexMcpAuthStatus {
     value === "oAuth"
     ? value
     : "unknown";
+}
+
+function requireCodexPersonality(
+  value: string,
+): asserts value is CodexPersonalitySelection {
+  if (!CODEX_PERSONALITY_SELECTIONS.has(value as CodexPersonalitySelection)) {
+    throw new HttpError(
+      400,
+      "codex_personality_invalid",
+      "Codex personality must be friendly or pragmatic.",
+    );
+  }
+}
+
+function codexPersonality(value: unknown): CodexPersonality {
+  // Codex TUI presents its absent config value as Friendly and offers only the
+  // Friendly and Pragmatic choices. Preserve that native command behavior.
+  if (value === undefined || value === null) return "friendly";
+  if (
+    typeof value === "string" &&
+    CODEX_PERSONALITIES.has(value as CodexPersonality)
+  ) {
+    return value as CodexPersonality;
+  }
+  throw invalidCodexResponse(
+    "codex_config_read_failed",
+    "Codex returned an unknown effective personality.",
+  );
+}
+
+function modelSupportsPersonality(
+  models: readonly unknown[],
+  modelId: string | undefined,
+) {
+  if (!modelId) return false;
+  const model = models
+    .map(objectRecord)
+    .find(
+      (candidate) =>
+        objectString(candidate, "id") === modelId ||
+        objectString(candidate, "model") === modelId,
+    );
+  return objectBoolean(model, "supportsPersonality") === true;
+}
+
+function codexTokenUsage(result: Record<string, unknown>): CodexTokenUsage {
+  const summary = objectRecord(result.summary);
+  if (!summary) {
+    throw invalidCodexResponse(
+      "codex_account_usage_read_failed",
+      "Codex returned an invalid account token-activity summary.",
+    );
+  }
+  const bucketsValue = result.dailyUsageBuckets;
+  if (
+    bucketsValue !== undefined &&
+    bucketsValue !== null &&
+    !Array.isArray(bucketsValue)
+  ) {
+    throw invalidCodexResponse(
+      "codex_account_usage_read_failed",
+      "Codex returned invalid account token-activity buckets.",
+    );
+  }
+  const dailyUsageBuckets = (Array.isArray(bucketsValue)
+    ? bucketsValue
+    : []
+  ).map((value) => {
+    const bucket = objectRecord(value);
+    const startDate = objectString(bucket, "startDate");
+    const tokens = boundedNonnegativeInteger(bucket?.tokens);
+    if (!startDate || tokens === undefined) {
+      throw invalidCodexResponse(
+        "codex_account_usage_read_failed",
+        "Codex returned an invalid account token-activity bucket.",
+      );
+    }
+    return { startDate, tokens };
+  });
+  return {
+    summary: {
+      lifetimeTokens: nullableNonnegativeInteger(summary.lifetimeTokens),
+      peakDailyTokens: nullableNonnegativeInteger(summary.peakDailyTokens),
+      longestRunningTurnSec: nullableNonnegativeInteger(
+        summary.longestRunningTurnSec,
+      ),
+      currentStreakDays: nullableNonnegativeInteger(summary.currentStreakDays),
+      longestStreakDays: nullableNonnegativeInteger(summary.longestStreakDays),
+    },
+    dailyUsageBuckets,
+  };
+}
+
+function codexMemoriesSettings(
+  config: Record<string, unknown>,
+): CodexMemoriesSettings {
+  const features = objectRecord(config.features);
+  const memories = objectRecord(config.memories);
+  return {
+    featureEnabled: objectBoolean(features, "memories") === true,
+    useMemories: objectBoolean(memories, "use_memories") === true,
+    generateMemories:
+      objectBoolean(memories, "generate_memories") === true,
+  };
+}
+
+function codexHooksInventory(
+  result: Record<string, unknown>,
+): CodexHooksInventory {
+  if (!Array.isArray(result.data)) {
+    throw invalidCodexResponse(
+      "codex_hooks_list_failed",
+      "Codex returned an invalid hooks inventory.",
+    );
+  }
+  const entry = result.data
+    .map(objectRecord)
+    .find((candidate) => objectString(candidate, "cwd") === CODEX_ENVIRONMENT_CWD);
+  if (!entry) {
+    return {
+      cwd: CODEX_ENVIRONMENT_CWD,
+      hooks: [],
+      warnings: [],
+      errors: [],
+    };
+  }
+  if (
+    !Array.isArray(entry.hooks) ||
+    !Array.isArray(entry.warnings) ||
+    !Array.isArray(entry.errors)
+  ) {
+    throw invalidCodexResponse(
+      "codex_hooks_list_failed",
+      "Codex returned an invalid hooks inventory entry.",
+    );
+  }
+  const hooks = entry.hooks.map(codexHook);
+  const warnings = entry.warnings.filter(
+    (value): value is string => typeof value === "string",
+  );
+  const errors = entry.errors.flatMap((value): CodexHookIssue[] => {
+    const issue = objectRecord(value);
+    const message = objectString(issue, "message");
+    if (!message) return [];
+    const issuePath = objectString(issue, "path");
+    return [{ ...(issuePath ? { path: issuePath } : {}), message }];
+  });
+  return {
+    cwd: CODEX_ENVIRONMENT_CWD,
+    hooks: hooks.sort(
+      (left, right) =>
+        left.displayOrder - right.displayOrder ||
+        left.eventName.localeCompare(right.eventName),
+    ),
+    warnings,
+    errors,
+  };
+}
+
+function codexHook(value: unknown): CodexHook {
+  const hook = objectRecord(value);
+  if (!hook) {
+    throw invalidCodexResponse(
+      "codex_hooks_list_failed",
+      "Codex returned an invalid hook.",
+    );
+  }
+  const key = objectString(hook, "key");
+  const eventName = objectString(hook, "eventName");
+  const handlerType = objectString(hook, "handlerType");
+  const source = objectString(hook, "source");
+  const currentHash = objectString(hook, "currentHash");
+  const trustStatus = objectString(hook, "trustStatus");
+  const displayOrder = boundedInteger(hook?.displayOrder);
+  const timeoutSec = boundedNonnegativeInteger(hook.timeoutSec);
+  const enabled = objectBoolean(hook, "enabled");
+  const isManaged = objectBoolean(hook, "isManaged");
+  const sourcePath = objectString(hook, "sourcePath");
+  if (
+    !key ||
+    !eventName ||
+    !handlerType ||
+    !source ||
+    !currentHash ||
+    !["managed", "untrusted", "trusted", "modified"].includes(
+      trustStatus ?? "",
+    ) ||
+    displayOrder === undefined ||
+    timeoutSec === undefined ||
+    enabled === undefined ||
+    isManaged === undefined ||
+    !sourcePath
+  ) {
+    throw invalidCodexResponse(
+      "codex_hooks_list_failed",
+      "Codex returned an invalid hook.",
+    );
+  }
+  return {
+    key,
+    eventName,
+    handlerType,
+    isManaged,
+    source,
+    displayOrder,
+    enabled,
+    currentHash,
+    trustStatus: trustStatus as CodexHook["trustStatus"],
+    matcher: objectString(hook, "matcher") ?? null,
+    command: objectString(hook, "command") ?? null,
+    timeoutSec,
+    statusMessage: objectString(hook, "statusMessage") ?? null,
+    sourcePath,
+    pluginId: objectString(hook, "pluginId") ?? null,
+  };
+}
+
+function codexBackgroundTerminalsPage(result: Record<string, unknown>) {
+  if (!Array.isArray(result.data)) {
+    throw invalidCodexResponse(
+      "codex_background_terminals_list_failed",
+      "Codex returned an invalid background-terminal list.",
+    );
+  }
+  const data = result.data.map((value): CodexBackgroundTerminal => {
+    const terminal = objectRecord(value);
+    const itemId = objectString(terminal, "itemId");
+    const processId = objectString(terminal, "processId");
+    const command = objectString(terminal, "command");
+    const cwd = objectString(terminal, "cwd");
+    if (!itemId || !processId || command === undefined || !cwd) {
+      throw invalidCodexResponse(
+        "codex_background_terminals_list_failed",
+        "Codex returned an invalid background terminal.",
+      );
+    }
+    return {
+      itemId,
+      processId,
+      command,
+      cwd,
+      osPid: nullableNonnegativeInteger(terminal?.osPid),
+      cpuPercent: nullableFiniteNumber(terminal?.cpuPercent),
+      rssKb: nullableNonnegativeInteger(terminal?.rssKb),
+    };
+  });
+  const nextCursor = result.nextCursor;
+  if (
+    nextCursor !== undefined &&
+    nextCursor !== null &&
+    typeof nextCursor !== "string"
+  ) {
+    throw invalidCodexResponse(
+      "codex_background_terminals_list_failed",
+      "Codex returned an invalid background-terminal cursor.",
+    );
+  }
+  return {
+    data,
+    nextCursor:
+      typeof nextCursor === "string" && nextCursor ? nextCursor : undefined,
+  };
+}
+
+function boundedNonnegativeInteger(value: unknown) {
+  return typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 0
+    ? value
+    : undefined;
+}
+
+function boundedInteger(value: unknown) {
+  return typeof value === "number" && Number.isSafeInteger(value)
+    ? value
+    : undefined;
+}
+
+function nullableNonnegativeInteger(value: unknown): number | null {
+  if (value === undefined || value === null) return null;
+  const parsed = boundedNonnegativeInteger(value);
+  if (parsed === undefined) {
+    throw invalidCodexResponse(
+      "codex_native_number_invalid",
+      "Codex returned an invalid numeric value.",
+    );
+  }
+  return parsed;
+}
+
+function nullableFiniteNumber(value: unknown): number | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw invalidCodexResponse(
+      "codex_native_number_invalid",
+      "Codex returned an invalid numeric value.",
+    );
+  }
+  return value;
 }
 
 function modelListPage(result: unknown) {
@@ -5006,41 +5491,29 @@ function turnSubmissionCoordinates(
   };
 }
 
-function runtimeRecoveryTurnSubmissionCoordinates(sessionId: string) {
-  return turnSubmissionCoordinates(
-    sessionId,
-    `${CODEX_RUNTIME_RECOVERY_CLIENT_ID_PREFIX}${sessionId}:${randomUUID()}`,
-  );
-}
-
-interface NativeTurnProjection {
-  turn: CodexThread["turns"][number];
-  matchedBy: "activeTurn" | "pendingTurn" | "clientMessage";
-}
-
 function nativeTurnForSessionProjection(
   thread: CodexThread,
   session: StoredSessionRuntime,
-): NativeTurnProjection | undefined {
+) {
   const visibleTurns = visibleCodexTurns(thread.turns);
   if (session.activeNativeTurnId) {
     const turn = visibleTurns.find(
       (candidate) => candidate.id === session.activeNativeTurnId,
     );
-    if (turn) return { turn, matchedBy: "activeTurn" };
+    if (turn) return turn;
   }
   if (session.pendingTurnNativeTurnId) {
     const turn = visibleTurns.find(
       (candidate) => candidate.id === session.pendingTurnNativeTurnId,
     );
-    if (turn) return { turn, matchedBy: "pendingTurn" };
+    if (turn) return turn;
   }
   if (session.pendingTurnClientMessageId) {
     const turn = nativeTurnForClientMessage(
       thread,
       session.pendingTurnClientMessageId,
     );
-    if (turn) return { turn, matchedBy: "clientMessage" };
+    if (turn) return turn;
   }
   return undefined;
 }
@@ -5063,41 +5536,11 @@ function latestInProgressNativeTurn(thread: CodexThread) {
   );
 }
 
-function nativeTurnBelongsToReplacedRuntime(
-  session: StoredSessionRuntime,
-  projection: NativeTurnProjection,
-  runtime: StoredEnvironmentRuntime,
-) {
-  const coordinates =
-    projection.matchedBy === "activeTurn"
-      ? {
-          attemptId: session.activeTurnAttemptId,
-          runtimeGeneration: session.activeTurnRuntimeGeneration,
-        }
-      : {
-          attemptId: session.pendingTurnAttemptId,
-          runtimeGeneration: session.pendingTurnRuntimeGeneration,
-        };
-  return (
-    coordinates.attemptId === undefined ||
-    coordinates.runtimeGeneration === undefined ||
-    coordinates.attemptId !== runtime.attemptId ||
-    coordinates.runtimeGeneration !== runtime.runtimeGeneration
-  );
-}
-
 function nativeInterruptTargetBelongsToReplacedRuntime(
   session: StoredSessionRuntime,
   nativeTurnId: string,
   runtime: StoredEnvironmentRuntime,
 ) {
-  if (
-    nativeTurnId === session.recoverySourceNativeTurnId &&
-    nativeTurnId !== session.activeNativeTurnId &&
-    nativeTurnId !== session.pendingTurnNativeTurnId
-  ) {
-    return true;
-  }
   const coordinates =
     nativeTurnId === session.activeNativeTurnId
       ? {

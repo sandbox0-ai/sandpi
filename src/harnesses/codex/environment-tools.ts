@@ -127,6 +127,18 @@ export interface CodexMcpServer {
   managed: boolean;
   runtimeStatus: CodexMcpRuntimeStatus;
   serverTitle?: string;
+  authStatus?: string;
+  tools: string[];
+  resources: Array<{
+    name: string;
+    title?: string;
+    uri: string;
+  }>;
+  resourceTemplates: Array<{
+    name: string;
+    title?: string;
+    uriTemplate: string;
+  }>;
   toolCount: number;
   resourceCount: number;
 }

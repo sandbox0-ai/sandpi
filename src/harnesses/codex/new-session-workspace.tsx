@@ -16,7 +16,10 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
-import type { EnvironmentSettingsTab } from "@/components/environment-settings";
+import type {
+  EnvironmentSettingsOpenOptions,
+  EnvironmentSettingsTab,
+} from "@/components/environment-settings";
 import {
   CodexComposerLocalImages,
   CodexComposerToolbar,
@@ -57,6 +60,11 @@ import {
   reconcileCodexComposerPreference,
   type CodexModelOption,
 } from "@/harnesses/codex/models";
+import {
+  CodexNativeCommandDialog,
+  type CodexNativeDialogMode,
+} from "@/harnesses/codex/native-command-dialog";
+import { parseCodexTokenUsageView } from "@/harnesses/codex/token-usage";
 import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
 import { consumePendingGuestPrompt } from "@/lib/auth-navigation";
 import {
@@ -74,8 +82,13 @@ interface NewSessionWorkspaceProps {
   canManageEnvironment: boolean;
   onEnvironmentChange: (environment: Environment) => void;
   onCreated: (session: CodexSession) => void;
+  initialTitle?: string;
+  sessionStartSource?: "startup" | "clear";
   onOpenAgentHarnessSettings: () => void;
-  onOpenEnvironmentSettings: (tab: EnvironmentSettingsTab) => void;
+  onOpenEnvironmentSettings: (
+    tab: EnvironmentSettingsTab,
+    options?: EnvironmentSettingsOpenOptions,
+  ) => void;
   onToggleSidebar: () => void;
   inspectorOpen: boolean;
   onToggleInspector: () => void;
@@ -97,6 +110,8 @@ export function CodexNewSessionWorkspace({
   canManageEnvironment,
   onEnvironmentChange,
   onCreated,
+  initialTitle,
+  sessionStartSource,
   onOpenAgentHarnessSettings,
   onOpenEnvironmentSettings,
   onToggleSidebar,
@@ -126,6 +141,10 @@ export function CodexNewSessionWorkspace({
   const [planMode, setPlanMode] = useState(false);
   const [fastMode, setFastMode] = useState(false);
   const [mentionOpenRequest, setMentionOpenRequest] = useState(0);
+  const [nativeDialog, setNativeDialog] = useState<{
+    mode: CodexNativeDialogMode;
+    usageView?: "daily" | "weekly" | "cumulative";
+  }>();
   const [images, setImages] = useState<CodexComposerImage[]>([]);
   const [localImages, setLocalImages] = useState<CodexComposerLocalImage[]>([]);
   const promptRef = useRef<HTMLTextAreaElement>(null);
@@ -332,7 +351,19 @@ export function CodexNewSessionWorkspace({
       return;
     }
     if (command.intent === "environment.mcp") {
-      onOpenEnvironmentSettings("mcp");
+      if (argumentsValue && argumentsValue.toLowerCase() !== "verbose") {
+        setCommandNotice({
+          tone: "error",
+          message:
+            language === "zh-CN"
+              ? "/mcp 仅支持可选参数 verbose。"
+              : "/mcp only accepts the optional verbose argument.",
+        });
+        return;
+      }
+      onOpenEnvironmentSettings("mcp", {
+        mcpVerbose: argumentsValue.toLowerCase() === "verbose",
+      });
       return;
     }
     if (command.intent === "environment.network") {
@@ -341,6 +372,36 @@ export function CodexNewSessionWorkspace({
     }
     if (command.intent === "environment.credentials") {
       onOpenEnvironmentSettings("credentials");
+      return;
+    }
+    if (
+      command.intent === "codex.personality" ||
+      command.intent === "codex.memories" ||
+      command.intent === "codex.hooks"
+    ) {
+      setNativeDialog({
+        mode:
+          command.intent === "codex.personality"
+            ? "personality"
+            : command.intent === "codex.memories"
+              ? "memories"
+              : "hooks",
+      });
+      return;
+    }
+    if (command.intent === "codex.usage") {
+      const view = parseCodexTokenUsageView(argumentsValue);
+      if (!view) {
+        setCommandNotice({
+          tone: "error",
+          message:
+            language === "zh-CN"
+              ? "/usage 参数必须是 daily、weekly 或 cumulative。"
+              : "/usage expects daily, weekly, or cumulative.",
+        });
+        return;
+      }
+      setNativeDialog({ mode: "usage", usageView: view });
       return;
     }
     if (command.intent === "composer.plan") {
@@ -447,6 +508,8 @@ export function CodexNewSessionWorkspace({
           method: "POST",
           body: JSON.stringify({
             environmentId: environment.id,
+            ...(initialTitle?.trim() ? { title: initialTitle.trim() } : {}),
+            ...(sessionStartSource ? { sessionStartSource } : {}),
             prompt: instruction,
             images: images.map(encodeCodexComposerImage),
             localImages: encodeCodexComposerLocalImages(localImages),
@@ -884,6 +947,15 @@ export function CodexNewSessionWorkspace({
           ))}
         </div>
       </div>
+      {nativeDialog ? (
+        <CodexNativeCommandDialog
+          mode={nativeDialog.mode}
+          language={language}
+          environmentId={environment.id}
+          initialUsageView={nativeDialog.usageView}
+          onClose={() => setNativeDialog(undefined)}
+        />
+      ) : null}
     </section>
   );
 }

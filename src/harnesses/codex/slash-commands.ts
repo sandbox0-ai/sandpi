@@ -11,8 +11,14 @@ export type CodexCommandIntent =
   | "agents.open"
   | "codex.compact"
   | "codex.goal"
+  | "codex.hooks"
   | "codex.init"
+  | "codex.memories"
+  | "codex.personality"
+  | "codex.processes"
   | "codex.review"
+  | "codex.stop"
+  | "codex.usage"
   | "composer.mention"
   | "composer.model"
   | "composer.plan"
@@ -36,23 +42,71 @@ export type CodexSlashCommandName =
   | "diff"
   | "fork"
   | "goal"
+  | "hooks"
   | "init"
   | "ide"
   | "logout"
   | "mcp"
+  | "memories"
   | "mention"
   | "model"
   | "new"
   | "permissions"
   | "plan"
+  | "personality"
+  | "ps"
   | "rename"
   | "review"
   | "skills"
+  | "stop"
   | "subagents"
   | "usage";
 
-export const CODEX_INIT_COMMAND_PROMPT =
-  "Inspect this repository and create or improve AGENTS.md with concise, actionable instructions for future coding agents. Preserve useful existing instructions, avoid unsupported assumptions, and document the build, test, architecture, and project conventions you can verify from the repository.";
+// Kept verbatim with codex-rs/tui/prompt_for_init_command.md from the Codex
+// version pinned by Sandbox0: openai/codex@rust-v0.144.1
+// (44918ea10c0f99151c6710411b4322c2f5c96bea).
+export const CODEX_INIT_COMMAND_PROMPT = `Generate a file named AGENTS.md that serves as a contributor guide for this repository.
+Before writing, check whether AGENTS.md already exists in the current working directory. If it does, do not overwrite or modify it.
+Your goal is to produce a clear, concise, and well-structured document with descriptive headings and actionable explanations for each section.
+Follow the outline below, but adapt as needed — add sections if relevant, and omit those that do not apply to this project.
+
+Document Requirements
+
+- Title the document "Repository Guidelines".
+- Use Markdown headings (#, ##, etc.) for structure.
+- Keep the document concise. 200-400 words is optimal.
+- Keep explanations short, direct, and specific to this repository.
+- Provide examples where helpful (commands, directory paths, naming patterns).
+- Maintain a professional, instructional tone.
+
+Recommended Sections
+
+Project Structure & Module Organization
+
+- Outline the project structure, including where the source code, tests, and assets are located.
+
+Build, Test, and Development Commands
+
+- List key commands for building, testing, and running locally (e.g., npm test, make build).
+- Briefly explain what each command does.
+
+Coding Style & Naming Conventions
+
+- Specify indentation rules, language-specific style preferences, and naming patterns.
+- Include any formatting or linting tools used.
+
+Testing Guidelines
+
+- Identify testing frameworks and coverage requirements.
+- State test naming conventions and how to run tests.
+
+Commit & Pull Request Guidelines
+
+- Summarize commit message conventions found in the project’s Git history.
+- Outline pull request requirements (descriptions, linked issues, screenshots, etc.).
+
+(Optional) Add other sections if relevant, such as Security & Configuration Tips, Architecture Overview, or Agent-Specific Instructions.
+`;
 
 export interface CodexSlashCommand {
   name: CodexSlashCommandName;
@@ -81,10 +135,15 @@ export const CODEX_SLASH_COMMANDS: readonly CodexSlashCommand[] = [
     name: "new",
     intent: "session.new",
     contexts: ["session"],
-    argumentMode: "none",
+    argumentMode: "optional",
+    unavailableWhileTurnRunning: true,
     description: {
       en: "Start a new Sandpi Session",
       "zh-CN": "新建一个 Sandpi Session",
+    },
+    argumentHint: {
+      en: "name",
+      "zh-CN": "名称",
     },
   },
   {
@@ -102,10 +161,15 @@ export const CODEX_SLASH_COMMANDS: readonly CodexSlashCommand[] = [
     name: "clear",
     intent: "session.new",
     contexts: ["session"],
-    argumentMode: "none",
+    argumentMode: "optional",
+    unavailableWhileTurnRunning: true,
     description: {
       en: "Start a clean Sandpi Session",
       "zh-CN": "新建一个干净的 Sandpi Session",
+    },
+    argumentHint: {
+      en: "name",
+      "zh-CN": "名称",
     },
   },
   {
@@ -155,19 +219,19 @@ export const CODEX_SLASH_COMMANDS: readonly CodexSlashCommand[] = [
     contexts: ["session"],
     argumentMode: "optional",
     description: {
-      en: "Show, set, or clear the native Codex goal",
-      "zh-CN": "查看、设置或清除 Codex 原生目标",
+      en: "Show, edit, pause, resume, or clear the native Codex goal",
+      "zh-CN": "查看、编辑、暂停、恢复或清除 Codex 原生目标",
     },
     argumentHint: {
-      en: "objective | clear",
-      "zh-CN": "目标 | clear",
+      en: "objective | edit | pause | resume | clear",
+      "zh-CN": "目标 | edit | pause | resume | clear",
     },
   },
   {
     name: "rename",
     intent: "session.rename",
     contexts: ["session"],
-    argumentMode: "required",
+    argumentMode: "optional",
     description: {
       en: "Rename this Sandpi Session",
       "zh-CN": "重命名当前 Sandpi Session",
@@ -195,8 +259,8 @@ export const CODEX_SLASH_COMMANDS: readonly CodexSlashCommand[] = [
     argumentMode: "none",
     unavailableWhileTurnRunning: true,
     description: {
-      en: "Create or improve AGENTS.md instructions",
-      "zh-CN": "创建或完善 AGENTS.md 项目说明",
+      en: "Create AGENTS.md when it does not exist",
+      "zh-CN": "仅在不存在时创建 AGENTS.md 项目说明",
     },
   },
   {
@@ -207,6 +271,16 @@ export const CODEX_SLASH_COMMANDS: readonly CodexSlashCommand[] = [
     description: {
       en: "Choose a model reported by Codex",
       "zh-CN": "选择 Codex 提供的模型",
+    },
+  },
+  {
+    name: "personality",
+    intent: "codex.personality",
+    contexts: BOTH_CONTEXTS,
+    argumentMode: "none",
+    description: {
+      en: "Choose the Codex response personality",
+      "zh-CN": "选择 Codex 回复风格",
     },
   },
   {
@@ -283,10 +357,14 @@ export const CODEX_SLASH_COMMANDS: readonly CodexSlashCommand[] = [
     name: "mcp",
     intent: "environment.mcp",
     contexts: BOTH_CONTEXTS,
-    argumentMode: "none",
+    argumentMode: "optional",
     description: {
       en: "Open Environment MCP servers",
       "zh-CN": "打开环境 MCP servers",
+    },
+    argumentHint: {
+      en: "verbose",
+      "zh-CN": "verbose",
     },
   },
   {
@@ -301,12 +379,57 @@ export const CODEX_SLASH_COMMANDS: readonly CodexSlashCommand[] = [
   },
   {
     name: "usage",
-    intent: "environment.credentials",
+    intent: "codex.usage",
+    contexts: BOTH_CONTEXTS,
+    argumentMode: "optional",
+    description: {
+      en: "Open Codex account token activity",
+      "zh-CN": "打开 Codex 账户 token 活动",
+    },
+    argumentHint: {
+      en: "daily | weekly | cumulative",
+      "zh-CN": "daily | weekly | cumulative",
+    },
+  },
+  {
+    name: "memories",
+    intent: "codex.memories",
+    contexts: BOTH_CONTEXTS,
+    argumentMode: "none",
+    unavailableWhileTurnRunning: true,
+    description: {
+      en: "Configure Codex memory use and generation",
+      "zh-CN": "配置 Codex 记忆读取与生成",
+    },
+  },
+  {
+    name: "hooks",
+    intent: "codex.hooks",
     contexts: BOTH_CONTEXTS,
     argumentMode: "none",
     description: {
-      en: "Open Codex account usage and limits",
-      "zh-CN": "打开 Codex 账户用量与限制",
+      en: "View and manage Codex lifecycle hooks",
+      "zh-CN": "查看和管理 Codex 生命周期 hooks",
+    },
+  },
+  {
+    name: "ps",
+    intent: "codex.processes",
+    contexts: ["session"],
+    argumentMode: "none",
+    description: {
+      en: "List native Codex background terminals",
+      "zh-CN": "列出 Codex 原生后台终端",
+    },
+  },
+  {
+    name: "stop",
+    intent: "codex.stop",
+    contexts: ["session"],
+    argumentMode: "none",
+    description: {
+      en: "Stop all native Codex background terminals",
+      "zh-CN": "停止所有 Codex 原生后台终端",
     },
   },
   {

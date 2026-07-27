@@ -2,21 +2,55 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  CODEX_INIT_COMMAND_PROMPT,
   CODEX_SLASH_COMMANDS,
   codexSlashCommandCompletion,
   codexSlashMenuCommands,
   parseCodexSlashInvocation,
 } from "./slash-commands";
 
-test("omits commands represented by Sandpi navigation or composer controls", () => {
+test("keeps /init aligned with Codex's visible TUI prompt", () => {
+  assert.match(
+    CODEX_INIT_COMMAND_PROMPT,
+    /If it does, do not overwrite or modify it\./,
+  );
+  assert.match(CODEX_INIT_COMMAND_PROMPT, /200-400 words is optimal\./);
+  assert.doesNotMatch(CODEX_INIT_COMMAND_PROMPT, /create or improve AGENTS\.md/);
+});
+
+test("keeps unsupported terminal-only commands out of the browser catalog", () => {
   const names = new Set<string>(
     CODEX_SLASH_COMMANDS.map((command) => command.name),
   );
   assert.equal(names.has("resume"), false);
   assert.equal(names.has("side"), false);
   assert.equal(names.has("btw"), false);
+  assert.equal(names.has("personality"), true);
+  assert.equal(names.has("memories"), true);
+  assert.equal(names.has("hooks"), true);
+  assert.equal(names.has("ps"), true);
+  assert.equal(names.has("stop"), true);
   assert.equal(names.has("fast"), false);
   assert.equal(names.has("status"), false);
+});
+
+test("preserves Codex task-time availability for native slash behavior", () => {
+  const byName = new Map(
+    CODEX_SLASH_COMMANDS.map((command) => [command.name, command]),
+  );
+  for (const name of ["new", "clear", "memories"] as const) {
+    assert.equal(byName.get(name)?.unavailableWhileTurnRunning, true);
+  }
+  for (const name of [
+    "goal",
+    "hooks",
+    "personality",
+    "ps",
+    "stop",
+    "usage",
+  ] as const) {
+    assert.notEqual(byName.get(name)?.unavailableWhileTurnRunning, true);
+  }
 });
 
 test("maps Codex agent command spellings to the native Agent Threads intent", () => {
@@ -63,7 +97,7 @@ test("hides unsafe native mutations while a Turn is running", () => {
   assert.equal(runningNames.has("fork"), false);
   assert.equal(runningNames.has("compact"), false);
   assert.equal(runningNames.has("review"), false);
-  assert.equal(runningNames.has("new"), true);
+  assert.equal(runningNames.has("new"), false);
   assert.equal(runningNames.has("status"), false);
 });
 
@@ -77,8 +111,16 @@ test("parses arguments and rejects unavailable or unknown commands", () => {
   });
   assert.equal(
     parseCodexSlashInvocation("/rename", "session").kind,
-    "missing-arguments",
+    "command",
   );
+  assert.equal(
+    parseCodexSlashInvocation("/usage weekly", "new-session").kind,
+    "command",
+  );
+  assert.deepEqual(parseCodexSlashInvocation("/side explain this", "session"), {
+    kind: "unknown",
+    name: "side",
+  });
   assert.equal(
     parseCodexSlashInvocation("/fork", "new-session").kind,
     "unavailable",

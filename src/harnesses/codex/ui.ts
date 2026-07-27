@@ -176,8 +176,6 @@ const copy = {
         "The native Codex rollout is no longer recoverable. Sandpi cannot safely reconstruct this conversation from a secondary transcript.",
       nativeStreamUnavailableBody:
         "The Codex event stream could not be opened. Check the Sandpi server connection and deployment configuration.",
-      runtimeRecoveryNotice:
-        "Sandbox restarted. Sandpi asked Codex to inspect persisted state and continue safely.",
       loadingConversation: "Loading conversation…",
       loadingConversationBody:
         "Restoring the latest native Codex session state.",
@@ -513,8 +511,6 @@ const copy = {
         "Codex 原生 rollout 已无法恢复。Sandpi 不会使用次级转录记录伪造或重建这段对话。",
       nativeStreamUnavailableBody:
         "无法打开 Codex 事件流。请检查 Sandpi 服务连接和部署配置。",
-      runtimeRecoveryNotice:
-        "Sandbox 已重启，Sandpi 已让 Codex 检查持久化状态并安全继续。",
       loadingConversation: "正在加载对话…",
       loadingConversationBody:
         "正在恢复最新的 Codex 原生会话状态。",

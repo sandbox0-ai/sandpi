@@ -814,6 +814,111 @@ function registerApiRoutes(
       meta: { availability: "available", source: "codex" },
     }),
   );
+  app.get<{ Params: { environmentId: string } }>(
+    "/api/v1/environments/:environmentId/harnesses/codex/personality",
+    async (request) => ({
+      data: await services.codex.readEnvironmentPersonality(
+        request.principal.userId,
+        request.params.environmentId,
+      ),
+    }),
+  );
+  app.put<{ Params: { environmentId: string } }>(
+    "/api/v1/environments/:environmentId/harnesses/codex/personality",
+    async (request) => {
+      const body = z
+        .object({
+          personality: z.enum(["friendly", "pragmatic"]),
+        })
+        .parse(request.body);
+      return {
+        data: await services.codex.setEnvironmentPersonality({
+          userId: request.principal.userId,
+          environmentId: request.params.environmentId,
+          personality: body.personality,
+        }),
+      };
+    },
+  );
+  app.get<{ Params: { environmentId: string } }>(
+    "/api/v1/environments/:environmentId/harnesses/codex/token-usage",
+    async (request) => ({
+      data: await services.codex.accountTokenUsageForEnvironment(
+        request.principal.userId,
+        request.params.environmentId,
+      ),
+    }),
+  );
+  app.get<{ Params: { environmentId: string } }>(
+    "/api/v1/environments/:environmentId/harnesses/codex/memories",
+    async (request) => ({
+      data: await services.codex.readEnvironmentMemories(
+        request.principal.userId,
+        request.params.environmentId,
+      ),
+    }),
+  );
+  app.put<{ Params: { environmentId: string } }>(
+    "/api/v1/environments/:environmentId/harnesses/codex/memories",
+    async (request) => {
+      const settings = z
+        .object({
+          featureEnabled: z.boolean(),
+          useMemories: z.boolean(),
+          generateMemories: z.boolean(),
+        })
+        .parse(request.body);
+      return {
+        data: await services.codex.setEnvironmentMemories({
+          userId: request.principal.userId,
+          environmentId: request.params.environmentId,
+          settings,
+        }),
+      };
+    },
+  );
+  app.delete<{ Params: { environmentId: string } }>(
+    "/api/v1/environments/:environmentId/harnesses/codex/memories",
+    async (request) => ({
+      data: await services.codex.resetEnvironmentMemories(
+        request.principal.userId,
+        request.params.environmentId,
+      ),
+    }),
+  );
+  app.get<{ Params: { environmentId: string } }>(
+    "/api/v1/environments/:environmentId/harnesses/codex/hooks",
+    async (request) => ({
+      data: await services.codex.listEnvironmentHooks(
+        request.principal.userId,
+        request.params.environmentId,
+      ),
+    }),
+  );
+  app.put<{ Params: { environmentId: string } }>(
+    "/api/v1/environments/:environmentId/harnesses/codex/hooks",
+    async (request) => {
+      const body = z
+        .object({
+          key: z.string().trim().min(1).max(8_192),
+          enabled: z.boolean().optional(),
+          trustedHash: z.string().trim().min(1).max(512).optional(),
+        })
+        .refine(
+          (value) =>
+            value.enabled !== undefined || value.trustedHash !== undefined,
+          { message: "A hook update is required." },
+        )
+        .parse(request.body);
+      return {
+        data: await services.codex.updateEnvironmentHook({
+          userId: request.principal.userId,
+          environmentId: request.params.environmentId,
+          ...body,
+        }),
+      };
+    },
+  );
   app.post<{ Params: { environmentId: string }; Body: unknown }>(
     "/api/v1/environments/:environmentId/harnesses/codex/uploads",
     { bodyLimit: CODEX_UPLOAD_BODY_LIMIT_BYTES },
@@ -874,6 +979,9 @@ function registerApiRoutes(
       data: await services.codex.listEnvironmentMcpServers(
         request.principal.userId,
         request.params.environmentId,
+        queryString(request, "detail") === "full"
+          ? "full"
+          : "toolsAndAuthOnly",
       ),
     }),
   );
@@ -919,6 +1027,7 @@ function registerApiRoutes(
           reasoningEffort: codexReasoningEffortSchema.optional(),
           collaborationMode: z.literal("plan").optional(),
           serviceTier: z.string().trim().min(1).max(100).optional(),
+          sessionStartSource: z.enum(["startup", "clear"]).optional(),
           images: codexInputImagesSchema,
           localImages: codexLocalImagesSchema,
         })
@@ -954,6 +1063,7 @@ function registerApiRoutes(
         reasoningEffort: body.reasoningEffort,
         collaborationMode: body.collaborationMode,
         serviceTier: body.serviceTier,
+        sessionStartSource: body.sessionStartSource,
       });
       return reply.status(201).send({
         data: await services.store.getSession(
@@ -1095,13 +1205,21 @@ function registerApiRoutes(
     "/api/v1/sessions/:sessionId/goal",
     async (request) => {
       const body = z
-        .object({ objective: z.string().trim().min(1).max(10_000) })
+        .object({
+          objective: z.string().trim().min(1).max(10_000).optional(),
+          status: z.enum(["active", "paused"]).optional(),
+        })
+        .refine(
+          (value) =>
+            value.objective !== undefined || value.status !== undefined,
+          { message: "A goal update is required." },
+        )
         .parse(request.body);
       return {
         data: await services.codex.setSessionGoal({
           userId: request.principal.userId,
           sessionId: request.params.sessionId,
-          objective: body.objective,
+          ...body,
         }),
       };
     },
@@ -1114,6 +1232,98 @@ function registerApiRoutes(
         sessionId: request.params.sessionId,
       }),
     }),
+  );
+  app.get<{ Params: { sessionId: string } }>(
+    "/api/v1/sessions/:sessionId/personality",
+    async (request) => ({
+      data: await services.codex.readSessionPersonality({
+        userId: request.principal.userId,
+        sessionId: request.params.sessionId,
+      }),
+    }),
+  );
+  app.put<{ Params: { sessionId: string } }>(
+    "/api/v1/sessions/:sessionId/personality",
+    async (request) => {
+      const body = z
+        .object({
+          personality: z.enum(["friendly", "pragmatic"]),
+        })
+        .parse(request.body);
+      return {
+        data: await services.codex.setSessionPersonality({
+          userId: request.principal.userId,
+          sessionId: request.params.sessionId,
+          personality: body.personality,
+        }),
+      };
+    },
+  );
+  app.get<{ Params: { sessionId: string } }>(
+    "/api/v1/sessions/:sessionId/memories",
+    async (request) => ({
+      data: await services.codex.readSessionMemories({
+        userId: request.principal.userId,
+        sessionId: request.params.sessionId,
+      }),
+    }),
+  );
+  app.put<{ Params: { sessionId: string } }>(
+    "/api/v1/sessions/:sessionId/memories",
+    async (request) => {
+      const settings = z
+        .object({
+          featureEnabled: z.boolean(),
+          useMemories: z.boolean(),
+          generateMemories: z.boolean(),
+        })
+        .parse(request.body);
+      return {
+        data: await services.codex.setSessionMemories({
+          userId: request.principal.userId,
+          sessionId: request.params.sessionId,
+          settings,
+        }),
+      };
+    },
+  );
+  app.get<{ Params: { sessionId: string } }>(
+    "/api/v1/sessions/:sessionId/background-terminals",
+    async (request) => ({
+      data: await services.codex.listSessionBackgroundTerminals({
+        userId: request.principal.userId,
+        sessionId: request.params.sessionId,
+      }),
+    }),
+  );
+  app.delete<{ Params: { sessionId: string } }>(
+    "/api/v1/sessions/:sessionId/background-terminals",
+    async (request) => ({
+      data: await services.codex.cleanSessionBackgroundTerminals({
+        userId: request.principal.userId,
+        sessionId: request.params.sessionId,
+      }),
+    }),
+  );
+  app.delete<{
+    Params: { sessionId: string; processId: string };
+  }>(
+    "/api/v1/sessions/:sessionId/background-terminals/:processId",
+    async (request) => {
+      const processId = z
+        .string()
+        .trim()
+        .min(1)
+        .max(200)
+        .parse(request.params.processId);
+      return {
+        data: await services.codex.terminateSessionBackgroundTerminal({
+          userId: request.principal.userId,
+          sessionId: request.params.sessionId,
+          processId,
+        }),
+      };
+    },
   );
   app.post<{ Params: { sessionId: string } }>(
     "/api/v1/sessions/:sessionId/fork",

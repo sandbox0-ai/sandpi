@@ -80,9 +80,14 @@ export type EnvironmentSettingsTab =
   | "egress-credentials"
   | "network";
 
+export interface EnvironmentSettingsOpenOptions {
+  mcpVerbose?: boolean;
+}
+
 interface EnvironmentSettingsProps {
   environment: Environment;
   initialTab?: EnvironmentSettingsTab;
+  initialMcpVerbose?: boolean;
   language: OperationLanguage;
   timeZone: string;
   archivedSessions: CodingSession[];
@@ -211,6 +216,7 @@ function mergeCredentialProjection(
 export function EnvironmentSettings({
   environment,
   initialTab = "general",
+  initialMcpVerbose = false,
   language,
   timeZone,
   archivedSessions,
@@ -2088,7 +2094,10 @@ export function EnvironmentSettings({
                 description={`MCP definitions and runtime status come directly from ${draft.codingAgent.label}. Sandpi only mirrors the native inventory and user-layer enablement.`}
               >
                 {draft.codingAgent.harness === "codex" ? (
-                  <CodexMcpSettings environmentId={draft.id} />
+                  <CodexMcpSettings
+                    environmentId={draft.id}
+                    verbose={initialMcpVerbose}
+                  />
                 ) : (
                   <HarnessSettingsUnavailable agent={draft.codingAgent.label} />
                 )}

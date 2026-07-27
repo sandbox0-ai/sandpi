@@ -20,6 +20,7 @@ import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
 
 interface CodexEnvironmentSettingsProps {
   environmentId: string;
+  verbose?: boolean;
 }
 
 function NativeToggle({
@@ -191,6 +192,7 @@ export function CodexSkillsSettings({
 
 export function CodexMcpSettings({
   environmentId,
+  verbose = false,
 }: CodexEnvironmentSettingsProps) {
   const [inventory, setInventory] = useState<CodexMcpInventory | null>(null);
   const [loading, setLoading] = useState(true);
@@ -202,9 +204,9 @@ export function CodexMcpSettings({
   const fetchInventory = useCallback(
     () =>
       apiFetch<ApiEnvelope<CodexMcpInventory>>(
-        `/api/v1/environments/${encodeURIComponent(environmentId)}/harnesses/codex/mcp-servers`,
+        `/api/v1/environments/${encodeURIComponent(environmentId)}/harnesses/codex/mcp-servers${verbose ? "?detail=full" : ""}`,
       ),
-    [environmentId],
+    [environmentId, verbose],
   );
 
   const load = useCallback(
@@ -375,6 +377,36 @@ export function CodexMcpSettings({
                     <span>{server.resourceCount} resources</span>
                   </div>
                 ) : null}
+                {verbose ? (
+                  <div className="codex-mcp-verbose">
+                    <McpCapabilityList
+                      label="Auth"
+                      values={[server.authStatus ?? "unknown"]}
+                    />
+                    <McpCapabilityList
+                      label="Tools"
+                      values={server.tools}
+                    />
+                    <McpCapabilityList
+                      label="Resources"
+                      values={server.resources.map(
+                        (resource) => {
+                          const label = resource.title ?? resource.name;
+                          return `${label} (${resource.uri})`;
+                        },
+                      )}
+                    />
+                    <McpCapabilityList
+                      label="Resource templates"
+                      values={server.resourceTemplates.map(
+                        (resource) => {
+                          const label = resource.title ?? resource.name;
+                          return `${label} (${resource.uriTemplate})`;
+                        },
+                      )}
+                    />
+                  </div>
+                ) : null}
                 {login?.name === server.name ? (
                   <a
                     className="codex-mcp-auth-link"
@@ -426,6 +458,26 @@ export function CodexMcpSettings({
         definitions.
       </p>
     </div>
+  );
+}
+
+function McpCapabilityList({
+  label,
+  values,
+}: {
+  label: string;
+  values: string[];
+}) {
+  if (!values.length) return null;
+  return (
+    <section>
+      <strong>{label}</strong>
+      <div>
+        {values.map((value) => (
+          <code key={value}>{value}</code>
+        ))}
+      </div>
+    </section>
   );
 }
 

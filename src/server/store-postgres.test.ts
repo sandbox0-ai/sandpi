@@ -6,7 +6,7 @@ import { Pool } from "pg";
 import { SandpiStore } from "./store";
 
 test(
-  "runtime recovery SQL binds against PostgreSQL column types",
+  "runtime control SQL binds against PostgreSQL column types",
   { skip: !process.env.DATABASE_URL },
   async (context) => {
     const database = new Pool({
@@ -58,9 +58,6 @@ test(
         pending_turn_attempt_id TEXT,
         pending_turn_runtime_generation BIGINT,
         interrupt_requested_native_turn_id TEXT,
-        recovery_source_native_turn_id TEXT,
-        recovery_prompt_version INTEGER,
-        recovery_attempt_count INTEGER NOT NULL DEFAULT 0,
         runtime_error_code TEXT,
         version BIGINT NOT NULL
       );
@@ -143,50 +140,6 @@ test(
       }),
       true,
     );
-
-    const stale = await client.query<{ version: string }>(
-      `UPDATE session_runtime
-       SET active_native_turn_id = 'turn-interrupted',
-           active_turn_attempt_id = 'attempt-replaced',
-           active_turn_runtime_generation = 0,
-           recovery_attempt_count = 0,
-           version = version + 1
-       WHERE session_id = 'session-one'
-       RETURNING version`,
-    );
-    assert.equal(
-      await store.claimInterruptedTurnRecovery({
-        sessionId: "session-one",
-        nativeSessionId: "thread-one",
-        historyRevision: 0,
-        runtimeVersion: Number(stale.rows[0]?.version),
-        environmentId: "environment-one",
-        environmentSupervisorSessionId: "supervisor-one",
-        environmentAttemptId: "attempt-one",
-        environmentRuntimeGeneration: 1,
-        sourceNativeTurnId: "turn-interrupted",
-        submission: {
-          requestId: "request-recovery",
-          clientMessageId: "sandpi-runtime-recovery:session-one:test",
-          stableInputId: "input-recovery",
-        },
-        promptVersion: 1,
-      }),
-      true,
-    );
-
-    const recovered = await client.query<{
-      recovery_source_native_turn_id: string | null;
-      pending_turn_phase: string | null;
-    }>(
-      `SELECT recovery_source_native_turn_id, pending_turn_phase
-       FROM session_runtime
-       WHERE session_id = 'session-one'`,
-    );
-    assert.deepEqual(recovered.rows[0], {
-      recovery_source_native_turn_id: "turn-interrupted",
-      pending_turn_phase: "prepared",
-    });
 
     await client.query(
       `UPDATE session_runtime

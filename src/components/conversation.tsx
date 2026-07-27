@@ -1,7 +1,10 @@
 "use client";
 
 import type { InspectorTab } from "@/components/inspector";
-import type { EnvironmentSettingsTab } from "@/components/environment-settings";
+import type {
+  EnvironmentSettingsOpenOptions,
+  EnvironmentSettingsTab,
+} from "@/components/environment-settings";
 import type { WorkspaceFileNavigationRequest } from "@/components/workspace-ide";
 import { CodexConversation } from "@/harnesses/codex/conversation";
 import { isCodexSession } from "@/harnesses/codex/types";
@@ -21,8 +24,14 @@ interface ConversationProps {
   onToggleInspector: () => void;
   onInspectorTabChange: (tab: InspectorTab) => void;
   onToggleTerminal: () => void;
-  onNewSession: () => void;
-  onOpenEnvironmentSettings: (tab: EnvironmentSettingsTab) => void;
+  onNewSession: (options?: {
+    title?: string;
+    source?: "startup" | "clear";
+  }) => void;
+  onOpenEnvironmentSettings: (
+    tab: EnvironmentSettingsTab,
+    options?: EnvironmentSettingsOpenOptions,
+  ) => void;
   onOpenInspector: (tab: InspectorTab) => void;
   workspaceNavigationRequest?: WorkspaceFileNavigationRequest;
   onOpenWorkspacePath: (path: string) => void;

@@ -9,6 +9,7 @@ export interface CodexModelOption {
   isDefault: boolean;
   defaultReasoningEffort: string;
   supportedReasoningEfforts: CodexReasoningEffortOption[];
+  supportsPersonality: boolean;
   fastServiceTier?: {
     id: string;
     name: string;
@@ -26,6 +27,7 @@ interface NativeCodexModel {
   supportedReasoningEfforts?: unknown;
   additionalSpeedTiers?: unknown;
   serviceTiers?: unknown;
+  supportsPersonality?: unknown;
 }
 
 function reasoningEffortOptions(value: unknown) {
@@ -142,6 +144,7 @@ export function codexModelOptionsFromNativeResult(result: unknown) {
           ? nativeDefaultReasoningEffort
           : (supportedReasoningEfforts[0]?.id ?? ""),
         supportedReasoningEfforts,
+        supportsPersonality: model.supportsPersonality === true,
         ...(nativeFastServiceTier
           ? { fastServiceTier: nativeFastServiceTier }
           : {}),

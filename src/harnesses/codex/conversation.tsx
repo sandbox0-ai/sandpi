@@ -53,7 +53,10 @@ import {
   reconcileCodexComposerPreference,
   type CodexModelOption,
 } from "@/harnesses/codex/models";
-import { codexTurnCapabilitySets } from "@/harnesses/codex/capabilities";
+import {
+  canInterruptCodexSession,
+  codexTurnCapabilitySets,
+} from "@/harnesses/codex/capabilities";
 import {
   clipboardCodexImageFiles,
   encodeCodexComposerImage,
@@ -72,11 +75,12 @@ import {
 } from "@/harnesses/codex/activity";
 import { CodexSessionActivityView } from "@/harnesses/codex/session-activity-view";
 import { CodexAgentThreadsDialog } from "@/harnesses/codex/agent-threads-dialog";
-import { normalizeCodexRolloutActivityFeed } from "@/harnesses/codex/rollout-activity";
 import {
-  canInterruptCodexSession,
-  isCodexRuntimeRecoveryClientMessageId,
-} from "@/harnesses/codex/runtime-recovery";
+  CodexNativeCommandDialog,
+  type CodexNativeDialogMode,
+} from "@/harnesses/codex/native-command-dialog";
+import { parseCodexTokenUsageView } from "@/harnesses/codex/token-usage";
+import { normalizeCodexRolloutActivityFeed } from "@/harnesses/codex/rollout-activity";
 import {
   groupCodexTimelineByTurn,
   type CodexTurnTimelineGroup,
@@ -117,7 +121,10 @@ import {
   type SendShortcut,
 } from "@/lib/operation-ui";
 import { getCodexUiCopy } from "@/harnesses/codex/ui";
-import type { EnvironmentSettingsTab } from "@/components/environment-settings";
+import type {
+  EnvironmentSettingsOpenOptions,
+  EnvironmentSettingsTab,
+} from "@/components/environment-settings";
 import type { Environment } from "@/lib/types";
 
 interface ConversationProps {
@@ -133,8 +140,14 @@ interface ConversationProps {
   onToggleInspector: () => void;
   onInspectorTabChange: (tab: InspectorTab) => void;
   onToggleTerminal: () => void;
-  onNewSession: () => void;
-  onOpenEnvironmentSettings: (tab: EnvironmentSettingsTab) => void;
+  onNewSession: (options?: {
+    title?: string;
+    source?: "startup" | "clear";
+  }) => void;
+  onOpenEnvironmentSettings: (
+    tab: EnvironmentSettingsTab,
+    options?: EnvironmentSettingsOpenOptions,
+  ) => void;
   onOpenInspector: (tab: InspectorTab) => void;
   workspaceNavigationRequest?: WorkspaceFileNavigationRequest;
   onOpenWorkspacePath: (path: string) => void;
@@ -223,12 +236,13 @@ export function CodexConversation({
       : {},
   );
   const fallbackReasoningEffort = session.harnessState.reasoningEffort ?? "";
-  const selectedModel = modelOptions.find(
+  const selectedModel: CodexModelOption = modelOptions.find(
     (model) => model.id === selectedModelId,
   ) ?? {
     id: selectedModelId || session.harnessState.modelId || "default",
     displayName: selectedModelId || session.harnessState.modelId || "Default",
     isDefault: false,
+    supportsPersonality: false,
     defaultReasoningEffort: fallbackReasoningEffort,
     supportedReasoningEfforts: fallbackReasoningEffort
       ? [
@@ -271,6 +285,11 @@ export function CodexConversation({
   const [activityClock, setActivityClock] = useState(() => Date.now());
   const [pendingTurn, setPendingTurn] = useState<PendingCodexTurn | null>(null);
   const [agentThreadsOpen, setAgentThreadsOpen] = useState(false);
+  const [nativeDialog, setNativeDialog] = useState<{
+    mode: CodexNativeDialogMode;
+    usageView?: "daily" | "weekly" | "cumulative";
+    editGoalImmediately?: boolean;
+  }>();
   const [selectedAgentThreadId, setSelectedAgentThreadId] = useState<
     string | undefined
   >();
@@ -440,6 +459,7 @@ export function CodexConversation({
       agentThreadUrl.searchParams.get("agents") === "1" ||
         Boolean(requestedAgentThread),
     );
+    setNativeDialog(undefined);
     setNativeSnapshot(null);
     setLiveNotifications([]);
     setNativeStreamReady(false);
@@ -960,7 +980,10 @@ export function CodexConversation({
     setCommandNotice(null);
 
     if (command.intent === "session.new") {
-      onNewSession();
+      onNewSession({
+        ...(argumentsValue ? { title: argumentsValue } : {}),
+        source: command.name === "clear" ? "clear" : "startup",
+      });
       return;
     }
     if (command.intent === "composer.model") {
@@ -984,7 +1007,19 @@ export function CodexConversation({
       return;
     }
     if (command.intent === "environment.mcp") {
-      onOpenEnvironmentSettings("mcp");
+      if (argumentsValue && argumentsValue.toLowerCase() !== "verbose") {
+        setCommandNotice({
+          tone: "error",
+          message:
+            language === "zh-CN"
+              ? "/mcp 仅支持可选参数 verbose。"
+              : "/mcp only accepts the optional verbose argument.",
+        });
+        return;
+      }
+      onOpenEnvironmentSettings("mcp", {
+        mcpVerbose: argumentsValue.toLowerCase() === "verbose",
+      });
       return;
     }
     if (command.intent === "environment.network") {
@@ -993,6 +1028,53 @@ export function CodexConversation({
     }
     if (command.intent === "environment.credentials") {
       onOpenEnvironmentSettings("credentials");
+      return;
+    }
+    if (
+      command.intent === "codex.personality" ||
+      command.intent === "codex.memories" ||
+      command.intent === "codex.hooks" ||
+      command.intent === "codex.processes"
+    ) {
+      setNativeDialog({
+        mode:
+          command.intent === "codex.personality"
+            ? "personality"
+            : command.intent === "codex.memories"
+              ? "memories"
+              : command.intent === "codex.hooks"
+                ? "hooks"
+                : "processes",
+      });
+      return;
+    }
+    if (command.intent === "codex.usage") {
+      const view = parseCodexTokenUsageView(argumentsValue);
+      if (!view) {
+        setCommandNotice({
+          tone: "error",
+          message:
+            language === "zh-CN"
+              ? "/usage 参数必须是 daily、weekly 或 cumulative。"
+              : "/usage expects daily, weekly, or cumulative.",
+        });
+        return;
+      }
+      setNativeDialog({ mode: "usage", usageView: view });
+      return;
+    }
+    if (
+      command.intent === "codex.goal" &&
+      (!argumentsValue || argumentsValue.toLowerCase() === "edit")
+    ) {
+      setNativeDialog({
+        mode: "goal",
+        editGoalImmediately: argumentsValue.toLowerCase() === "edit",
+      });
+      return;
+    }
+    if (command.intent === "session.rename" && !argumentsValue) {
+      setNativeDialog({ mode: "rename" });
       return;
     }
     if (command.intent === "response.copy") {
@@ -1060,17 +1142,24 @@ export function CodexConversation({
     setAttachmentError("");
     try {
       if (command.intent === "codex.goal") {
-        const clear = argumentsValue.toLowerCase() === "clear";
+        const action = argumentsValue.toLowerCase();
+        const clear = action === "clear";
+        const status =
+          action === "pause"
+            ? ("paused" as const)
+            : action === "resume"
+              ? ("active" as const)
+              : undefined;
         const response = await apiFetch<ApiEnvelope<CodexGoalProjection>>(
           `/api/v1/sessions/${encodeURIComponent(session.id)}/goal`,
-          argumentsValue
-            ? clear
-              ? { method: "DELETE" }
-              : {
-                  method: "PUT",
-                  body: JSON.stringify({ objective: argumentsValue }),
-                }
-            : undefined,
+          clear
+            ? { method: "DELETE" }
+            : {
+                method: "PUT",
+                body: JSON.stringify(
+                  status ? { status } : { objective: argumentsValue },
+                ),
+              },
         );
         const goal = response.data.goal;
         setCommandNotice({
@@ -1091,6 +1180,22 @@ export function CodexConversation({
               : language === "zh-CN"
                 ? "当前没有 Codex Session 目标。"
                 : "This Codex Session has no goal.",
+        });
+        return;
+      }
+      if (command.intent === "codex.stop") {
+        await apiFetch<ApiEnvelope<{ cleaned: boolean }>>(
+          `/api/v1/sessions/${encodeURIComponent(
+            session.id,
+          )}/background-terminals`,
+          { method: "DELETE" },
+        );
+        setCommandNotice({
+          tone: "info",
+          message:
+            language === "zh-CN"
+              ? "已停止并清理所有 Codex 后台终端。"
+              : "Stopped and cleaned all Codex background terminals.",
         });
         return;
       }
@@ -1496,21 +1601,6 @@ export function CodexConversation({
     }
 
     const message = entry;
-    if (
-      message.role === "user" &&
-      isCodexRuntimeRecoveryClientMessageId(message.clientId)
-    ) {
-      return (
-        <div
-          className="codex-runtime-recovery-notice"
-          key={message.id}
-          role="note"
-        >
-          <span aria-hidden="true" />
-          {ui.runtimeRecoveryNotice}
-        </div>
-      );
-    }
     return (
       <article
         className={`message message-${message.role}`}
@@ -1715,7 +1805,7 @@ export function CodexConversation({
             </button>
             <div className="conversation-title-line">
               <div className="conversation-breadcrumb">
-                <button type="button" onClick={onNewSession}>
+                <button type="button" onClick={() => onNewSession()}>
                   {environment.name}
                 </button>
                 <span>/</span>
@@ -2086,6 +2176,18 @@ export function CodexConversation({
           </p>
         </div>
       </section>
+      {nativeDialog ? (
+        <CodexNativeCommandDialog
+          mode={nativeDialog.mode}
+          language={language}
+          environmentId={environment.id}
+          session={session}
+          initialUsageView={nativeDialog.usageView}
+          editGoalImmediately={nativeDialog.editGoalImmediately}
+          onSessionChange={onSessionChange}
+          onClose={() => setNativeDialog(undefined)}
+        />
+      ) : null}
       {agentThreadsOpen ? (
         <CodexAgentThreadsDialog
           language={language}

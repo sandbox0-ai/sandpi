@@ -1122,30 +1122,6 @@ pre,
   margin-bottom: 32px;
 }
 
-.codex-runtime-recovery-notice {
-  display: flex;
-  width: fit-content;
-  max-width: calc(100% - 80px);
-  align-items: center;
-  gap: 7px;
-  margin: -4px auto 28px;
-  padding: 5px 9px;
-  border: 1px solid var(--line-soft);
-  border-radius: 999px;
-  background: var(--panel);
-  color: var(--ink-faint);
-  font-size: 11px;
-  line-height: 1.35;
-}
-
-.codex-runtime-recovery-notice > span {
-  width: 6px;
-  height: 6px;
-  flex: 0 0 auto;
-  border-radius: 999px;
-  background: var(--blue);
-}
-
 .message-user .message-body {
   grid-column: 2;
   width: fit-content;
@@ -5209,6 +5185,46 @@ code.codex-compact-activity-subject {
   flex-wrap: wrap;
   gap: 4px;
   margin-top: 7px;
+}
+
+.codex-mcp-verbose {
+  display: grid;
+  gap: 8px;
+  margin-top: 9px;
+  padding-top: 9px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.codex-mcp-verbose section {
+  display: grid;
+  gap: 5px;
+}
+
+.codex-mcp-verbose section > strong {
+  color: var(--ink-faint);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+}
+
+.codex-mcp-verbose section > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.codex-mcp-verbose code {
+  max-width: 100%;
+  overflow: hidden;
+  padding: 3px 6px;
+  border: 1px solid var(--line-soft);
+  border-radius: 5px;
+  background: var(--sidebar);
+  color: var(--ink-soft);
+  font-size: 8.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .codex-extension-error,

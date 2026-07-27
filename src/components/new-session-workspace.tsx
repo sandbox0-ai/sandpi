@@ -1,7 +1,10 @@
 "use client";
 
 import { CodexNewSessionWorkspace } from "@/harnesses/codex/new-session-workspace";
-import type { EnvironmentSettingsTab } from "@/components/environment-settings";
+import type {
+  EnvironmentSettingsOpenOptions,
+  EnvironmentSettingsTab,
+} from "@/components/environment-settings";
 import type { CodexSession } from "@/harnesses/codex/types";
 import type { OperationLanguage, SendShortcut } from "@/lib/operation-ui";
 import type { CodingSession, Environment } from "@/lib/types";
@@ -13,8 +16,13 @@ interface NewSessionWorkspaceProps {
   canManageEnvironment: boolean;
   onEnvironmentChange: (environment: Environment) => void;
   onCreated: (session: CodingSession) => void;
+  initialTitle?: string;
+  sessionStartSource?: "startup" | "clear";
   onOpenAgentHarnessSettings: () => void;
-  onOpenEnvironmentSettings: (tab: EnvironmentSettingsTab) => void;
+  onOpenEnvironmentSettings: (
+    tab: EnvironmentSettingsTab,
+    options?: EnvironmentSettingsOpenOptions,
+  ) => void;
   onToggleSidebar: () => void;
   inspectorOpen: boolean;
   onToggleInspector: () => void;
