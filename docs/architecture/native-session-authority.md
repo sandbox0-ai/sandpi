@@ -415,9 +415,11 @@ applied only after the running harness returns its current catalog; unavailable
 values fall back to the live native model defaults. Selecting a control updates
 only browser UI state until `thread/start` or `turn/start` submits it. The same
 versioned browser-only record contains device layout choices, including the
-sidebar and Inspector open/collapsed state, as well as filter choices. It never
-contains prompts, attachments, credentials, native history or Workspace
-content.
+sidebar and Inspector open/collapsed state, the resizable Inspector width
+ratio, as well as filter choices. The conversation and Inspector consume the
+remaining desktop width proportionally, so collapsing the sidebar or resizing
+the window preserves the user's split. It never contains prompts, attachments,
+credentials, native history or Workspace content.
 
 The two Codex composer surfaces share a harness-owned toolbar so model,
 reasoning, upload and `@` behavior cannot drift between New Session and an

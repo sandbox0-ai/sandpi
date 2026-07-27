@@ -3,6 +3,10 @@ import {
   isEnvironmentMetricRangeSeconds,
   type EnvironmentMetricRangeSeconds,
 } from "./environment-metrics";
+import {
+  DEFAULT_INSPECTOR_WIDTH_RATIO,
+  normalizeInspectorWidthRatio,
+} from "./workspace-layout";
 
 export const LOCAL_UI_PREFERENCES_STORAGE_KEY =
   "sandpi.local-ui-preferences.v1";
@@ -27,6 +31,7 @@ export interface SandpiLocalUiPreferences {
     sidebarCollapsed: boolean;
     inspectorOpen: boolean;
     inspectorTab: LocalInspectorTab;
+    inspectorWidthRatio: number;
     metricsRangeSeconds: EnvironmentMetricRangeSeconds;
     terminalHeight: number;
   };
@@ -41,6 +46,7 @@ export const DEFAULT_LOCAL_UI_PREFERENCES: SandpiLocalUiPreferences = {
     sidebarCollapsed: false,
     inspectorOpen: false,
     inspectorTab: "files",
+    inspectorWidthRatio: DEFAULT_INSPECTOR_WIDTH_RATIO,
     metricsRangeSeconds: DEFAULT_ENVIRONMENT_METRIC_RANGE_SECONDS,
     terminalHeight: 320,
   },
@@ -204,6 +210,9 @@ export function normalizeLocalUiPreferences(
         INSPECTOR_TABS,
         workspace.inspectorTab,
         DEFAULT_LOCAL_UI_PREFERENCES.workspace.inspectorTab,
+      ),
+      inspectorWidthRatio: normalizeInspectorWidthRatio(
+        workspace.inspectorWidthRatio,
       ),
       metricsRangeSeconds: isEnvironmentMetricRangeSeconds(metricsRangeSeconds)
         ? metricsRangeSeconds

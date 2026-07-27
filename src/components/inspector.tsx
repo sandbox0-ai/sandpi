@@ -12,7 +12,14 @@ import {
   Network,
   X,
 } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+} from "react";
 
 import {
   InteractiveMetricChart,
@@ -35,6 +42,13 @@ import {
 import { updateLocalUiPreferences } from "@/lib/local-ui-preferences";
 import { formatUnixTimestamp } from "@/lib/time";
 import { useLocalUiPreferences } from "@/lib/use-local-ui-preferences";
+import {
+  clampInspectorWidthRatioForAvailableWidth,
+  DEFAULT_INSPECTOR_WIDTH_RATIO,
+  inspectorWidthRatioFromPointer,
+  MAX_STORED_INSPECTOR_WIDTH_RATIO,
+  MIN_STORED_INSPECTOR_WIDTH_RATIO,
+} from "@/lib/workspace-layout";
 import type {
   CodingSession,
   Environment,
@@ -68,6 +82,8 @@ interface InspectorProps {
   ) => void;
   activeTab: InspectorTab;
   onTabChange: (tab: InspectorTab) => void;
+  widthRatio: number;
+  onWidthRatioChange: (ratio: number, persist: boolean) => void;
   onClose: () => void;
 }
 
@@ -306,11 +322,16 @@ export function Inspector({
   onBrowserNavigationHandled,
   activeTab,
   onTabChange,
+  widthRatio,
+  onWidthRatioChange,
   onClose,
 }: InspectorProps) {
   const ui = getOperationUiCopy(language).inspector;
   const metricsRangeSeconds =
     useLocalUiPreferences().workspace.metricsRangeSeconds;
+  const resizePointerRef = useRef<number | null>(null);
+  const resizeRatioRef = useRef(widthRatio);
+  const [resizing, setResizing] = useState(false);
   const metricRangeOptions = [
     {
       seconds: 15 * 60,
@@ -428,8 +449,128 @@ export function Inspector({
     return () => controller.abort();
   }, [activeTab, dataTab, environment.id, metricsRangeSeconds, requestKey]);
 
+  useEffect(() => {
+    resizeRatioRef.current = widthRatio;
+  }, [widthRatio]);
+
+  useEffect(
+    () => () => {
+      document.body.style.removeProperty("cursor");
+      document.body.style.removeProperty("user-select");
+    },
+    [],
+  );
+
+  function ratioForPointer(event: ReactPointerEvent<HTMLDivElement>) {
+    const shell = event.currentTarget.closest<HTMLElement>(".app-shell");
+    if (!shell) return resizeRatioRef.current;
+    const shellRect = shell.getBoundingClientRect();
+    const sidebar = shell.querySelector<HTMLElement>(":scope > .sidebar");
+    return inspectorWidthRatioFromPointer({
+      pointerX: event.clientX,
+      shellLeft: shellRect.left,
+      shellWidth: shellRect.width,
+      sidebarWidth: sidebar?.getBoundingClientRect().width ?? 0,
+    });
+  }
+
+  function updateResizeRatio(ratio: number, persist: boolean) {
+    resizeRatioRef.current = ratio;
+    onWidthRatioChange(ratio, persist);
+  }
+
+  function finishResize(
+    event: ReactPointerEvent<HTMLDivElement>,
+    ratio: number,
+  ) {
+    updateResizeRatio(ratio, true);
+    resizePointerRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    setResizing(false);
+    document.body.style.removeProperty("cursor");
+    document.body.style.removeProperty("user-select");
+  }
+
+  function handleResizePointerDown(
+    event: ReactPointerEvent<HTMLDivElement>,
+  ) {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    resizePointerRef.current = event.pointerId;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setResizing(true);
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+  }
+
+  function handleResizePointerMove(
+    event: ReactPointerEvent<HTMLDivElement>,
+  ) {
+    if (resizePointerRef.current !== event.pointerId) return;
+    updateResizeRatio(ratioForPointer(event), false);
+  }
+
+  function handleResizePointerUp(
+    event: ReactPointerEvent<HTMLDivElement>,
+  ) {
+    if (resizePointerRef.current !== event.pointerId) return;
+    finishResize(event, ratioForPointer(event));
+  }
+
+  function handleResizePointerCancel(
+    event: ReactPointerEvent<HTMLDivElement>,
+  ) {
+    if (resizePointerRef.current !== event.pointerId) return;
+    finishResize(event, resizeRatioRef.current);
+  }
+
+  function handleResizeKeyDown(
+    event: ReactKeyboardEvent<HTMLDivElement>,
+  ) {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    const shell = event.currentTarget.closest<HTMLElement>(".app-shell");
+    const sidebar = shell?.querySelector<HTMLElement>(":scope > .sidebar");
+    const availableWidth = shell
+      ? shell.getBoundingClientRect().width -
+        (sidebar?.getBoundingClientRect().width ?? 0)
+      : window.innerWidth;
+    const delta = event.key === "ArrowLeft" ? 0.025 : -0.025;
+    updateResizeRatio(
+      clampInspectorWidthRatioForAvailableWidth(
+        resizeRatioRef.current + delta,
+        availableWidth,
+      ),
+      true,
+    );
+  }
+
   return (
     <aside className="inspector" aria-label={ui.label}>
+      <div
+        className={`inspector-resize-handle ${resizing ? "is-resizing" : ""}`}
+        role="separator"
+        aria-label={ui.resize}
+        aria-orientation="vertical"
+        aria-valuemin={MIN_STORED_INSPECTOR_WIDTH_RATIO * 100}
+        aria-valuemax={MAX_STORED_INSPECTOR_WIDTH_RATIO * 100}
+        aria-valuenow={Math.round(widthRatio * 100)}
+        aria-valuetext={ui.resizeValue(Math.round(widthRatio * 100))}
+        title={ui.resizeHelp}
+        tabIndex={0}
+        onDoubleClick={() =>
+          updateResizeRatio(DEFAULT_INSPECTOR_WIDTH_RATIO, true)
+        }
+        onKeyDown={handleResizeKeyDown}
+        onPointerDown={handleResizePointerDown}
+        onPointerMove={handleResizePointerMove}
+        onPointerUp={handleResizePointerUp}
+        onPointerCancel={handleResizePointerCancel}
+      >
+        <span aria-hidden="true" />
+      </div>
       <header className="inspector-header">
         <nav aria-label={ui.views}>
           <button

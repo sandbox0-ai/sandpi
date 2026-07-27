@@ -143,10 +143,12 @@ interface ConversationProps {
   session: CodexSession;
   inspectorOpen: boolean;
   inspectorTab: InspectorTab;
+  inspectorWidthRatio: number;
   terminalOpen: boolean;
   onToggleSidebar: () => void;
   onToggleInspector: () => void;
   onInspectorTabChange: (tab: InspectorTab) => void;
+  onInspectorWidthRatioChange: (ratio: number, persist: boolean) => void;
   onToggleTerminal: () => void;
   onNewSession: (options?: {
     title?: string;
@@ -220,10 +222,12 @@ export function CodexConversation({
   session,
   inspectorOpen,
   inspectorTab,
+  inspectorWidthRatio,
   terminalOpen,
   onToggleSidebar,
   onToggleInspector,
   onInspectorTabChange,
+  onInspectorWidthRatioChange,
   onToggleTerminal,
   onNewSession,
   onOpenEnvironmentSettings,
@@ -2338,11 +2342,13 @@ export function CodexConversation({
           environment={environment}
           session={session}
           activeTab={inspectorTab}
+          widthRatio={inspectorWidthRatio}
           workspaceNavigationRequest={workspaceNavigationRequest}
           onWorkspaceNavigationHandled={onWorkspaceNavigationHandled}
           browserNavigationRequest={browserNavigationRequest}
           onBrowserNavigationHandled={onBrowserNavigationHandled}
           onTabChange={onInspectorTabChange}
+          onWidthRatioChange={onInspectorWidthRatioChange}
           onClose={onToggleInspector}
           sessionActivity={{
             label: ui.activity,

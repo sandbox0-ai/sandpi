@@ -38,6 +38,7 @@ import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
 import { visibleSessionsForEnvironment } from "@/lib/session-list";
 import { useLocalUiPreferences } from "@/lib/use-local-ui-preferences";
 import { userVisibleWorkspacePath } from "@/lib/workspace-path-policy";
+import { normalizeInspectorWidthRatio } from "@/lib/workspace-layout";
 import type {
   CodingSession,
   Environment,
@@ -110,7 +111,12 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
   const inspectorTab = localUiPreferences.workspace.inspectorTab;
   const sidebarCollapsed = localUiPreferences.workspace.sidebarCollapsed;
   const storedInspectorOpen = localUiPreferences.workspace.inspectorOpen;
+  const storedInspectorWidthRatio =
+    localUiPreferences.workspace.inspectorWidthRatio;
   const storedTerminalHeight = localUiPreferences.workspace.terminalHeight;
+  const [inspectorWidthRatio, setInspectorWidthRatio] = useState(
+    storedInspectorWidthRatio,
+  );
   const workspaceNavigationRequestIdRef = useRef(0);
   const browserNavigationRequestIdRef = useRef(0);
   const restoredWorkspaceNavigationRef = useRef(false);
@@ -160,6 +166,10 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
   useEffect(() => {
     setInspectorOpen(storedInspectorOpen);
   }, [storedInspectorOpen]);
+
+  useEffect(() => {
+    setInspectorWidthRatio(storedInspectorWidthRatio);
+  }, [storedInspectorWidthRatio]);
 
   useEffect(() => {
     if (terminalMaximized) return;
@@ -735,6 +745,22 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
     }));
   }, []);
 
+  const handleInspectorWidthRatioChange = useCallback(
+    (ratio: number, persist: boolean) => {
+      const normalizedRatio = normalizeInspectorWidthRatio(ratio);
+      setInspectorWidthRatio(normalizedRatio);
+      if (!persist) return;
+      updateLocalUiPreferences((current) => ({
+        ...current,
+        workspace: {
+          ...current.workspace,
+          inspectorWidthRatio: normalizedRatio,
+        },
+      }));
+    },
+    [],
+  );
+
   const handleSidebarCollapsedChange = useCallback((collapsed: boolean) => {
     updateLocalUiPreferences((current) => ({
       ...current,
@@ -755,6 +781,13 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
 
   const showInspector = inspectorOpen;
   const showTerminal = terminalOpen;
+  const workspaceStyle = {
+    "--conversation-pane-size": `${1 - inspectorWidthRatio}fr`,
+    "--inspector-pane-size": `${inspectorWidthRatio}fr`,
+    ...(showTerminal
+      ? { "--terminal-height": `${terminalHeight}px` }
+      : {}),
+  } as CSSProperties;
   const sidebar = (
     <Sidebar
       language={preferences.general.language}
@@ -857,11 +890,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
       } ${sidebarOpen ? "sidebar-is-open" : ""} ${
         sidebarCollapsed ? "sidebar-is-collapsed" : ""
       }`}
-      style={
-        showTerminal
-          ? ({ "--terminal-height": `${terminalHeight}px` } as CSSProperties)
-          : undefined
-      }
+      style={workspaceStyle}
     >
       <a className="skip-link" href="#conversation">
         Skip to conversation
@@ -886,10 +915,12 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
           session={selectedSession}
           inspectorOpen={showInspector}
           inspectorTab={inspectorTab}
+          inspectorWidthRatio={inspectorWidthRatio}
           terminalOpen={showTerminal}
           onToggleSidebar={handleToggleNavigation}
           onToggleInspector={() => handleInspectorOpenChange(!showInspector)}
           onInspectorTabChange={handleInspectorTabChange}
+          onInspectorWidthRatioChange={handleInspectorWidthRatioChange}
           onToggleTerminal={() => setTerminalOpen((open) => !open)}
           onNewSession={(options) =>
             handleNewSession(selectedEnvironment.id, options)
@@ -946,6 +977,8 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
           onBrowserNavigationHandled={handleBrowserNavigationHandled}
           activeTab={inspectorTab === "activity" ? "files" : inspectorTab}
           onTabChange={handleInspectorTabChange}
+          widthRatio={inspectorWidthRatio}
+          onWidthRatioChange={handleInspectorWidthRatioChange}
           onClose={() => handleInspectorOpenChange(false)}
         />
       ) : null}

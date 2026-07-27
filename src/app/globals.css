@@ -122,7 +122,9 @@ pre,
 
 .app-shell.inspector-is-open {
   grid-template-columns:
-    var(--sidebar-width) minmax(400px, 1fr) clamp(600px, 46vw, 780px);
+    var(--sidebar-width)
+    minmax(360px, var(--conversation-pane-size, 0.5fr))
+    minmax(360px, var(--inspector-pane-size, 0.5fr));
 }
 
 .app-shell.terminal-is-open {
@@ -3379,6 +3381,38 @@ code.codex-compact-activity-subject {
   overflow: hidden;
   border-left: 1px solid var(--line);
   background: var(--panel);
+}
+
+.inspector-resize-handle {
+  position: absolute;
+  z-index: 8;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 9px;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.inspector-resize-handle span {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 2px;
+  background: var(--blue);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.inspector-resize-handle:hover span,
+.inspector-resize-handle:focus-visible span,
+.inspector-resize-handle.is-resizing span {
+  opacity: 1;
+}
+
+.inspector-resize-handle:focus-visible {
+  outline: none;
 }
 
 .inspector-header {
@@ -6658,10 +6692,6 @@ code.codex-compact-activity-subject {
     --sidebar-width: 220px;
   }
 
-  .app-shell.inspector-is-open {
-    grid-template-columns: var(--sidebar-width) minmax(370px, 1fr) 520px;
-  }
-
   .app-shell:not(.inspector-is-open) {
     grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
   }
@@ -6762,6 +6792,10 @@ code.codex-compact-activity-subject {
     bottom: 0;
     width: min(390px, 92vw);
     box-shadow: -18px 0 50px rgb(20 20 18 / 14%);
+  }
+
+  .inspector-resize-handle {
+    display: none;
   }
 
   .conversation-header {

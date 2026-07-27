@@ -28,6 +28,7 @@ import {
   getMockBootstrap,
   mockEnvironmentMetrics,
 } from "../src/lib/mock-data";
+import { LOCAL_UI_PREFERENCES_STORAGE_KEY } from "../src/lib/local-ui-preferences";
 
 interface ControlledEventWindow extends Window {
   __sandpiEmitEvent?: (
@@ -4320,6 +4321,155 @@ test("shows a matching skeleton while each Inspector tab loads", async ({
   await expect(page.getByRole("button", { name: "Open inspector" })).toBeVisible();
   await expect(tabs).toBeHidden();
   expect(browserErrors).toEqual([]);
+});
+
+test("resizes the Inspector proportionally and restores the local split", async ({
+  page,
+}) => {
+  const bootstrap = getMockBootstrap();
+  useEnglishUi(bootstrap);
+  const session = bootstrap.sessions.find(
+    (candidate) => candidate.harness === "codex" && !candidate.archived,
+  );
+  const environment = bootstrap.environments.find(
+    (candidate) => candidate.id === session?.environmentId,
+  );
+  expect(session).toBeTruthy();
+  expect(environment).toBeTruthy();
+  if (!session || !environment || session.harness !== "codex") return;
+  const codexSession = session as CodexSession;
+  bootstrap.selectedEnvironmentId = environment.id;
+  bootstrap.selectedSessionId = session.id;
+
+  await page.addInitScript((storageKey) => {
+    if (window.localStorage.getItem(storageKey)) return;
+    window.localStorage.setItem(
+      storageKey,
+      JSON.stringify({
+        workspace: {
+          sidebarCollapsed: false,
+          inspectorOpen: true,
+          inspectorTab: "files",
+          inspectorWidthRatio: 0.5,
+        },
+      }),
+    );
+  }, LOCAL_UI_PREFERENCES_STORAGE_KEY);
+  await installControlledEventSource(page);
+  await page.route(
+    (url) => url.pathname === "/api/v1/bootstrap",
+    async (route) => {
+      await route.fulfill({ json: { data: bootstrap } });
+    },
+  );
+  await page.route("**/api/v1/sessions/**/models", async (route) => {
+    await route.fulfill({
+      json: {
+        data: {
+          data: [
+            {
+              id: codexSession.harnessState.modelId,
+              displayName: "E2E layout model",
+              isDefault: true,
+              supportedReasoningEfforts: [],
+            },
+          ],
+        },
+        meta: { availability: "available", source: "codex" },
+      },
+    });
+  });
+  await page.route("**/api/v1/environments/**/metrics/current", async (route) => {
+    await route.fulfill({
+      json: {
+        data: { cpuUtilization: 0.1, memoryUtilization: 0.2 },
+      },
+    });
+  });
+  await page.route("**/api/v1/environments/**/ide", async (route) => {
+    await route.fulfill({
+      json: {
+        data: {
+          files: [],
+          git: { repositories: [] },
+          refreshedAt: Date.now() / 1_000,
+        },
+      },
+    });
+  });
+
+  await page.goto(
+    `/?environment=${encodeURIComponent(environment.id)}&session=${encodeURIComponent(session.id)}`,
+  );
+  const shell = page.locator(".app-shell");
+  const sidebar = page.locator(".sidebar");
+  const conversation = page.locator(".conversation-pane");
+  const inspector = page.locator(".inspector");
+  const resizeHandle = page.getByRole("separator", {
+    name: "Resize Inspector",
+  });
+  await expect(resizeHandle).toBeVisible();
+
+  const initialSidebarWidth = (await sidebar.boundingBox())!.width;
+  const initialConversationWidth = (await conversation.boundingBox())!.width;
+  const initialInspectorWidth = (await inspector.boundingBox())!.width;
+  expect(
+    initialInspectorWidth / (initialConversationWidth + initialInspectorWidth),
+  ).toBeCloseTo(0.5, 2);
+
+  await page.getByRole("button", { name: "Collapse sidebar" }).click();
+  await expect(sidebar).toBeHidden();
+  const collapsedConversationWidth = (await conversation.boundingBox())!.width;
+  const collapsedInspectorWidth = (await inspector.boundingBox())!.width;
+  expect(collapsedConversationWidth).toBeGreaterThan(initialConversationWidth);
+  expect(collapsedInspectorWidth).toBeGreaterThan(initialInspectorWidth);
+  expect(collapsedConversationWidth - initialConversationWidth).toBeCloseTo(
+    initialSidebarWidth / 2,
+    0,
+  );
+  expect(collapsedInspectorWidth - initialInspectorWidth).toBeCloseTo(
+    initialSidebarWidth / 2,
+    0,
+  );
+
+  const handleBox = await resizeHandle.boundingBox();
+  expect(handleBox).not.toBeNull();
+  await page.mouse.move(
+    handleBox!.x + handleBox!.width / 2,
+    handleBox!.y + 180,
+  );
+  await page.mouse.down();
+  await page.mouse.move(handleBox!.x - 140, handleBox!.y + 180, { steps: 6 });
+  await page.mouse.up();
+
+  const resizedConversationWidth = (await conversation.boundingBox())!.width;
+  const resizedInspectorWidth = (await inspector.boundingBox())!.width;
+  expect(resizedInspectorWidth).toBeGreaterThan(collapsedInspectorWidth + 120);
+  expect(resizedConversationWidth).toBeLessThan(
+    collapsedConversationWidth - 120,
+  );
+  const persistedRatio = await page.evaluate((storageKey) => {
+    const raw = window.localStorage.getItem(storageKey);
+    return raw
+      ? (JSON.parse(raw) as {
+          workspace?: { inspectorWidthRatio?: number };
+        }).workspace?.inspectorWidthRatio
+      : undefined;
+  }, LOCAL_UI_PREFERENCES_STORAGE_KEY);
+  expect(persistedRatio).toBeCloseTo(
+    resizedInspectorWidth /
+      (resizedConversationWidth + resizedInspectorWidth),
+    3,
+  );
+
+  await page.reload();
+  await expect(resizeHandle).toBeVisible();
+  await expect(sidebar).toBeHidden();
+  const restoredConversationWidth = (await conversation.boundingBox())!.width;
+  const restoredInspectorWidth = (await inspector.boundingBox())!.width;
+  expect(restoredConversationWidth).toBeCloseTo(resizedConversationWidth, 0);
+  expect(restoredInspectorWidth).toBeCloseTo(resizedInspectorWidth, 0);
+  expect((await shell.boundingBox())!.width).toBe(1_440);
 });
 
 test("renders the dedicated live Web IDE with Git state and changed lines", async ({
