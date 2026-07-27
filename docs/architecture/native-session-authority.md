@@ -46,6 +46,32 @@ Environment
   explicitly as unavailable or partial, but does not invalidate a successfully
   restored conversation.
 
+## Project guidance and `AGENTS.md`
+
+Project guidance remains ordinary Environment Workspace state. The Project
+guidance surface reads, creates and opens `/workspace/AGENTS.md` and
+`/workspace/AGENTS.override.md` through the same Workspace APIs as every other
+user file. Sandpi does not copy their contents into PostgreSQL, maintain a
+second instruction model, inject a hidden Turn prompt or ask Codex to reload
+them.
+
+Codex is also the authority for what a native Thread actually loaded.
+`thread/start`, `thread/resume` and `thread/fork` return `cwd` and
+`instructionSources`; Sandpi keeps that metadata only in the process-local
+attachment projection and exposes it as the current Session snapshot. Managed
+Codex-home sources remain visible by native path but cannot be opened through
+the user Workspace editor. User-visible sources under `/workspace` can be
+opened directly.
+
+Instruction discovery is fixed for the lifetime of a native Session. Editing,
+creating, deleting or renaming an `AGENTS.md` file does not mutate an existing
+Thread, so the UI explicitly directs the user to start a new Session to apply
+the latest Workspace guidance. Sandpi does not simulate hot reload by adding
+custom instructions to a later Turn. Sessions currently start at
+`/workspace`; product support for nested `AGENTS.md` scopes therefore requires
+a future native working-directory selection passed to `thread/start`, rather
+than a Sandpi-owned discovery algorithm.
+
 ## Persistent native state and credentials
 
 Codex uses `/workspace/.sandpi/harnesses/codex` as its persistent `CODEX_HOME`.

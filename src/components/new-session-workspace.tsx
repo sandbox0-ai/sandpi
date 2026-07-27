@@ -28,6 +28,7 @@ interface NewSessionWorkspaceProps {
   onToggleInspector: () => void;
   terminalOpen: boolean;
   onToggleTerminal: () => void;
+  onOpenWorkspacePath: (path: string) => void;
 }
 
 /**

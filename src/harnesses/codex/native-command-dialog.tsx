@@ -2,9 +2,12 @@
 
 import {
   Activity,
+  BookOpenText,
   Brain,
   Check,
+  FilePlus2,
   Flag,
+  FolderOpen,
   Gauge,
   LoaderCircle,
   RefreshCw,
@@ -32,6 +35,7 @@ import {
   type CodexMemoriesSettings,
   type CodexPersonalitySelection,
   type CodexPersonalitySettings,
+  type CodexProjectGuidance,
   type CodexTokenUsage,
 } from "@/harnesses/codex/native-capabilities";
 import {
@@ -41,11 +45,16 @@ import {
 import type { CodexSession } from "@/harnesses/codex/types";
 import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
 import type { OperationLanguage } from "@/lib/operation-ui";
+import type {
+  WorkspaceDirectoryListing,
+  WorkspaceFile,
+} from "@/lib/types";
 
 import styles from "./native-command-dialog.module.css";
 
 export type CodexNativeDialogMode =
   | "goal"
+  | "guidance"
   | "hooks"
   | "memories"
   | "personality"
@@ -61,6 +70,8 @@ interface CodexNativeCommandDialogProps {
   initialUsageView?: CodexTokenUsageView;
   editGoalImmediately?: boolean;
   onSessionChange?: (session: CodexSession) => void;
+  onOpenWorkspacePath?: (path: string) => void;
+  onStartNewSession?: () => void;
   onClose: () => void;
 }
 
@@ -72,6 +83,12 @@ const MODE_META: Record<
     title: "Goal",
     description: "Manage the persisted goal on this native Codex Thread.",
     icon: Flag,
+  },
+  guidance: {
+    title: "Project guidance",
+    description:
+      "Manage Workspace AGENTS.md files and inspect Codex's native Session snapshot.",
+    icon: BookOpenText,
   },
   hooks: {
     title: "Lifecycle hooks",
@@ -113,6 +130,8 @@ export function CodexNativeCommandDialog({
   initialUsageView = "daily",
   editGoalImmediately = false,
   onSessionChange,
+  onOpenWorkspacePath,
+  onStartNewSession,
   onClose,
 }: CodexNativeCommandDialogProps) {
   const titleId = useId();
@@ -187,7 +206,15 @@ export function CodexNativeCommandDialog({
           </button>
         </header>
         <div className={styles.body}>
-          {mode === "personality" ? (
+          {mode === "guidance" ? (
+            <ProjectGuidancePanel
+              language={language}
+              environmentId={environmentId}
+              sessionId={session?.id}
+              onOpenWorkspacePath={onOpenWorkspacePath}
+              onStartNewSession={onStartNewSession}
+            />
+          ) : mode === "personality" ? (
             <PersonalityPanel
               language={language}
               environmentId={environmentId}
@@ -234,6 +261,368 @@ export function CodexNativeCommandDialog({
         </div>
       </section>
     </div>
+  );
+}
+
+const ROOT_AGENTS_PATH = "/workspace/AGENTS.md";
+const ROOT_AGENTS_OVERRIDE_PATH = "/workspace/AGENTS.override.md";
+
+function ProjectGuidancePanel({
+  language,
+  environmentId,
+  sessionId,
+  onOpenWorkspacePath,
+  onStartNewSession,
+}: {
+  language: OperationLanguage;
+  environmentId: string;
+  sessionId?: string;
+  onOpenWorkspacePath?: (path: string) => void;
+  onStartNewSession?: () => void;
+}) {
+  const [existingPaths, setExistingPaths] = useState<Set<string>>();
+  const [guidance, setGuidance] = useState<CodexProjectGuidance>();
+  const [filesLoading, setFilesLoading] = useState(true);
+  const [guidanceLoading, setGuidanceLoading] = useState(Boolean(sessionId));
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState("");
+  const [guidanceError, setGuidanceError] = useState("");
+  const isChinese = language === "zh-CN";
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setExistingPaths(undefined);
+    setGuidance(undefined);
+    setFilesLoading(true);
+    setGuidanceLoading(Boolean(sessionId));
+    setError("");
+    setGuidanceError("");
+    void readRootGuidanceFiles(environmentId, controller.signal)
+      .then(setExistingPaths)
+      .catch((cause) => {
+        if (!controller.signal.aborted) {
+          setError(
+            errorMessage(cause, "Could not load Project guidance."),
+          );
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setFilesLoading(false);
+      });
+
+    if (sessionId) {
+      void apiFetch<ApiEnvelope<CodexProjectGuidance>>(
+        `/api/v1/sessions/${encodeURIComponent(sessionId)}/project-guidance`,
+        { signal: controller.signal },
+      )
+        .then((response) => setGuidance(response.data))
+        .catch((cause) => {
+          if (!controller.signal.aborted) {
+            setGuidanceError(
+              errorMessage(
+                cause,
+                "Could not load the native Session guidance snapshot.",
+              ),
+            );
+          }
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) setGuidanceLoading(false);
+        });
+    }
+    return () => controller.abort();
+  }, [environmentId, sessionId]);
+
+  async function createRootAgents() {
+    if (creating) return;
+    setCreating(true);
+    setError("");
+    try {
+      await apiFetch<ApiEnvelope<WorkspaceFile>>(
+        `/api/v1/environments/${encodeURIComponent(environmentId)}/ide/entries`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            parentPath: "/workspace",
+            name: "AGENTS.md",
+            kind: "file",
+          }),
+        },
+      );
+      setExistingPaths((current) =>
+        new Set([...(current ?? []), ROOT_AGENTS_PATH]),
+      );
+      onOpenWorkspacePath?.(ROOT_AGENTS_PATH);
+    } catch (cause) {
+      setError(errorMessage(cause, "Could not create AGENTS.md."));
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  const agentsExists = existingPaths?.has(ROOT_AGENTS_PATH) ?? false;
+  const overrideExists =
+    existingPaths?.has(ROOT_AGENTS_OVERRIDE_PATH) ?? false;
+
+  return (
+    <div className={styles.guidanceStack}>
+      {error ? <PanelError message={error} /> : null}
+      <section className={styles.guidanceSection}>
+        <div className={styles.guidanceHeading}>
+          <span>
+            <strong>{isChinese ? "环境文件" : "Environment files"}</strong>
+            <small>
+              {isChinese
+                ? "文件内容只保存在共享 Workspace 中。"
+                : "Contents stay only in the shared Workspace."}
+            </small>
+          </span>
+        </div>
+        {filesLoading ? (
+          <PanelLoading
+            label={
+              isChinese ? "正在检查 Workspace…" : "Checking the Workspace…"
+            }
+          />
+        ) : !existingPaths ? null : agentsExists || overrideExists ? (
+          <div className={styles.guidanceFileList}>
+            {overrideExists ? (
+              <GuidanceFileRow
+                path={ROOT_AGENTS_OVERRIDE_PATH}
+                badge={isChinese ? "优先" : "Precedence"}
+                language={language}
+                onOpen={onOpenWorkspacePath}
+              />
+            ) : null}
+            {agentsExists ? (
+              <GuidanceFileRow
+                path={ROOT_AGENTS_PATH}
+                language={language}
+                onOpen={onOpenWorkspacePath}
+              />
+            ) : null}
+          </div>
+        ) : (
+          <div className={styles.empty}>
+            {isChinese
+              ? "根目录还没有 AGENTS.md。"
+              : "There is no root AGENTS.md yet."}
+          </div>
+        )}
+        {!filesLoading && existingPaths ? (
+          <div className={styles.actionRow}>
+            {agentsExists ? (
+              <button
+                type="button"
+                disabled={!onOpenWorkspacePath}
+                onClick={() => onOpenWorkspacePath?.(ROOT_AGENTS_PATH)}
+              >
+                <FolderOpen size={14} aria-hidden="true" />
+                {isChinese ? "编辑 AGENTS.md" : "Edit AGENTS.md"}
+              </button>
+            ) : (
+              <button
+                type="button"
+                className={styles.primaryButton}
+                disabled={creating}
+                onClick={() => void createRootAgents()}
+              >
+                {creating ? (
+                  <LoaderCircle
+                    className={styles.spin}
+                    size={14}
+                    aria-hidden="true"
+                  />
+                ) : (
+                  <FilePlus2 size={14} aria-hidden="true" />
+                )}
+                {isChinese ? "创建 AGENTS.md" : "Create AGENTS.md"}
+              </button>
+            )}
+          </div>
+        ) : null}
+        {overrideExists ? (
+          <p className={styles.footnote}>
+            {isChinese
+              ? "同一目录中的 AGENTS.override.md 会覆盖 AGENTS.md。"
+              : "AGENTS.override.md takes precedence over AGENTS.md in the same directory."}
+          </p>
+        ) : null}
+      </section>
+
+      <section className={styles.guidanceSection}>
+        <div className={styles.guidanceHeading}>
+          <span>
+            <strong>
+              {sessionId
+                ? isChinese
+                  ? "当前 Session 快照"
+                  : "Current Session snapshot"
+                : isChinese
+                  ? "加载时机"
+                  : "Load behavior"}
+            </strong>
+            <small>
+              {sessionId
+                ? `${isChinese ? "工作目录" : "Working directory"}: ${
+                    guidance?.cwd ?? "/workspace"
+                  }`
+                : isChinese
+                  ? "Codex 会在原生 Session 启动时发现适用文件。"
+                  : "Codex discovers applicable files when the native Session starts."}
+            </small>
+          </span>
+        </div>
+        {sessionId ? (
+          guidanceLoading ? (
+            <PanelLoading
+              label={
+                isChinese
+                  ? "正在读取原生 Session 快照…"
+                  : "Reading the native Session snapshot…"
+              }
+            />
+          ) : guidanceError ? (
+            <PanelError message={guidanceError} />
+          ) : guidance?.instructionSources.length ? (
+            <div className={styles.guidanceFileList}>
+              {guidance.instructionSources.map((source, index) => (
+                <div
+                  className={styles.guidanceSourceRow}
+                  key={`${source.path}:${index}`}
+                >
+                  <span>
+                    <code>{source.path}</code>
+                    <small>
+                      {source.workspacePath
+                        ? isChinese
+                          ? "Workspace 指引"
+                          : "Workspace guidance"
+                        : isChinese
+                          ? "Codex 管理或外部来源"
+                          : "Codex-managed or external source"}
+                    </small>
+                  </span>
+                  {source.workspacePath && onOpenWorkspacePath ? (
+                    <button
+                      type="button"
+                      className={styles.iconButton}
+                      aria-label={
+                        isChinese ? `打开 ${source.path}` : `Open ${source.path}`
+                      }
+                      title={
+                        isChinese ? `打开 ${source.path}` : `Open ${source.path}`
+                      }
+                      onClick={() => {
+                        if (source.workspacePath) {
+                          onOpenWorkspacePath(source.workspacePath);
+                        }
+                      }}
+                    >
+                      <FolderOpen size={14} aria-hidden="true" />
+                    </button>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className={styles.empty}>
+              {isChinese
+                ? "此 Session 启动时没有加载任何指引文件。"
+                : "No guidance file was loaded when this Session started."}
+            </div>
+          )
+        ) : (
+          <PanelNotice>
+            {isChinese
+              ? "新 Session 将以 /workspace 为工作目录，并使用 Codex 原生发现规则加载指引。"
+              : "New Sessions use /workspace and Codex's native discovery rules."}
+          </PanelNotice>
+        )}
+        <PanelNotice>
+          {isChinese
+            ? "Codex 按 Session 固定指引快照；保存文件不会改变当前 Session，请新建 Session 应用最新内容。"
+            : "Codex snapshots guidance per Session. Saving a file does not change the current Session; start a new Session to apply it."}
+        </PanelNotice>
+        {sessionId && onStartNewSession ? (
+          <div className={styles.actionRow}>
+            <button
+              type="button"
+              className={styles.primaryButton}
+              onClick={onStartNewSession}
+            >
+              {isChinese ? "新建 Session" : "Start new Session"}
+            </button>
+          </div>
+        ) : null}
+      </section>
+    </div>
+  );
+}
+
+function GuidanceFileRow({
+  path,
+  badge,
+  language,
+  onOpen,
+}: {
+  path: string;
+  badge?: string;
+  language: OperationLanguage;
+  onOpen?: (path: string) => void;
+}) {
+  return (
+    <div className={styles.guidanceSourceRow}>
+      <span>
+        <code>{path}</code>
+        <small>{language === "zh-CN" ? "Workspace 文件" : "Workspace file"}</small>
+      </span>
+      {badge ? <em>{badge}</em> : null}
+      {onOpen ? (
+        <button
+          type="button"
+          className={styles.iconButton}
+          aria-label={
+            language === "zh-CN" ? `打开 ${path}` : `Open ${path}`
+          }
+          title={language === "zh-CN" ? `打开 ${path}` : `Open ${path}`}
+          onClick={() => onOpen(path)}
+        >
+          <FolderOpen size={14} aria-hidden="true" />
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+async function readRootGuidanceFiles(
+  environmentId: string,
+  signal: AbortSignal,
+) {
+  const query = new URLSearchParams({ path: "/workspace" });
+  const response = await apiFetch<ApiEnvelope<WorkspaceDirectoryListing>>(
+    `/api/v1/environments/${encodeURIComponent(environmentId)}/files?${query.toString()}`,
+    { signal },
+  );
+  const conflict = response.data.entries.find(
+    (entry) =>
+      entry.kind !== "file" &&
+      (entry.path === ROOT_AGENTS_PATH ||
+        entry.path === ROOT_AGENTS_OVERRIDE_PATH),
+  );
+  if (conflict) {
+    throw new Error(
+      `${conflict.path} is a folder and cannot be used as Codex Project guidance.`,
+    );
+  }
+  return new Set(
+    response.data.entries.flatMap((entry) =>
+      entry.kind === "file" &&
+      (entry.path === ROOT_AGENTS_PATH ||
+        entry.path === ROOT_AGENTS_OVERRIDE_PATH)
+        ? [entry.path]
+        : [],
+    ),
   );
 }
 

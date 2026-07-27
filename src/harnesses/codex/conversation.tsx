@@ -4,6 +4,7 @@ import Image from "next/image";
 import {
   ArrowDown,
   ArrowUp,
+  BookOpenText,
   Check,
   Copy,
   Files,
@@ -1807,6 +1808,18 @@ export function CodexConversation({
           <div className="conversation-header-actions">
             <button
               type="button"
+              className={`header-action-button ${
+                nativeDialog?.mode === "guidance" ? "is-active" : ""
+              }`}
+              aria-label={ui.projectGuidance}
+              title={ui.projectGuidance}
+              onClick={() => setNativeDialog({ mode: "guidance" })}
+            >
+              <BookOpenText size={15} aria-hidden="true" />
+              <span>{ui.projectGuidance}</span>
+            </button>
+            <button
+              type="button"
               className={`header-action-button ${terminalOpen ? "is-active" : ""}`}
               aria-label={ui.terminal}
               aria-pressed={terminalOpen}
@@ -2159,6 +2172,14 @@ export function CodexConversation({
           initialUsageView={nativeDialog.usageView}
           editGoalImmediately={nativeDialog.editGoalImmediately}
           onSessionChange={onSessionChange}
+          onOpenWorkspacePath={(path) => {
+            setNativeDialog(undefined);
+            onOpenWorkspacePath(path);
+          }}
+          onStartNewSession={() => {
+            setNativeDialog(undefined);
+            onNewSession();
+          }}
           onClose={() => setNativeDialog(undefined)}
         />
       ) : null}

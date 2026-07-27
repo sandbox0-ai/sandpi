@@ -887,6 +887,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
           onToggleInspector={() => handleInspectorOpenChange(!showInspector)}
           terminalOpen={showTerminal}
           onToggleTerminal={() => setTerminalOpen((open) => !open)}
+          onOpenWorkspacePath={openWorkspacePath}
         />
       )}
 
@@ -895,6 +896,8 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
           language={preferences.general.language}
           timeZone={preferences.general.timeZone}
           environment={selectedEnvironment}
+          workspaceNavigationRequest={workspaceNavigationRequest}
+          onWorkspaceNavigationHandled={handleWorkspaceNavigationHandled}
           activeTab={inspectorTab === "activity" ? "files" : inspectorTab}
           onTabChange={handleInspectorTabChange}
           onClose={() => handleInspectorOpenChange(false)}

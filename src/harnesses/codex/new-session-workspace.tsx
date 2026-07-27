@@ -3,6 +3,7 @@
 import Image from "next/image";
 import {
   ArrowUp,
+  BookOpenText,
   GitFork,
   KeyRound,
   LockKeyhole,
@@ -94,6 +95,7 @@ interface NewSessionWorkspaceProps {
   onToggleInspector: () => void;
   terminalOpen: boolean;
   onToggleTerminal: () => void;
+  onOpenWorkspacePath: (path: string) => void;
 }
 
 interface CreateCodexSessionOptions {
@@ -119,6 +121,7 @@ export function CodexNewSessionWorkspace({
   onToggleInspector,
   terminalOpen,
   onToggleTerminal,
+  onOpenWorkspacePath,
 }: NewSessionWorkspaceProps) {
   const ui = getCodexUiCopy(language).newSession;
   const [prompt, setPrompt] = useState("");
@@ -595,6 +598,18 @@ export function CodexNewSessionWorkspace({
         <div className={styles.headerActions}>
           <button
             type="button"
+            className={`${styles.guidanceButton} ${
+              nativeDialog?.mode === "guidance" ? styles.active : ""
+            }`}
+            aria-label={ui.projectGuidance}
+            title={ui.projectGuidance}
+            disabled={environment.status !== "ready"}
+            onClick={() => setNativeDialog({ mode: "guidance" })}
+          >
+            <BookOpenText size={17} aria-hidden="true" />
+          </button>
+          <button
+            type="button"
             className={`${styles.terminalButton} ${terminalOpen ? styles.active : ""}`}
             aria-label={ui.terminal}
             aria-pressed={terminalOpen}
@@ -927,6 +942,10 @@ export function CodexNewSessionWorkspace({
           language={language}
           environmentId={environment.id}
           initialUsageView={nativeDialog.usageView}
+          onOpenWorkspacePath={(path) => {
+            setNativeDialog(undefined);
+            onOpenWorkspacePath(path);
+          }}
           onClose={() => setNativeDialog(undefined)}
         />
       ) : null}
