@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   canInterruptCodexSession,
   codexTurnCapabilitySets,
+  shouldRefreshSettledCodexProjection,
 } from "./capabilities";
 import type { CodexNativeSnapshot } from "./types";
 
@@ -48,6 +49,48 @@ test("keeps server-running Sessions interruptible before a native snapshot arriv
   );
   assert.equal(
     canInterruptCodexSession({
+      sessionRunning: false,
+      localTurnPending: false,
+    }),
+    false,
+  );
+  assert.equal(
+    canInterruptCodexSession({
+      nativeActiveTurnId: "turn-stale",
+      sessionRunning: false,
+      localTurnPending: false,
+    }),
+    false,
+  );
+});
+
+test("refreshes a stale active projection after the Session settles", () => {
+  assert.equal(
+    shouldRefreshSettledCodexProjection({
+      nativeActiveTurnId: "turn-stale",
+      sessionRunning: false,
+      localTurnPending: false,
+    }),
+    true,
+  );
+  assert.equal(
+    shouldRefreshSettledCodexProjection({
+      nativeActiveTurnId: "turn-active",
+      sessionRunning: true,
+      localTurnPending: false,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldRefreshSettledCodexProjection({
+      nativeActiveTurnId: "turn-pending",
+      sessionRunning: false,
+      localTurnPending: true,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldRefreshSettledCodexProjection({
       sessionRunning: false,
       localTurnPending: false,
     }),

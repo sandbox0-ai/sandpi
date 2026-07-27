@@ -58,6 +58,7 @@ import {
 import {
   canInterruptCodexSession,
   codexTurnCapabilitySets,
+  shouldRefreshSettledCodexProjection,
 } from "@/harnesses/codex/capabilities";
 import {
   clipboardCodexImageFiles,
@@ -182,6 +183,7 @@ const CODEX_SESSION_STATUSES = new Set<CodexNativeSnapshot["sessionStatus"]>([
   "completed",
   "failed",
 ]);
+const SETTLED_PROJECTION_REFRESH_DELAY_MS = 250;
 
 interface PendingCodexTurn {
   clientMessageId: string;
@@ -318,8 +320,26 @@ export function CodexConversation({
   const liveNotificationSequencesRef = useRef(new Set<number>());
   const liveNotificationCountRef = useRef(0);
   const nativeSnapshotRefreshRequestedRef = useRef(false);
+  const settledProjectionRefreshKeyRef = useRef<string | null>(null);
   const localComposerPreferenceActiveRef = useRef(false);
   const sessionRef = useRef(session);
+  const requestNativeSnapshotRefresh = useCallback(
+    (options: { clearProjection?: boolean } = {}) => {
+      if (options.clearProjection) {
+        liveNotificationSequencesRef.current.clear();
+        liveNotificationCountRef.current = 0;
+        setNativeSnapshot(null);
+        setLiveNotifications([]);
+      }
+      hasNativeSnapshotRef.current = false;
+      setNativeStreamReady(false);
+      setNativeHistoryError("");
+      if (nativeSnapshotRefreshRequestedRef.current) return;
+      nativeSnapshotRefreshRequestedRef.current = true;
+      setNativeStreamEpoch((current) => current + 1);
+    },
+    [],
+  );
   const visibleTimeline = useMemo(() => {
     return projectCodexTimeline(nativeSnapshot?.thread, liveNotifications);
   }, [liveNotifications, nativeSnapshot?.thread]);
@@ -372,11 +392,14 @@ export function CodexConversation({
   const runningTurnId = runningTurn?.turnId;
   const interruptibleTurnId = visibleTimeline.activeTurn?.turnId;
   const turnRunning = Boolean(runningTurnId || pendingTurn);
-  const canInterruptTurn = canInterruptCodexSession({
+  const interruptProjection = {
     nativeActiveTurnId: interruptibleTurnId,
     sessionRunning: session.status === "running",
     localTurnPending: Boolean(pendingTurn),
-  });
+  };
+  const canInterruptTurn = canInterruptCodexSession(interruptProjection);
+  const settledProjectionNeedsRefresh =
+    shouldRefreshSettledCodexProjection(interruptProjection);
   const nativeReady =
     Boolean(nativeSnapshot) && nativeStreamReady && !nativeHistoryError;
   const contextUsedPercent = codexContextUsedPercent(
@@ -445,6 +468,29 @@ export function CodexConversation({
   }, [session]);
 
   useEffect(() => {
+    if (!settledProjectionNeedsRefresh) {
+      if (session.status === "running" || pendingTurn) {
+        settledProjectionRefreshKeyRef.current = null;
+      }
+      return;
+    }
+    const refreshKey = `${session.id}:${interruptibleTurnId}`;
+    if (settledProjectionRefreshKeyRef.current === refreshKey) return;
+    const timer = window.setTimeout(() => {
+      settledProjectionRefreshKeyRef.current = refreshKey;
+      requestNativeSnapshotRefresh({ clearProjection: true });
+    }, SETTLED_PROJECTION_REFRESH_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, [
+    interruptibleTurnId,
+    pendingTurn,
+    requestNativeSnapshotRefresh,
+    session.id,
+    session.status,
+    settledProjectionNeedsRefresh,
+  ]);
+
+  useEffect(() => {
     setNativeHistoryWaitLong(false);
     if (!nativeHistoryLoading) return;
     const timer = window.setTimeout(() => {
@@ -487,6 +533,7 @@ export function CodexConversation({
     liveNotificationSequencesRef.current.clear();
     liveNotificationCountRef.current = 0;
     nativeSnapshotRefreshRequestedRef.current = false;
+    settledProjectionRefreshKeyRef.current = null;
     localComposerPreferenceActiveRef.current = false;
   }, [session.id]);
 
@@ -703,21 +750,12 @@ export function CodexConversation({
           return;
         }
         if (liveNotificationSequencesRef.current.has(envelope.sequence)) return;
-        if (shouldRefreshCodexNativeSnapshot(liveNotificationCountRef.current)) {
-          // Projection replays the suffix over the native Thread snapshot. Cap
-          // that work and reconnect so app-server supplies a fresh authority
-          // instead of letting a long Turn grow memory and replay cost without
-          // bound.
-          if (!nativeSnapshotRefreshRequestedRef.current) {
-            nativeSnapshotRefreshRequestedRef.current = true;
-            hasNativeSnapshotRef.current = false;
-            setNativeStreamReady(false);
-            setNativeStreamEpoch((current) => current + 1);
-          }
-          return;
-        }
         liveNotificationSequencesRef.current.add(envelope.sequence);
         liveNotificationCountRef.current += 1;
+        const refreshSnapshotAfterNotification =
+          shouldRefreshCodexNativeSnapshot(
+            liveNotificationCountRef.current,
+          );
         setLiveNotifications((current) => [...current, envelope]);
 
         const current = sessionRef.current;
@@ -754,6 +792,12 @@ export function CodexConversation({
           ).catch((error) =>
             console.error("Unable to mark completed Codex Turn as read", error),
           );
+        }
+        if (refreshSnapshotAfterNotification) {
+          // Apply the boundary event before reconnecting. In particular, never
+          // discard turn/completed when it is the event that fills the bounded
+          // suffix.
+          requestNativeSnapshotRefresh();
         }
       } catch (error) {
         console.error("Unable to decode Codex live notification", error);
@@ -878,6 +922,7 @@ export function CodexConversation({
   }, [
     nativeStreamEpoch,
     onSessionChange,
+    requestNativeSnapshotRefresh,
     session.id,
     ui.nativeRolloutUnavailableBody,
     ui.nativeStreamUnavailableBody,
@@ -1489,7 +1534,12 @@ export function CodexConversation({
     setInterrupting(true);
     setAttachmentError("");
     try {
-      await apiFetch<ApiEnvelope<{ requestId: string }>>(
+      const response = await apiFetch<
+        ApiEnvelope<{
+          turnId?: string;
+          status: "interrupting" | "settled";
+        }>
+      >(
         `/api/v1/sessions/${encodeURIComponent(session.id)}/turns/interrupt`,
         {
           method: "POST",
@@ -1498,7 +1548,11 @@ export function CodexConversation({
           ),
         },
       );
-      // Keep the stop state until the native active Turn disappears. Product
+      if (response.data.status === "settled") {
+        setInterrupting(false);
+        requestNativeSnapshotRefresh({ clearProjection: true });
+      }
+      // For an active Turn, keep the stop state until it disappears. Product
       // Session status converges from the shared native event stream/snapshot.
     } catch (error) {
       setAttachmentError(

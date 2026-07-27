@@ -2568,22 +2568,35 @@ export class CodexService {
     sessionId: string;
     turnId?: string;
   }) {
-    await this.requireNativeSessionRuntime(input.userId, input.sessionId);
+    let sessionRuntime = await this.requireNativeSessionRuntime(
+      input.userId,
+      input.sessionId,
+    );
     const turnId = await this.store.requestTurnInterrupt(
       input.sessionId,
       input.turnId,
     );
     if (!turnId) {
+      sessionRuntime = await this.requireNativeSessionRuntime(
+        input.userId,
+        input.sessionId,
+      );
+      if (sessionRuntime.sessionStatus !== "running") {
+        return { status: "settled" as const };
+      }
       throw new HttpError(
         409,
         "codex_turn_not_interruptible",
         "The running Codex Turn has not exposed an interrupt target yet.",
       );
     }
-    const sessionRuntime = await this.requireNativeSessionRuntime(
+    sessionRuntime = await this.requireNativeSessionRuntime(
       input.userId,
       input.sessionId,
     );
+    if (sessionRuntime.sessionStatus !== "running") {
+      return { status: "settled" as const };
+    }
     if (sessionRuntime.interruptRequestedNativeTurnId !== turnId) {
       return { turnId, status: "interrupting" as const };
     }

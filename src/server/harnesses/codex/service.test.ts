@@ -5827,6 +5827,59 @@ test("lazily attaches only the native Session that starts a Turn", async () => {
   }
 });
 
+test("treats an interrupt that reaches an already settled Session as idempotent", async () => {
+  const context = fixture({
+    sessions: [
+      {
+        id: "session-one",
+        nativeSessionId: "thread-one",
+        status: "waiting",
+      },
+    ],
+  });
+  try {
+    const result = await context.service.interruptActiveTurn({
+      userId: "user",
+      sessionId: "session-one",
+      turnId: "turn-browser-stale",
+    });
+
+    assert.deepEqual(result, { status: "settled" });
+    assert.equal(
+      context.writes.some(({ message }) => message.method === "turn/interrupt"),
+      false,
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("still rejects a running Session without an interrupt target", async () => {
+  const context = fixture({
+    sessions: [
+      {
+        id: "session-one",
+        nativeSessionId: "thread-one",
+        status: "running",
+      },
+    ],
+  });
+  try {
+    await assert.rejects(
+      context.service.interruptActiveTurn({
+        userId: "user",
+        sessionId: "session-one",
+      }),
+      (error: unknown) =>
+        error instanceof HttpError &&
+        error.statusCode === 409 &&
+        error.code === "codex_turn_not_interruptible",
+    );
+  } finally {
+    await context.close();
+  }
+});
+
 test("interrupts from the durable active Turn when the browser has no native snapshot", async () => {
   const context = fixture({
     sessions: [
