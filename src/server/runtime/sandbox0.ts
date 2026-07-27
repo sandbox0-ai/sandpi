@@ -27,6 +27,7 @@ import type {
   WorkspaceIdeFile,
   WorkspaceLineChange,
 } from "@/lib/types";
+import { BROWSER_DASHBOARD_SESSION_NAME } from "@/lib/environment-browser";
 import type {
   EnvironmentCredentialMaterial,
   EnvironmentCredentialResolverKind,
@@ -86,6 +87,13 @@ import {
   requireWorkspaceFileRevision,
   workspaceFileRevision,
 } from "./workspace-edit";
+import {
+  isPlaywrightBrowserDependencyUnavailable,
+  isPlaywrightBrowserNotOpen,
+  playwrightProfilePathFromInUseError,
+  playwrightStaleProfileLockRecoveryCommand,
+  type PlaywrightCliResult,
+} from "./playwright-browser-recovery";
 import { reconcileTerminalReplayCursor } from "./terminal-replay";
 import {
   terminalEnvironmentUpdate,
@@ -451,6 +459,7 @@ export class Sandbox0Runtime implements RuntimeAdapter {
 
   async ensureEnvironmentBrowserDashboard(
     runtime: EnvironmentRuntimeRecord,
+    sessionRevision = 0,
   ): Promise<RuntimeBrowserDashboard> {
     const requestToken = createHmac("sha256", this.browserProxyKey)
       .update(runtime.sandboxId, "utf8")
@@ -461,7 +470,9 @@ export class Sandbox0Runtime implements RuntimeAdapter {
       const services = existing.services
         .filter((service) => service.id !== BROWSER_DASHBOARD_SERVICE_ID)
         .map(sandboxAppServiceFromView);
-      services.push(browserDashboardService(requestToken));
+      services.push(
+        browserDashboardService(requestToken, sessionRevision),
+      );
       const updated = await sandbox.updateServices(services);
       const dashboard = updated.services.find(
         (service) => service.id === BROWSER_DASHBOARD_SERVICE_ID,
@@ -487,21 +498,17 @@ export class Sandbox0Runtime implements RuntimeAdapter {
 
   async ensureEnvironmentBrowserSession(
     runtime: EnvironmentRuntimeRecord,
-  ): Promise<void> {
+  ): Promise<boolean> {
     try {
       const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
       await preparePlaywrightWorkspace(sandbox);
       const tabs = await runPlaywrightCli(sandbox, ["tab-list"]);
-      if (tabs.exitCode === 0) return;
-      requirePlaywrightCliSuccess(
-        await runPlaywrightCli(sandbox, [
-          "open",
-          "about:blank",
-          "--browser",
-          "chromium",
-          "--persistent",
-        ]),
-      );
+      if (tabs.exitCode === 0) return false;
+      if (!isPlaywrightBrowserNotOpen(tabs)) {
+        requirePlaywrightCliSuccess(tabs);
+      }
+      await openPlaywrightBrowser(sandbox, "about:blank");
+      return true;
     } catch (error) {
       if (error instanceof HttpError) throw error;
       throw translateSandbox0Error(error);
@@ -511,26 +518,22 @@ export class Sandbox0Runtime implements RuntimeAdapter {
   async openEnvironmentBrowserUrl(
     runtime: EnvironmentRuntimeRecord,
     url: string,
-  ): Promise<void> {
+  ): Promise<boolean> {
     try {
       const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
       await preparePlaywrightWorkspace(sandbox);
       const tabs = await runPlaywrightCli(sandbox, ["tab-list"]);
       if (tabs.exitCode === 0) {
-        requirePlaywrightCliSuccess(
-          await runPlaywrightCli(sandbox, ["tab-new", url]),
-        );
-        return;
+        const openedTab = await runPlaywrightCli(sandbox, ["tab-new", url]);
+        if (openedTab.exitCode === 0) return false;
+        if (!isPlaywrightBrowserNotOpen(openedTab)) {
+          requirePlaywrightCliSuccess(openedTab);
+        }
+      } else if (!isPlaywrightBrowserNotOpen(tabs)) {
+        requirePlaywrightCliSuccess(tabs);
       }
-      requirePlaywrightCliSuccess(
-        await runPlaywrightCli(sandbox, [
-          "open",
-          url,
-          "--browser",
-          "chromium",
-          "--persistent",
-        ]),
-      );
+      await openPlaywrightBrowser(sandbox, url);
+      return true;
     } catch (error) {
       if (error instanceof HttpError) throw error;
       throw translateSandbox0Error(error);
@@ -2343,7 +2346,10 @@ function sandboxAppServiceFromView(
   };
 }
 
-function browserDashboardService(requestToken: string): Sandbox0AppService {
+function browserDashboardService(
+  requestToken: string,
+  sessionRevision: number,
+): Sandbox0AppService {
   return {
     id: BROWSER_DASHBOARD_SERVICE_ID,
     displayName: "Sandpi Browser",
@@ -2353,13 +2359,18 @@ function browserDashboardService(requestToken: string): Sandbox0AppService {
       command: [
         "playwright-cli",
         "show",
+        "--session",
+        BROWSER_DASHBOARD_SESSION_NAME,
         "--host",
         "0.0.0.0",
         "--port",
         String(BROWSER_DASHBOARD_PORT),
       ],
       cwd: "/workspace",
-      envVars: { ...PLAYWRIGHT_CLI_ENVIRONMENT },
+      envVars: {
+        ...PLAYWRIGHT_CLI_ENVIRONMENT,
+        SANDPI_BROWSER_SESSION_REVISION: String(sessionRevision),
+      },
     },
     ingress: {
       _public: true,
@@ -2404,15 +2415,53 @@ function runPlaywrightCli(
   });
 }
 
-function requirePlaywrightCliSuccess(result: {
-  exitCode?: number;
-  stderr: string;
-}) {
+async function openPlaywrightBrowser(
+  sandbox: ReturnType<Client["sandboxes"]["sandbox"]>,
+  url: string,
+) {
+  const args = [
+    "open",
+    url,
+    "--browser",
+    "chromium",
+    "--persistent",
+  ];
+  let result = await runPlaywrightCli(sandbox, args);
   if (result.exitCode === 0) return;
+
+  const profilePath = playwrightProfilePathFromInUseError(result.stderr);
+  const recoveryCommand =
+    profilePath &&
+    playwrightStaleProfileLockRecoveryCommand(profilePath);
+  if (recoveryCommand) {
+    const recovery = await sandbox.cmd("playwright-profile-lock-recovery", {
+      command: recoveryCommand,
+      cwd: "/workspace",
+      envVars: { ...PLAYWRIGHT_CLI_ENVIRONMENT },
+      wait: true,
+      ttlSec: PLAYWRIGHT_CLI_TIMEOUT_SECONDS,
+    });
+    if (recovery.exitCode === 0) {
+      result = await runPlaywrightCli(sandbox, args);
+      if (result.exitCode === 0) return;
+    }
+  }
+  requirePlaywrightCliSuccess(result);
+}
+
+function requirePlaywrightCliSuccess(result: PlaywrightCliResult) {
+  if (result.exitCode === 0) return;
+  if (isPlaywrightBrowserDependencyUnavailable(result)) {
+    throw new HttpError(
+      503,
+      "environment_browser_dependency_unavailable",
+      "This Environment does not include a compatible Playwright CLI and Chromium. Recreate it with the current coding-agent template.",
+    );
+  }
   throw new HttpError(
     503,
-    "environment_browser_unavailable",
-    "The official Playwright browser is unavailable in this Environment. Recreate it with the current coding-agent template.",
+    "environment_browser_recovery_failed",
+    "The shared Environment browser could not be recovered. Retry after the Environment finishes resuming.",
   );
 }
 

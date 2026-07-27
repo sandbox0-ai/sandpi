@@ -1,7 +1,51 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { sandboxLoopbackUrl } from "./environment-browser";
+import {
+  BROWSER_DASHBOARD_READY_MESSAGE,
+  BROWSER_DASHBOARD_SESSION_NAME,
+  BROWSER_DASHBOARD_SESSION_READY_MESSAGE,
+  BROWSER_DASHBOARD_THEME_TOKEN_MAP,
+  isBrowserDashboardReadyMessage,
+  isBrowserDashboardSessionReadyMessage,
+  sandboxLoopbackUrl,
+} from "./environment-browser";
+
+test("recognizes only the embedded Dashboard ready message", () => {
+  assert.equal(
+    isBrowserDashboardReadyMessage({
+      type: BROWSER_DASHBOARD_READY_MESSAGE,
+    }),
+    true,
+  );
+  assert.equal(
+    isBrowserDashboardReadyMessage({
+      type: "sandpi:browser-dashboard-theme",
+    }),
+    false,
+  );
+  assert.equal(isBrowserDashboardReadyMessage(null), false);
+  assert.equal(
+    isBrowserDashboardSessionReadyMessage({
+      type: BROWSER_DASHBOARD_SESSION_READY_MESSAGE,
+    }),
+    true,
+  );
+  assert.equal(
+    isBrowserDashboardSessionReadyMessage({
+      type: BROWSER_DASHBOARD_READY_MESSAGE,
+    }),
+    false,
+  );
+  assert.equal(BROWSER_DASHBOARD_SESSION_NAME, "default");
+  assert.deepEqual(BROWSER_DASHBOARD_THEME_TOKEN_MAP["--canvas"], [
+    "--color-canvas-default",
+  ]);
+  assert.deepEqual(BROWSER_DASHBOARD_THEME_TOKEN_MAP["--line"], [
+    "--color-border-default",
+    "--vscode-panel-border",
+  ]);
+});
 
 test("accepts HTTP loopback URLs that the Environment browser can reach", () => {
   assert.equal(

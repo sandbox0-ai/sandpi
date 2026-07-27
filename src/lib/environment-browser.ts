@@ -4,6 +4,69 @@ const SANDBOX_LOOPBACK_HOSTS = new Set([
   "[::1]",
 ]);
 
+export const BROWSER_DASHBOARD_READY_MESSAGE =
+  "sandpi:browser-dashboard-ready";
+export const BROWSER_DASHBOARD_SESSION_READY_MESSAGE =
+  "sandpi:browser-dashboard-session-ready";
+export const BROWSER_DASHBOARD_THEME_MESSAGE =
+  "sandpi:browser-dashboard-theme";
+export const BROWSER_DASHBOARD_SESSION_NAME = "default";
+
+export const BROWSER_DASHBOARD_THEME_TOKEN_MAP = {
+  "--canvas": ["--color-canvas-default"],
+  "--sidebar": ["--color-canvas-inset", "--color-canvas-subtle"],
+  "--panel": ["--color-canvas-overlay"],
+  "--panel-strong": ["--color-btn-bg"],
+  "--ink": ["--color-fg-default"],
+  "--ink-soft": ["--color-fg-muted"],
+  "--ink-faint": ["--color-fg-subtle"],
+  "--line": ["--color-border-default", "--vscode-panel-border"],
+  "--line-soft": ["--color-border-muted"],
+  "--hover": ["--color-neutral-subtle"],
+  "--selected": ["--color-neutral-muted"],
+  "--green": ["--color-success-fg"],
+  "--green-soft": ["--color-success-subtle"],
+  "--amber": ["--color-attention-fg"],
+  "--amber-soft": ["--color-attention-subtle"],
+  "--red": ["--color-danger-fg"],
+  "--red-soft": ["--color-danger-subtle"],
+  "--blue": ["--color-accent-emphasis", "--color-accent-fg"],
+  "--blue-soft": ["--color-accent-muted", "--color-accent-subtle"],
+  "--shadow-lg": ["--color-overlay-shadow"],
+} as const;
+
+export type BrowserDashboardTheme = "system" | "light" | "dark";
+export type BrowserDashboardResolvedTheme = "light" | "dark";
+
+export interface BrowserDashboardThemeMessage {
+  type: typeof BROWSER_DASHBOARD_THEME_MESSAGE;
+  theme: BrowserDashboardTheme;
+  resolvedTheme: BrowserDashboardResolvedTheme;
+  tokens: Record<string, string>;
+}
+
+export function isBrowserDashboardReadyMessage(
+  value: unknown,
+): value is { type: typeof BROWSER_DASHBOARD_READY_MESSAGE } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "type" in value &&
+    value.type === BROWSER_DASHBOARD_READY_MESSAGE
+  );
+}
+
+export function isBrowserDashboardSessionReadyMessage(
+  value: unknown,
+): value is { type: typeof BROWSER_DASHBOARD_SESSION_READY_MESSAGE } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "type" in value &&
+    value.type === BROWSER_DASHBOARD_SESSION_READY_MESSAGE
+  );
+}
+
 /**
  * Returns an HTTP URL that intentionally resolves inside the Environment
  * browser, not on the Sandpi user's device.

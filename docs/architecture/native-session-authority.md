@@ -199,6 +199,30 @@ state or page model in PostgreSQL. Workspace backups do include the persistent
 browser profile, so access to those snapshots must be treated as access to the
 Environment's logged-in browser credentials.
 
+Sandpi adapts only the embedded Dashboard shell: it binds the Dashboard to the
+shared `default` session explicitly, hides Playwright's redundant session
+sidebar and theme control, stretches the browser viewport to the Inspector
+bounds, and projects Sandpi's system/light/dark theme tokens into the frame.
+Playwright's `show --session default` reveal applies only to the Dashboard
+connection present when that command runs, so every newly embedded connection
+also selects the first tab in `default` after Playwright publishes it. Sandpi
+keeps its loading surface above the frame until the selected tab has delivered
+a live screencast image; users never need to operate the hidden session picker.
+Playwright continues to own the browser toolbar, pages and interaction behavior.
+
+An Environment resume can terminate Chromium while leaving its persistent
+profile's `Singleton*` symlinks on the Workspace Volume. If Playwright reports
+that `default` is stopped and then reports that its validated default profile
+is still in use, Sandpi checks that `SingletonLock` names another Sandbox host
+or a dead local PID, removes only the three ephemeral singleton symlinks, and
+retries the official CLI once. It never deletes profile data. A successful
+browser restart increments the Dashboard service revision so the embedded
+Dashboard reconnects to the replacement daemon; an already-running browser
+does not restart connected Dashboard clients. Missing CLI or Chromium
+dependencies remain a template compatibility error; other failed starts are
+reported as runtime recovery failures instead of telling the user to recreate
+the Environment unconditionally.
+
 An authenticated chat link using HTTP or HTTPS on `localhost`, `127.0.0.1` or
 `::1` opens in a new tab in that remote browser, where loopback resolves inside
 the Sandbox rather than on the user's device. Scheme-less Markdown link targets

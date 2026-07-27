@@ -891,6 +891,8 @@ test("publishes the official Dashboard behind a server-only hashed header", asyn
   assert.deepEqual(service.runtime.command, [
     "playwright-cli",
     "show",
+    "--session",
+    "default",
     "--host",
     "0.0.0.0",
     "--port",
@@ -900,6 +902,7 @@ test("publishes the official Dashboard behind a server-only hashed header", asyn
   assert.equal(service.runtime.envVars.PLAYWRIGHT_MCP_BROWSER, "chromium");
   assert.equal(service.runtime.envVars.PLAYWRIGHT_MCP_ISOLATED, "false");
   assert.equal(service.runtime.envVars.PLAYWRIGHT_MCP_SANDBOX, "false");
+  assert.equal(service.runtime.envVars.SANDPI_BROWSER_SESSION_REVISION, "0");
   assert.equal(service.ingress._public, true);
   assert.deepEqual(service.ingress.routes[0]?.methods, ["GET"]);
   assert.equal(service.ingress.routes[0]?.resume, false);
@@ -940,7 +943,9 @@ test("uses only official Playwright CLI commands for the shared browser", async 
               return {
                 exitCode: browserOpen ? 0 : 1,
                 stdout: "",
-                stderr: "",
+                stderr: browserOpen
+                  ? ""
+                  : "Error: Browser 'default' is not open.",
               };
             }
             if (operation === "open") browserOpen = true;
@@ -962,10 +967,16 @@ test("uses only official Playwright CLI commands for the shared browser", async 
     },
   };
 
-  await runtime.ensureEnvironmentBrowserSession(coordinates);
-  await runtime.openEnvironmentBrowserUrl(
-    coordinates,
-    "http://localhost:3000/",
+  assert.equal(
+    await runtime.ensureEnvironmentBrowserSession(coordinates),
+    true,
+  );
+  assert.equal(
+    await runtime.openEnvironmentBrowserUrl(
+      coordinates,
+      "http://localhost:3000/",
+    ),
+    false,
   );
 
   assert.deepEqual(
@@ -992,6 +1003,146 @@ test("uses only official Playwright CLI commands for the shared browser", async 
     assert.equal(command.envVars.HOME, "/workspace");
     assert.equal(command.envVars.PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD, "1");
   }
+});
+
+test("recovers one stale persistent browser profile lock", async () => {
+  const commands: Array<{ alias: string; command: string[] }> = [];
+  let openAttempts = 0;
+  const profilePath =
+    "/workspace/.cache/ms-playwright/daemon/8af22c44f40455cc/ud-default-chrome-for-testing";
+  const runtime = runtimeWithClient({
+    sandboxes: {
+      sandbox() {
+        return {
+          async cmd(alias: string, options: { command: string[] }) {
+            commands.push({ alias, command: options.command });
+            if (options.command[0] === "node") {
+              assert.equal(options.command.at(-1), profilePath);
+              return { exitCode: 0, stdout: "", stderr: "" };
+            }
+            const operation = options.command[1];
+            if (operation === "tab-list") {
+              return {
+                exitCode: 1,
+                stdout: "",
+                stderr: "Error: Browser 'default' is not open.",
+              };
+            }
+            if (operation === "open" && openAttempts++ === 0) {
+              return {
+                exitCode: 1,
+                stdout: "",
+                stderr: `Error: Browser is already in use for ${profilePath}, use --isolated`,
+              };
+            }
+            return { exitCode: 0, stdout: "", stderr: "" };
+          },
+        };
+      },
+    },
+  });
+  const coordinates: EnvironmentRuntimeRecord = {
+    id: environment.id,
+    sandboxId: environment.sandboxId,
+    workspaceVolumeId: environment.workspaceVolumeId,
+    runtimeGeneration: 1,
+    decoder: {
+      supervisorCursor: 0,
+      tailBase64: "",
+      runtimeGeneration: 1,
+    },
+  };
+
+  assert.equal(
+    await runtime.ensureEnvironmentBrowserSession(coordinates),
+    true,
+  );
+
+  assert.deepEqual(
+    commands.map(({ alias, command }) => [alias, command[0], command[1]]),
+    [
+      ["playwright-cli", "playwright-cli", "install"],
+      ["playwright-cli", "playwright-cli", "tab-list"],
+      ["playwright-cli", "playwright-cli", "open"],
+      ["playwright-profile-lock-recovery", "node", "-e"],
+      ["playwright-cli", "playwright-cli", "open"],
+    ],
+  );
+});
+
+test("distinguishes missing Playwright dependencies from failed recovery", async () => {
+  const coordinates: EnvironmentRuntimeRecord = {
+    id: environment.id,
+    sandboxId: environment.sandboxId,
+    workspaceVolumeId: environment.workspaceVolumeId,
+    runtimeGeneration: 1,
+    decoder: {
+      supervisorCursor: 0,
+      tailBase64: "",
+      runtimeGeneration: 1,
+    },
+  };
+  const missing = runtimeWithClient({
+    sandboxes: {
+      sandbox() {
+        return {
+          async cmd() {
+            return {
+              exitCode: 127,
+              stdout: "",
+              stderr: "playwright-cli: command not found",
+            };
+          },
+        };
+      },
+    },
+  });
+  await assert.rejects(
+    missing.ensureEnvironmentBrowserSession(coordinates),
+    (error) =>
+      error instanceof HttpError &&
+      error.code === "environment_browser_dependency_unavailable",
+  );
+
+  const profilePath =
+    "/workspace/.cache/ms-playwright/daemon/8af22c44f40455cc/ud-default-chrome-for-testing";
+  const unrecoverable = runtimeWithClient({
+    sandboxes: {
+      sandbox() {
+        return {
+          async cmd(
+            alias: string,
+            options: { command: string[] },
+          ) {
+            if (alias === "playwright-profile-lock-recovery") {
+              return { exitCode: 12, stdout: "", stderr: "" };
+            }
+            if (options.command[1] === "tab-list") {
+              return {
+                exitCode: 1,
+                stdout: "",
+                stderr: "Error: Browser 'default' is not open.",
+              };
+            }
+            if (options.command[1] === "open") {
+              return {
+                exitCode: 1,
+                stdout: "",
+                stderr: `Error: Browser is already in use for ${profilePath}, use --isolated`,
+              };
+            }
+            return { exitCode: 0, stdout: "", stderr: "" };
+          },
+        };
+      },
+    },
+  });
+  await assert.rejects(
+    unrecoverable.ensureEnvironmentBrowserSession(coordinates),
+    (error) =>
+      error instanceof HttpError &&
+      error.code === "environment_browser_recovery_failed",
+  );
 });
 
 test("creates, restores and deletes native snapshots for the Environment Workspace Volume", async () => {

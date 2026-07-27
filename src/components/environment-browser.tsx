@@ -1,9 +1,18 @@
 "use client";
 
 import { LoaderCircle, RefreshCw, TriangleAlert } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { apiFetch, apiUrl } from "@/lib/api-client";
+import {
+  BROWSER_DASHBOARD_THEME_MESSAGE,
+  BROWSER_DASHBOARD_THEME_TOKEN_MAP,
+  type BrowserDashboardResolvedTheme,
+  type BrowserDashboardTheme,
+  type BrowserDashboardThemeMessage,
+  isBrowserDashboardReadyMessage,
+  isBrowserDashboardSessionReadyMessage,
+} from "@/lib/environment-browser";
 
 export interface EnvironmentBrowserNavigationRequest {
   id: number;
@@ -31,9 +40,11 @@ export function EnvironmentBrowser({
   copy,
 }: EnvironmentBrowserProps) {
   const [ready, setReady] = useState(false);
+  const [dashboardReady, setDashboardReady] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [retry, setRetry] = useState(0);
+  const dashboardFrame = useRef<HTMLIFrameElement>(null);
   const completedNavigationId = useRef<number | undefined>(undefined);
   const pendingRequest = useRef<{
     key: string;
@@ -43,6 +54,61 @@ export function EnvironmentBrowser({
     navigationRequest?.environmentId === environmentId
       ? navigationRequest
       : undefined;
+
+  const sendDashboardTheme = useCallback(() => {
+    const frame = dashboardFrame.current;
+    if (!frame?.contentWindow) return;
+
+    const root = document.documentElement;
+    const theme: BrowserDashboardTheme =
+      root.dataset.theme === "light" || root.dataset.theme === "dark"
+        ? root.dataset.theme
+        : "system";
+    const resolvedTheme: BrowserDashboardResolvedTheme =
+      root.dataset.resolvedTheme === "dark" ? "dark" : "light";
+    const styles = getComputedStyle(root);
+    const tokens: Record<string, string> = {};
+    for (const name of Object.keys(BROWSER_DASHBOARD_THEME_TOKEN_MAP)) {
+      const value = styles.getPropertyValue(name).trim();
+      if (value) tokens[name] = value;
+    }
+    const message: BrowserDashboardThemeMessage = {
+      type: BROWSER_DASHBOARD_THEME_MESSAGE,
+      theme,
+      resolvedTheme,
+      tokens,
+    };
+    const targetOrigin = new URL(frame.src, window.location.href).origin;
+    frame.contentWindow.postMessage(message, targetOrigin);
+  }, []);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    const handleDashboardMessage = (event: MessageEvent<unknown>) => {
+      if (
+        event.source === dashboardFrame.current?.contentWindow &&
+        isBrowserDashboardReadyMessage(event.data)
+      ) {
+        sendDashboardTheme();
+      }
+      if (
+        event.source === dashboardFrame.current?.contentWindow &&
+        isBrowserDashboardSessionReadyMessage(event.data)
+      ) {
+        setDashboardReady(true);
+      }
+    };
+    const observer = new MutationObserver(sendDashboardTheme);
+    observer.observe(root, {
+      attributes: true,
+      attributeFilter: ["data-theme", "data-resolved-theme"],
+    });
+    window.addEventListener("message", handleDashboardMessage);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("message", handleDashboardMessage);
+    };
+  }, [sendDashboardTheme]);
 
   useEffect(() => {
     if (!requestedNavigation && ready) return;
@@ -115,16 +181,18 @@ export function EnvironmentBrowser({
     <div className="environment-browser">
       {ready ? (
         <iframe
+          ref={dashboardFrame}
           className="environment-browser-frame"
           src={apiUrl(
-            `/api/v1/environments/${encodeURIComponent(environmentId)}/browser/`,
+            `/api/v1/environments/${encodeURIComponent(environmentId)}/browser/?embed=1`,
           )}
           title={copy.title}
           referrerPolicy="no-referrer"
           sandbox="allow-forms allow-same-origin allow-scripts"
+          onLoad={sendDashboardTheme}
         />
       ) : null}
-      {!ready || error ? (
+      {!ready || !dashboardReady || error ? (
         <div
           className={`environment-browser-state ${error ? "is-error" : ""}`}
           role={error ? "alert" : "status"}
@@ -147,7 +215,7 @@ export function EnvironmentBrowser({
           ) : null}
         </div>
       ) : null}
-      {busy && ready && !error ? (
+      {busy && ready && dashboardReady && !error ? (
         <span className="environment-browser-busy" role="status">
           <LoaderCircle
             className="environment-browser-spinner"

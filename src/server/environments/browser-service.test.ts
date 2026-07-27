@@ -6,6 +6,7 @@ import {
   dashboardAssetPath,
   dashboardProxyPrefix,
   dashboardRedirectLocation,
+  rewriteDashboardCss,
   rewriteDashboardHtml,
 } from "./browser-service";
 import type { EnvironmentRuntimeAccessService } from "./runtime-access-service";
@@ -74,6 +75,13 @@ test("reuses protected coordinates but admits every HTTP and WebSocket request",
     },
   );
   assert.deepEqual(
+    await service.httpUpstream("user-browser", runtimeRecord.id, undefined),
+    {
+      url: "https://dashboard.example.invalid/",
+      headers: { "X-Sandpi-Browser-Proxy": "secret" },
+    },
+  );
+  assert.deepEqual(
     await service.websocketUpstream(
       "user-browser",
       runtimeRecord.id,
@@ -84,8 +92,52 @@ test("reuses protected coordinates but admits every HTTP and WebSocket request",
       headers: { "X-Sandpi-Browser-Proxy": "secret" },
     },
   );
-  assert.equal(admissions, 3);
+  assert.equal(admissions, 4);
   assert.equal(dashboardEnsures, 1);
+});
+
+test("restarts the Dashboard only after the shared browser is restarted", async () => {
+  const dashboardRevisions: number[] = [];
+  let browserRestarted = true;
+  const runtimeAccess = {
+    async withRuntimeAccess(
+      _userId: string,
+      _environmentId: string,
+      operation: (runtime: EnvironmentRuntimeRecord) => Promise<unknown>,
+    ) {
+      return operation(runtimeRecord);
+    },
+  } as unknown as EnvironmentRuntimeAccessService;
+  const runtime = {
+    async ensureEnvironmentBrowserSession() {
+      return browserRestarted;
+    },
+    async ensureEnvironmentBrowserDashboard(
+      _runtime: EnvironmentRuntimeRecord,
+      sessionRevision: number,
+    ) {
+      dashboardRevisions.push(sessionRevision);
+      return {
+        publicUrl: "https://dashboard.example.invalid",
+        requestHeaders: {},
+      };
+    },
+  } as unknown as RuntimeAdapter;
+  const service = new EnvironmentBrowserService(runtimeAccess, runtime);
+
+  await service.ensureSession("user-browser", runtimeRecord.id);
+  await service.httpUpstream("user-browser", runtimeRecord.id, undefined);
+  await service.httpUpstream("user-browser", runtimeRecord.id, "index.html");
+
+  browserRestarted = false;
+  await service.ensureSession("user-browser", runtimeRecord.id);
+  await service.httpUpstream("user-browser", runtimeRecord.id, undefined);
+
+  browserRestarted = true;
+  await service.ensureSession("user-browser", runtimeRecord.id);
+  await service.httpUpstream("user-browser", runtimeRecord.id, undefined);
+
+  assert.deepEqual(dashboardRevisions, [1, 2]);
 });
 
 test("maps only official Dashboard static paths", () => {
@@ -111,6 +163,46 @@ test("rewrites the official Dashboard redirect and root-relative assets", () => 
       prefix,
     ),
     '<script src="/api/v1/environments/environment%20one/browser/assets/app.js"></script><link href="/api/v1/environments/environment%20one/browser/playwright-logo.svg">',
+  );
+  assert.equal(
+    rewriteDashboardCss(
+      '@font-face{src:url(/assets/codicon.ttf)}.external{src:url("https://example.com/font.woff2")}',
+      prefix,
+    ),
+    '@font-face{src:url(/api/v1/environments/environment%20one/browser/assets/codicon.ttf)}.external{src:url("https://example.com/font.woff2")}',
+  );
+});
+
+test("embeds Sandpi layout and theme control into the official Dashboard", () => {
+  const rewritten = rewriteDashboardHtml(
+    `<!doctype html>
+<html>
+  <head>
+    <script type="module" src="/assets/index.js"></script>
+    <link rel="stylesheet" href="/assets/index.css">
+  </head>
+  <body><div id="root"></div></body>
+</html>`,
+    "/api/v1/environments/environment/browser",
+  );
+
+  assert.match(rewritten, /data-sandpi-browser-dashboard/);
+  assert.match(rewritten, /sandpi:browser-dashboard-ready/);
+  assert.match(rewritten, /sandpi:browser-dashboard-theme/);
+  assert.match(
+    rewritten,
+    /#root > \.split-view\.horizontal\.sidebar-first > \.split-view-sidebar/,
+  );
+  assert.match(rewritten, /\.browser-window \{/);
+  assert.match(rewritten, /width: 100% !important/);
+  assert.match(rewritten, /--color-canvas-default/);
+  assert.match(
+    rewritten,
+    /src="\/api\/v1\/environments\/environment\/browser\/assets\/index\.js"/,
+  );
+  assert.match(
+    rewritten,
+    /href="\/api\/v1\/environments\/environment\/browser\/assets\/index\.css"/,
   );
 });
 

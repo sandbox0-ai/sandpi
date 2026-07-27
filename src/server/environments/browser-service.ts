@@ -1,4 +1,5 @@
 import type { EnvironmentRuntimeAccessService } from "./runtime-access-service";
+import { embedBrowserDashboard } from "./browser-dashboard-embed";
 import { HttpError } from "@/server/http-error";
 import type {
   RuntimeAdapter,
@@ -23,6 +24,7 @@ export class EnvironmentBrowserService {
     string,
     Promise<RuntimeBrowserDashboard>
   >();
+  private readonly dashboardSessionRevisions = new Map<string, number>();
 
   constructor(
     private readonly runtimeAccess: EnvironmentRuntimeAccessService,
@@ -30,19 +32,21 @@ export class EnvironmentBrowserService {
   ) {}
 
   async ensureSession(userId: string, environmentId: string) {
-    await this.runtimeAccess.withRuntimeAccess(
+    const restarted = await this.runtimeAccess.withRuntimeAccess(
       userId,
       environmentId,
       (runtime) => this.runtime.ensureEnvironmentBrowserSession(runtime),
     );
+    if (restarted) this.restartDashboard(environmentId);
   }
 
   async openUrl(userId: string, environmentId: string, url: string) {
-    await this.runtimeAccess.withRuntimeAccess(
+    const restarted = await this.runtimeAccess.withRuntimeAccess(
       userId,
       environmentId,
       (runtime) => this.runtime.openEnvironmentBrowserUrl(runtime, url),
     );
+    if (restarted) this.restartDashboard(environmentId);
   }
 
   async httpUpstream(
@@ -95,7 +99,11 @@ export class EnvironmentBrowserService {
       pending = this.runtimeAccess.withRuntimeAccess(
         userId,
         environmentId,
-        (runtime) => this.runtime.ensureEnvironmentBrowserDashboard(runtime),
+        (runtime) =>
+          this.runtime.ensureEnvironmentBrowserDashboard(
+            runtime,
+            this.dashboardSessionRevisions.get(environmentId) ?? 0,
+          ),
       );
       this.dashboards.set(environmentId, pending);
       void pending.catch(() => {
@@ -114,6 +122,14 @@ export class EnvironmentBrowserService {
       );
     }
     return pending;
+  }
+
+  private restartDashboard(environmentId: string) {
+    this.dashboards.delete(environmentId);
+    this.dashboardSessionRevisions.set(
+      environmentId,
+      (this.dashboardSessionRevisions.get(environmentId) ?? 0) + 1,
+    );
   }
 }
 
@@ -160,5 +176,16 @@ export function dashboardRedirectLocation(
 }
 
 export function rewriteDashboardHtml(html: string, proxyPrefix: string) {
-  return html.replace(/((?:src|href)=["'])\/(?!\/)/g, `$1${proxyPrefix}/`);
+  const rewritten = html.replace(
+    /((?:src|href)=["'])\/(?!\/)/g,
+    `$1${proxyPrefix}/`,
+  );
+  return embedBrowserDashboard(rewritten);
+}
+
+export function rewriteDashboardCss(css: string, proxyPrefix: string) {
+  return css.replace(
+    /url\((\s*)(["']?)\/(?!\/)/g,
+    `url($1$2${proxyPrefix}/`,
+  );
 }

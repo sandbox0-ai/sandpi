@@ -186,14 +186,15 @@ export interface RuntimeAdapter {
   ): Promise<RuntimeMcpOAuthCallbackService>;
   ensureEnvironmentBrowserDashboard(
     runtime: EnvironmentRuntimeRecord,
+    sessionRevision?: number,
   ): Promise<RuntimeBrowserDashboard>;
   ensureEnvironmentBrowserSession(
     runtime: EnvironmentRuntimeRecord,
-  ): Promise<void>;
+  ): Promise<boolean>;
   openEnvironmentBrowserUrl(
     runtime: EnvironmentRuntimeRecord,
     url: string,
-  ): Promise<void>;
+  ): Promise<boolean>;
   createEnvironmentWorkspaceBackup(
     runtime: EnvironmentRuntimeRecord,
     input: { name: string; description: string },

@@ -60,6 +60,7 @@ import {
   EnvironmentBrowserService,
   dashboardProxyPrefix,
   dashboardRedirectLocation,
+  rewriteDashboardCss,
   rewriteDashboardHtml,
 } from "@/server/environments/browser-service";
 import {
@@ -1838,16 +1839,18 @@ function registerApiRoutes(
       );
     },
   );
+  // Next's development rewrite can remove the trailing slash before proxying
+  // this request. Serve both root spellings directly so the iframe cannot loop
+  // between the frontend proxy and a permanent slash redirect.
   app.get<{ Params: { environmentId: string } }>(
     "/api/v1/environments/:environmentId/browser",
     async (request, reply) =>
-      reply
-        .status(308)
-        .header(
-          "Location",
-          `${dashboardProxyPrefix(request.params.environmentId)}/`,
-        )
-        .send(),
+      proxyEnvironmentBrowserAsset(
+        services.browser,
+        request,
+        reply,
+        undefined,
+      ),
   );
   app.get<{ Params: { environmentId: string } }>(
     "/api/v1/environments/:environmentId/browser/",
@@ -2410,6 +2413,8 @@ async function proxyEnvironmentBrowserAsset(
   const payload =
     normalizedAssetPath === "index.html"
       ? Buffer.from(rewriteDashboardHtml(body.toString("utf8"), prefix))
+      : normalizedAssetPath?.endsWith(".css")
+        ? Buffer.from(rewriteDashboardCss(body.toString("utf8"), prefix))
       : body;
   return reply.status(response.status).send(payload);
 }

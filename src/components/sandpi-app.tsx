@@ -853,10 +853,6 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
     <AppFrame
       as="main"
       className={`app-shell ${showInspector ? "inspector-is-open" : ""} ${
-        showInspector && inspectorTab === "browser"
-          ? "browser-inspector-is-open"
-          : ""
-      } ${
         showTerminal ? "terminal-is-open" : ""
       } ${sidebarOpen ? "sidebar-is-open" : ""} ${
         sidebarCollapsed ? "sidebar-is-collapsed" : ""
