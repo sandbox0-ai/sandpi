@@ -210,24 +210,26 @@ export function EnvironmentSchedules({
   }
 
   return (
-    <div className={styles.root}>
-      <div className={styles.toolbar}>
+    <div className="codex-extension-panel">
+      <div className="codex-extension-toolbar">
         <p>
           Sandpi persists each occurrence before waking the Environment. Missed
           cron intervals are coalesced, and overlapping runs are recorded as
           skipped.
         </p>
-        <button
-          type="button"
-          className="secondary-action-button"
-          onClick={() => {
-            setDraft(emptyDraft(timeZone, availableSessions[0]?.id));
-            setFormError("");
-          }}
-        >
-          <Plus size={15} />
-          New Schedule
-        </button>
+        <div>
+          <button
+            type="button"
+            className="secondary-action-button"
+            onClick={() => {
+              setDraft(emptyDraft(timeZone, availableSessions[0]?.id));
+              setFormError("");
+            }}
+          >
+            <Plus size={13} aria-hidden="true" />
+            New Schedule
+          </button>
+        </div>
       </div>
 
       {loadError ? (
@@ -252,14 +254,24 @@ export function EnvironmentSchedules({
       ) : null}
 
       {loading ? (
-        <div className={styles.empty}>Loading Schedules…</div>
-      ) : schedules.length === 0 ? (
-        <div className={styles.empty}>
-          <CalendarClock size={22} aria-hidden="true" />
-          <strong>No Schedules yet</strong>
+        <div
+          className="codex-extension-empty"
+          aria-label="Loading Schedules"
+        >
           <span>
-            Create a one-time or recurring Codex task for this Environment.
+            <CalendarClock size={18} aria-hidden="true" />
           </span>
+          <strong>Loading Schedules…</strong>
+        </div>
+      ) : schedules.length === 0 ? (
+        <div className="codex-extension-empty">
+          <span>
+            <CalendarClock size={18} aria-hidden="true" />
+          </span>
+          <strong>No Schedules yet</strong>
+          <p>
+            Create a one-time or recurring Codex task for this Environment.
+          </p>
         </div>
       ) : (
         <div className={styles.list}>
@@ -452,11 +464,16 @@ function ScheduleEditor({
   onSave: () => void;
 }) {
   return (
-    <div className={styles.editor}>
-      <div className={styles.editorHeader}>
+    <section
+      className="environment-credential-editor"
+      aria-labelledby="environment-schedule-editor-title"
+    >
+      <header>
         <div>
           <span>{draft.id ? "Edit Automation" : "New Automation"}</span>
-          <strong>{draft.id ? draft.name : "Schedule a Codex task"}</strong>
+          <strong id="environment-schedule-editor-title">
+            {draft.id ? draft.name : "Schedule a Codex task"}
+          </strong>
         </div>
         <button
           type="button"
@@ -465,11 +482,11 @@ function ScheduleEditor({
           disabled={saving}
           onClick={onCancel}
         >
-          <X size={17} />
+          <X size={15} aria-hidden="true" />
         </button>
-      </div>
+      </header>
 
-      <div className={styles.grid}>
+      <div className="field-grid two-columns">
         <label>
           Name
           <input
@@ -482,7 +499,9 @@ function ScheduleEditor({
           />
         </label>
         <label>
-          Session title <small>optional</small>
+          <span className={styles.fieldHeading}>
+            Session title <small>optional</small>
+          </span>
           <input
             autoComplete="off"
             maxLength={200}
@@ -495,9 +514,10 @@ function ScheduleEditor({
         </label>
       </div>
 
-      <label className={styles.fullField}>
+      <label className="full-field">
         Prompt
         <textarea
+          className={styles.promptInput}
           maxLength={100_000}
           rows={8}
           placeholder="Describe the complete task, expected checks, and desired output."
@@ -506,10 +526,14 @@ function ScheduleEditor({
             onChange({ ...draft, prompt: event.target.value })
           }
         />
-        <small>{draft.prompt.length.toLocaleString()} / 100,000</small>
+        <small className={styles.characterCount}>
+          {draft.prompt.length.toLocaleString()} / 100,000
+        </small>
       </label>
 
-      <fieldset className={styles.choiceField}>
+      <fieldset
+        className={`environment-credential-locations ${styles.choiceField}`}
+      >
         <legend>Timing</legend>
         <label>
           <input
@@ -532,8 +556,10 @@ function ScheduleEditor({
       </fieldset>
 
       {draft.timingKind === "once" ? (
-        <label className={styles.fullField}>
-          Run at <small>browser local time</small>
+        <label className="full-field">
+          <span className={styles.fieldHeading}>
+            Run at <small>browser local time</small>
+          </span>
           <input
             type="datetime-local"
             value={draft.runAt}
@@ -543,7 +569,7 @@ function ScheduleEditor({
           />
         </label>
       ) : (
-        <div className={styles.grid}>
+        <div className="field-grid two-columns">
           <label>
             Five-field cron
             <input
@@ -569,7 +595,9 @@ function ScheduleEditor({
         </div>
       )}
 
-      <fieldset className={styles.choiceField}>
+      <fieldset
+        className={`environment-credential-locations ${styles.choiceField}`}
+      >
         <legend>Run in</legend>
         <label>
           <input
@@ -599,7 +627,7 @@ function ScheduleEditor({
       </fieldset>
 
       {draft.targetKind === "session" ? (
-        <label className={styles.fullField}>
+        <label className="full-field">
           Target Session
           <select
             value={draft.targetSessionId}
@@ -637,7 +665,7 @@ function ScheduleEditor({
         </p>
       ) : null}
 
-      <div className={styles.editorActions}>
+      <footer>
         <button
           type="button"
           className="button-secondary"
@@ -654,8 +682,8 @@ function ScheduleEditor({
         >
           {saving ? "Saving…" : draft.id ? "Save Schedule" : "Create Schedule"}
         </button>
-      </div>
-    </div>
+      </footer>
+    </section>
   );
 }
 
@@ -671,10 +699,18 @@ function ScheduleRunHistory({
   timeZone: string;
 }) {
   if (loading && !runs) {
-    return <div className={styles.history}>Loading run history…</div>;
+    return (
+      <div className={`${styles.history} ${styles.historyEmpty}`}>
+        Loading run history…
+      </div>
+    );
   }
   if (!runs?.length) {
-    return <div className={styles.history}>No occurrences recorded yet.</div>;
+    return (
+      <div className={`${styles.history} ${styles.historyEmpty}`}>
+        No occurrences recorded yet.
+      </div>
+    );
   }
   return (
     <div className={styles.history}>
