@@ -664,7 +664,7 @@ export function CodexAgentThreadsDialog({
 
         <footer className={styles.footer}>
           <span>
-            <code>/agent</code> · <code>/subagents</code>
+            <code>/agent</code>
           </span>
           <span>
             {language === "zh-CN"

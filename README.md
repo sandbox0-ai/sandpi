@@ -141,23 +141,25 @@ Web today; iOS / Android / HarmonyOS later
   Session with the matching native start source, `/rename [name]` updates the
   Sandpi Session title without mutating native Thread metadata, and `/fork` creates and selects
   a child product Session. `/skills`, `/mcp [verbose]`, `/permissions`,
-  `/model`, `/mention` and `/diff` open their existing Sandpi surfaces; verbose
-  MCP also shows the native tools, resources and templates. `/agent` and its
-  Codex compatibility spelling `/subagents`
-  open a dedicated native Agent Threads tree and transcript viewer; this is
-  separate from Session Activity. `/ide` opens the Workspace Inspector, while
-  `/logout` opens the Codex account connection
+  `/mention` and `/diff` open their existing Sandpi surfaces; verbose MCP also
+  shows the native tools, resources and templates. `/agent` opens a dedicated
+  native Agent Threads tree containing the main Agent and its spawned
+  subagents; this is separate from Session Activity. `/ide` opens the Workspace
+  Inspector, while `/logout` opens the Codex account connection
   instead of logging out without confirmation. `/compact`, `/review` and
   `/goal`, `/personality`, `/usage daily|weekly|cumulative`, `/memories`,
   `/hooks`, `/ps` and `/stop` call the native Codex app-server. Goal supports
   edit, pause, resume and clear from either command arguments or its dialog.
+  The Memories feature switch turns native memory use and generation on or off
+  together; either policy remains independently adjustable while enabled.
   Inline review displays the native
   wrapper result without exposing its private reviewer Turn as an interrupted
   user Turn. `/plan` submits Codex's native Plan collaboration mode, and
   the input toolbar exposes a Fast switch only when the selected model's live
-  metadata reports a Fast service tier. `/fast` and `/status` are omitted
-  because Fast is a visible composer control and Session status is already
-  visible in the browser. `/side`, its `/btw` alias, and `/resume` remain absent:
+  metadata reports a Fast service tier. `/model`, `/fast` and `/status` are
+  omitted because model and Fast are visible composer controls and Session
+  status is already visible in the browser. `/side`, its `/btw` alias, and
+  `/resume` remain absent:
   Codex implements side conversations and resume as TUI application behavior,
   while Sandpi owns browser Session selection. Sandpi never forwards an unknown
   slash command as ordinary agent text. Other terminal-only commands remain

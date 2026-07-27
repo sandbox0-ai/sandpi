@@ -294,7 +294,6 @@ export function CodexConversation({
     string | undefined
   >();
   const composerRef = useRef<HTMLTextAreaElement>(null);
-  const modelSelectRef = useRef<HTMLSelectElement>(null);
   const scrollbarHideTimerRef = useRef<number | null>(null);
   const pendingTurnStartedAtRef = useRef<number | null>(null);
   const nativeAcceptedMessageIdsRef = useRef(new Set<string>());
@@ -931,26 +930,6 @@ export function CodexConversation({
     });
   }
 
-  function openModelPicker() {
-    const select = modelSelectRef.current;
-    if (!select || select.disabled) {
-      setCommandNotice({
-        tone: "error",
-        message:
-          language === "zh-CN"
-            ? "Codex 模型列表当前不可用。"
-            : "The Codex model catalog is currently unavailable.",
-      });
-      return;
-    }
-    select.focus();
-    try {
-      select.showPicker();
-    } catch {
-      // Focus remains a usable fallback when the browser blocks showPicker.
-    }
-  }
-
   function markNativeCommandRunning() {
     const current = sessionRef.current;
     const next: CodexSession = {
@@ -984,10 +963,6 @@ export function CodexConversation({
         ...(argumentsValue ? { title: argumentsValue } : {}),
         source: command.name === "clear" ? "clear" : "startup",
       });
-      return;
-    }
-    if (command.intent === "composer.model") {
-      openModelPicker();
       return;
     }
     if (command.intent === "composer.mention") {
@@ -2107,7 +2082,6 @@ export function CodexConversation({
                 setFastMode(enabled);
                 setCommandNotice(null);
               }}
-              modelSelectRef={modelSelectRef}
               mentionOpenRequest={mentionOpenRequest}
               status={{
                 state: nativeHistoryError

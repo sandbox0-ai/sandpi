@@ -25,13 +25,14 @@ import {
   type ReactNode,
 } from "react";
 
-import type {
-  CodexBackgroundTerminals,
-  CodexHooksInventory,
-  CodexMemoriesSettings,
-  CodexPersonalitySelection,
-  CodexPersonalitySettings,
-  CodexTokenUsage,
+import {
+  codexMemoriesFeatureToggleSettings,
+  type CodexBackgroundTerminals,
+  type CodexHooksInventory,
+  type CodexMemoriesSettings,
+  type CodexPersonalitySelection,
+  type CodexPersonalitySettings,
+  type CodexTokenUsage,
 } from "@/harnesses/codex/native-capabilities";
 import {
   codexTokenUsagePoints,
@@ -579,22 +580,12 @@ function MemoriesPanel({
         title={language === "zh-CN" ? "启用 Memories" : "Enable memories"}
         detail={
           language === "zh-CN"
-            ? "启用 Codex memory tool；新 Session 会完整应用此能力。"
-            : "Enable the Codex memory tool; new Sessions apply the capability fully."
+            ? "开启时同步启用记忆读取和写入，关闭时同步禁用两者。"
+            : "Turn memory reading and writing on or off together."
         }
         checked={draft.featureEnabled}
         onChange={(featureEnabled) =>
-          setDraft((current) =>
-            current
-              ? {
-                  ...current,
-                  featureEnabled,
-                  useMemories: featureEnabled && current.useMemories,
-                  generateMemories:
-                    featureEnabled && current.generateMemories,
-                }
-              : current,
-          )
+          setDraft(codexMemoriesFeatureToggleSettings(featureEnabled))
         }
       />
       <SettingRow

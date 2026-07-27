@@ -313,11 +313,10 @@ conversation dispatcher. The New Session and active Session composers use one
 Codex registry and parser, support pointer plus Up/Down/Tab/Enter/Escape
 interaction, and reject unknown commands locally instead of sending them to the
 model as user text. Each registry entry also names a stable browser intent.
-Dispatch switches on that intent rather than command text, so Codex aliases
-such as `/agent` and `/subagents` share one implementation. The Codex TUI is the
+Dispatch switches on that intent rather than command text. The Codex TUI is the
 behavioral reference for command meaning, while app-server remains the data and
-mutation authority; terminal-only presentation commands are not copied into
-the browser.
+mutation authority; redundant aliases and terminal-only presentation commands
+are not copied into the browser.
 
 The model-visible input boundary is strict. Sandpi submits only text the user
 can see in a composer, validated native image inputs, or the verbatim Codex TUI
@@ -340,14 +339,13 @@ already exists:
   metadata remains harness-owned. Bare `/rename` opens the same product
   operation in a dialog. `/archive`
   updates product Session metadata.
-- `/model`, `/mention`, `/diff`, `/skills`, `/mcp [verbose]` and `/permissions`
-  open the corresponding composer, Inspector or Environment settings surface.
-  MCP verbose requests full native status and renders server tools, resources
-  and resource templates.
-- `/ide` opens the Workspace Inspector. `/agent` and `/subagents` open the
-  dedicated native Agent Threads picker described below. `/logout` opens the
-  Codex account connection so the user retains the existing confirmation and
-  reconnect flow.
+- `/mention`, `/diff`, `/skills`, `/mcp [verbose]` and `/permissions` open the
+  corresponding composer, Inspector or Environment settings surface. MCP
+  verbose requests full native status and renders server tools, resources and
+  resource templates.
+- `/ide` opens the Workspace Inspector. `/agent` opens the dedicated native
+  Agent Threads picker described below. `/logout` opens the Codex account
+  connection so the user retains the existing confirmation and reconnect flow.
 - `/copy` copies the latest assistant message.
 - `/compact` calls `thread/compact/start`; `/review` calls inline
   `review/start` with either the native `uncommittedChanges` target or a custom
@@ -366,8 +364,10 @@ already exists:
   `thread/settings/update` on a loaded Thread. `/usage
   daily|weekly|cumulative` projects `account/usage/read` token activity and is
   deliberately separate from Sandpi/Sandbox0 billing usage.
-- `/memories` writes `features.memories` and native memory policy, rereads the
-  effective layered values, updates the selected Thread's
+- `/memories` writes `features.memories` and native memory policy. Its feature
+  switch enables or disables both memory use and generation together; after
+  enabling, either policy can still be adjusted independently. Sandpi rereads
+  the effective layered values, updates the selected Thread's
   `thread/memoryMode/set` eligibility, and exposes
   `memory/reset`. `/hooks` reads `hooks/list` and only upserts user-controlled
   enablement or the reviewed current hash under `hooks.state`.
@@ -386,12 +386,13 @@ already exists:
 
 Session Activity is a parent-Thread execution and audit feed; it is not the
 Codex Agent picker. Sandpi initializes app-server with
-`capabilities.experimentalApi`, then `/agent` and `/subagents` use
+`capabilities.experimentalApi`, then `/agent` uses
 `thread/list(ancestorThreadId)` to page the persisted spawn tree at any depth.
-This preserves completed descendants across Sandpi, app-server and Sandbox
-restarts. Selecting a row calls `thread/read(includeTurns: true)` and projects
-that native child transcript with the same Codex message, tool and Turn
-renderers used by the main conversation. A child that has not materialized
+The Agent picker contains the main Agent thread and its spawned subagent
+threads. This preserves completed descendants across Sandpi, app-server and
+Sandbox restarts. Selecting a row calls `thread/read(includeTurns: true)` and
+projects that native child transcript with the same Codex message, tool and
+Turn renderers used by the main conversation. A child that has not materialized
 history yet falls back to metadata-only display.
 
 The server re-reads the ancestor tree before accepting a child Thread id, so a
@@ -413,13 +414,14 @@ projections may normalize validated native values, but must not invent harness
 behavior.
 
 `/resume` is intentionally absent because Sandpi's sidebar and URL own product
-Session selection. `/fast` is absent because the composer owns that switch, and
-`/status` is absent because the browser already presents the relevant state.
-TUI terminal styling, local-login and debug commands are likewise omitted
-rather than emulated or forwarded. Commands for Apps, plugins, experimental
-flags, feedback and permanent deletion stay absent until Sandpi has a faithful
-product surface and lifecycle contract for them. A native mutation that cannot
-safely overlap a Turn is hidden and rejected while the current Turn is active.
+Session selection. `/model` and `/fast` are absent because the composer owns
+those controls, and `/status` is absent because the browser already presents
+the relevant state. TUI terminal styling, local-login and debug commands are
+likewise omitted rather than emulated or forwarded. Commands for Apps, plugins,
+experimental flags, feedback and permanent deletion stay absent until Sandpi
+has a faithful product surface and lifecycle contract for them. A native
+mutation that cannot safely overlap a Turn is hidden and rejected while the
+current Turn is active.
 
 Uploaded composer files use the Sandbox0 File API and live under
 `/workspace/.sandpi/uploads/{upload-id}/{safe-name}`. Sandpi validates a

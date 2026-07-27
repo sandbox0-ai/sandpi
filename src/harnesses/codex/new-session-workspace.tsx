@@ -148,7 +148,6 @@ export function CodexNewSessionWorkspace({
   const [images, setImages] = useState<CodexComposerImage[]>([]);
   const [localImages, setLocalImages] = useState<CodexComposerLocalImage[]>([]);
   const promptRef = useRef<HTMLTextAreaElement>(null);
-  const modelSelectRef = useRef<HTMLSelectElement>(null);
   const selectedModel = modelOptions.find(
     (model) => model.id === selectedModelId,
   );
@@ -311,26 +310,6 @@ export function CodexNewSessionWorkspace({
     window.requestAnimationFrame(() => promptRef.current?.focus());
   }
 
-  function openModelPicker() {
-    const select = modelSelectRef.current;
-    if (!select || select.disabled) {
-      setCommandNotice({
-        tone: "error",
-        message:
-          language === "zh-CN"
-            ? "Codex 模型列表当前不可用。"
-            : "The Codex model catalog is currently unavailable.",
-      });
-      return;
-    }
-    select.focus();
-    try {
-      select.showPicker();
-    } catch {
-      // Focus remains a usable fallback when the browser blocks showPicker.
-    }
-  }
-
   async function executeSlashCommand(
     command: CodexSlashCommand,
     argumentsValue: string,
@@ -338,10 +317,6 @@ export function CodexNewSessionWorkspace({
     clearComposerPrompt();
     setCommandNotice(null);
     setError("");
-    if (command.intent === "composer.model") {
-      openModelPicker();
-      return;
-    }
     if (command.intent === "composer.mention") {
       setMentionOpenRequest((request) => request + 1);
       return;
@@ -830,7 +805,6 @@ export function CodexNewSessionWorkspace({
               setFastMode(enabled);
               setCommandNotice(null);
             }}
-            modelSelectRef={modelSelectRef}
             mentionOpenRequest={mentionOpenRequest}
             status={{
               state:

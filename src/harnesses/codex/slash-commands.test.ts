@@ -31,7 +31,9 @@ test("keeps unsupported terminal-only commands out of the browser catalog", () =
   assert.equal(names.has("ps"), true);
   assert.equal(names.has("stop"), true);
   assert.equal(names.has("fast"), false);
+  assert.equal(names.has("model"), false);
   assert.equal(names.has("status"), false);
+  assert.equal(names.has("subagents"), false);
 });
 
 test("preserves Codex task-time availability for native slash behavior", () => {
@@ -53,13 +55,13 @@ test("preserves Codex task-time availability for native slash behavior", () => {
   }
 });
 
-test("maps Codex agent command spellings to the native Agent Threads intent", () => {
+test("maps /agent to the native Agent Threads intent", () => {
   const agentCommands = CODEX_SLASH_COMMANDS.filter(
     (command) => command.intent === "agents.open",
   );
   assert.deepEqual(
     agentCommands.map((command) => command.name),
-    ["agent", "subagents"],
+    ["agent"],
   );
   assert.equal(
     agentCommands.every(
@@ -129,17 +131,20 @@ test("parses arguments and rejects unavailable or unknown commands", () => {
     kind: "unknown",
     name: "resume",
   });
+  assert.deepEqual(parseCodexSlashInvocation("/model", "session"), {
+    kind: "unknown",
+    name: "model",
+  });
+  assert.deepEqual(parseCodexSlashInvocation("/subagents", "session"), {
+    kind: "unknown",
+    name: "subagents",
+  });
 });
 
 test("completes argument commands without executing them", () => {
   const rename = CODEX_SLASH_COMMANDS.find(
     (command) => command.name === "rename",
   );
-  const model = CODEX_SLASH_COMMANDS.find(
-    (command) => command.name === "model",
-  );
   assert.ok(rename);
-  assert.ok(model);
   assert.equal(codexSlashCommandCompletion(rename), "/rename ");
-  assert.equal(codexSlashCommandCompletion(model), "/model");
 });

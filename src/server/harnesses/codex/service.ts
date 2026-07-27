@@ -34,17 +34,18 @@ import type {
   CodexSkillsInventory,
   CodexSpendControlSnapshot,
 } from "@/harnesses/codex/environment-tools";
-import type {
-  CodexBackgroundTerminal,
-  CodexBackgroundTerminals,
-  CodexHook,
-  CodexHookIssue,
-  CodexHooksInventory,
-  CodexMemoriesSettings,
-  CodexPersonality,
-  CodexPersonalitySelection,
-  CodexPersonalitySettings,
-  CodexTokenUsage,
+import {
+  codexMemoriesFeatureToggleSettings,
+  type CodexBackgroundTerminal,
+  type CodexBackgroundTerminals,
+  type CodexHook,
+  type CodexHookIssue,
+  type CodexHooksInventory,
+  type CodexMemoriesSettings,
+  type CodexPersonality,
+  type CodexPersonalitySelection,
+  type CodexPersonalitySettings,
+  type CodexTokenUsage,
 } from "@/harnesses/codex/native-capabilities";
 import type { Environment } from "@/lib/types";
 import { toUnixTimestamp } from "@/lib/time";
@@ -1482,6 +1483,9 @@ export class CodexService {
     runtime: StoredEnvironmentRuntime,
     settings: CodexMemoriesSettings,
   ) {
+    const normalizedSettings = settings.featureEnabled
+      ? settings
+      : codexMemoriesFeatureToggleSettings(false);
     const response = await this.requestCodex(environmentId, runtime, {
       method: "config/batchWrite",
       id: rpcId("memories-config-write", environmentId),
@@ -1489,17 +1493,17 @@ export class CodexService {
         edits: [
           {
             keyPath: "features.memories",
-            value: settings.featureEnabled,
+            value: normalizedSettings.featureEnabled,
             mergeStrategy: "replace",
           },
           {
             keyPath: "memories.use_memories",
-            value: settings.useMemories,
+            value: normalizedSettings.useMemories,
             mergeStrategy: "replace",
           },
           {
             keyPath: "memories.generate_memories",
-            value: settings.generateMemories,
+            value: normalizedSettings.generateMemories,
             mergeStrategy: "replace",
           },
         ],
@@ -5154,8 +5158,12 @@ function codexMemoriesSettings(
 ): CodexMemoriesSettings {
   const features = objectRecord(config.features);
   const memories = objectRecord(config.memories);
+  const featureEnabled = objectBoolean(features, "memories") === true;
+  if (!featureEnabled) {
+    return codexMemoriesFeatureToggleSettings(false);
+  }
   return {
-    featureEnabled: objectBoolean(features, "memories") === true,
+    featureEnabled,
     useMemories: objectBoolean(memories, "use_memories") === true,
     generateMemories:
       objectBoolean(memories, "generate_memories") === true,

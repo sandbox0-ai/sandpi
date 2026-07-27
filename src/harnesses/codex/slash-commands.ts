@@ -4,8 +4,8 @@ export type CodexSlashCommandContext = "new-session" | "session";
 
 /**
  * Stable browser intents decouple Codex command spelling from Sandpi UI
- * execution. Aliases such as `/agent` and `/subagents` intentionally share an
- * intent, while the menu can continue mirroring the Codex TUI vocabulary.
+ * execution while keeping the registry independent from shared conversation
+ * dispatch.
  */
 export type CodexCommandIntent =
   | "agents.open"
@@ -20,7 +20,6 @@ export type CodexCommandIntent =
   | "codex.stop"
   | "codex.usage"
   | "composer.mention"
-  | "composer.model"
   | "composer.plan"
   | "environment.credentials"
   | "environment.mcp"
@@ -49,7 +48,6 @@ export type CodexSlashCommandName =
   | "mcp"
   | "memories"
   | "mention"
-  | "model"
   | "new"
   | "permissions"
   | "plan"
@@ -59,7 +57,6 @@ export type CodexSlashCommandName =
   | "review"
   | "skills"
   | "stop"
-  | "subagents"
   | "usage";
 
 // Kept verbatim with codex-rs/tui/prompt_for_init_command.md from the Codex
@@ -264,16 +261,6 @@ export const CODEX_SLASH_COMMANDS: readonly CodexSlashCommand[] = [
     },
   },
   {
-    name: "model",
-    intent: "composer.model",
-    contexts: BOTH_CONTEXTS,
-    argumentMode: "none",
-    description: {
-      en: "Choose a model reported by Codex",
-      "zh-CN": "选择 Codex 提供的模型",
-    },
-  },
-  {
     name: "personality",
     intent: "codex.personality",
     contexts: BOTH_CONTEXTS,
@@ -315,16 +302,6 @@ export const CODEX_SLASH_COMMANDS: readonly CodexSlashCommand[] = [
   },
   {
     name: "agent",
-    intent: "agents.open",
-    contexts: ["session"],
-    argumentMode: "none",
-    description: {
-      en: "Switch or inspect native Codex agent threads",
-      "zh-CN": "切换或查看 Codex 原生 Agent Threads",
-    },
-  },
-  {
-    name: "subagents",
     intent: "agents.open",
     contexts: ["session"],
     argumentMode: "none",

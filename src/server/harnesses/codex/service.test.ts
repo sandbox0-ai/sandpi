@@ -2306,6 +2306,55 @@ test("projects native personality, usage, and memory settings", async () => {
       { threadId: "thread-one", mode: "enabled" },
     );
     assert.deepEqual(
+      await context.service.setSessionMemories({
+        userId: "user",
+        sessionId: "session-one",
+        settings: {
+          featureEnabled: false,
+          useMemories: true,
+          generateMemories: true,
+        },
+      }),
+      {
+        featureEnabled: false,
+        useMemories: false,
+        generateMemories: false,
+      },
+    );
+    assert.deepEqual(
+      context.writes
+        .filter(({ message }) => message.method === "config/batchWrite")
+        .at(-1)?.message.params,
+      {
+        edits: [
+          {
+            keyPath: "features.memories",
+            value: false,
+            mergeStrategy: "replace",
+          },
+          {
+            keyPath: "memories.use_memories",
+            value: false,
+            mergeStrategy: "replace",
+          },
+          {
+            keyPath: "memories.generate_memories",
+            value: false,
+            mergeStrategy: "replace",
+          },
+        ],
+        reloadUserConfig: true,
+      },
+    );
+    assert.deepEqual(
+      context.writes
+        .filter(
+          ({ message }) => message.method === "thread/memoryMode/set",
+        )
+        .at(-1)?.message.params,
+      { threadId: "thread-one", mode: "disabled" },
+    );
+    assert.deepEqual(
       await context.service.resetEnvironmentMemories("user", environment.id),
       { reset: true },
     );
@@ -2324,8 +2373,8 @@ test("uses effective Codex configuration after native writes", async () => {
             config: {
               features: { memories: false },
               memories: {
-                use_memories: false,
-                generate_memories: false,
+                use_memories: true,
+                generate_memories: true,
               },
             },
             layers: [],

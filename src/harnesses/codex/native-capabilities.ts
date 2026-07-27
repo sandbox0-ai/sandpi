@@ -49,6 +49,16 @@ export interface CodexMemoriesSettings {
   generateMemories: boolean;
 }
 
+export function codexMemoriesFeatureToggleSettings(
+  featureEnabled: boolean,
+): CodexMemoriesSettings {
+  return {
+    featureEnabled,
+    useMemories: featureEnabled,
+    generateMemories: featureEnabled,
+  };
+}
+
 export type CodexHookTrustStatus =
   | "trusted"
   | "untrusted"
