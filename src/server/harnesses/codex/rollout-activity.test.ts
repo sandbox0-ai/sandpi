@@ -5,6 +5,7 @@ import {
   CODEX_ROLLOUT_MAX_RECORDS,
   CODEX_ROLLOUT_MAX_VALUE_STRING_LENGTH,
   parseCodexRolloutActivity,
+  parseCodexRolloutSupplement,
 } from "./rollout-activity";
 
 const THREAD_ID = "019f-thread-native";
@@ -28,6 +29,70 @@ function responseItem(
 ) {
   return { timestamp, type: "response_item", payload };
 }
+
+test("restores the latest persisted context-window usage", () => {
+  const supplement = parseCodexRolloutSupplement(
+    jsonl([
+      sessionMeta(),
+      {
+        timestamp: "2026-07-18T00:00:01.000Z",
+        type: "event_msg",
+        payload: {
+          type: "token_count",
+          info: {
+            total_token_usage: {
+              input_tokens: 20_000,
+              cached_input_tokens: 2_000,
+              output_tokens: 2_000,
+              reasoning_output_tokens: 1_000,
+              total_tokens: 23_000,
+            },
+            last_token_usage: {
+              input_tokens: 18_000,
+              cached_input_tokens: 2_000,
+              output_tokens: 2_000,
+              reasoning_output_tokens: 1_000,
+              total_tokens: 21_000,
+            },
+            model_context_window: 200_000,
+          },
+          rate_limits: null,
+        },
+      },
+      {
+        timestamp: "2026-07-18T00:00:02.000Z",
+        type: "event_msg",
+        payload: {
+          type: "token_count",
+          info: {
+            total_token_usage: {
+              input_tokens: 30_000,
+              cached_input_tokens: 3_000,
+              output_tokens: 3_000,
+              reasoning_output_tokens: 2_000,
+              total_tokens: 35_000,
+            },
+            last_token_usage: {
+              input_tokens: 24_000,
+              cached_input_tokens: 3_000,
+              output_tokens: 3_000,
+              reasoning_output_tokens: 2_000,
+              total_tokens: 29_000,
+            },
+            model_context_window: 200_000,
+          },
+          rate_limits: null,
+        },
+      },
+    ]),
+    THREAD_ID,
+  );
+
+  assert.equal(supplement.activity.availability, "available");
+  assert.equal(supplement.tokenUsage?.total.totalTokens, 35_000);
+  assert.equal(supplement.tokenUsage?.last.totalTokens, 29_000);
+  assert.equal(supplement.tokenUsage?.modelContextWindow, 200_000);
+});
 
 test("pairs native call/output families by turn, family, and call id", () => {
   const feed = parseCodexRolloutActivity(

@@ -3258,6 +3258,14 @@ code.codex-compact-activity-subject {
   gap: 10px;
 }
 
+.composer-context-usage {
+  display: inline-flex;
+  align-items: center;
+  color: var(--ink-faint);
+  font-size: 9.5px;
+  white-space: nowrap;
+}
+
 .connection-copy {
   display: inline-flex;
   align-items: center;

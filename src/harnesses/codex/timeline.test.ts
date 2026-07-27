@@ -12,7 +12,10 @@ import {
   shouldRefreshCodexNativeSnapshot,
 } from "./events";
 import { groupCodexTimelineByTurn } from "./timeline";
-import { CODEX_TRANSCRIPT_NOTIFICATION_METHODS } from "./types";
+import {
+  CODEX_SESSION_NOTIFICATION_METHODS,
+  CODEX_TRANSCRIPT_NOTIFICATION_METHODS,
+} from "./types";
 import type {
   CodexEventEnvelope,
   CodexServerNotification,
@@ -1242,6 +1245,12 @@ test("keeps every modeled plan and reasoning notification in the live suffix", (
   );
   assert.equal(
     CODEX_TRANSCRIPT_NOTIFICATION_METHODS.includes("item/reasoning/textDelta"),
+    true,
+  );
+  assert.equal(
+    CODEX_SESSION_NOTIFICATION_METHODS.includes(
+      "thread/tokenUsage/updated",
+    ),
     true,
   );
 });

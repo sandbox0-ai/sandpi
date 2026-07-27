@@ -272,6 +272,13 @@ read generation prevent a late result from replacing a newer Session snapshot.
 The UI presents the newest Turn group first and keeps Codex's native action
 order inside each Turn.
 
+The same non-blocking rollout pass restores the latest persisted
+`token_count.info` for the Thread, while `thread/tokenUsage/updated` supplies
+new values during an active Turn. The existing Session composer displays the
+baseline-adjusted percentage of the user-controllable context window, matching
+Codex's native calculation from `last.totalTokens` and `modelContextWindow`.
+Sandpi does not estimate message text or persist a second usage counter.
+
 New Session model discovery is also Environment-native. Its request wakes and
 initializes that Environment's Codex app-server, waits for `model/list`, and
 selects the native default model. Each model's `supportedReasoningEfforts` and

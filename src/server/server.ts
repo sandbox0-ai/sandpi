@@ -1953,7 +1953,7 @@ async function streamHarnessEvents(
   let latestActivity: CodexRolloutActivityFeed | undefined;
   const writeActivity = (
     identity: ActivityIdentity,
-    activity: CodexRolloutActivityFeed,
+    supplement: Awaited<NativeSnapshotRead["supplement"]>,
     generation: number,
   ) => {
     if (
@@ -1964,11 +1964,11 @@ async function streamHarnessEvents(
       return;
     }
     activityIdentity = identity;
-    latestActivity = activity;
+    latestActivity = supplement.activity;
     reply.raw.write(
       `event: activity\ndata: ${JSON.stringify({
         ...identity,
-        activity,
+        ...supplement,
       })}\n\n`,
     );
   };
@@ -1979,13 +1979,16 @@ async function streamHarnessEvents(
     writeActivity(
       activityIdentity,
       {
-        source: "codex-rollout",
-        availability: records.length > 0 ? "partial" : "unavailable",
-        records,
-        error: {
-          code: "codex_rollout_activity_refresh_failed",
-          message: `Codex persisted Session Activity could not be refreshed: ${normalized.message}`,
+        activity: {
+          source: "codex-rollout",
+          availability: records.length > 0 ? "partial" : "unavailable",
+          records,
+          error: {
+            code: "codex_rollout_activity_refresh_failed",
+            message: `Codex persisted Session Activity could not be refreshed: ${normalized.message}`,
+          },
         },
+        tokenUsage: null,
       },
       generation,
     );
@@ -2003,10 +2006,10 @@ async function streamHarnessEvents(
       latestActivity = undefined;
     }
     activityIdentity = identity;
-    void read.activity
-      .then((activity) => {
+    void read.supplement
+      .then((supplement) => {
         if (generation === activityGeneration) {
-          writeActivity(identity, activity, generation);
+          writeActivity(identity, supplement, generation);
         }
       })
       .catch((error: unknown) => writeActivityFailure(error, generation));

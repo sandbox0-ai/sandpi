@@ -65,6 +65,7 @@ interface CodexComposerToolbarProps {
   fastDisabled: boolean;
   onFastEnabledChange: (enabled: boolean) => void;
   mentionOpenRequest?: number;
+  contextUsedPercent?: number | null;
   status: CodexComposerStatus;
   action: ReactNode;
 }
@@ -89,6 +90,9 @@ const composerCopy = {
     selectModel: (agent: string) => `Select ${agent} model`,
     selectReasoning: (model: string) => `Select reasoning effort for ${model}`,
     fastMode: (name: string) => `${name} mode`,
+    contextUsed: (percent: number) => `Context ${percent}%`,
+    contextUsedTitle: (percent: number) =>
+      `${percent}% of the current context is used`,
   },
   "zh-CN": {
     uploadFiles: "上传文件",
@@ -109,6 +113,8 @@ const composerCopy = {
     selectModel: (agent: string) => `选择 ${agent} 模型`,
     selectReasoning: (model: string) => `选择 ${model} 的推理深度`,
     fastMode: (name: string) => `${name} 模式`,
+    contextUsed: (percent: number) => `上下文 ${percent}%`,
+    contextUsedTitle: (percent: number) => `当前上下文已使用 ${percent}%`,
   },
 } as const;
 
@@ -191,6 +197,7 @@ export function CodexComposerToolbar({
   fastDisabled,
   onFastEnabledChange,
   mentionOpenRequest,
+  contextUsedPercent,
   status,
   action,
 }: CodexComposerToolbarProps) {
@@ -573,6 +580,20 @@ export function CodexComposerToolbar({
         </span>
       </div>
       <div className="composer-send-area">
+        {contextUsedPercent !== null &&
+        contextUsedPercent !== undefined ? (
+          <span
+            className="composer-context-usage"
+            role="meter"
+            aria-label={copy.contextUsedTitle(contextUsedPercent)}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={contextUsedPercent}
+            title={copy.contextUsedTitle(contextUsedPercent)}
+          >
+            {copy.contextUsed(contextUsedPercent)}
+          </span>
+        ) : null}
         <span
           className={`connection-copy ${
             status.state === "unavailable"

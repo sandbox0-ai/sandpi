@@ -9,7 +9,7 @@ import {
   visibleCodexTurns,
 } from "@/harnesses/codex/inline-review";
 import {
-  CODEX_TRANSCRIPT_NOTIFICATION_METHODS,
+  CODEX_SESSION_NOTIFICATION_METHODS,
   type CodexAgentThreads,
   type CodexEventEnvelope,
   type CodexNativeSnapshot,
@@ -77,7 +77,10 @@ import {
   type EncodedCodexInputImage,
 } from "./input-images";
 import type { EncodedCodexLocalImage } from "./input-files";
-import { parseCodexRolloutActivity } from "./rollout-activity";
+import {
+  parseCodexRolloutSupplement,
+  type CodexRolloutSupplement,
+} from "./rollout-activity";
 
 const STREAM_RECONNECT_DELAY_MS = 250;
 const STREAM_BATCH_DELAY_MS = 20;
@@ -148,8 +151,8 @@ const CODEX_RATE_LIMIT_RESET_OUTCOMES =
     "noCredit",
     "alreadyRedeemed",
   ]);
-const TRANSCRIPT_NOTIFICATION_METHODS = new Set<string>(
-  CODEX_TRANSCRIPT_NOTIFICATION_METHODS,
+const SESSION_NOTIFICATION_METHODS = new Set<string>(
+  CODEX_SESSION_NOTIFICATION_METHODS,
 );
 type CodexMcpAuthStatus =
   "unsupported" | "notLoggedIn" | "bearerToken" | "oAuth" | "unknown";
@@ -247,8 +250,8 @@ export interface CodexNativeSnapshotRead {
   snapshot: CodexNativeSnapshot;
   /** Process-local cursor at the exact matching thread/read response. */
   liveCursor: number;
-  /** Supplemental rollout read that never delays the conversation snapshot. */
-  activity: Promise<CodexRolloutActivityFeed>;
+  /** Supplemental rollout state that never delays the conversation snapshot. */
+  supplement: Promise<CodexRolloutSupplement>;
 }
 
 /**
@@ -1919,9 +1922,11 @@ export class CodexService {
 
   async readNativeSnapshot(userId: string, sessionId: string) {
     const read = await this.readNativeSnapshotWithCursor(userId, sessionId);
+    const supplement = await read.supplement;
     return {
       ...read.snapshot,
-      activity: await read.activity,
+      activity: supplement.activity,
+      tokenUsage: supplement.tokenUsage,
     };
   }
 
@@ -1981,7 +1986,7 @@ export class CodexService {
       requestId,
       sessionId,
     );
-    const activity = this.readCodexRolloutActivity(
+    const supplement = this.readCodexRolloutSupplement(
       sessionRuntime.environmentId,
       responseRuntime,
       sessionRuntime.nativeSessionId,
@@ -2067,34 +2072,38 @@ export class CodexService {
             ? "waiting"
             : latest.sessionStatus,
         thread,
+        tokenUsage: null,
         activity: loadingCodexRolloutActivity(),
         forkableTurnIds,
       },
       liveCursor: anchor ?? this.liveCursor(sessionId),
-      activity,
+      supplement,
     };
   }
 
-  private async readCodexRolloutActivity(
+  private async readCodexRolloutSupplement(
     environmentId: string,
     runtime: StoredEnvironmentRuntime,
     nativeSessionId: string,
     nativeRolloutPath: unknown,
     signal?: AbortSignal,
-  ): Promise<CodexRolloutActivityFeed> {
+  ): Promise<CodexRolloutSupplement> {
     const rolloutPath = validCodexRolloutPath(
       nativeRolloutPath,
       nativeSessionId,
     );
     if (!rolloutPath) {
-      return unavailableCodexRolloutActivity(
-        nativeRolloutPath !== null && nativeRolloutPath !== undefined
-          ? "codex_rollout_path_invalid"
-          : "codex_rollout_path_missing",
-        nativeRolloutPath !== null && nativeRolloutPath !== undefined
-          ? "Codex returned an invalid rollout path. Persisted tool activity is unavailable."
-          : "Codex did not expose a rollout path. Persisted tool activity is unavailable.",
-      );
+      return {
+        activity: unavailableCodexRolloutActivity(
+          nativeRolloutPath !== null && nativeRolloutPath !== undefined
+            ? "codex_rollout_path_invalid"
+            : "codex_rollout_path_missing",
+          nativeRolloutPath !== null && nativeRolloutPath !== undefined
+            ? "Codex returned an invalid rollout path. Persisted tool activity is unavailable."
+            : "Codex did not expose a rollout path. Persisted tool activity is unavailable.",
+        ),
+        tokenUsage: null,
+      };
     }
 
     let readTimeout: ReturnType<typeof setTimeout> | undefined;
@@ -2139,7 +2148,7 @@ export class CodexService {
         );
       }
       const bytes = await Promise.race(reads);
-      return parseCodexRolloutActivity(
+      return parseCodexRolloutSupplement(
         Buffer.from(bytes).toString("utf8"),
         nativeSessionId,
       );
@@ -2155,10 +2164,13 @@ export class CodexService {
         },
         "Codex persisted Session Activity unavailable",
       );
-      return unavailableCodexRolloutActivity(
-        code.startsWith("codex_rollout_") ? code : "codex_rollout_read_failed",
-        message,
-      );
+      return {
+        activity: unavailableCodexRolloutActivity(
+          code.startsWith("codex_rollout_") ? code : "codex_rollout_read_failed",
+          message,
+        ),
+        tokenUsage: null,
+      };
     } finally {
       if (readTimeout) clearTimeout(readTimeout);
       if (abortRead) signal?.removeEventListener("abort", abortRead);
@@ -2404,7 +2416,7 @@ export class CodexService {
       this.scheduleEnvironmentMcpReload(stored.id, next);
     }
     for (const record of records) {
-      if (!isTranscriptNotification(record.message)) continue;
+      if (!isSessionNotification(record.message)) continue;
       const nativeSessionId = notificationThreadId(record.message);
       if (!nativeSessionId) continue;
       const sessionId = await this.ownerForNativeThread(
@@ -4353,12 +4365,12 @@ function isSuccessfulMcpOAuthLoginNotification(record: DecodedCodexRecord) {
   return objectBoolean(objectRecord(record.message.params), "success") === true;
 }
 
-function isTranscriptNotification(
+function isSessionNotification(
   message: Record<string, unknown>,
 ): message is Record<string, unknown> & CodexServerNotification {
   return (
     typeof message.method === "string" &&
-    TRANSCRIPT_NOTIFICATION_METHODS.has(message.method)
+    SESSION_NOTIFICATION_METHODS.has(message.method)
   );
 }
 

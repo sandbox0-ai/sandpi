@@ -2668,6 +2668,31 @@ test("reads and parses persisted rollout Activity with the native snapshot", asy
       payload: { turn_id: "turn-one" },
     },
     {
+      timestamp: "2026-07-18T00:00:01.500Z",
+      type: "event_msg",
+      payload: {
+        type: "token_count",
+        info: {
+          total_token_usage: {
+            input_tokens: 24_000,
+            cached_input_tokens: 2_000,
+            output_tokens: 3_000,
+            reasoning_output_tokens: 1_000,
+            total_tokens: 28_000,
+          },
+          last_token_usage: {
+            input_tokens: 20_000,
+            cached_input_tokens: 2_000,
+            output_tokens: 3_000,
+            reasoning_output_tokens: 1_000,
+            total_tokens: 24_000,
+          },
+          model_context_window: 200_000,
+        },
+        rate_limits: null,
+      },
+    },
+    {
       timestamp: "2026-07-18T00:00:02.000Z",
       type: "response_item",
       payload: {
@@ -2702,6 +2727,8 @@ test("reads and parses persisted rollout Activity with the native snapshot", asy
     assert.equal(snapshot.activity.availability, "available");
     assert.equal(snapshot.activity.error, null);
     assert.equal(snapshot.activity.records.length, 1);
+    assert.equal(snapshot.tokenUsage?.last.totalTokens, 24_000);
+    assert.equal(snapshot.tokenUsage?.modelContextWindow, 200_000);
     assert.deepEqual(
       {
         turnId: snapshot.activity.records[0]?.turnId,
@@ -2765,7 +2792,7 @@ test("delivers the conversation snapshot before persisted rollout Activity", asy
         payload: { id: "thread-one" },
       })}\n`,
     );
-    assert.equal((await read.activity).availability, "available");
+    assert.equal((await read.supplement).activity.availability, "available");
   } finally {
     await context.close();
   }
@@ -5243,6 +5270,32 @@ test("routes a shared Supervisor journal by native thread id", async () => {
         delta: "hello",
       },
     },
+    {
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: "thread-one",
+        turnId: "turn-one-live",
+        tokenUsage: {
+          total: {
+            inputTokens: 24_000,
+            cachedInputTokens: 2_000,
+            cacheWriteInputTokens: 0,
+            outputTokens: 3_000,
+            reasoningOutputTokens: 1_000,
+            totalTokens: 28_000,
+          },
+          last: {
+            inputTokens: 20_000,
+            cachedInputTokens: 2_000,
+            cacheWriteInputTokens: 0,
+            outputTokens: 3_000,
+            reasoningOutputTokens: 1_000,
+            totalTokens: 24_000,
+          },
+          modelContextWindow: 200_000,
+        },
+      },
+    },
   ]);
 
   try {
@@ -5259,7 +5312,7 @@ test("routes a shared Supervisor journal by native thread id", async () => {
       one.map((update) =>
         update.kind === "notification" ? update.event.notification.method : "",
       ),
-      ["turn/started"],
+      ["turn/started", "thread/tokenUsage/updated"],
     );
     assert.deepEqual(
       two.map((update) =>

@@ -253,11 +253,34 @@ export interface CodexAgentThreads {
   descendants: CodexThread[];
 }
 
+export interface CodexTokenUsageBreakdown {
+  inputTokens: number;
+  cachedInputTokens: number;
+  cacheWriteInputTokens: number;
+  outputTokens: number;
+  reasoningOutputTokens: number;
+  totalTokens: number;
+}
+
+export interface CodexThreadTokenUsage {
+  total: CodexTokenUsageBreakdown;
+  last: CodexTokenUsageBreakdown;
+  modelContextWindow: number | null;
+}
+
 export type CodexServerNotification =
   | { method: "thread/started"; params: { thread: { id: string } } }
   | {
       method: "thread/status/changed";
       params: { threadId: string; status: CodexThreadStatus };
+    }
+  | {
+      method: "thread/tokenUsage/updated";
+      params: {
+        threadId: string;
+        turnId: string;
+        tokenUsage: CodexThreadTokenUsage;
+      };
     }
   | { method: "turn/started"; params: { threadId: string; turn: CodexTurn } }
   | {
@@ -395,6 +418,12 @@ export const CODEX_TRANSCRIPT_NOTIFICATION_METHODS = [
   "turn/completed",
 ] as const;
 
+/** Native notifications projected by an active Sandpi Session. */
+export const CODEX_SESSION_NOTIFICATION_METHODS = [
+  ...CODEX_TRANSCRIPT_NOTIFICATION_METHODS,
+  "thread/tokenUsage/updated",
+] as const;
+
 export type CodexEventEnvelope = HarnessEventEnvelope<
   "codex",
   CodexServerNotification
@@ -428,6 +457,8 @@ export interface CodexNativeSnapshot {
    */
   sessionStatus: SessionStatus;
   thread: CodexThread;
+  /** Latest native context-window usage, restored asynchronously when needed. */
+  tokenUsage?: CodexThreadTokenUsage | null;
   /**
    * Codex-only durable tool records reconstructed from this native Thread's
    * rollout. app-server intentionally returns a lossy historical item view.
@@ -442,6 +473,8 @@ export interface CodexNativeActivityUpdate {
   nativeSessionId: string;
   historyRevision: number;
   activity: CodexRolloutActivityFeed;
+  /** Present on servers that restore native context usage with Activity. */
+  tokenUsage?: CodexThreadTokenUsage | null;
 }
 
 /**

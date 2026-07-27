@@ -18,6 +18,7 @@ import type {
   CodexEventEnvelope,
   CodexFileUpdateChange,
   CodexNativeSnapshot,
+  CodexSession,
   CodexThread,
   CodexThreadItem,
   CodexTurn,
@@ -151,6 +152,17 @@ async function pageBlocksUnload(page: Page) {
   });
 }
 
+function codexTokenBreakdown(totalTokens: number) {
+  return {
+    inputTokens: totalTokens,
+    cachedInputTokens: 0,
+    cacheWriteInputTokens: 0,
+    outputTokens: 0,
+    reasoningOutputTokens: 0,
+    totalTokens,
+  };
+}
+
 async function activeWorkspace(request: APIRequestContext) {
   const response = await request.get("/api/v1/bootstrap");
   expect(response.ok()).toBeTruthy();
@@ -207,6 +219,145 @@ async function captureLoginNavigation(page: Page) {
   );
   return () => requestUrl;
 }
+
+test("shows live native context usage inside the Session composer", async ({
+  page,
+}) => {
+  const bootstrap = getMockBootstrap();
+  useEnglishUi(bootstrap);
+  const session = bootstrap.sessions.find(
+    (candidate) => candidate.harness === "codex" && !candidate.archived,
+  );
+  const environment = bootstrap.environments.find(
+    (candidate) => candidate.id === session?.environmentId,
+  );
+  expect(session).toBeTruthy();
+  expect(environment).toBeTruthy();
+  if (!session || !environment || session.harness !== "codex") return;
+  const codexSession = session as CodexSession;
+  bootstrap.selectedEnvironmentId = environment.id;
+  bootstrap.selectedSessionId = session.id;
+
+  await page.route(
+    (url) => url.pathname === "/api/v1/bootstrap",
+    async (route) => {
+      await route.fulfill({ json: { data: bootstrap } });
+    },
+  );
+
+  const nativeSessionId = codexSession.harnessState.threadId;
+  const snapshot: CodexNativeSnapshot = {
+    protocol: "codex-app-server",
+    nativeSessionId,
+    historyRevision: codexSession.harnessState.historyRevision,
+    modelId: codexSession.harnessState.modelId,
+    reasoningEffort: codexSession.harnessState.reasoningEffort,
+    sessionStatus: "waiting",
+    tokenUsage: null,
+    activity: {
+      source: "codex-rollout",
+      availability: "loading",
+      records: [],
+      error: null,
+    },
+    forkableTurnIds: [],
+    thread: {
+      id: nativeSessionId,
+      createdAt: session.createdAt,
+      updatedAt: session.updatedAt,
+      status: { type: "idle" },
+      turns: [],
+    },
+  };
+  const restoredUsage = {
+    total: codexTokenBreakdown(59_000),
+    last: codexTokenBreakdown(59_000),
+    modelContextWindow: 200_000,
+  };
+  const liveUsage = {
+    total: codexTokenBreakdown(106_000),
+    last: codexTokenBreakdown(106_000),
+    modelContextWindow: 200_000,
+  };
+
+  await installControlledEventSource(page);
+  await page.route("**/api/v1/sessions/**/models", async (route) => {
+    await route.fulfill({
+      json: {
+        data: {
+          data: [
+            {
+              id: snapshot.modelId,
+              displayName: "E2E Codex",
+              isDefault: true,
+              supportedReasoningEfforts: [],
+            },
+          ],
+        },
+        meta: { availability: "available", source: "codex" },
+      },
+    });
+  });
+
+  await page.goto(
+    `/?environment=${encodeURIComponent(environment.id)}&session=${encodeURIComponent(session.id)}`,
+  );
+  const eventPath = `/api/v1/sessions/${session.id}/events`;
+  await emitControlledEvent(page, eventPath, "snapshot", snapshot);
+  await emitControlledEvent(page, eventPath, "activity", {
+    nativeSessionId,
+    historyRevision: snapshot.historyRevision,
+    activity: {
+      source: "codex-rollout",
+      availability: "available",
+      records: [],
+      error: null,
+    },
+    tokenUsage: restoredUsage,
+  });
+  const composer = page.locator(".composer-shell");
+  await expect(
+    composer.getByRole("meter", {
+      name: "25% of the current context is used",
+    }),
+  ).toContainText("Context 25%");
+
+  await emitControlledEvent(
+    page,
+    eventPath,
+    "notification",
+    {
+      harness: "codex",
+      harnessVersion: "e2e",
+      protocolVersion: "v2",
+      sequence: 1,
+      receivedAt: session.updatedAt,
+      notification: {
+        method: "thread/tokenUsage/updated",
+        params: {
+          threadId: nativeSessionId,
+          turnId: "turn-context-usage",
+          tokenUsage: liveUsage,
+        },
+      },
+    } satisfies CodexEventEnvelope,
+  );
+  const meter = composer.getByRole("meter", {
+    name: "50% of the current context is used",
+  });
+  await expect(meter).toContainText("Context 50%");
+
+  const [composerBox, meterBox] = await Promise.all([
+    composer.boundingBox(),
+    meter.boundingBox(),
+  ]);
+  expect(composerBox).not.toBeNull();
+  expect(meterBox).not.toBeNull();
+  expect(meterBox!.x).toBeGreaterThanOrEqual(composerBox!.x);
+  expect(meterBox!.x + meterBox!.width).toBeLessThanOrEqual(
+    composerBox!.x + composerBox!.width,
+  );
+});
 
 test("keeps anonymous visitors on the app home until they send a message", async ({
   page,

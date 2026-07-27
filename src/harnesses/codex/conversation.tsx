@@ -81,6 +81,10 @@ import {
   type CodexNativeDialogMode,
 } from "@/harnesses/codex/native-command-dialog";
 import { parseCodexTokenUsageView } from "@/harnesses/codex/token-usage";
+import {
+  codexContextUsedPercent,
+  normalizeCodexThreadTokenUsage,
+} from "@/harnesses/codex/context-usage";
 import { ensureWorkspaceAgentsFile } from "@/harnesses/codex/workspace-agents";
 import { normalizeCodexRolloutActivityFeed } from "@/harnesses/codex/rollout-activity";
 import {
@@ -366,6 +370,9 @@ export function CodexConversation({
   });
   const nativeReady =
     Boolean(nativeSnapshot) && nativeStreamReady && !nativeHistoryError;
+  const contextUsedPercent = codexContextUsedPercent(
+    nativeSnapshot?.tokenUsage,
+  );
   // Sandpi deliberately stores no secondary chat transcript. Until the native
   // harness snapshot arrives, this is runtime recovery—not an empty history.
   // Do not infer a cold start from persisted Sandbox state here: bootstrap may
@@ -602,6 +609,15 @@ export function CodexConversation({
           throw new Error("Invalid Codex native snapshot");
         }
         snapshot.activity = normalizeCodexRolloutActivityFeed(snapshot.activity);
+        const tokenUsage = normalizeCodexThreadTokenUsage(snapshot.tokenUsage);
+        if (
+          snapshot.tokenUsage !== null &&
+          snapshot.tokenUsage !== undefined &&
+          !tokenUsage
+        ) {
+          throw new Error("Invalid Codex context usage");
+        }
+        snapshot.tokenUsage = tokenUsage;
         hasNativeSnapshotRef.current = true;
         hasNativeStreamFailureRef.current = false;
         nativeSnapshotRefreshRequestedRef.current = false;
@@ -661,6 +677,20 @@ export function CodexConversation({
       try {
         const envelope = JSON.parse(event.data) as CodexEventEnvelope;
         if (envelope.harness !== "codex" || !hasNativeSnapshotRef.current) {
+          return;
+        }
+        if (envelope.notification.method === "thread/tokenUsage/updated") {
+          const { threadId, tokenUsage: nativeTokenUsage } =
+            envelope.notification.params;
+          const tokenUsage =
+            normalizeCodexThreadTokenUsage(nativeTokenUsage);
+          if (tokenUsage) {
+            setNativeSnapshot((current) =>
+              current && current.nativeSessionId === threadId
+                ? { ...current, tokenUsage }
+                : current,
+            );
+          }
           return;
         }
         if (liveNotificationSequencesRef.current.has(envelope.sequence)) return;
@@ -732,11 +762,24 @@ export function CodexConversation({
           throw new Error("Invalid Codex Activity update");
         }
         const activity = normalizeCodexRolloutActivityFeed(update.activity);
+        const tokenUsage = normalizeCodexThreadTokenUsage(update.tokenUsage);
+        if (
+          update.tokenUsage !== null &&
+          update.tokenUsage !== undefined &&
+          !tokenUsage
+        ) {
+          throw new Error("Invalid Codex context usage");
+        }
         setNativeSnapshot((current) =>
           current &&
           current.nativeSessionId === update.nativeSessionId &&
           current.historyRevision === update.historyRevision
-            ? { ...current, activity }
+            ? {
+                ...current,
+                activity,
+                // A live notification is newer than an in-flight rollout read.
+                tokenUsage: current.tokenUsage ?? tokenUsage,
+              }
             : current,
         );
       } catch (error) {
@@ -2120,6 +2163,7 @@ export function CodexConversation({
                 setCommandNotice(null);
               }}
               mentionOpenRequest={mentionOpenRequest}
+              contextUsedPercent={contextUsedPercent}
               status={{
                 state: nativeHistoryError
                   ? "unavailable"

@@ -2,6 +2,8 @@ import type {
   CodexRolloutActivityFeed,
   CodexRolloutToolActivity,
 } from "@/harnesses/codex/rollout-activity";
+import { codexThreadTokenUsageFromRolloutInfo } from "@/harnesses/codex/context-usage";
+import type { CodexThreadTokenUsage } from "@/harnesses/codex/types";
 
 export const CODEX_ROLLOUT_MAX_RECORDS = 10_000;
 export const CODEX_ROLLOUT_MAX_VALUE_STRING_LENGTH = 64 * 1_024;
@@ -15,6 +17,18 @@ const TRUNCATION_MARKER = "...[truncated]";
 const UNSAFE_OBJECT_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
 type JsonObject = Record<string, unknown>;
+
+export interface CodexRolloutSupplement {
+  activity: CodexRolloutActivityFeed;
+  tokenUsage: CodexThreadTokenUsage | null;
+}
+
+function rolloutSupplement(
+  activity: CodexRolloutActivityFeed,
+  tokenUsage: CodexThreadTokenUsage | null = null,
+): CodexRolloutSupplement {
+  return { activity, tokenUsage };
+}
 
 interface ParserIssues {
   malformedLines: number;
@@ -341,8 +355,15 @@ export function parseCodexRolloutActivity(
   text: string,
   expectedThreadId: string,
 ): CodexRolloutActivityFeed {
+  return parseCodexRolloutSupplement(text, expectedThreadId).activity;
+}
+
+export function parseCodexRolloutSupplement(
+  text: string,
+  expectedThreadId: string,
+): CodexRolloutSupplement {
   if (expectedThreadId.length === 0) {
-    return {
+    return rolloutSupplement({
       source: "codex-rollout",
       availability: "unavailable",
       records: [],
@@ -350,7 +371,7 @@ export function parseCodexRolloutActivity(
         code: "codex_rollout_thread_id_missing",
         message: "A native Codex thread id is required to validate the rollout.",
       },
-    };
+    });
   }
 
   const issues: ParserIssues = {
@@ -369,6 +390,7 @@ export function parseCodexRolloutActivity(
   let invalidSessionPreamble = false;
   let threadMismatch = false;
   let currentTurnId: string | null = null;
+  let tokenUsage: CodexThreadTokenUsage | null = null;
   let lineNumber = 0;
 
   const applyOutput = (
@@ -429,6 +451,14 @@ export function parseCodexRolloutActivity(
     }
     if (envelopeType === "session_meta") return;
 
+    if (
+      envelopeType === "event_msg" &&
+      nativeString(payload.type) === "token_count"
+    ) {
+      tokenUsage =
+        codexThreadTokenUsageFromRolloutInfo(payload.info) ?? tokenUsage;
+      return;
+    }
     if (envelopeType === "turn_context") {
       currentTurnId =
         nativeString(payload.turn_id) ??
@@ -607,7 +637,7 @@ export function parseCodexRolloutActivity(
   }
 
   if (threadMismatch) {
-    return {
+    return rolloutSupplement({
       source: "codex-rollout",
       availability: "unavailable",
       records: [],
@@ -616,10 +646,10 @@ export function parseCodexRolloutActivity(
         message:
           "The Codex rollout session id does not match the requested native thread.",
       },
-    };
+    });
   }
   if (invalidSessionPreamble) {
-    return {
+    return rolloutSupplement({
       source: "codex-rollout",
       availability: "unavailable",
       records: [],
@@ -628,10 +658,10 @@ export function parseCodexRolloutActivity(
         message:
           "The Codex rollout does not begin with matching session metadata.",
       },
-    };
+    });
   }
   if (!sessionMetaSeen) {
-    return {
+    return rolloutSupplement({
       source: "codex-rollout",
       availability: "unavailable",
       records: [],
@@ -640,17 +670,20 @@ export function parseCodexRolloutActivity(
         message:
           "The Codex rollout does not contain matching session metadata.",
       },
-    };
+    });
   }
 
   issues.orphanOutputs = [...pendingOutputs.entries()]
     .filter(([key]) => !ignoredActivityKeys.has(key))
     .reduce((total, [, outputs]) => total + outputs.length, 0);
   const error = partialError(issues);
-  return {
-    source: "codex-rollout",
-    availability: error ? "partial" : "available",
-    records,
-    error,
-  };
+  return rolloutSupplement(
+    {
+      source: "codex-rollout",
+      availability: error ? "partial" : "available",
+      records,
+      error,
+    },
+    tokenUsage,
+  );
 }
