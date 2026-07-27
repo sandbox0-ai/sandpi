@@ -77,12 +77,16 @@ same files, tools and execution context.
    become an instruction to stop the coding agent.
 5. **Recover native state; do not guess or replay mutations.** Sandpi reconnects
    to the persisted native Session and Workspace rather than maintaining a
-   second chat transcript or silently resubmitting an interrupted request.
+   second chat transcript or silently resubmitting an interrupted request. A
+   Sandbox-caused interruption may receive one visible, conservative recovery
+   Turn that inspects durable state before continuing; the original request is
+   never replayed.
 
 ## What works today
 
 - Native Codex device login and Environment-scoped account connections
 - Native model and reasoning discovery, Session/Turn history and branching
+- Sandbox/Codex process self-recovery with a bounded visible continuation
 - Live native context-window usage in the active Session composer
 - Codex tools, Skills, MCP configuration, approvals and supported slash-command
   surfaces
@@ -227,10 +231,14 @@ Sandbox0
 
 ## Current limits
 
-- A hard Sandbox or harness failure does not erase the persisted Session or
-  Workspace. If it interrupts an active Codex Turn, that Turn may require a new
-  visible instruction; Sandpi intentionally does not replay it automatically
-  and risk duplicate mutations.
+- A Sandbox runtime or Codex process restart does not erase the persisted
+  Session or Workspace. Sandpi restores the harness and may run one visible,
+  state-inspecting recovery Turn for an old-runtime interruption; explicit user
+  interruption and a failed recovery stop there. The original user request is
+  never replayed.
+- External deletion of the entire Sandbox resource is not treated as a runtime
+  restart. Sandpi reports the missing resource instead of silently allocating a
+  replacement with potentially different policy or credentials.
 - Sessions inside one Environment share one mutable Workspace and harness
   account. They are not isolated checkouts. Use separate Environments when work
   must not affect each other.

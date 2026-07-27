@@ -26,8 +26,10 @@ Environment
   id. It owns no Sandbox, Volume, Terminal or transcript.
 - PostgreSQL stores scalar control and repair state: native Session id, selected
   model, history revision, active native Turn id, delivery runtime epoch and
-  explicit interrupt marker. It never stores message, reasoning, tool-call,
-  delta, recovery-prompt text or JSON-RPC payloads.
+  explicit interrupt marker. A claimed runtime recovery also stores only its
+  source Turn id, prompt version and bounded attempt count. PostgreSQL never
+  stores message, reasoning, tool-call, delta, recovery-prompt text or JSON-RPC
+  payloads.
 - The Supervisor journal is a durable transport, not conversation storage. One
   Environment worker holds a cursor-resumable Sandbox0 event stream, consumes
   retained replay followed by live events, decodes the journal once and routes
@@ -68,9 +70,13 @@ Codex uses `/workspace/.sandpi/harnesses/codex` as its persistent `CODEX_HOME`.
 This keeps all native Threads on the Environment Workspace Volume, so a Sandbox
 runtime or harness process restart can reopen their persisted history without a
 Sandpi chat store. An in-flight Turn itself does not survive an app-server
-restart: Codex reports it as interrupted, and Sandpi waits for a new visible
-user message rather than manufacturing a continuation. The Web IDE and file
-APIs expose the reserved
+restart: Codex reports it as interrupted. When Sandpi proves that its delivery
+belongs to the replaced runtime epoch, it may submit one visible, versioned
+recovery Turn on the same Thread. That Turn tells Codex to inspect persisted
+conversation and Workspace state, continue only unfinished work that is safe,
+and avoid repeating external side effects; it never replays the original user
+request. Explicit user interruption and a second recovery failure always stop
+automatic continuation. The Web IDE and file APIs expose the reserved
 `/workspace/.sandpi` subtree as readable, Sandpi-managed state while keeping it
 read-only and outside the Git projection.
 
@@ -141,6 +147,20 @@ delivery has its own abortable deadline, while the response deadline is armed
 only after submission; Sandbox wake-up, credential materialization and
 lifecycle lock waiting are not counted as Codex response time.
 
+New Codex Supervisors use Sandbox0's `always` restart policy, including for a
+clean process exit. The Environment worker also consumes Supervisor lifecycle
+records: restart-limit exhaustion, or a legacy clean exit with no replacement
+attempt/backoff, enters the same exclusive Environment recovery path as a
+Sandbox generation change. Intentional attempt replacement, Session deletion
+and desired-state stop are excluded. Recovery rehydrates the memory-backed
+credential, repairs or recreates the Supervisor, initializes app-server and
+invalidates every process-local Thread attachment before Session repair begins.
+A Supervisor in terminal `failed` phase is revived by reasserting `running` on
+the same Sandbox0 Session, preserving its spec and journal while resetting the
+exhausted restart window. Recovery ownership remains held while a newly observed
+attempt races initialization, so a `session is not running` response is
+reconciled again instead of leaving a terminal event stream idle.
+
 Files, the Web IDE, its watcher and Terminal are Environment capabilities rather
 than Codex capabilities. They enter a shared PostgreSQL advisory lock keyed by
 Environment, which permits concurrent user access while excluding pause,
@@ -164,6 +184,13 @@ Creating a Sandpi Session calls native `thread/start`; it does not claim or fork
 a Sandbox0 resource. Subsequent Turns call `turn/start` with that native Thread
 id. Codex app-server can own many Threads, so one Environment Supervisor is
 sufficient.
+
+`thread/start` and `thread/fork` carry a deterministic, Session-scoped
+`threadSource`. Codex persists that source before answering. If the response is
+lost, Sandpi searches the native Thread store for the exact source and binds the
+single result instead of replaying creation. Zero matches fail closed; multiple
+matches are an integrity error. The original prompt is still not stored in
+PostgreSQL.
 
 The browser allocates `clientUserMessageId` before submitting a Turn and may
 render that prompt as an ephemeral pending row while HTTP admission and native
@@ -206,11 +233,24 @@ operation releases its lease. Active native Threads preserve the existing
 pending and active-Turn projection. Ordinary waiting Sessions and archived
 Sessions are never inspected by this repair.
 
-If the authoritative native Turn is `interrupted`, Sandpi clears only its local
-active and pending control projection and returns the product Session to
-`waiting`. It never submits a replacement Turn, replays the original request,
-or injects a recovery instruction. Continuing after a Sandbox runtime
-replacement therefore always requires a new, visible user message.
+If the authoritative native Turn is `interrupted`, Sandpi compares its persisted
+delivery attempt and Sandbox generation with the current Environment epoch. A
+current-epoch interruption, an explicit user interrupt, or an interruption with
+no provably replaced delivery epoch clears local control state and returns the
+Session to `waiting`.
+
+Only an old-epoch interruption can atomically claim one automatic recovery.
+The claim is durable across a Sandpi restart and starts a new, visible
+`turn/start` on the same native Thread with a versioned Sandpi recovery client
+message id. The recovery prompt asks Codex to inspect native history,
+Workspace/Git state and any observable external result before deciding what
+remains. It explicitly forbids blindly repeating the original request or
+external side effects. Sandpi does not possess or replay that original prompt.
+If recovery delivery is ambiguous in the current epoch, native state is
+reconciled without resubmission. It can be delivered again only after its own
+recorded runtime epoch has been replaced and the native Thread proves the
+recovery Turn absent. An interrupted recovery records exhaustion and never
+chains another recovery Turn.
 
 The background read holds the Environment lifecycle advisory lock only while it
 rechecks the native epoch and submits `thread/read`; it releases the lock before
@@ -345,9 +385,10 @@ The model-visible input boundary is strict. Sandpi submits only text the user
 can see in a composer, validated native image inputs, or the verbatim Codex TUI
 `/init` prompt after the user explicitly invokes that command. It never supplies
 Sandpi-authored `baseInstructions` or `developerInstructions`, calls
-`thread/inject_items`, or creates a semantic continuation Turn after runtime
-repair. Custom review instructions remain user input and go only through
-Codex's native `review/start` contract.
+`thread/inject_items`, or replays a user mutation after runtime repair. The only
+Sandpi-authored model input is the visible, versioned, single-attempt recovery
+Turn described above. Custom review instructions remain user input and go only
+through Codex's native `review/start` contract.
 
 Commands preserve Sandpi product ownership where a browser-native surface
 already exists:

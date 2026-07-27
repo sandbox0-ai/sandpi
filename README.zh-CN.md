@@ -71,12 +71,15 @@ Environment。如果多个 Session 本来就应该共享文件、工具和执行
 4. **客户端保持轻量。** 当前 Web 客户端以及规划中的 iOS、Android 和 OpenHarmony
    客户端都使用同一个 Sandpi server。客户端断线不等于要求 coding agent 停止工作。
 5. **恢复原生状态，不猜测或重放写操作。** Sandpi 会重新连接持久化的原生 Session
-   和 Workspace，而不是维护第二份聊天记录，或在中断后静默重复提交请求。
+   和 Workspace，而不是维护第二份聊天记录，或在中断后静默重复提交请求。对于
+   Sandbox 导致的中断，Sandpi 最多发起一次可见、保守的恢复 Turn，先检查持久化
+   状态再决定是否继续；原始请求永远不会被重放。
 
 ## 当前已经支持
 
 - 原生 Codex device login 和 Environment 级账号连接
 - 原生 model/reasoning 能力发现、Session/Turn 历史和分支
+- Sandbox/Codex 进程自恢复，以及有上限的可见 continuation
 - 在当前 Session 输入框实时显示原生上下文窗口使用率
 - Codex tools、Skills、MCP 配置、审批和已支持的 slash-command 界面
 - 持久化多 Environment、多 Session Web UI
@@ -208,9 +211,11 @@ Sandbox0
 
 ## 当前限制
 
-- Sandbox 或 harness 的严重故障不会删除持久化 Session 和 Workspace。但如果故障打断
-  了正在执行的 Codex Turn，该 Turn 可能需要用户重新给出一条明确指令。Sandpi
-  不会自动重放，以免重复执行写操作。
+- Sandbox runtime 或 Codex 进程重启不会删除持久化 Session 和 Workspace。对于旧
+  runtime 中断的 Turn，Sandpi 会恢复 harness，并且最多运行一次可见、先检查状态的
+  恢复 Turn；用户明确中断或恢复 Turn 再次失败时立即停止。原始用户请求不会被重放。
+- 外部直接删除整个 Sandbox resource 不等同于 runtime 重启。Sandpi 会报告资源缺失，
+  不会在可能改变网络策略或凭证边界的情况下静默新建替代 Sandbox。
 - 同一个 Environment 中的 Session 共享可变 Workspace 和 harness 账号，它们不是互相
   隔离的 checkout。工作之间不能互相影响时，请创建不同 Environment。
 - 内置管理员模式只适用于受信任的单用户部署。公开或多用户部署应使用 OIDC，并配置

@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import {
+  CODEX_RUNTIME_RECOVERY_CLIENT_ID_PREFIX,
+  CODEX_RUNTIME_RECOVERY_PROMPT_VERSION,
+  codexRuntimeRecoveryPrompt,
+  isCodexRuntimeRecoveryClientMessageId,
+} from "@/harnesses/codex/runtime-recovery";
 import type { CodexThread } from "@/harnesses/codex/types";
 import type { CodingSession, Environment } from "@/lib/types";
 import type { RuntimeAdapter } from "@/server/runtime/types";
@@ -101,6 +107,7 @@ function sessionRuntime(
     nativeSessionId,
     modelId: "gpt-test",
     historyRevision: 0,
+    recoveryAttemptCount: 0,
     version: 1,
     sessionStatus: nativeSessionId ? "waiting" : "provisioning",
   };
@@ -219,6 +226,9 @@ interface Fixture {
     messages: Record<string, unknown>[],
     coordinates?: { attemptId: string; runtimeGeneration: number },
   ): void;
+  enqueueEvent(
+    event: Omit<SupervisorOutputEvent, "seq" | "occurredAt">,
+  ): void;
   commitEvents(events: readonly SupervisorOutputEvent[]): Promise<void>;
   disconnectStreams(): void;
   close(): Promise<void>;
@@ -275,6 +285,10 @@ function fixture(
       pendingTurnAttemptId?: string;
       pendingTurnRuntimeGeneration?: number;
       interruptRequestedNativeTurnId?: string;
+      recoverySourceNativeTurnId?: string;
+      recoveryPromptVersion?: number;
+      recoveryAttemptCount?: number;
+      runtimeErrorCode?: string;
       reasoningEffort?: string;
     }>;
     initialDecoder?: StoredEnvironmentRuntime["decoder"];
@@ -296,6 +310,7 @@ function fixture(
     onRequest?: (
       message: Record<string, unknown>,
     ) => Record<string, unknown> | null | undefined;
+    writeErrors?: Record<string, Error[]>;
     writeDelays?: Record<string, Promise<void>>;
     authoritativeEpochFence?: boolean;
     rollouts?: Record<string, string | Error | Promise<string>>;
@@ -329,6 +344,10 @@ function fixture(
         pendingTurnAttemptId,
         pendingTurnRuntimeGeneration,
         interruptRequestedNativeTurnId,
+        recoverySourceNativeTurnId,
+        recoveryPromptVersion,
+        recoveryAttemptCount,
+        runtimeErrorCode,
         reasoningEffort,
         status,
       }) => {
@@ -355,6 +374,11 @@ function fixture(
             pendingTurnAttemptId,
             pendingTurnRuntimeGeneration,
             interruptRequestedNativeTurnId,
+            recoverySourceNativeTurnId,
+            recoveryPromptVersion,
+            recoveryAttemptCount:
+              recoveryAttemptCount ?? runtime.recoveryAttemptCount,
+            runtimeErrorCode,
             reasoningEffort,
             sessionStatus: status ?? runtime.sessionStatus,
           },
@@ -422,13 +446,22 @@ function fixture(
   let lastStartedThreadId: string | undefined;
   let lastStartedTurnId: string | undefined;
 
-  const enqueue = (
-    messages: Record<string, unknown>[],
-    coordinates?: { attemptId: string; runtimeGeneration: number },
+  const enqueueEvent = (
+    event: Omit<SupervisorOutputEvent, "seq" | "occurredAt">,
   ) => {
     const seq = ++eventSequence;
     events.push({
       seq,
+      ...event,
+      occurredAt: "2026-07-16T00:00:00.000Z",
+    });
+    for (const stream of activeStreams) stream.wake?.();
+  };
+  const enqueue = (
+    messages: Record<string, unknown>[],
+    coordinates?: { attemptId: string; runtimeGeneration: number },
+  ) =>
+    enqueueEvent({
       runtimeGeneration:
         coordinates?.runtimeGeneration ?? environmentRuntime.runtimeGeneration,
       attemptId: coordinates?.attemptId ?? environmentRuntime.attemptId,
@@ -437,10 +470,7 @@ function fixture(
       dataBase64: Buffer.from(
         `${messages.map((message) => JSON.stringify(message)).join("\n")}\n`,
       ).toString("base64"),
-      occurredAt: "2026-07-16T00:00:00.000Z",
     });
-    for (const stream of activeStreams) stream.wake?.();
-  };
 
   const defaultResponse = (message: Record<string, unknown>) => {
     const id = message.id;
@@ -690,6 +720,9 @@ function fixture(
         const current = sessionRuntimes.get(owner.sessionId)!;
         const currentSession = sessions.get(owner.sessionId)!;
         if (transition.type === "turnStarted") {
+          if (current.recoverySourceNativeTurnId === transition.nativeTurnId) {
+            continue;
+          }
           sessionRuntimes.set(owner.sessionId, {
             ...current,
             activeNativeTurnId: transition.nativeTurnId,
@@ -710,7 +743,8 @@ function fixture(
         } else {
           if (
             current.activeNativeTurnId !== transition.nativeTurnId &&
-            current.activeNativeTurnId !== undefined
+            (current.activeNativeTurnId !== undefined ||
+              current.recoverySourceNativeTurnId !== undefined)
           ) {
             continue;
           }
@@ -728,6 +762,9 @@ function fixture(
             pendingTurnAttemptId: undefined,
             pendingTurnRuntimeGeneration: undefined,
             interruptRequestedNativeTurnId: undefined,
+            recoverySourceNativeTurnId: undefined,
+            recoveryPromptVersion: undefined,
+            recoveryAttemptCount: 0,
             sessionStatus: "waiting",
           });
           sessions.set(owner.sessionId, {
@@ -837,6 +874,8 @@ function fixture(
       clearPendingWhenNativeIdle?: boolean;
       clearPendingRequestId?: string;
       clearPendingStartedBefore?: Date;
+      clearRecoveryState?: boolean;
+      recoveryErrorCode?: string;
       requireUnarchived?: boolean;
     }) {
       reconciledEnvironmentEpochs.push({
@@ -872,6 +911,9 @@ function fixture(
         !options.activeNativeTurnId &&
         Boolean(current.pendingTurnPhase) &&
         pendingRecoveryEligible;
+      const clearRecovery =
+        options.clearRecoveryState === true && !options.activeNativeTurnId;
+      const clearControl = clearPending || clearRecovery;
       const activeChanged =
         current.activeNativeTurnId !== options.activeNativeTurnId;
       sessionRuntimes.set(options.sessionId, {
@@ -883,43 +925,53 @@ function fixture(
         activeTurnRuntimeGeneration: options.activeNativeTurnId
           ? options.environmentRuntimeGeneration
           : undefined,
-        pendingTurnRequestId: clearPending
+        pendingTurnRequestId: clearControl
           ? undefined
           : current.pendingTurnRequestId,
-        pendingTurnClientMessageId: clearPending
+        pendingTurnClientMessageId: clearControl
           ? undefined
           : current.pendingTurnClientMessageId,
-        pendingTurnStableInputId: clearPending
+        pendingTurnStableInputId: clearControl
           ? undefined
           : current.pendingTurnStableInputId,
-        pendingTurnPhase: clearPending ? undefined : current.pendingTurnPhase,
-        pendingTurnNativeTurnId: clearPending
+        pendingTurnPhase: clearControl ? undefined : current.pendingTurnPhase,
+        pendingTurnNativeTurnId: clearControl
           ? undefined
           : current.pendingTurnNativeTurnId,
-        pendingTurnStartedAt: clearPending
+        pendingTurnStartedAt: clearControl
           ? undefined
           : current.pendingTurnStartedAt,
-        pendingTurnAttemptId: clearPending
+        pendingTurnAttemptId: clearControl
           ? undefined
           : current.pendingTurnAttemptId,
-        pendingTurnRuntimeGeneration: clearPending
+        pendingTurnRuntimeGeneration: clearControl
           ? undefined
           : current.pendingTurnRuntimeGeneration,
-        interruptRequestedNativeTurnId: clearPending
+        interruptRequestedNativeTurnId: clearControl
           ? undefined
           : current.interruptRequestedNativeTurnId,
+        recoverySourceNativeTurnId: clearRecovery
+          ? undefined
+          : current.recoverySourceNativeTurnId,
+        recoveryPromptVersion: clearRecovery
+          ? undefined
+          : current.recoveryPromptVersion,
+        recoveryAttemptCount: clearRecovery ? 0 : current.recoveryAttemptCount,
+        runtimeErrorCode: clearRecovery
+          ? options.recoveryErrorCode
+          : current.runtimeErrorCode,
         sessionStatus:
           options.activeNativeTurnId ||
-          (!clearPending && current.pendingTurnPhase)
+          (!clearControl && current.pendingTurnPhase)
             ? "running"
             : "waiting",
-        version: current.version + (activeChanged || clearPending ? 1 : 0),
+        version: current.version + (activeChanged || clearControl ? 1 : 0),
       });
       sessions.set(options.sessionId, {
         ...sessions.get(options.sessionId)!,
         status:
           options.activeNativeTurnId ||
-          (!clearPending && current.pendingTurnPhase)
+          (!clearControl && current.pendingTurnPhase)
             ? "running"
             : "waiting",
       });
@@ -967,6 +1019,9 @@ function fixture(
         pendingTurnAttemptId: undefined,
         pendingTurnRuntimeGeneration: undefined,
         interruptRequestedNativeTurnId: undefined,
+        recoverySourceNativeTurnId: undefined,
+        recoveryPromptVersion: undefined,
+        recoveryAttemptCount: 0,
         runtimeErrorCode: undefined,
         sessionStatus: "running",
         version: current.version + 1,
@@ -1026,6 +1081,7 @@ function fixture(
       const knownTurnIds = [
         current.pendingTurnNativeTurnId,
         current.activeNativeTurnId,
+        current.recoverySourceNativeTurnId,
       ];
       const nativeTurnId =
         preferredNativeTurnId && knownTurnIds.includes(preferredNativeTurnId)
@@ -1045,6 +1101,154 @@ function fixture(
       });
       return nativeTurnId;
     },
+    async claimInterruptedTurnRecovery(options: {
+      sessionId: string;
+      nativeSessionId: string;
+      historyRevision: number;
+      runtimeVersion: number;
+      environmentId: string;
+      environmentSupervisorSessionId?: string;
+      environmentAttemptId?: string;
+      environmentRuntimeGeneration: number;
+      sourceNativeTurnId: string;
+      sourcePendingClientMessageId?: string;
+      submission: {
+        requestId: string;
+        clientMessageId: string;
+        stableInputId: string;
+      };
+      promptVersion: number;
+    }) {
+      const current = sessionRuntimes.get(options.sessionId)!;
+      const currentSession = sessions.get(options.sessionId)!;
+      const activeMatches =
+        current.activeNativeTurnId === options.sourceNativeTurnId &&
+        (current.activeTurnAttemptId !== options.environmentAttemptId ||
+          current.activeTurnRuntimeGeneration !==
+            options.environmentRuntimeGeneration);
+      const pendingMatches =
+        (current.pendingTurnNativeTurnId === options.sourceNativeTurnId ||
+          (options.sourcePendingClientMessageId !== undefined &&
+            current.pendingTurnClientMessageId ===
+              options.sourcePendingClientMessageId)) &&
+        (current.pendingTurnAttemptId !== options.environmentAttemptId ||
+          current.pendingTurnRuntimeGeneration !==
+            options.environmentRuntimeGeneration);
+      if (
+        current.nativeSessionId !== options.nativeSessionId ||
+        current.historyRevision !== options.historyRevision ||
+        current.version !== options.runtimeVersion ||
+        current.environmentId !== options.environmentId ||
+        environmentRuntime.supervisorSessionId !==
+          options.environmentSupervisorSessionId ||
+        environmentRuntime.attemptId !== options.environmentAttemptId ||
+        environmentRuntime.runtimeGeneration !==
+          options.environmentRuntimeGeneration ||
+        currentSession.archived ||
+        currentSession.status === "failed" ||
+        current.interruptRequestedNativeTurnId === options.sourceNativeTurnId ||
+        current.recoverySourceNativeTurnId !== undefined ||
+        current.recoveryAttemptCount !== 0 ||
+        (!activeMatches && !pendingMatches)
+      ) {
+        return false;
+      }
+      sessionRuntimes.set(options.sessionId, {
+        ...current,
+        activeNativeTurnId: undefined,
+        activeTurnAttemptId: undefined,
+        activeTurnRuntimeGeneration: undefined,
+        pendingTurnRequestId: options.submission.requestId,
+        pendingTurnClientMessageId: options.submission.clientMessageId,
+        pendingTurnStableInputId: options.submission.stableInputId,
+        pendingTurnPhase: "prepared",
+        pendingTurnNativeTurnId: undefined,
+        pendingTurnStartedAt: new Date(),
+        pendingTurnAttemptId: undefined,
+        pendingTurnRuntimeGeneration: undefined,
+        interruptRequestedNativeTurnId: undefined,
+        recoverySourceNativeTurnId: options.sourceNativeTurnId,
+        recoveryPromptVersion: options.promptVersion,
+        recoveryAttemptCount: current.recoveryAttemptCount + 1,
+        runtimeErrorCode: undefined,
+        sessionStatus: "running",
+        version: current.version + 1,
+      });
+      sessions.set(options.sessionId, {
+        ...currentSession,
+        status: "running",
+      });
+      return true;
+    },
+    async prepareInterruptedTurnRecoveryReplay(options: {
+      sessionId: string;
+      nativeSessionId: string;
+      runtimeVersion: number;
+      requestId: string;
+      environmentAttemptId?: string;
+      environmentRuntimeGeneration: number;
+    }) {
+      const current = sessionRuntimes.get(options.sessionId)!;
+      if (
+        current.nativeSessionId !== options.nativeSessionId ||
+        current.version !== options.runtimeVersion ||
+        current.pendingTurnRequestId !== options.requestId ||
+        current.pendingTurnPhase !== "submitted" ||
+        !current.recoverySourceNativeTurnId ||
+        (current.pendingTurnAttemptId === options.environmentAttemptId &&
+          current.pendingTurnRuntimeGeneration ===
+            options.environmentRuntimeGeneration)
+      ) {
+        return false;
+      }
+      sessionRuntimes.set(options.sessionId, {
+        ...current,
+        pendingTurnPhase: "prepared",
+        pendingTurnAttemptId: undefined,
+        pendingTurnRuntimeGeneration: undefined,
+        version: current.version + 1,
+      });
+      return true;
+    },
+    async failInterruptedTurnRecovery(
+      sessionId: string,
+      requestId: string,
+      errorCode: string,
+    ) {
+      const current = sessionRuntimes.get(sessionId)!;
+      if (
+        current.pendingTurnRequestId !== requestId ||
+        !current.recoverySourceNativeTurnId
+      ) {
+        return false;
+      }
+      sessionRuntimes.set(sessionId, {
+        ...current,
+        activeNativeTurnId: undefined,
+        activeTurnAttemptId: undefined,
+        activeTurnRuntimeGeneration: undefined,
+        pendingTurnRequestId: undefined,
+        pendingTurnClientMessageId: undefined,
+        pendingTurnStableInputId: undefined,
+        pendingTurnPhase: undefined,
+        pendingTurnNativeTurnId: undefined,
+        pendingTurnStartedAt: undefined,
+        pendingTurnAttemptId: undefined,
+        pendingTurnRuntimeGeneration: undefined,
+        interruptRequestedNativeTurnId: undefined,
+        recoverySourceNativeTurnId: undefined,
+        recoveryPromptVersion: undefined,
+        recoveryAttemptCount: 0,
+        runtimeErrorCode: errorCode,
+        sessionStatus: "waiting",
+        version: current.version + 1,
+      });
+      sessions.set(sessionId, {
+        ...sessions.get(sessionId)!,
+        status: "waiting",
+      });
+      return true;
+    },
     async abandonTurn(sessionId: string, requestId: string) {
       const current = sessionRuntimes.get(sessionId)!;
       if (current.pendingTurnRequestId !== requestId) return;
@@ -1062,6 +1266,9 @@ function fixture(
         activeTurnAttemptId: undefined,
         activeTurnRuntimeGeneration: undefined,
         interruptRequestedNativeTurnId: undefined,
+        recoverySourceNativeTurnId: undefined,
+        recoveryPromptVersion: undefined,
+        recoveryAttemptCount: 0,
         sessionStatus: "waiting",
         version: current.version + 1,
       });
@@ -1137,6 +1344,8 @@ function fixture(
       signal?: AbortSignal,
     ) {
       const message = value as Record<string, unknown>;
+      const writeError = input.writeErrors?.[String(message.method)]?.shift();
+      if (writeError) throw writeError;
       if (
         input.authoritativeEpochFence &&
         (runtime.supervisorSessionId !==
@@ -1346,6 +1555,7 @@ function fixture(
       });
     },
     enqueue,
+    enqueueEvent,
     commitEvents: async (values) => {
       const commit = (
         service as unknown as {
@@ -1897,6 +2107,53 @@ test("retries an epoch change raised inside Environment lifecycle recovery", asy
   }
 });
 
+test("keeps recovery ownership when initialization races a stopped attempt", async () => {
+  const context = fixture({
+    writeErrors: {
+      initialize: [
+        new HttpError(
+          409,
+          "sandbox0_session_not_running",
+          "session is not running",
+        ),
+      ],
+    },
+  });
+  try {
+    assert.deepEqual(await context.service.listModels("user", "session-one"), {
+      data: [{ id: "gpt-test" }],
+    });
+    assert.equal(context.runtimeRecoveryCount(), 2);
+    assert.equal(context.lifecycleLocks.length, 2);
+  } finally {
+    await context.close();
+  }
+});
+
+test("fails closed when the Environment Sandbox resource is missing", async () => {
+  const context = fixture({
+    environmentRecoveryErrors: [
+      new HttpError(
+        404,
+        "sandbox0_not_found",
+        "the Environment Sandbox does not exist",
+      ),
+    ],
+  });
+  try {
+    await assert.rejects(
+      context.service.listModels("user", "session-one"),
+      (error: unknown) =>
+        error instanceof HttpError &&
+        error.code === "sandbox0_not_found",
+    );
+    assert.equal(context.runtimeRecoveryCount(), 1);
+    assert.equal(context.lifecycleLocks.length, 1);
+  } finally {
+    await context.close();
+  }
+});
+
 test("recovery keeps runtime reads on the lifecycle-scoped Store", async () => {
   const context = fixture({ assertScopedRecoveryLocks: true });
   try {
@@ -1948,6 +2205,10 @@ test("starts the first Turn on a newly created loaded Thread without resume", as
       model_reasoning_effort: "high",
     });
     assert.equal(threadStart?.sessionStartSource, "clear");
+    assert.equal(
+      threadStart?.threadSource,
+      `sandpi-session:${sessionId}`,
+    );
     assert.equal(turnStart?.effort, "high");
     assert.equal(
       context.sessionRuntimes.get(sessionId)?.reasoningEffort,
@@ -1991,6 +2252,119 @@ test("passes native Plan collaboration settings to a new Thread and its first Tu
     assert.deepEqual(turnStart.collaborationMode, expectedMode);
     assert.equal(threadStart.serviceTier, "native-priority");
     assert.equal(turnStart.serviceTier, "native-priority");
+  } finally {
+    await context.close();
+  }
+});
+
+test("reconciles a persisted native Thread when the thread/start response is lost", async () => {
+  let creationSource: string | undefined;
+  const context = fixture({
+    rpcTimeoutMs: 5,
+    onRequest(message) {
+      if (message.method === "thread/start") {
+        creationSource = (message.params as Record<string, unknown>)
+          .threadSource as string;
+        return null;
+      }
+      if (message.method === "thread/list") {
+        return {
+          id: message.id,
+          result: {
+            data: [
+              {
+                id: "thread-recovered-create",
+                threadSource: creationSource,
+                status: { type: "idle" },
+                turns: [],
+              },
+            ],
+            nextCursor: null,
+          },
+        };
+      }
+      return undefined;
+    },
+  });
+  try {
+    const sessionId = await context.service.createSession({
+      userId: "user",
+      environment,
+      title: "Recovered creation",
+      prompt: "Start after recovery",
+      images: [],
+    });
+
+    assert.equal(
+      context.sessionRuntimes.get(sessionId)?.nativeSessionId,
+      "thread-recovered-create",
+    );
+    assert.equal(context.sessions.get(sessionId)?.status, "running");
+    assert.deepEqual(
+      context.writes
+        .map(({ message }) => message.method)
+        .filter((method) => method !== "initialize" && method !== "initialized"),
+      ["thread/start", "thread/list", "thread/resume", "turn/start"],
+    );
+    assert.equal(
+      (
+        context.writes.find(
+          ({ message }) => message.method === "turn/start",
+        )?.message.params as Record<string, unknown>
+      ).threadId,
+      "thread-recovered-create",
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("fails closed when a creation key resolves to multiple native Threads", async () => {
+  let creationSource: string | undefined;
+  const context = fixture({
+    rpcTimeoutMs: 5,
+    onRequest(message) {
+      if (message.method === "thread/start") {
+        creationSource = (message.params as Record<string, unknown>)
+          .threadSource as string;
+        return null;
+      }
+      if (message.method === "thread/list") {
+        return {
+          id: message.id,
+          result: {
+            data: ["one", "two"].map((suffix) => ({
+              id: `thread-duplicate-${suffix}`,
+              threadSource: creationSource,
+              status: { type: "idle" },
+              turns: [],
+            })),
+            nextCursor: null,
+          },
+        };
+      }
+      return undefined;
+    },
+  });
+  try {
+    await assert.rejects(
+      context.service.createSession({
+        userId: "user",
+        environment,
+        title: "Ambiguous creation",
+        prompt: "Do not duplicate this",
+        images: [],
+      }),
+      (error: unknown) =>
+        error instanceof HttpError &&
+        error.code === "codex_thread_creation_ambiguous",
+    );
+
+    assert.equal(context.sessions.get("session-new-1")?.status, "failed");
+    assert.equal(
+      context.writes.some(({ message }) => message.method === "turn/start"),
+      false,
+    );
   } finally {
     await context.close();
   }
@@ -3461,7 +3835,10 @@ test("full native repair preserves an active native Thread", async () => {
   }
 });
 
-test("waits for user input after a Sandbox restart interrupts the native Turn", async () => {
+test("starts one conservative recovery Turn after the Sandbox runtime epoch is replaced", async () => {
+  let recoveryClientMessageId: string | undefined;
+  let recoveryInputText: string | undefined;
+  let nativeReads = 0;
   const context = fixture({
     sessions: [
       {
@@ -3474,18 +3851,44 @@ test("waits for user input after a Sandbox restart interrupts the native Turn", 
       },
     ],
     exceptionalSessionRecoveryDelayMs: 0,
+    exceptionalSessionActiveRecheckMs: 1_000,
     onRequest(message) {
-      if (message.method !== "thread/read") return undefined;
-      return {
-        id: message.id,
-        result: {
-          thread: {
-            id: "thread-interrupted",
-            status: { type: "idle" },
-            turns: [interruptedTurn("turn-original")],
+      if (message.method === "thread/read") {
+        nativeReads += 1;
+        const recoveryTurn = recoveryClientMessageId
+          ? {
+              ...interruptedTurn("turn-recovery", recoveryClientMessageId),
+              status: "inProgress" as const,
+              completedAt: null,
+              durationMs: null,
+            }
+          : undefined;
+        return {
+          id: message.id,
+          result: {
+            thread: {
+              id: "thread-interrupted",
+              status: recoveryTurn
+                ? { type: "active", activeFlags: [] }
+                : { type: "idle" },
+              turns: recoveryTurn
+                ? [interruptedTurn("turn-original"), recoveryTurn]
+                : [interruptedTurn("turn-original")],
+            },
           },
-        },
-      };
+        };
+      }
+      if (message.method === "turn/start") {
+        const params = message.params as {
+          clientUserMessageId?: string;
+          input?: Array<{ type?: string; text?: string }>;
+        };
+        recoveryClientMessageId = params.clientUserMessageId;
+        recoveryInputText = params.input?.find(
+          (item) => item.type === "text",
+        )?.text;
+      }
+      return undefined;
     },
   });
   context.recoverRuntimeAs({
@@ -3496,19 +3899,52 @@ test("waits for user input after a Sandbox restart interrupts the native Turn", 
   try {
     await context.service.resumeWorkers();
     await eventually(
-      () => context.sessions.get("session-interrupted")?.status === "waiting",
-      "interrupted native Turn did not return the Session to waiting",
+      () =>
+        context.sessionRuntimes.get("session-interrupted")?.pendingTurnPhase ===
+        "accepted",
+      "automatic recovery Turn was not accepted",
     );
 
     assert.equal(
-      context.sessionRuntimes.get("session-interrupted")?.activeNativeTurnId,
-      undefined,
+      isCodexRuntimeRecoveryClientMessageId(recoveryClientMessageId),
+      true,
+    );
+    assert.equal(
+      recoveryInputText,
+      codexRuntimeRecoveryPrompt(CODEX_RUNTIME_RECOVERY_PROMPT_VERSION),
+    );
+    assert.equal(
+      context.sessionRuntimes.get("session-interrupted")
+        ?.recoverySourceNativeTurnId,
+      "turn-original",
+    );
+    assert.equal(
+      context.sessionRuntimes.get("session-interrupted")?.recoveryAttemptCount,
+      1,
+    );
+    assert.equal(
+      context.sessionRuntimes.get("session-interrupted")?.activeTurnAttemptId,
+      "attempt-environment-next",
     );
     assert.equal(
       context.writes.filter(({ message }) => message.method === "turn/start")
         .length,
-      0,
-      "Sandpi must not synthesize a continuation Turn",
+      1,
+    );
+
+    await context.service.scheduleSessionControlStateRepair(
+      "session-interrupted",
+    );
+    await eventually(
+      () => nativeReads >= 2,
+      "accepted recovery Turn was not reconciled after another repair pass",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(
+      context.writes.filter(({ message }) => message.method === "turn/start")
+        .length,
+      1,
+      "native recovery state must suppress a duplicate recovery Turn",
     );
   } finally {
     await context.close();
@@ -3601,6 +4037,245 @@ test("settles a current-epoch interrupted Turn without submitting another Turn",
     assert.equal(
       context.writes.some(({ message }) => message.method === "turn/start"),
       false,
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("delivers a durably claimed recovery Turn after Sandpi restarts", async () => {
+  const recoveryClientMessageId =
+    `${CODEX_RUNTIME_RECOVERY_CLIENT_ID_PREFIX}session-claimed:persisted`;
+  const context = fixture({
+    sessions: [
+      {
+        id: "session-claimed",
+        nativeSessionId: "thread-claimed",
+        status: "running",
+        pendingTurnRequestId: "turn-recovery:session-claimed:persisted",
+        pendingTurnClientMessageId: recoveryClientMessageId,
+        pendingTurnPhase: "prepared",
+        recoverySourceNativeTurnId: "turn-original",
+        recoveryPromptVersion: CODEX_RUNTIME_RECOVERY_PROMPT_VERSION,
+        recoveryAttemptCount: 1,
+      },
+    ],
+    exceptionalSessionRecoveryDelayMs: 0,
+    onRequest(message) {
+      if (message.method !== "thread/read") return undefined;
+      return {
+        id: message.id,
+        result: {
+          thread: {
+            id: "thread-claimed",
+            status: { type: "idle" },
+            turns: [interruptedTurn("turn-original")],
+          },
+        },
+      };
+    },
+  });
+  try {
+    await context.service.resumeWorkers();
+    await eventually(
+      () =>
+        context.sessionRuntimes.get("session-claimed")?.pendingTurnPhase ===
+        "accepted",
+      "persisted recovery claim was not delivered",
+    );
+
+    const starts = context.writes.filter(
+      ({ message }) => message.method === "turn/start",
+    );
+    assert.equal(starts.length, 1);
+    assert.equal(
+      (
+        starts[0]?.message.params as
+          | { clientUserMessageId?: string }
+          | undefined
+      )?.clientUserMessageId,
+      recoveryClientMessageId,
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("redelivers an absent recovery only after its submitted runtime epoch is gone", async () => {
+  const recoveryClientMessageId =
+    `${CODEX_RUNTIME_RECOVERY_CLIENT_ID_PREFIX}session-old-submit:persisted`;
+  const context = fixture({
+    sessions: [
+      {
+        id: "session-old-submit",
+        nativeSessionId: "thread-old-submit",
+        status: "running",
+        pendingTurnRequestId: "turn-recovery:session-old-submit:persisted",
+        pendingTurnClientMessageId: recoveryClientMessageId,
+        pendingTurnPhase: "submitted",
+        pendingTurnAttemptId: "attempt-before-restart",
+        pendingTurnRuntimeGeneration: 1,
+        recoverySourceNativeTurnId: "turn-original",
+        recoveryPromptVersion: CODEX_RUNTIME_RECOVERY_PROMPT_VERSION,
+        recoveryAttemptCount: 1,
+      },
+    ],
+    exceptionalSessionRecoveryDelayMs: 0,
+    onRequest(message) {
+      if (message.method !== "thread/read") return undefined;
+      return {
+        id: message.id,
+        result: {
+          thread: {
+            id: "thread-old-submit",
+            status: { type: "idle" },
+            turns: [interruptedTurn("turn-original")],
+          },
+        },
+      };
+    },
+  });
+  try {
+    await context.service.resumeWorkers();
+    await eventually(
+      () =>
+        context.sessionRuntimes.get("session-old-submit")?.pendingTurnPhase ===
+        "accepted",
+      "old-epoch recovery submission was not safely redelivered",
+    );
+
+    assert.equal(
+      context.writes.filter(({ message }) => message.method === "turn/start")
+        .length,
+      1,
+    );
+    assert.equal(
+      context.sessionRuntimes.get("session-old-submit")?.pendingTurnAttemptId,
+      "attempt-environment-test",
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("does not replay an ambiguously submitted recovery in the current runtime epoch", async () => {
+  const context = fixture({
+    sessions: [
+      {
+        id: "session-current-submit",
+        nativeSessionId: "thread-current-submit",
+        status: "running",
+        pendingTurnRequestId:
+          "turn-recovery:session-current-submit:persisted",
+        pendingTurnClientMessageId:
+          `${CODEX_RUNTIME_RECOVERY_CLIENT_ID_PREFIX}` +
+          "session-current-submit:persisted",
+        pendingTurnPhase: "submitted",
+        pendingTurnStartedAt: new Date("2026-07-15T00:00:00.000Z"),
+        pendingTurnAttemptId: "attempt-environment-test",
+        pendingTurnRuntimeGeneration: 1,
+        recoverySourceNativeTurnId: "turn-original",
+        recoveryPromptVersion: CODEX_RUNTIME_RECOVERY_PROMPT_VERSION,
+        recoveryAttemptCount: 1,
+      },
+    ],
+    exceptionalSessionRecoveryDelayMs: 0,
+    exceptionalPendingTurnGraceMs: 0,
+    onRequest(message) {
+      if (message.method !== "thread/read") return undefined;
+      return {
+        id: message.id,
+        result: {
+          thread: {
+            id: "thread-current-submit",
+            status: { type: "idle" },
+            turns: [interruptedTurn("turn-original")],
+          },
+        },
+      };
+    },
+  });
+  try {
+    await context.service.resumeWorkers();
+    await eventually(
+      () =>
+        context.sessions.get("session-current-submit")?.status === "waiting",
+      "ambiguous current-epoch recovery did not stop after its grace",
+    );
+
+    assert.equal(
+      context.writes.some(({ message }) => message.method === "turn/start"),
+      false,
+    );
+    assert.equal(
+      context.sessionRuntimes.get("session-current-submit")?.runtimeErrorCode,
+      "automatic_turn_recovery_timeout",
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("never chains another automatic Turn when recovery is interrupted", async () => {
+  const recoveryClientMessageId =
+    `${CODEX_RUNTIME_RECOVERY_CLIENT_ID_PREFIX}session-exhausted:persisted`;
+  const context = fixture({
+    sessions: [
+      {
+        id: "session-exhausted",
+        nativeSessionId: "thread-exhausted",
+        status: "running",
+        activeNativeTurnId: "turn-recovery",
+        activeTurnAttemptId: "attempt-environment-test",
+        activeTurnRuntimeGeneration: 1,
+        pendingTurnRequestId: "turn-recovery:session-exhausted:persisted",
+        pendingTurnClientMessageId: recoveryClientMessageId,
+        pendingTurnPhase: "accepted",
+        pendingTurnNativeTurnId: "turn-recovery",
+        pendingTurnAttemptId: "attempt-environment-test",
+        pendingTurnRuntimeGeneration: 1,
+        recoverySourceNativeTurnId: "turn-original",
+        recoveryPromptVersion: CODEX_RUNTIME_RECOVERY_PROMPT_VERSION,
+        recoveryAttemptCount: 1,
+      },
+    ],
+    exceptionalSessionRecoveryDelayMs: 0,
+    onRequest(message) {
+      if (message.method !== "thread/read") return undefined;
+      return {
+        id: message.id,
+        result: {
+          thread: {
+            id: "thread-exhausted",
+            status: { type: "idle" },
+            turns: [
+              interruptedTurn("turn-original"),
+              interruptedTurn("turn-recovery", recoveryClientMessageId),
+            ],
+          },
+        },
+      };
+    },
+  });
+  try {
+    await context.service.resumeWorkers();
+    await eventually(
+      () => context.sessions.get("session-exhausted")?.status === "waiting",
+      "interrupted recovery Turn did not settle",
+    );
+
+    assert.equal(
+      context.writes.some(({ message }) => message.method === "turn/start"),
+      false,
+    );
+    assert.equal(
+      context.sessionRuntimes.get("session-exhausted")?.runtimeErrorCode,
+      "automatic_turn_recovery_exhausted",
+    );
+    assert.equal(
+      context.sessionRuntimes.get("session-exhausted")
+        ?.recoverySourceNativeTurnId,
+      undefined,
     );
   } finally {
     await context.close();
@@ -3914,6 +4589,95 @@ test("a recovery-owned worker reconnects without waiting on its own recovery", a
     });
     assert.equal(context.runtimeRecoveryCount(), 1);
     assert.ok(context.streamStarts.length >= 2);
+  } finally {
+    await context.close();
+  }
+});
+
+test("actively recovers after the Supervisor exhausts process restarts", async () => {
+  const context = fixture();
+  try {
+    await context.service.resumeWorkers();
+    assert.equal(context.runtimeRecoveryCount(), 1);
+    context.recoverRuntimeAs({
+      attemptId: "attempt-after-restart-limit",
+      runtimeGeneration: 1,
+    });
+
+    context.enqueueEvent({
+      attemptId: "attempt-environment-test",
+      runtimeGeneration: 1,
+      type: "session.failed",
+      reason: "restart_limit_exceeded",
+    });
+
+    await eventually(
+      () => context.runtimeRecoveryCount() === 2,
+      "Supervisor restart exhaustion did not trigger runtime recovery",
+    );
+    assert.equal(
+      context.environmentRuntime().attemptId,
+      "attempt-after-restart-limit",
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("actively recovers a clean Codex exit left without a replacement attempt", async () => {
+  const context = fixture();
+  try {
+    await context.service.resumeWorkers();
+    context.recoverRuntimeAs({
+      attemptId: "attempt-after-clean-exit",
+      runtimeGeneration: 1,
+    });
+
+    context.enqueueEvent({
+      attemptId: "attempt-environment-test",
+      runtimeGeneration: 1,
+      type: "attempt.exited",
+      exitCode: 0,
+      reason: "exited",
+    });
+
+    await eventually(
+      () => context.runtimeRecoveryCount() === 2,
+      "clean Codex exit did not trigger runtime recovery",
+    );
+    assert.equal(
+      context.environmentRuntime().attemptId,
+      "attempt-after-clean-exit",
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("lets the Supervisor own a clean-exit backoff before intervening", async () => {
+  const context = fixture();
+  try {
+    await context.service.resumeWorkers();
+    context.enqueueEvent({
+      attemptId: "attempt-environment-test",
+      runtimeGeneration: 1,
+      type: "attempt.exited",
+      exitCode: 0,
+      reason: "exited",
+    });
+    context.enqueueEvent({
+      attemptId: "attempt-environment-test",
+      runtimeGeneration: 1,
+      type: "session.backoff",
+      reason: "500ms",
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 75));
+    assert.equal(
+      context.runtimeRecoveryCount(),
+      1,
+      "Sandpi must not race the Supervisor's scheduled replacement attempt",
+    );
   } finally {
     await context.close();
   }
@@ -5763,6 +6527,10 @@ test("forks a product Session only through Codex thread/fork", async () => {
     assert.deepEqual(forkParams?.config, {
       "features.apply_patch_streaming_events": true,
     });
+    assert.equal(
+      forkParams?.threadSource,
+      `sandpi-session:${childId}`,
+    );
     await context.service.startTurn({
       userId: "user",
       sessionId: childId,
@@ -5778,6 +6546,58 @@ test("forks a product Session only through Codex thread/fork", async () => {
       context.writes.every(
         (write) => !String(write.message.method).includes("snapshot"),
       ),
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("reconciles a persisted native fork when the thread/fork response is lost", async () => {
+  let creationSource: string | undefined;
+  const context = fixture({
+    rpcTimeoutMs: 5,
+    onRequest(message) {
+      if (message.method === "thread/fork") {
+        creationSource = (message.params as Record<string, unknown>)
+          .threadSource as string;
+        return null;
+      }
+      if (message.method === "thread/list") {
+        return {
+          id: message.id,
+          result: {
+            data: [
+              {
+                id: "thread-recovered-fork",
+                threadSource: creationSource,
+                status: { type: "idle" },
+                turns: [],
+              },
+            ],
+            nextCursor: null,
+          },
+        };
+      }
+      return undefined;
+    },
+  });
+  try {
+    const childId = await context.service.forkSession({
+      userId: "user",
+      sessionId: "session-one",
+      title: "Recovered fork",
+    });
+
+    assert.equal(
+      context.sessionRuntimes.get(childId)?.nativeSessionId,
+      "thread-recovered-fork",
+    );
+    assert.equal(context.sessions.get(childId)?.status, "waiting");
+    assert.deepEqual(
+      context.writes
+        .map(({ message }) => message.method)
+        .filter((method) => method !== "initialize" && method !== "initialized"),
+      ["thread/fork", "thread/list"],
     );
   } finally {
     await context.close();

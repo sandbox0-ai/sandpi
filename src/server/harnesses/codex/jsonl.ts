@@ -5,6 +5,8 @@ export interface SupervisorOutputEvent {
   type: string;
   stream?: string;
   dataBase64?: string;
+  exitCode?: number;
+  reason?: string;
   occurredAt: string;
 }
 

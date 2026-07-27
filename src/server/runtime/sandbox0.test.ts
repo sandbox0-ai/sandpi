@@ -1631,6 +1631,14 @@ test("starts one Environment-scoped Codex app-server without unsupported plugin 
     HOME: "/workspace",
     CODEX_HOME: "/workspace/.sandpi/harnesses/codex",
   });
+  assert.deepEqual(sessions[0]?.spec.lifecycle, {
+    restart: {
+      policy: "always",
+      initialBackoffMs: 500,
+      maxBackoffMs: 10_000,
+    },
+    runtimeRecovery: "restart",
+  });
   assert.doesNotMatch(
     String((sessions[0]?.spec.command as string[] | undefined)?.at(-1)),
     /mcp_oauth_credentials_store="file"/,
@@ -1651,6 +1659,93 @@ test("starts one Environment-scoped Codex app-server without unsupported plugin 
           ),
     ),
   );
+});
+
+test("reasserts a failed Supervisor desired state after restart exhaustion", async () => {
+  const operations: string[] = [];
+  const failed = {
+    id: "supervisor-environment",
+    phase: "failed",
+    attempt: {
+      id: "attempt-exhausted",
+      finishedAt: new Date("2026-07-27T00:00:00.000Z"),
+    },
+    runtimeGeneration: 1,
+  };
+  const restarted = {
+    id: "supervisor-environment",
+    phase: "running",
+    attempt: { id: "attempt-after-exhaustion" },
+    runtimeGeneration: 1,
+  };
+  const sandbox = {
+    async mkdir() {},
+    async writeFile() {},
+    async cmd() {
+      return { exitCode: 0 };
+    },
+    async listFiles() {
+      return [];
+    },
+    async getSession() {
+      operations.push("supervisor-read");
+      return failed;
+    },
+    async setSessionDesiredState(sessionId: string, state: string) {
+      assert.equal(sessionId, failed.id);
+      assert.equal(state, "running");
+      operations.push("supervisor-desired-running");
+      return restarted;
+    },
+    async createSession() {
+      assert.fail("restart exhaustion must preserve the Supervisor Session");
+    },
+    async createSessionAttempt() {
+      assert.fail("a failed Supervisor requires a desired-state reset");
+    },
+  };
+  const runtime = runtimeWithClient({
+    sandboxes: {
+      sandbox() {
+        return sandbox;
+      },
+      async get() {
+        return {
+          status: "running",
+          paused: false,
+          runtimeGeneration: 1,
+        };
+      },
+    },
+  });
+  const coordinates: EnvironmentRuntimeRecord = {
+    id: environment.id,
+    sandboxId: environment.sandboxId,
+    workspaceVolumeId: environment.workspaceVolumeId,
+    supervisorSessionId: failed.id,
+    attemptId: failed.attempt.id,
+    runtimeGeneration: 1,
+    decoder: {
+      supervisorCursor: 0,
+      tailBase64: "",
+      attemptId: failed.attempt.id,
+      runtimeGeneration: 1,
+    },
+  };
+
+  assert.deepEqual(
+    await runtime.ensureCodexEnvironmentRuntime(coordinates, "{}"),
+    {
+      supervisorSessionId: restarted.id,
+      attemptId: restarted.attempt.id,
+      runtimeGeneration: 1,
+      sandboxRestarted: false,
+    },
+  );
+  assert.deepEqual(operations, [
+    "supervisor-read",
+    "supervisor-desired-running",
+  ]);
 });
 
 test("replaces a live Codex app-server attempt after its credential binding changes", async () => {

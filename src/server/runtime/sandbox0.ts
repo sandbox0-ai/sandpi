@@ -550,7 +550,7 @@ export class Sandbox0Runtime implements RuntimeAdapter {
         io: { mode: "pipes" },
         lifecycle: {
           restart: {
-            policy: "on_failure",
+            policy: "always",
             initialBackoffMs: 500,
             maxBackoffMs: 10_000,
           },
@@ -856,6 +856,36 @@ export class Sandbox0Runtime implements RuntimeAdapter {
             502,
             "supervisor_credential_switch_failed",
             "Codex app-server did not restart with the current Environment credential.",
+          );
+        }
+      }
+
+      if (!hasLiveAttempt(supervisor) && supervisor.phase === "failed") {
+        const previousAttemptId = supervisor.attempt?.id;
+        try {
+          // A failed Supervisor has exhausted its automatic restart window.
+          // Reasserting the durable desired state resets that terminal phase
+          // without replacing the Session specification or its journal.
+          supervisor = await sandbox.setSessionDesiredState(
+            supervisor.id,
+            "running",
+          );
+        } catch (error) {
+          if (!(error instanceof APIError) || error.statusCode !== 409) {
+            throw error;
+          }
+          const raced = await sandbox.getSession(supervisor.id);
+          if (!hasLiveAttempt(raced)) throw error;
+          supervisor = raced;
+        }
+        if (
+          !hasLiveAttempt(supervisor) ||
+          supervisor.attempt?.id === previousAttemptId
+        ) {
+          supervisor = await waitForNewAttempt(
+            sandbox,
+            supervisor.id,
+            previousAttemptId,
           );
         }
       }

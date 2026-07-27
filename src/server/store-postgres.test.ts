@@ -58,6 +58,9 @@ test(
         pending_turn_attempt_id TEXT,
         pending_turn_runtime_generation BIGINT,
         interrupt_requested_native_turn_id TEXT,
+        recovery_source_native_turn_id TEXT,
+        recovery_prompt_version INTEGER,
+        recovery_attempt_count INTEGER NOT NULL DEFAULT 0,
         runtime_error_code TEXT,
         version BIGINT NOT NULL
       );

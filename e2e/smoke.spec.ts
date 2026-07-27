@@ -2461,10 +2461,12 @@ test("maps Codex slash commands to Sandpi new and fork Session flows", async ({
 
   await composer.fill("/subagents");
   await composer.press("Enter");
-  await expect(agentDialog).toBeVisible();
-  await agentDialog
-    .getByRole("button", { name: "Close Agent Threads" })
-    .click();
+  await expect(agentDialog).toBeHidden();
+  await expect(
+    page
+      .getByRole("region", { name: "Codex conversation" })
+      .getByRole("alert"),
+  ).toContainText("Unknown command /subagents");
 
   await composer.fill("/new");
   await composer.press("Enter");

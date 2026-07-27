@@ -75,6 +75,7 @@ test("migration history contains every durable Sandpi boundary", async () => {
       "0048_user_billing_and_usage",
       "0049_environment_resource_defaults",
       "0050_retire_codex_automatic_turn_recovery",
+      "0051_restore_codex_fault_recovery",
     ],
   );
 
@@ -403,6 +404,24 @@ test("migration history contains every durable Sandpi boundary", async () => {
   assert.match(
     retiredRuntimeTurnRecoverySql,
     /DROP COLUMN recovery_attempt_count/,
+  );
+
+  const restoredRuntimeTurnRecoverySql = migrations[50]?.sql ?? "";
+  assert.match(
+    restoredRuntimeTurnRecoverySql,
+    /ADD COLUMN recovery_source_native_turn_id TEXT/,
+  );
+  assert.match(
+    restoredRuntimeTurnRecoverySql,
+    /ADD COLUMN recovery_prompt_version INTEGER/,
+  );
+  assert.match(
+    restoredRuntimeTurnRecoverySql,
+    /ADD COLUMN recovery_attempt_count INTEGER NOT NULL DEFAULT 0/,
+  );
+  assert.doesNotMatch(
+    restoredRuntimeTurnRecoverySql,
+    /prompt\s+(TEXT|JSONB)|message\s+(TEXT|JSONB)|input\s+JSONB|payload\s+JSONB/i,
   );
 
   const environmentNetworkPolicySql = migrations[26]?.sql ?? "";
