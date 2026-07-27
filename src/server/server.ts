@@ -102,6 +102,8 @@ import { networkPolicySchema } from "@/server/network-policy-schema";
 
 const SESSION_COOKIE = "sandpi_session";
 const BUILTIN_SIGNED_OUT_COOKIE = "sandpi_builtin_signed_out";
+export const AUTH_COOKIE_PATH = "/api/v1";
+export const AUTH_COOKIE_CLEAR_PATHS = [AUTH_COOKIE_PATH, "/"] as const;
 const CODEX_IMAGE_BODY_LIMIT_BYTES = 36 * 1024 * 1024;
 const CODEX_UPLOAD_BODY_LIMIT_BYTES =
   MAX_CODEX_COMPOSER_UPLOAD_BASE64_LENGTH + 64 * 1024;
@@ -470,7 +472,7 @@ function registerAuthRoutes(
   app.get("/api/v1/auth/login", async (request, reply) => {
     const returnTo = queryString(request, "return_to") ?? "/";
     if (!oidcIdentity) {
-      reply.clearCookie(BUILTIN_SIGNED_OUT_COOKIE, { path: "/" });
+      clearAuthCookie(reply, BUILTIN_SIGNED_OUT_COOKIE);
       return reply.redirect(safeLocalRedirect(returnTo, config));
     }
     const login = await oidcIdentity.startLogin(returnTo);
@@ -498,7 +500,7 @@ function registerAuthRoutes(
       result.token,
       sessionCookie(config, result.expiresAt),
     );
-    reply.clearCookie(BUILTIN_SIGNED_OUT_COOKIE, { path: "/" });
+    clearAuthCookie(reply, BUILTIN_SIGNED_OUT_COOKIE);
     return reply.redirect(result.returnTo);
   });
 
@@ -506,7 +508,7 @@ function registerAuthRoutes(
   app.post("/api/v1/auth/logout", async (request, reply) => {
     const token = request.cookies[SESSION_COOKIE];
     if (token && oidcIdentity) await oidcIdentity.logout(token);
-    reply.clearCookie(SESSION_COOKIE, { path: "/" });
+    clearAuthCookie(reply, SESSION_COOKIE);
     if (!oidcIdentity) {
       reply.setCookie(
         BUILTIN_SIGNED_OUT_COOKIE,
@@ -2624,22 +2626,33 @@ function deploymentSummary(
   };
 }
 
-function sessionCookie(config: SandpiConfig, expires: Date) {
+export function authCookieAttributes(
+  config: Pick<SandpiConfig, "publicUrl">,
+) {
   return {
-    path: "/",
+    path: AUTH_COOKIE_PATH,
     httpOnly: true,
     sameSite: "lax" as const,
     secure: config.publicUrl.protocol === "https:",
+  };
+}
+
+function clearAuthCookie(reply: FastifyReply, name: string) {
+  for (const path of AUTH_COOKIE_CLEAR_PATHS) {
+    reply.clearCookie(name, { path });
+  }
+}
+
+function sessionCookie(config: SandpiConfig, expires: Date) {
+  return {
+    ...authCookieAttributes(config),
     expires,
   };
 }
 
 function builtinSignedOutCookie(config: SandpiConfig) {
   return {
-    path: "/",
-    httpOnly: true,
-    sameSite: "lax" as const,
-    secure: config.publicUrl.protocol === "https:",
+    ...authCookieAttributes(config),
     expires: new Date(Date.now() + 365 * 24 * 60 * 60 * 1_000),
   };
 }
