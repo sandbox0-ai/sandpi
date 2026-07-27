@@ -120,3 +120,28 @@ test("keeps wall-clock cron time across daylight-saving changes", () => {
     "2026-11-02T14:00:00.000Z",
   );
 });
+
+test("supports the last calendar day emitted by the Simple recurrence editor", () => {
+  const timing = normalizeEnvironmentScheduleTiming(
+    {
+      kind: "cron",
+      expression: "0 9 L * *",
+      timeZone: "UTC",
+    },
+    new Date("2026-01-30T00:00:00.000Z"),
+  );
+  assert.equal(
+    firstEnvironmentScheduleRunAt(
+      timing,
+      new Date("2026-01-30T00:00:00.000Z"),
+    ).toISOString(),
+    "2026-01-31T09:00:00.000Z",
+  );
+  assert.equal(
+    firstEnvironmentScheduleRunAt(
+      timing,
+      new Date("2026-02-01T00:00:00.000Z"),
+    ).toISOString(),
+    "2026-02-28T09:00:00.000Z",
+  );
+});

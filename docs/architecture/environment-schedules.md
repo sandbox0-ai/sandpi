@@ -44,6 +44,13 @@ A Schedule uses one of two timing forms:
 Macros, a seconds field and hashed `H` fields are rejected. Cron calculation
 uses the configured wall-clock time zone, including daylight-saving changes.
 
+The Environment Settings UI presents common hourly, daily, weekday, weekly and
+monthly recurrences as structured controls. It compiles those controls into the
+same five-field cron contract and previews upcoming occurrences with the same
+parser used by the server. Expressions that cannot be represented losslessly by
+the structured editor remain available unchanged through Advanced mode. The UI
+rule is not a second persisted scheduling model.
+
 `next_run_at` is the earliest occurrence that has not yet been processed. When
 Sandpi was unavailable across multiple cron intervals, startup reconciliation
 claims only the latest missed occurrence and advances directly to the first

@@ -44,7 +44,7 @@ Codex is the first supported coding agent.
 | Shared browser debugging | A human and coding agent use the same official Playwright browser session, including its tabs and login profile. |
 | Controlled outbound access | Restrict sandbox egress by destination and inject supported credentials only into matching traffic, instead of placing service secrets in the repository or browser. |
 | Workspace protection | Create manual or scheduled Workspace backups with retention and restore them through Sandbox0 Volume snapshots. |
-| Durable Automation | Schedule a long Codex prompt once or with a time-zone-aware cron expression. Sandpi persists run intent outside the Sandbox and reconciles native Turn completion after server or runtime recovery. |
+| Durable Automation | Schedule a long Codex prompt once or with a human-friendly, time-zone-aware recurrence. Advanced cron remains available when needed. Sandpi persists run intent outside the Sandbox and reconciles native Turn completion after server or runtime recovery. |
 
 An Environment is deliberately larger than a chat:
 
@@ -97,8 +97,9 @@ same files, tools and execution context.
 - Live Workspace file browser, Monaco editor, media previews and Git changes
 - Shared official Playwright Browser for human and coding-agent debugging
 - Environment terminal, runtime metrics and configurable idle pause
-- Environment Schedules with one-time or five-field cron timing, IANA time
-  zones, durable run history and overlap skipping
+- Environment Schedules with one-time or human-friendly recurring timing,
+  Advanced cron, IANA time zones, upcoming-run previews, durable run history
+  and overlap skipping
 - Per-Environment network policy and Sandbox0-backed egress credential injection
 - Manual and scheduled Workspace backups, retention and restore
 - Built-in single-user identity or OIDC

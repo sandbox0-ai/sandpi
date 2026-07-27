@@ -46,8 +46,7 @@
 .cardTitle span {
   overflow: hidden;
   color: var(--ink-faint);
-  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  font-size: 9px;
+  font-size: 9.5px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -271,6 +270,154 @@
   font-weight: 450;
 }
 
+.recurrenceEditor {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.recurrenceToolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.recurrenceToolbar > span {
+  color: var(--ink-soft);
+  font-size: 11px;
+  font-weight: 620;
+}
+
+.recurrenceToolbar > div {
+  display: inline-flex;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--sidebar);
+}
+
+.recurrenceToolbar button {
+  min-height: 26px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ink-faint);
+  font-size: 9.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.recurrenceToolbar button[aria-pressed="true"] {
+  background: var(--panel-strong);
+  box-shadow: 0 0 0 1px var(--line-soft);
+  color: var(--ink);
+}
+
+.recurrenceToolbar button:focus-visible,
+.weekdayField button:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 1px;
+}
+
+.weekdayField {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.weekdayField legend {
+  margin-bottom: 6px;
+  color: var(--ink-soft);
+  font-size: 11px;
+  font-weight: 590;
+}
+
+.weekdayField > div {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(42px, 1fr));
+  gap: 5px;
+}
+
+.weekdayField button {
+  min-width: 0;
+  min-height: 31px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-strong);
+  color: var(--ink-faint);
+  font-size: 9.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.weekdayField button:hover {
+  border-color: color-mix(in srgb, var(--green) 45%, var(--line));
+  color: var(--ink-soft);
+}
+
+.weekdayField button[aria-pressed="true"] {
+  border-color: var(--green);
+  background: var(--green-soft);
+  color: var(--green);
+}
+
+.cronInput {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+}
+
+.recurrencePreview {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 9px 10px;
+  border: 1px solid color-mix(in srgb, var(--green) 30%, var(--line));
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--green-soft) 55%, var(--panel-strong));
+}
+
+.recurrencePreview > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: var(--green);
+}
+
+.recurrencePreview > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.recurrencePreview strong {
+  color: var(--ink-soft);
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1.4;
+}
+
+.recurrencePreview span {
+  color: var(--ink-faint);
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.previewError {
+  border-color: color-mix(in srgb, var(--red) 40%, var(--line));
+  background: var(--red-soft);
+}
+
+.previewError > svg,
+.previewError strong,
+.previewError span {
+  color: var(--red);
+}
+
 .promptInput {
   min-height: 132px;
   font-family: inherit;
@@ -304,5 +451,16 @@
   .deletePrompt {
     width: 100%;
     text-align: right;
+  }
+
+  .weekdayField > div {
+    grid-template-columns: repeat(4, minmax(48px, 1fr));
+  }
+}
+
+@media (max-width: 480px) {
+  .recurrenceToolbar {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }

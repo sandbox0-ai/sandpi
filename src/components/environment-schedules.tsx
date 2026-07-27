@@ -12,6 +12,20 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
+import {
+  compileSimpleScheduleRecurrence,
+  defaultSimpleScheduleRecurrence,
+  describeScheduleCronExpression,
+  describeSimpleScheduleRecurrence,
+  nextScheduleCronOccurrences,
+  normalizeScheduleCronExpression,
+  parseSimpleScheduleRecurrence,
+  SCHEDULE_WEEKDAYS,
+  type ScheduleMonthDay,
+  type ScheduleWeekday,
+  type SimpleScheduleFrequency,
+  type SimpleScheduleRecurrence,
+} from "@/lib/environment-schedule-recurrence";
 import type { OperationLanguage } from "@/lib/operation-ui";
 import {
   dateFromUnixTimestamp,
@@ -36,8 +50,10 @@ interface ScheduleDraft {
   id?: string;
   name: string;
   prompt: string;
-  timingKind: "once" | "cron";
+  timingKind: "once" | "recurring";
   runAt: string;
+  recurrenceEditor: "simple" | "advanced";
+  recurrence: SimpleScheduleRecurrence;
   cronExpression: string;
   timeZone: string;
   targetKind: "newSession" | "session";
@@ -51,6 +67,7 @@ interface ScheduleDraft {
 }
 
 const REFRESH_INTERVAL_MS = 10_000;
+const MONTH_DAYS = Array.from({ length: 31 }, (_, index) => index + 1);
 
 export function EnvironmentSchedules({
   environmentId,
@@ -214,8 +231,8 @@ export function EnvironmentSchedules({
       <div className="codex-extension-toolbar">
         <p>
           Sandpi persists each occurrence before waking the Environment. Missed
-          cron intervals are coalesced, and overlapping runs are recorded as
-          skipped.
+          recurring intervals are coalesced, and overlapping runs are recorded
+          as skipped.
         </p>
         <div>
           <button
@@ -242,6 +259,7 @@ export function EnvironmentSchedules({
         <ScheduleEditor
           draft={draft}
           sessions={availableSessions}
+          language={language}
           saving={saving}
           error={formError}
           onChange={setDraft}
@@ -299,7 +317,9 @@ export function EnvironmentSchedules({
                               language,
                               timeZone,
                             )}`
-                          : `${schedule.timing.expression} · ${schedule.timing.timeZone}`}
+                          : `${describeScheduleCronExpression(
+                              schedule.timing.expression,
+                            )} · ${schedule.timing.timeZone}`}
                       </span>
                     </div>
                   </div>
@@ -449,6 +469,7 @@ export function EnvironmentSchedules({
 function ScheduleEditor({
   draft,
   sessions,
+  language,
   saving,
   error,
   onChange,
@@ -457,12 +478,60 @@ function ScheduleEditor({
 }: {
   draft: ScheduleDraft;
   sessions: CodingSession[];
+  language: OperationLanguage;
   saving: boolean;
   error: string;
   onChange: (draft: ScheduleDraft) => void;
   onCancel: () => void;
   onSave: () => void;
 }) {
+  const preview = useMemo(() => {
+    if (draft.timingKind !== "recurring") return undefined;
+    try {
+      const expression =
+        draft.recurrenceEditor === "simple"
+          ? compileSimpleScheduleRecurrence(draft.recurrence)
+          : normalizeScheduleCronExpression(draft.cronExpression);
+      return {
+        summary:
+          draft.recurrenceEditor === "simple"
+            ? describeSimpleScheduleRecurrence(draft.recurrence)
+            : describeScheduleCronExpression(expression),
+        occurrences: nextScheduleCronOccurrences(
+          expression,
+          draft.timeZone,
+        ),
+      };
+    } catch (previewError) {
+      return {
+        error: errorMessage(previewError, "Check the recurrence settings."),
+      };
+    }
+  }, [
+    draft.cronExpression,
+    draft.recurrence,
+    draft.recurrenceEditor,
+    draft.timeZone,
+    draft.timingKind,
+  ]);
+  const timeZoneOptions = useMemo(
+    () => supportedScheduleTimeZones(draft.timeZone),
+    [draft.timeZone],
+  );
+  const updateSimpleRecurrence = (recurrence: SimpleScheduleRecurrence) => {
+    let cronExpression = draft.cronExpression;
+    try {
+      cronExpression = compileSimpleScheduleRecurrence(recurrence);
+    } catch {
+      // Keep the last valid expression until the Simple rule is complete.
+    }
+    onChange({
+      ...draft,
+      recurrence,
+      cronExpression,
+    });
+  };
+
   return (
     <section
       className="environment-credential-editor"
@@ -548,10 +617,10 @@ function ScheduleEditor({
           <input
             type="radio"
             name="schedule-timing"
-            checked={draft.timingKind === "cron"}
-            onChange={() => onChange({ ...draft, timingKind: "cron" })}
+            checked={draft.timingKind === "recurring"}
+            onChange={() => onChange({ ...draft, timingKind: "recurring" })}
           />
-          Recurring cron
+          Recurring
         </label>
       </fieldset>
 
@@ -569,29 +638,236 @@ function ScheduleEditor({
           />
         </label>
       ) : (
-        <div className="field-grid two-columns">
-          <label>
-            Five-field cron
+        <div className={styles.recurrenceEditor}>
+          <div className={styles.recurrenceToolbar}>
+            <span>Recurrence</span>
+            <div role="group" aria-label="Recurrence editor mode">
+              <button
+                type="button"
+                aria-pressed={draft.recurrenceEditor === "simple"}
+                onClick={() => {
+                  const parsed = parseSimpleScheduleRecurrence(
+                    draft.cronExpression,
+                  );
+                  onChange({
+                    ...draft,
+                    recurrenceEditor: "simple",
+                    recurrence: parsed ?? draft.recurrence,
+                  });
+                }}
+              >
+                Simple
+              </button>
+              <button
+                type="button"
+                aria-pressed={draft.recurrenceEditor === "advanced"}
+                onClick={() =>
+                  onChange({
+                    ...draft,
+                    recurrenceEditor: "advanced",
+                  })
+                }
+              >
+                Advanced
+              </button>
+            </div>
+          </div>
+
+          {draft.recurrenceEditor === "simple" ? (
+            <>
+              <div className="field-grid two-columns">
+                <label>
+                  Repeat
+                  <select
+                    value={draft.recurrence.frequency}
+                    onChange={(event) =>
+                      updateSimpleRecurrence({
+                        ...draft.recurrence,
+                        frequency: event.target
+                          .value as SimpleScheduleFrequency,
+                      })
+                    }
+                  >
+                    <option value="hourly">Every hour</option>
+                    <option value="daily">Every day</option>
+                    <option value="weekdays">Weekdays</option>
+                    <option value="weekly">Weekly</option>
+                    <option value="monthly">Monthly</option>
+                  </select>
+                </label>
+
+                {draft.recurrence.frequency === "hourly" ? (
+                  <label>
+                    <span className={styles.fieldHeading}>
+                      At minute <small>0–59</small>
+                    </span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={59}
+                      step={1}
+                      value={draft.recurrence.minute}
+                      onChange={(event) => {
+                        const minute = event.target.valueAsNumber;
+                        updateSimpleRecurrence({
+                          ...draft.recurrence,
+                          minute: Number.isFinite(minute) ? minute : 0,
+                        });
+                      }}
+                    />
+                  </label>
+                ) : (
+                  <label>
+                    At
+                    <input
+                      type="time"
+                      value={draft.recurrence.time}
+                      onChange={(event) =>
+                        updateSimpleRecurrence({
+                          ...draft.recurrence,
+                          time: event.target.value,
+                        })
+                      }
+                    />
+                  </label>
+                )}
+              </div>
+
+              {draft.recurrence.frequency === "weekly" ? (
+                <fieldset className={styles.weekdayField}>
+                  <legend>On</legend>
+                  <div>
+                    {SCHEDULE_WEEKDAYS.map((weekday) => {
+                      const selected = draft.recurrence.weekdays.includes(
+                        weekday.value,
+                      );
+                      return (
+                        <button
+                          type="button"
+                          key={weekday.value}
+                          aria-label={weekday.longLabel}
+                          aria-pressed={selected}
+                          onClick={() =>
+                            updateSimpleRecurrence({
+                              ...draft.recurrence,
+                              weekdays: toggleWeekday(
+                                draft.recurrence.weekdays,
+                                weekday.value,
+                              ),
+                            })
+                          }
+                        >
+                          {weekday.shortLabel}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </fieldset>
+              ) : null}
+
+              {draft.recurrence.frequency === "monthly" ? (
+                <label className="full-field">
+                  On
+                  <select
+                    aria-label="Day of month"
+                    value={String(draft.recurrence.monthDay)}
+                    onChange={(event) =>
+                      updateSimpleRecurrence({
+                        ...draft.recurrence,
+                        monthDay: parseMonthDay(event.target.value),
+                      })
+                    }
+                  >
+                    {MONTH_DAYS.map((day) => (
+                      <option value={day} key={day}>
+                        Day {day}
+                      </option>
+                    ))}
+                    <option value="last">Last day of the month</option>
+                  </select>
+                  {draft.recurrence.monthDay !== "last" &&
+                  draft.recurrence.monthDay > 28 ? (
+                    <small>
+                      Months without day {draft.recurrence.monthDay} are
+                      skipped. Choose Last day to run every month.
+                    </small>
+                  ) : null}
+                </label>
+              ) : null}
+            </>
+          ) : (
+            <label className="full-field">
+              Cron expression
+              <input
+                className={styles.cronInput}
+                autoComplete="off"
+                spellCheck={false}
+                placeholder="0 9 * * 1-5"
+                value={draft.cronExpression}
+                onChange={(event) =>
+                  onChange({ ...draft, cronExpression: event.target.value })
+                }
+              />
+              <small>
+                Five fields: minute, hour, day of month, month, weekday.
+              </small>
+            </label>
+          )}
+
+          <label className="full-field">
+            Time zone
             <input
               autoComplete="off"
-              placeholder="0 9 * * 1-5"
-              value={draft.cronExpression}
-              onChange={(event) =>
-                onChange({ ...draft, cronExpression: event.target.value })
-              }
-            />
-          </label>
-          <label>
-            IANA time zone
-            <input
-              autoComplete="off"
+              spellCheck={false}
+              list="environment-schedule-time-zones"
               placeholder="UTC"
               value={draft.timeZone}
               onChange={(event) =>
                 onChange({ ...draft, timeZone: event.target.value })
               }
             />
+            <small>
+              Runs at this wall-clock time, including daylight-saving changes.
+            </small>
           </label>
+          <datalist id="environment-schedule-time-zones">
+            {timeZoneOptions.map((candidate) => (
+              <option value={candidate} key={candidate} />
+            ))}
+          </datalist>
+
+          <div
+            className={`${styles.recurrencePreview} ${
+              preview && "error" in preview ? styles.previewError : ""
+            }`}
+            aria-live="polite"
+          >
+            <CalendarClock size={15} aria-hidden="true" />
+            {preview && "error" in preview ? (
+              <div>
+                <strong>Preview unavailable</strong>
+                <span>{preview.error}</span>
+              </div>
+            ) : preview ? (
+              <div>
+                <strong>
+                  {preview.summary} · {draft.timeZone}
+                </strong>
+                <span>
+                  Next:{" "}
+                  {preview.occurrences
+                    .map((occurrence) =>
+                      formatScheduleOccurrence(
+                        occurrence,
+                        language,
+                        draft.timeZone,
+                      ),
+                    )
+                    .join(" · ")}
+                </span>
+              </div>
+            ) : null}
+          </div>
         </div>
       )}
 
@@ -742,6 +1018,8 @@ function emptyDraft(
     prompt: "",
     timingKind: "once",
     runAt: localDateTimeInput(new Date(Date.now() + 60 * 60 * 1_000)),
+    recurrenceEditor: "simple",
+    recurrence: defaultSimpleScheduleRecurrence(),
     cronExpression: "0 9 * * 1-5",
     timeZone: resolveTimeZone(timeZone),
     targetKind: "newSession",
@@ -752,15 +1030,21 @@ function emptyDraft(
 }
 
 function scheduleDraft(schedule: EnvironmentSchedule): ScheduleDraft {
+  const parsedRecurrence =
+    schedule.timing.kind === "cron"
+      ? parseSimpleScheduleRecurrence(schedule.timing.expression)
+      : undefined;
   return {
     id: schedule.id,
     name: schedule.name,
     prompt: schedule.prompt,
-    timingKind: schedule.timing.kind,
+    timingKind: schedule.timing.kind === "once" ? "once" : "recurring",
     runAt:
       schedule.timing.kind === "once"
         ? localDateTimeInput(dateFromUnixTimestamp(schedule.timing.runAt))
         : localDateTimeInput(new Date(Date.now() + 60 * 60 * 1_000)),
+    recurrenceEditor: parsedRecurrence ? "simple" : "advanced",
+    recurrence: parsedRecurrence ?? defaultSimpleScheduleRecurrence(),
     cronExpression:
       schedule.timing.kind === "cron" ? schedule.timing.expression : "0 9 * * 1-5",
     timeZone:
@@ -799,15 +1083,24 @@ function draftPayload(
     }
     timing = { kind: "once", runAt: runAtMilliseconds / 1_000 };
   } else {
-    if (!draft.cronExpression.trim()) {
-      return { error: "A five-field cron expression is required." };
-    }
     if (!draft.timeZone.trim()) {
-      return { error: "An IANA time zone is required." };
+      return { error: "Choose a time zone." };
+    }
+    let expression: string;
+    try {
+      expression =
+        draft.recurrenceEditor === "simple"
+          ? compileSimpleScheduleRecurrence(draft.recurrence)
+          : normalizeScheduleCronExpression(draft.cronExpression);
+      nextScheduleCronOccurrences(expression, draft.timeZone, new Date(), 1);
+    } catch (timingError) {
+      return {
+        error: errorMessage(timingError, "Check the recurrence settings."),
+      };
     }
     timing = {
       kind: "cron",
-      expression: draft.cronExpression.trim(),
+      expression,
       timeZone: draft.timeZone.trim(),
     };
   }
@@ -878,6 +1171,53 @@ function formatTime(
     dateStyle: "medium",
     timeStyle: "short",
   });
+}
+
+function formatScheduleOccurrence(
+  occurrence: Date,
+  language: OperationLanguage,
+  timeZone: string,
+) {
+  return formatUnixTimestamp(
+    occurrence.getTime() / 1_000,
+    language,
+    timeZone,
+    {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    },
+  );
+}
+
+function supportedScheduleTimeZones(selected: string) {
+  let supported: string[] = [];
+  try {
+    supported = Intl.supportedValuesOf("timeZone");
+  } catch {
+    // Older browsers can still use the current zone or enter an IANA name.
+  }
+  return Array.from(new Set(["UTC", selected, ...supported]))
+    .filter(Boolean)
+    .sort((left, right) => left.localeCompare(right));
+}
+
+function toggleWeekday(
+  weekdays: ScheduleWeekday[],
+  weekday: ScheduleWeekday,
+) {
+  const selected = new Set(weekdays);
+  if (selected.has(weekday)) selected.delete(weekday);
+  else selected.add(weekday);
+  return SCHEDULE_WEEKDAYS.map(({ value }) => value).filter((candidate) =>
+    selected.has(candidate),
+  );
+}
+
+function parseMonthDay(value: string): ScheduleMonthDay {
+  return value === "last" ? "last" : Number(value);
 }
 
 function scheduleCollectionPath(environmentId: string) {

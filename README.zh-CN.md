@@ -43,6 +43,7 @@ project。它让原生 coding agent 运行在远程 Sandbox0 Sandbox 中，并�
 | 人与 Agent 共享浏览器 | Human 和 coding agent 使用同一个官方 Playwright browser session，共享 tab 和登录 profile。 |
 | 可控的出站访问 | 按目标限制 Sandbox 出站流量，并只向匹配的请求注入受支持的凭证，避免把服务密钥放进仓库或浏览器。 |
 | Workspace 防丢失 | 通过 Sandbox0 Volume snapshot 手动或定时备份 Workspace，设置保留数量并按需恢复。 |
+| 持久化自动化 | 使用一次性或易读的周期规则定时执行长 Codex prompt，需要时仍可使用高级 Cron。Sandpi 在 Sandbox 外持久化运行意图，并在 server 或 runtime 恢复后对账原生 Turn。 |
 
 Environment 刻意设计得比一个聊天会话更完整：
 
@@ -52,6 +53,7 @@ Environment
 ├── 一个原生 coding-agent harness 和 provider 账号
 ├── 网络策略和出站凭证
 ├── runtime 资源、终端、共享 Browser 和指标
+├── 持久化 Automation Schedules
 └── 多个原生 coding-agent Session
 ```
 
@@ -87,6 +89,8 @@ Environment。如果多个 Session 本来就应该共享文件、工具和执行
 - 实时 Workspace 文件浏览器、Monaco 编辑器、媒体预览和 Git 变更
 - Human 与 coding agent 共用的官方 Playwright Browser
 - Environment 终端、runtime 指标和可配置 idle pause
+- Environment Schedules，支持一次性或易读的周期设置、高级 Cron、IANA
+  时区、后续运行预览、持久化运行历史和重叠跳过
 - 每个 Environment 独立的网络策略和 Sandbox0 出站凭证注入
 - Workspace 手动/定时备份、保留和恢复
 - 内置单用户身份模式或 OIDC
