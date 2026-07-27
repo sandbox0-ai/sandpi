@@ -35,7 +35,6 @@ import {
   type CodexMemoriesSettings,
   type CodexPersonalitySelection,
   type CodexPersonalitySettings,
-  type CodexProjectGuidance,
   type CodexTokenUsage,
 } from "@/harnesses/codex/native-capabilities";
 import {
@@ -71,7 +70,6 @@ interface CodexNativeCommandDialogProps {
   editGoalImmediately?: boolean;
   onSessionChange?: (session: CodexSession) => void;
   onOpenWorkspacePath?: (path: string) => void;
-  onStartNewSession?: () => void;
   onClose: () => void;
 }
 
@@ -86,8 +84,7 @@ const MODE_META: Record<
   },
   guidance: {
     title: "Project guidance",
-    description:
-      "Manage Workspace AGENTS.md files and inspect Codex's native Session snapshot.",
+    description: "Manage AGENTS.md files in the shared Workspace.",
     icon: BookOpenText,
   },
   hooks: {
@@ -131,7 +128,6 @@ export function CodexNativeCommandDialog({
   editGoalImmediately = false,
   onSessionChange,
   onOpenWorkspacePath,
-  onStartNewSession,
   onClose,
 }: CodexNativeCommandDialogProps) {
   const titleId = useId();
@@ -210,9 +206,7 @@ export function CodexNativeCommandDialog({
             <ProjectGuidancePanel
               language={language}
               environmentId={environmentId}
-              sessionId={session?.id}
               onOpenWorkspacePath={onOpenWorkspacePath}
-              onStartNewSession={onStartNewSession}
             />
           ) : mode === "personality" ? (
             <PersonalityPanel
@@ -270,33 +264,23 @@ const ROOT_AGENTS_OVERRIDE_PATH = "/workspace/AGENTS.override.md";
 function ProjectGuidancePanel({
   language,
   environmentId,
-  sessionId,
   onOpenWorkspacePath,
-  onStartNewSession,
 }: {
   language: OperationLanguage;
   environmentId: string;
-  sessionId?: string;
   onOpenWorkspacePath?: (path: string) => void;
-  onStartNewSession?: () => void;
 }) {
   const [existingPaths, setExistingPaths] = useState<Set<string>>();
-  const [guidance, setGuidance] = useState<CodexProjectGuidance>();
   const [filesLoading, setFilesLoading] = useState(true);
-  const [guidanceLoading, setGuidanceLoading] = useState(Boolean(sessionId));
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
-  const [guidanceError, setGuidanceError] = useState("");
   const isChinese = language === "zh-CN";
 
   useEffect(() => {
     const controller = new AbortController();
     setExistingPaths(undefined);
-    setGuidance(undefined);
     setFilesLoading(true);
-    setGuidanceLoading(Boolean(sessionId));
     setError("");
-    setGuidanceError("");
     void readRootGuidanceFiles(environmentId, controller.signal)
       .then(setExistingPaths)
       .catch((cause) => {
@@ -309,29 +293,8 @@ function ProjectGuidancePanel({
       .finally(() => {
         if (!controller.signal.aborted) setFilesLoading(false);
       });
-
-    if (sessionId) {
-      void apiFetch<ApiEnvelope<CodexProjectGuidance>>(
-        `/api/v1/sessions/${encodeURIComponent(sessionId)}/project-guidance`,
-        { signal: controller.signal },
-      )
-        .then((response) => setGuidance(response.data))
-        .catch((cause) => {
-          if (!controller.signal.aborted) {
-            setGuidanceError(
-              errorMessage(
-                cause,
-                "Could not load the native Session guidance snapshot.",
-              ),
-            );
-          }
-        })
-        .finally(() => {
-          if (!controller.signal.aborted) setGuidanceLoading(false);
-        });
-    }
     return () => controller.abort();
-  }, [environmentId, sessionId]);
+  }, [environmentId]);
 
   async function createRootAgents() {
     if (creating) return;
@@ -370,7 +333,7 @@ function ProjectGuidancePanel({
       <section className={styles.guidanceSection}>
         <div className={styles.guidanceHeading}>
           <span>
-            <strong>{isChinese ? "环境文件" : "Environment files"}</strong>
+            <strong>{isChinese ? "Workspace 文件" : "Workspace files"}</strong>
             <small>
               {isChinese
                 ? "文件内容只保存在共享 Workspace 中。"
@@ -450,112 +413,11 @@ function ProjectGuidancePanel({
         ) : null}
       </section>
 
-      <section className={styles.guidanceSection}>
-        <div className={styles.guidanceHeading}>
-          <span>
-            <strong>
-              {sessionId
-                ? isChinese
-                  ? "当前 Session 快照"
-                  : "Current Session snapshot"
-                : isChinese
-                  ? "加载时机"
-                  : "Load behavior"}
-            </strong>
-            <small>
-              {sessionId
-                ? `${isChinese ? "工作目录" : "Working directory"}: ${
-                    guidance?.cwd ?? "/workspace"
-                  }`
-                : isChinese
-                  ? "Codex 会在原生 Session 启动时发现适用文件。"
-                  : "Codex discovers applicable files when the native Session starts."}
-            </small>
-          </span>
-        </div>
-        {sessionId ? (
-          guidanceLoading ? (
-            <PanelLoading
-              label={
-                isChinese
-                  ? "正在读取原生 Session 快照…"
-                  : "Reading the native Session snapshot…"
-              }
-            />
-          ) : guidanceError ? (
-            <PanelError message={guidanceError} />
-          ) : guidance?.instructionSources.length ? (
-            <div className={styles.guidanceFileList}>
-              {guidance.instructionSources.map((source, index) => (
-                <div
-                  className={styles.guidanceSourceRow}
-                  key={`${source.path}:${index}`}
-                >
-                  <span>
-                    <code>{source.path}</code>
-                    <small>
-                      {source.workspacePath
-                        ? isChinese
-                          ? "Workspace 指引"
-                          : "Workspace guidance"
-                        : isChinese
-                          ? "Codex 管理或外部来源"
-                          : "Codex-managed or external source"}
-                    </small>
-                  </span>
-                  {source.workspacePath && onOpenWorkspacePath ? (
-                    <button
-                      type="button"
-                      className={styles.iconButton}
-                      aria-label={
-                        isChinese ? `打开 ${source.path}` : `Open ${source.path}`
-                      }
-                      title={
-                        isChinese ? `打开 ${source.path}` : `Open ${source.path}`
-                      }
-                      onClick={() => {
-                        if (source.workspacePath) {
-                          onOpenWorkspacePath(source.workspacePath);
-                        }
-                      }}
-                    >
-                      <FolderOpen size={14} aria-hidden="true" />
-                    </button>
-                  ) : null}
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className={styles.empty}>
-              {isChinese
-                ? "此 Session 启动时没有加载任何指引文件。"
-                : "No guidance file was loaded when this Session started."}
-            </div>
-          )
-        ) : (
-          <PanelNotice>
-            {isChinese
-              ? "新 Session 将以 /workspace 为工作目录，并使用 Codex 原生发现规则加载指引。"
-              : "New Sessions use /workspace and Codex's native discovery rules."}
-          </PanelNotice>
-        )}
-        <PanelNotice>
-          {isChinese
-            ? "Codex 按 Session 固定指引快照；保存文件不会改变当前 Session，请新建 Session 应用最新内容。"
-            : "Codex snapshots guidance per Session. Saving a file does not change the current Session; start a new Session to apply it."}
-        </PanelNotice>
-        {sessionId && onStartNewSession ? (
-          <div className={styles.actionRow}>
-            <button
-              type="button"
-              className={styles.primaryButton}
-              onClick={onStartNewSession}
-            >
-              {isChinese ? "新建 Session" : "Start new Session"}
-            </button>
-          </div>
-        ) : null}
-      </section>
+      <PanelNotice>
+        {isChinese
+          ? "修改将在新建 Session 时生效。"
+          : "Changes take effect when you start a new Session."}
+      </PanelNotice>
     </div>
   );
 }

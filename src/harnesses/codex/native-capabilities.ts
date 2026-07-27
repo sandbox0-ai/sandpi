@@ -11,44 +11,6 @@ export interface CodexPersonalitySettings {
   supported: boolean;
 }
 
-export interface CodexProjectGuidanceSource {
-  /** Environment-native path reported by Codex for this Thread snapshot. */
-  path: string;
-  /** User-visible Workspace path when the source can be opened in Sandpi. */
-  workspacePath: string | null;
-}
-
-export interface CodexProjectGuidance {
-  cwd: string;
-  instructionSources: CodexProjectGuidanceSource[];
-}
-
-/**
- * Projects thread/start, thread/resume and thread/fork response metadata
- * without rediscovering AGENTS.md or copying its contents into Sandpi state.
- */
-export function codexProjectGuidanceFromNativeResult(
-  value: unknown,
-  fallbackCwd = "/workspace",
-): CodexProjectGuidance {
-  const result = nativeRecord(value);
-  const cwd = nativePath(result?.cwd) ?? fallbackCwd;
-  const instructionSources = Array.isArray(result?.instructionSources)
-    ? result.instructionSources.flatMap((source) => {
-        const sourcePath = nativePath(source);
-        return sourcePath
-          ? [
-              {
-                path: sourcePath,
-                workspacePath: userVisibleInstructionSource(sourcePath),
-              },
-            ]
-          : [];
-      })
-    : [];
-  return { cwd, instructionSources };
-}
-
 export interface CodexTokenUsageSummary {
   lifetimeTokens: number | null;
   peakDailyTokens: number | null;
@@ -131,33 +93,4 @@ export interface CodexHooksInventory {
   hooks: CodexHook[];
   warnings: string[];
   errors: CodexHookIssue[];
-}
-
-function nativeRecord(value: unknown): Record<string, unknown> | undefined {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function nativePath(value: unknown) {
-  return typeof value === "string" &&
-    value.length > 0 &&
-    value.length <= 4_096 &&
-    !value.includes("\0")
-    ? value
-    : undefined;
-}
-
-function userVisibleInstructionSource(sourcePath: string) {
-  const prefix = "/workspace/";
-  if (!sourcePath.startsWith(prefix)) return null;
-  const segments = sourcePath.slice(prefix.length).split("/");
-  if (
-    segments.length === 0 ||
-    segments.some((segment) => !segment || segment === "." || segment === "..") ||
-    segments[0] === ".sandpi"
-  ) {
-    return null;
-  }
-  return sourcePath;
 }

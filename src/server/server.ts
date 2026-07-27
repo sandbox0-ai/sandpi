@@ -1369,19 +1369,6 @@ function registerApiRoutes(
     },
   );
   app.get<{ Params: { sessionId: string } }>(
-    "/api/v1/sessions/:sessionId/project-guidance",
-    async (request) => ({
-      data: await services.codex.readSessionProjectGuidance({
-        userId: request.principal.userId,
-        sessionId: request.params.sessionId,
-      }),
-      meta: {
-        source: "codex",
-        lifecycle: "native-thread-snapshot",
-      },
-    }),
-  );
-  app.get<{ Params: { sessionId: string } }>(
     "/api/v1/sessions/:sessionId/models",
     async (request) => {
       try {

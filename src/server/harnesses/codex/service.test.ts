@@ -1406,67 +1406,6 @@ test("uses one Environment app-server for multiple native Sessions", async () =>
   }
 });
 
-test("reuses Codex's native Project guidance snapshot for one attachment", async () => {
-  const context = fixture({
-    onRequest(message) {
-      if (message.method !== "thread/resume") return undefined;
-      const params = message.params as { threadId: string };
-      return {
-        id: message.id,
-        result: {
-          cwd: "/workspace",
-          instructionSources: [
-            "/workspace/.sandpi/harnesses/codex/AGENTS.md",
-            "/workspace/AGENTS.md",
-          ],
-          thread: {
-            id: params.threadId,
-            status: { type: "idle" },
-            turns: [completedTurn("turn-resumed")],
-          },
-        },
-      };
-    },
-  });
-  try {
-    const expected = {
-      cwd: "/workspace",
-      instructionSources: [
-        {
-          path: "/workspace/.sandpi/harnesses/codex/AGENTS.md",
-          workspacePath: null,
-        },
-        {
-          path: "/workspace/AGENTS.md",
-          workspacePath: "/workspace/AGENTS.md",
-        },
-      ],
-    };
-    assert.deepEqual(
-      await context.service.readSessionProjectGuidance({
-        userId: "user",
-        sessionId: "session-one",
-      }),
-      expected,
-    );
-    assert.deepEqual(
-      await context.service.readSessionProjectGuidance({
-        userId: "user",
-        sessionId: "session-one",
-      }),
-      expected,
-    );
-    assert.equal(
-      context.writes.filter(
-        ({ message }) => message.method === "thread/resume",
-      ).length,
-      1,
-    );
-  } finally {
-    await context.close();
-  }
-});
-
 test("restarts a warm app-server before publishing a replacement account credential", async () => {
   let credentialRevision = 1;
   const credentialEvents: string[] = [];

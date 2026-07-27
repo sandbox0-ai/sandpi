@@ -2176,10 +2176,6 @@ export function CodexConversation({
             setNativeDialog(undefined);
             onOpenWorkspacePath(path);
           }}
-          onStartNewSession={() => {
-            setNativeDialog(undefined);
-            onNewSession();
-          }}
           onClose={() => setNativeDialog(undefined)}
         />
       ) : null}

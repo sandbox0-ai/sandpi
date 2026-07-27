@@ -55,22 +55,13 @@ user file. Sandpi does not copy their contents into PostgreSQL, maintain a
 second instruction model, inject a hidden Turn prompt or ask Codex to reload
 them.
 
-Codex is also the authority for what a native Thread actually loaded.
-`thread/start`, `thread/resume` and `thread/fork` return `cwd` and
-`instructionSources`; Sandpi keeps that metadata only in the process-local
-attachment projection and exposes it as the current Session snapshot. Managed
-Codex-home sources remain visible by native path but cannot be opened through
-the user Workspace editor. User-visible sources under `/workspace` can be
-opened directly.
-
 Instruction discovery is fixed for the lifetime of a native Session. Editing,
 creating, deleting or renaming an `AGENTS.md` file does not mutate an existing
-Thread, so the UI explicitly directs the user to start a new Session to apply
-the latest Workspace guidance. Sandpi does not simulate hot reload by adding
-custom instructions to a later Turn. Sessions currently start at
-`/workspace`; product support for nested `AGENTS.md` scopes therefore requires
-a future native working-directory selection passed to `thread/start`, rather
-than a Sandpi-owned discovery algorithm.
+Thread, so the UI states that changes apply to new Sessions. Sandpi does not
+simulate hot reload by adding custom instructions to a later Turn. Sessions
+currently start at `/workspace`; product support for nested `AGENTS.md` scopes
+therefore requires a future native working-directory selection passed to
+`thread/start`, rather than a Sandpi-owned discovery algorithm.
 
 ## Persistent native state and credentials
 

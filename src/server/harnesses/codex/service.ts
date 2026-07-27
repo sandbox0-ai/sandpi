@@ -36,7 +36,6 @@ import type {
 } from "@/harnesses/codex/environment-tools";
 import {
   codexMemoriesFeatureToggleSettings,
-  codexProjectGuidanceFromNativeResult,
   type CodexBackgroundTerminal,
   type CodexBackgroundTerminals,
   type CodexHook,
@@ -46,7 +45,6 @@ import {
   type CodexPersonality,
   type CodexPersonalitySelection,
   type CodexPersonalitySettings,
-  type CodexProjectGuidance,
   type CodexTokenUsage,
 } from "@/harnesses/codex/native-capabilities";
 import type { Environment } from "@/lib/types";
@@ -182,7 +180,7 @@ interface RpcAnchor {
 
 interface NativeSessionAttachmentState {
   epoch: string;
-  threads: Map<string, Promise<CodexProjectGuidance>>;
+  threads: Map<string, Promise<void>>;
 }
 
 interface ExceptionalSessionReconciliation {
@@ -411,11 +409,7 @@ export class CodexService {
         nativeSessionId,
         sessionId,
       );
-      this.rememberNativeSessionAttached(
-        environmentRuntime,
-        nativeSessionId,
-        codexProjectGuidanceFromNativeResult(response.result),
-      );
+      this.rememberNativeSessionAttached(environmentRuntime, nativeSessionId);
       await this.startTurn({
         userId: input.userId,
         sessionId,
@@ -1091,11 +1085,7 @@ export class CodexService {
       }
       await this.store.markSessionNativeReady(childSessionId, nativeSessionId);
       this.rememberNativeOwner(environment.id, nativeSessionId, childSessionId);
-      this.rememberNativeSessionAttached(
-        environmentRuntime,
-        nativeSessionId,
-        codexProjectGuidanceFromNativeResult(response.result),
-      );
+      this.rememberNativeSessionAttached(environmentRuntime, nativeSessionId);
       this.ensureEnvironmentWorker(environment.id);
       return childSessionId;
     } catch (error) {
@@ -1779,28 +1769,6 @@ export class CodexService {
       environmentRuntime,
       sessionId,
       sessionId,
-    );
-  }
-
-  /**
-   * Returns Codex's own Thread-scoped instruction-source snapshot. Sandpi does
-   * not rediscover AGENTS.md, persist its contents or mutate the active Thread.
-   */
-  async readSessionProjectGuidance(input: {
-    userId: string;
-    sessionId: string;
-  }): Promise<CodexProjectGuidance> {
-    const sessionRuntime = await this.requireNativeSessionRuntime(
-      input.userId,
-      input.sessionId,
-    );
-    const environmentRuntime = await this.environmentRuntimeForSession(
-      input.userId,
-      input.sessionId,
-    );
-    return this.ensureNativeSessionAttached(
-      environmentRuntime,
-      sessionRuntime,
     );
   }
 
@@ -3595,17 +3563,15 @@ export class CodexService {
         "Codex returned an invalid native Session resume response.",
       );
     }
-    return codexProjectGuidanceFromNativeResult(response.result);
   }
 
   private rememberNativeSessionAttached(
     runtime: StoredEnvironmentRuntime,
     nativeSessionId: string,
-    guidance: CodexProjectGuidance,
   ) {
     this.nativeSessionAttachmentState(runtime).threads.set(
       nativeSessionId,
-      Promise.resolve(guidance),
+      Promise.resolve(),
     );
   }
 
