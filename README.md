@@ -44,6 +44,7 @@ Codex is the first supported coding agent.
 | Shared browser debugging | A human and coding agent use the same official Playwright browser session, including its tabs and login profile. |
 | Controlled outbound access | Restrict sandbox egress by destination and inject supported credentials only into matching traffic, instead of placing service secrets in the repository or browser. |
 | Workspace protection | Create manual or scheduled Workspace backups with retention and restore them through Sandbox0 Volume snapshots. |
+| Encrypted persisted state | Sandbox0 encrypts persisted Environment rootfs checkpoint objects and default S0FS Workspace Volume objects at the application layer before object storage. |
 | Durable Automation | Schedule a long Codex prompt once or with a human-friendly, time-zone-aware recurrence. Advanced cron remains available when needed. Sandpi persists run intent outside the Sandbox and reconciles native Turn completion after server or runtime recovery. |
 
 An Environment is deliberately larger than a chat:
@@ -232,6 +233,12 @@ Sandbox0
 - Sandbox0 owns Sandbox lifecycle, Volumes, network enforcement, credential
   injection and usage truth. Sandpi owns its users, Environment attribution,
   native Session references and optional product entitlements.
+- With Sandbox0's default storage runtime, persisted Environment rootfs
+  checkpoint objects and default S0FS Workspace Volume objects are encrypted at
+  the application layer before object storage. Sandbox0 manager and the active
+  ctld hold the installation key, so this is service-side rather than
+  end-to-end encryption. Self-hosted operators control it with
+  `spec.storage.runtime.objectEncryptionEnabled`.
 - Native Codex Session history remains in the Environment Workspace. PostgreSQL
   stores the opaque native reference and product control state, not a duplicate
   conversation transcript. Environment Schedule definitions are an explicit

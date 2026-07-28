@@ -43,6 +43,7 @@ project。它让原生 coding agent 运行在远程 Sandbox0 Sandbox 中，并�
 | 人与 Agent 共享浏览器 | Human 和 coding agent 使用同一个官方 Playwright browser session，共享 tab 和登录 profile。 |
 | 可控的出站访问 | 按目标限制 Sandbox 出站流量，并只向匹配的请求注入受支持的凭证，避免把服务密钥放进仓库或浏览器。 |
 | Workspace 防丢失 | 通过 Sandbox0 Volume snapshot 手动或定时备份 Workspace，设置保留数量并按需恢复。 |
+| 持久化数据加密 | Sandbox0 在写入对象存储前，对 Environment rootfs checkpoint 对象和默认 S0FS Workspace Volume 对象做应用层加密。 |
 | 持久化自动化 | 使用一次性或易读的周期规则定时执行长 Codex prompt，需要时仍可使用高级 Cron。Sandpi 在 Sandbox 外持久化运行意图，并在 server 或 runtime 恢复后对账原生 Turn。 |
 
 Environment 刻意设计得比一个聊天会话更完整：
@@ -214,6 +215,10 @@ Sandbox0
   metering endpoint 或 ClickHouse 凭证。
 - Sandbox0 负责 Sandbox 生命周期、Volume、网络执行、凭证注入和 usage truth。
   Sandpi 负责用户、Environment 归属、原生 Session 引用和可选产品 entitlement。
+- 使用 Sandbox0 默认存储 runtime 时，Environment rootfs checkpoint 对象和默认 S0FS
+  Workspace Volume 对象会在写入对象存储前进行应用层加密。Sandbox0 manager 和 active
+  ctld 持有 installation key，因此这是服务端加密而不是端到端加密；self-hosted
+  operator 可通过 `spec.storage.runtime.objectEncryptionEnabled` 控制该能力。
 - 原生 Codex Session 历史保存在 Environment Workspace 中。PostgreSQL 只保存不透明
   的原生引用和产品控制状态，不维护第二份 conversation transcript。
 - 出站凭证注入能够减少 secret 暴露，但 coding agent 仍然可以使用明确授予该
