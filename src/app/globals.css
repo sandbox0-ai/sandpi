@@ -1152,14 +1152,8 @@ pre,
 }
 
 .assistant-avatar {
-  display: flex;
   width: 27px;
   height: 27px;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid #cbc9c1;
-  border-radius: 7px;
-  background: #1f1f1d;
 }
 
 .user-avatar {
@@ -1168,9 +1162,9 @@ pre,
 }
 
 .assistant-avatar-mark {
-  width: 15px;
-  height: 15px;
-  background: #fff;
+  width: 100%;
+  height: 100%;
+  background: var(--ink);
 }
 
 .codex-glyph {
@@ -1594,13 +1588,7 @@ pre,
 .codex-turn-activity-content .assistant-avatar {
   width: 18px;
   height: 18px;
-  border-radius: 5px;
   opacity: 0.72;
-}
-
-.codex-turn-activity-content .assistant-avatar-mark {
-  width: 10px;
-  height: 10px;
 }
 
 .codex-turn-activity-content .markdown-content {
