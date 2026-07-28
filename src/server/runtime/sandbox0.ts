@@ -480,7 +480,32 @@ export class Sandbox0Runtime implements RuntimeAdapter {
         `${memoryMiB}Mi`,
       );
     } catch (error) {
+      if (
+        error instanceof APIError &&
+        error.statusCode >= 500 &&
+        error.statusCode < 600 &&
+        (await this.environmentMemoryMatches(runtime.sandboxId, memoryMiB))
+      ) {
+        return;
+      }
       throw translateSandbox0Error(error);
+    }
+  }
+
+  /**
+   * Resolves an ambiguous mutation response only when Sandbox0's authoritative
+   * state already matches the requested limit. Read failures preserve the
+   * original mutation error.
+   */
+  private async environmentMemoryMatches(
+    sandboxId: string,
+    memoryMiB: number,
+  ) {
+    try {
+      const sandbox = await this.client.sandboxes.get(sandboxId);
+      return sandboxMemoryQuantityMiB(sandbox.resources?.memory) === memoryMiB;
+    } catch {
+      return false;
     }
   }
 
@@ -3669,6 +3694,25 @@ function runtimeCredentialSourceMetadata(
 
 function isMissingResource(error: unknown) {
   return error instanceof APIError && error.statusCode === 404;
+}
+
+// Sandbox0 canonicalizes Kubernetes memory quantities, for example 4096Mi to
+// 4Gi, so ambiguous update confirmation must compare values rather than text.
+function sandboxMemoryQuantityMiB(quantity: string | undefined) {
+  const match = /^([1-9]\d*)(Ki|Mi|Gi|Ti)$/.exec(quantity?.trim() ?? "");
+  if (!match) return undefined;
+  const binaryUnitBytes = {
+    Ki: 1n << 10n,
+    Mi: 1n << 20n,
+    Gi: 1n << 30n,
+    Ti: 1n << 40n,
+  } as const;
+  const unit = match[2] as keyof typeof binaryUnitBytes;
+  const bytes = BigInt(match[1]) * binaryUnitBytes[unit];
+  const mebibyte = 1n << 20n;
+  if (bytes % mebibyte !== 0n) return undefined;
+  const value = bytes / mebibyte;
+  return value <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(value) : undefined;
 }
 
 function isWorkspaceTransportDisconnected(error: unknown) {

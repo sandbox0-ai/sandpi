@@ -54,6 +54,20 @@ function runtimeWithClient(client: unknown) {
   return runtime;
 }
 
+function environmentRuntimeRecord(): EnvironmentRuntimeRecord {
+  return {
+    id: environment.id,
+    sandboxId: environment.sandboxId,
+    workspaceVolumeId: environment.workspaceVolumeId,
+    runtimeGeneration: 1,
+    decoder: {
+      supervisorCursor: 0,
+      tailBase64: "",
+      runtimeGeneration: 1,
+    },
+  };
+}
+
 function sandbox0FetchTimeout() {
   const cause = Object.assign(new Error("connect timed out"), {
     code: "ETIMEDOUT",
@@ -580,23 +594,97 @@ test("updates the existing Environment Sandbox memory", async () => {
       },
     },
   });
-  const coordinates: EnvironmentRuntimeRecord = {
-    id: environment.id,
-    sandboxId: environment.sandboxId,
-    workspaceVolumeId: environment.workspaceVolumeId,
-    runtimeGeneration: 1,
-    decoder: {
-      supervisorCursor: 0,
-      tailBase64: "",
-      runtimeGeneration: 1,
-    },
-  };
 
-  await runtime.updateEnvironmentMemory(coordinates, 8 * 1024);
+  await runtime.updateEnvironmentMemory(environmentRuntimeRecord(), 8 * 1024);
 
   assert.deepEqual(updates, [
     { sandboxId: "sandbox-environment", memory: "8192Mi" },
   ]);
+});
+
+test("confirms an ambiguous Environment memory update from Sandbox0 state", async () => {
+  const calls: string[] = [];
+  const runtime = runtimeWithClient({
+    sandboxes: {
+      async updateMemory(sandboxId: string, memory: string) {
+        calls.push(`update:${sandboxId}:${memory}`);
+        throw new APIError({
+          statusCode: 500,
+          code: "unexpected_response",
+          message: "Internal Server Error",
+        });
+      },
+      async get(sandboxId: string) {
+        calls.push(`get:${sandboxId}`);
+        return { resources: { memory: "4Gi" } };
+      },
+    },
+  });
+
+  await runtime.updateEnvironmentMemory(environmentRuntimeRecord(), 4 * 1024);
+
+  assert.deepEqual(calls, [
+    "update:sandbox-environment:4096Mi",
+    "get:sandbox-environment",
+  ]);
+});
+
+test("preserves an ambiguous Environment memory error when Sandbox0 state differs", async () => {
+  const runtime = runtimeWithClient({
+    sandboxes: {
+      async updateMemory() {
+        throw new APIError({
+          statusCode: 502,
+          code: "unexpected_response",
+          message: "Bad Gateway",
+        });
+      },
+      async get() {
+        return { resources: { memory: "2Gi" } };
+      },
+    },
+  });
+
+  await assert.rejects(
+    runtime.updateEnvironmentMemory(environmentRuntimeRecord(), 4 * 1024),
+    (error: unknown) => {
+      assert.equal((error as { statusCode?: number }).statusCode, 502);
+      assert.equal(
+        (error as { code?: string }).code,
+        "sandbox0_unexpected_response",
+      );
+      return true;
+    },
+  );
+});
+
+test("does not reconcile a rejected Environment memory update", async () => {
+  let reads = 0;
+  const runtime = runtimeWithClient({
+    sandboxes: {
+      async updateMemory() {
+        throw new APIError({
+          statusCode: 400,
+          code: "bad_request",
+          message: "invalid memory",
+        });
+      },
+      async get() {
+        reads += 1;
+        return { resources: { memory: "4Gi" } };
+      },
+    },
+  });
+
+  await assert.rejects(
+    runtime.updateEnvironmentMemory(environmentRuntimeRecord(), 4 * 1024),
+    (error: unknown) => {
+      assert.equal((error as { statusCode?: number }).statusCode, 400);
+      assert.equal((error as { code?: string }).code, "sandbox0_bad_request");
+      return true;
+    },
+  );
+  assert.equal(reads, 0);
 });
 
 test("queries only the latest Sandbox CPU and memory gauges for compact UI", async () => {
