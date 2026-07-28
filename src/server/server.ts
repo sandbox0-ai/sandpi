@@ -16,27 +16,12 @@ import type { Pool } from "pg";
 import WebSocket, { type RawData } from "ws";
 import { ZodError, z } from "zod";
 
-import type { SandpiDeploymentSummary, SandpiPreferences } from "@/lib/types";
-import {
-  BROWSER_DASHBOARD_VIEWPORT_LIMITS,
-  sandboxLoopbackUrl,
-} from "@/lib/environment-browser";
+import type { SandpiDeploymentSummary } from "@/lib/types";
+import { sandboxLoopbackUrl } from "@/lib/environment-browser";
 import { BillingQuotaService } from "@/server/billing/quota-service";
 import { BillingRepository } from "@/server/billing/repository";
-import {
-  isPaidPlanInput,
-  StripeBillingService,
-} from "@/server/billing/stripe-service";
+import { StripeBillingService } from "@/server/billing/stripe-service";
 import { SandboxUsageService } from "@/server/billing/usage-service";
-import {
-  ENVIRONMENT_SANDBOX_MEMORY_MAX_MIB,
-  ENVIRONMENT_SANDBOX_MEMORY_MIN_MIB,
-} from "@/lib/environment-resources";
-import { MAX_ENVIRONMENT_IDLE_PAUSE_TIMEOUT_SECONDS } from "@/lib/environment-lifecycle";
-import {
-  isEnvironmentWorkspaceBackupIntervalSeconds,
-  isEnvironmentWorkspaceBackupRetentionCount,
-} from "@/lib/environment-workspace-backup";
 import {
   DEFAULT_ENVIRONMENT_METRIC_RANGE_SECONDS,
   ENVIRONMENT_RESOURCE_METRIC_LOOKBACK_SECONDS,
@@ -85,12 +70,7 @@ import {
 } from "@/server/harnesses/codex/native-stream";
 import { CodexService } from "@/server/harnesses/codex/service";
 import {
-  MAX_CODEX_INPUT_BASE64_LENGTH,
-  MAX_CODEX_INPUT_IMAGES,
-} from "@/server/harnesses/codex/input-images";
-import {
   MAX_CODEX_COMPOSER_UPLOAD_BASE64_LENGTH,
-  MAX_CODEX_INPUT_LOCAL_IMAGES,
   codexComposerUpload,
   codexComposerUploadPath,
   decodeCodexComposerUpload,
@@ -107,9 +87,40 @@ import {
 import { SecretBox } from "@/server/secrets";
 import { SandpiStore } from "@/server/store";
 import { TerminalInputQueue } from "@/server/terminal-input-queue";
-import { networkPolicySchema } from "@/server/network-policy-schema";
+import {
+  billingCheckoutSchema,
+  browserOpenSchema,
+  browserSessionSchema,
+  codexComposerUploadSchema,
+  codexHookUpdateSchema,
+  codexMcpServerEnabledSchema,
+  codexMemoriesSettingsSchema,
+  codexPersonalitySelectionSchema,
+  codexRateLimitResetSchema,
+  codexSkillConfigurationSchema,
+  environmentBrowserViewportSchema,
+  environmentCreateSchema,
+  environmentProvisioningSchema,
+  environmentScheduleSchema,
+  environmentUpdateSchema,
+  preferencesSchema,
+  sessionCreateSchema,
+  sessionForkSchema,
+  sessionGoalUpdateSchema,
+  sessionMetadataSchema,
+  sessionReviewSchema,
+  terminalInputSchema,
+  turnCreateSchema,
+  turnInterruptSchema,
+  turnSteerSchema,
+  workspaceBackupRestoreSchema,
+  workspaceFileSearchQuerySchema,
+  workspaceIdeCreateEntrySchema,
+  workspaceIdeRenameEntrySchema,
+  workspaceIdeWriteSchema,
+} from "@/server/api-schemas";
 
-const SESSION_COOKIE = "sandpi_session";
+export const SESSION_COOKIE = "sandpi_session";
 const BUILTIN_SIGNED_OUT_COOKIE = "sandpi_builtin_signed_out";
 export const AUTH_COOKIE_PATH = "/api/v1";
 export const AUTH_COOKIE_CLEAR_PATHS = [AUTH_COOKIE_PATH, "/"] as const;
@@ -117,92 +128,6 @@ const CODEX_IMAGE_BODY_LIMIT_BYTES = 36 * 1024 * 1024;
 const CODEX_UPLOAD_BODY_LIMIT_BYTES =
   MAX_CODEX_COMPOSER_UPLOAD_BASE64_LENGTH + 64 * 1024;
 const WORKSPACE_FILE_BODY_LIMIT_BYTES = 7 * 1024 * 1024;
-const environmentBrowserViewportSchema = z
-  .object({
-    width: z
-      .number()
-      .int()
-      .min(BROWSER_DASHBOARD_VIEWPORT_LIMITS.minWidth)
-      .max(BROWSER_DASHBOARD_VIEWPORT_LIMITS.maxWidth),
-    height: z
-      .number()
-      .int()
-      .min(BROWSER_DASHBOARD_VIEWPORT_LIMITS.minHeight)
-      .max(BROWSER_DASHBOARD_VIEWPORT_LIMITS.maxHeight),
-  })
-  .strict();
-const workspaceFileSearchQuerySchema = z
-  .string()
-  .trim()
-  .max(512)
-  .refine((value) => !value.includes("\0"));
-const codexReasoningEffortSchema = z.string().trim().min(1).max(100);
-const codexReferenceNameSchema = z
-  .string()
-  .trim()
-  .min(1)
-  .max(512)
-  .refine((value) => !/[\u0000\r\n]/.test(value));
-const codexLocalImageSchema = z.object({
-  name: codexReferenceNameSchema,
-  path: z.string().trim().min(1).max(4_096),
-});
-const codexLocalImagesSchema = z
-  .array(codexLocalImageSchema)
-  .max(MAX_CODEX_INPUT_LOCAL_IMAGES)
-  .default([]);
-const codexComposerUploadSchema = z.object({
-  name: codexReferenceNameSchema,
-  mimeType: z
-    .string()
-    .trim()
-    .min(1)
-    .max(255)
-    .refine((value) => !/[\u0000\r\n]/.test(value))
-    .default("application/octet-stream"),
-  dataBase64: z.string().min(1).max(MAX_CODEX_COMPOSER_UPLOAD_BASE64_LENGTH),
-});
-const codexRateLimitResetSchema = z
-  .object({
-    idempotencyKey: z
-      .string()
-      .trim()
-      .min(16)
-      .max(128)
-      .refine((value) => !/[\u0000\r\n]/.test(value)),
-  })
-  .strict();
-const environmentScheduleSchema = z
-  .object({
-    name: z.string().trim().min(1).max(80),
-    prompt: z.string().trim().min(1).max(100_000),
-    timing: z.discriminatedUnion("kind", [
-      z.object({
-        kind: z.literal("once"),
-        runAt: z.number().positive(),
-      }),
-      z.object({
-        kind: z.literal("cron"),
-        expression: z.string().trim().min(1).max(200),
-        timeZone: z.string().trim().min(1).max(100),
-      }),
-    ]),
-    target: z.discriminatedUnion("kind", [
-      z.object({ kind: z.literal("newSession") }),
-      z.object({
-        kind: z.literal("session"),
-        sessionId: z.string().trim().min(1).max(200),
-      }),
-    ]),
-    overlapPolicy: z.literal("skip").default("skip"),
-    enabled: z.boolean().default(true),
-    title: z.string().trim().min(1).max(200).optional(),
-    modelId: z.string().trim().min(1).max(200).optional(),
-    reasoningEffort: codexReasoningEffortSchema.optional(),
-    collaborationMode: z.literal("plan").optional(),
-    serviceTier: z.string().trim().min(1).max(100).optional(),
-  })
-  .strict();
 export interface SandpiServerOptions {
   config?: SandpiConfig;
   pool?: Pool;
@@ -466,7 +391,7 @@ export async function createSandpiServer(
   };
 }
 
-function registerHealthRoutes(
+export function registerHealthRoutes(
   app: FastifyInstance,
   pool: Pool,
   runtime: RuntimeAdapter,
@@ -486,7 +411,7 @@ function registerHealthRoutes(
   });
 }
 
-function registerAuthRoutes(
+export function registerAuthRoutes(
   app: FastifyInstance,
   config: SandpiConfig,
   environments: EnvironmentService,
@@ -543,7 +468,7 @@ function registerAuthRoutes(
   });
 }
 
-function registerApiRoutes(
+export function registerApiRoutes(
   app: FastifyInstance,
   services: {
     config: SandpiConfig;
@@ -591,18 +516,7 @@ function registerApiRoutes(
     data: await services.billingQuota.summary(request.principal.userId),
   }));
   app.post("/api/v1/billing/checkout", async (request) => {
-    const body = z
-      .object({
-        planId: z.string().refine(isPaidPlanInput),
-        idempotencyKey: z
-          .string()
-          .trim()
-          .min(16)
-          .max(128)
-          .refine((value) => !/[\u0000\r\n]/.test(value)),
-      })
-      .strict()
-      .parse(request.body);
+    const body = billingCheckoutSchema.parse(request.body);
     return {
       data: await services.stripeBilling.checkout(
         request.principal.userId,
@@ -653,11 +567,7 @@ function registerApiRoutes(
     data: await services.store.listEnvironments(request.principal.userId),
   }));
   app.post("/api/v1/environments", async (request, reply) => {
-    const body = z
-      .object({
-        name: z.string().trim().min(1).max(80),
-      })
-      .parse(request.body);
+    const body = environmentCreateSchema.parse(request.body);
     const environment = await services.environments.create({
       userId: request.principal.userId,
       ...body,
@@ -667,34 +577,7 @@ function registerApiRoutes(
   app.put<{ Params: { environmentId: string } }>(
     "/api/v1/environments/:environmentId",
     async (request) => {
-      const body = z
-        .object({
-          name: z.string().trim().min(1).max(80),
-          description: z.string().max(500),
-          color: z.string().regex(/^#[0-9a-f]{6}$/i),
-          idlePauseTimeoutSeconds: z
-            .number()
-            .int()
-            .min(0)
-            .max(MAX_ENVIRONMENT_IDLE_PAUSE_TIMEOUT_SECONDS),
-          sandboxMemoryMiB: z
-            .number()
-            .int()
-            .min(ENVIRONMENT_SANDBOX_MEMORY_MIN_MIB)
-            .max(ENVIRONMENT_SANDBOX_MEMORY_MAX_MIB),
-          workspaceBackup: z.object({
-            intervalSeconds: z
-              .number()
-              .int()
-              .refine(isEnvironmentWorkspaceBackupIntervalSeconds),
-            retentionCount: z
-              .number()
-              .int()
-              .refine(isEnvironmentWorkspaceBackupRetentionCount),
-          }),
-          networkPolicy: networkPolicySchema,
-        })
-        .parse(request.body);
+      const body = environmentUpdateSchema.parse(request.body);
       return {
         data: await services.environments.update(
           request.principal.userId,
@@ -781,9 +664,7 @@ function registerApiRoutes(
   }>(
     "/api/v1/environments/:environmentId/workspace-backups/:snapshotId/restore",
     async (request) => {
-      const body = z
-        .object({ confirmation: z.string().min(1).max(80) })
-        .parse(request.body);
+      const body = workspaceBackupRestoreSchema.parse(request.body);
       return {
         data: await services.workspaceBackups.restore(
           request.principal.userId,
@@ -872,9 +753,7 @@ function registerApiRoutes(
   app.put<{ Params: { environmentId: string } }>(
     "/api/v1/environments/:environmentId/provisioning",
     async (request, reply) => {
-      const body = z
-        .object({ desiredState: z.literal("ready") })
-        .parse(request.body);
+      const body = environmentProvisioningSchema.parse(request.body);
       void body;
       const environment = await services.environments.retry(
         request.principal.userId,
@@ -976,11 +855,7 @@ function registerApiRoutes(
   app.put<{ Params: { environmentId: string } }>(
     "/api/v1/environments/:environmentId/harnesses/codex/personality",
     async (request) => {
-      const body = z
-        .object({
-          personality: z.enum(["friendly", "pragmatic"]),
-        })
-        .parse(request.body);
+      const body = codexPersonalitySelectionSchema.parse(request.body);
       return {
         data: await services.codex.setEnvironmentPersonality({
           userId: request.principal.userId,
@@ -1011,13 +886,7 @@ function registerApiRoutes(
   app.put<{ Params: { environmentId: string } }>(
     "/api/v1/environments/:environmentId/harnesses/codex/memories",
     async (request) => {
-      const settings = z
-        .object({
-          featureEnabled: z.boolean(),
-          useMemories: z.boolean(),
-          generateMemories: z.boolean(),
-        })
-        .parse(request.body);
+      const settings = codexMemoriesSettingsSchema.parse(request.body);
       return {
         data: await services.codex.setEnvironmentMemories({
           userId: request.principal.userId,
@@ -1048,18 +917,7 @@ function registerApiRoutes(
   app.put<{ Params: { environmentId: string } }>(
     "/api/v1/environments/:environmentId/harnesses/codex/hooks",
     async (request) => {
-      const body = z
-        .object({
-          key: z.string().trim().min(1).max(8_192),
-          enabled: z.boolean().optional(),
-          trustedHash: z.string().trim().min(1).max(512).optional(),
-        })
-        .refine(
-          (value) =>
-            value.enabled !== undefined || value.trustedHash !== undefined,
-          { message: "A hook update is required." },
-        )
-        .parse(request.body);
+      const body = codexHookUpdateSchema.parse(request.body);
       return {
         data: await services.codex.updateEnvironmentHook({
           userId: request.principal.userId,
@@ -1108,12 +966,7 @@ function registerApiRoutes(
   app.put<{ Params: { environmentId: string } }>(
     "/api/v1/environments/:environmentId/harnesses/codex/skills/config",
     async (request) => {
-      const body = z
-        .object({
-          path: z.string().trim().min(1).max(4_096),
-          enabled: z.boolean(),
-        })
-        .parse(request.body);
+      const body = codexSkillConfigurationSchema.parse(request.body);
       return {
         data: await services.codex.setEnvironmentSkillEnabled({
           userId: request.principal.userId,
@@ -1138,7 +991,7 @@ function registerApiRoutes(
   app.put<{ Params: { environmentId: string; name: string } }>(
     "/api/v1/environments/:environmentId/harnesses/codex/mcp-servers/:name/enabled",
     async (request) => {
-      const body = z.object({ enabled: z.boolean() }).parse(request.body);
+      const body = codexMcpServerEnabledSchema.parse(request.body);
       return {
         data: await services.codex.setEnvironmentMcpServerEnabled({
           userId: request.principal.userId,
@@ -1168,29 +1021,7 @@ function registerApiRoutes(
     "/api/v1/sessions",
     { bodyLimit: CODEX_IMAGE_BODY_LIMIT_BYTES },
     async (request, reply) => {
-      const body = z
-        .object({
-          environmentId: z.string().min(1),
-          prompt: z.string().trim().max(100_000).default(""),
-          title: z.string().trim().max(200).optional(),
-          modelId: z.string().max(200).optional(),
-          reasoningEffort: codexReasoningEffortSchema.optional(),
-          collaborationMode: z.literal("plan").optional(),
-          serviceTier: z.string().trim().min(1).max(100).optional(),
-          sessionStartSource: z.enum(["startup", "clear"]).optional(),
-          images: codexInputImagesSchema,
-          localImages: codexLocalImagesSchema,
-        })
-        .refine(
-          (value) =>
-            value.prompt.length > 0 ||
-            value.images.length > 0 ||
-            value.localImages.length > 0,
-          {
-            message: "A Session requires text or an image.",
-          },
-        )
-        .parse(request.body);
+      const body = sessionCreateSchema.parse(request.body);
       const environment = await services.store.getEnvironment(
         request.principal.userId,
         body.environmentId,
@@ -1236,15 +1067,7 @@ function registerApiRoutes(
   app.put<{ Params: { sessionId: string } }>(
     "/api/v1/sessions/:sessionId/metadata",
     async (request) => {
-      const body = z
-        .object({
-          title: z.string().trim().min(1).max(200).optional(),
-          pinned: z.boolean().optional(),
-          archived: z.boolean().optional(),
-          unread: z.boolean().optional(),
-        })
-        .refine((value) => Object.keys(value).length > 0)
-        .parse(request.body);
+      const body = sessionMetadataSchema.parse(request.body);
       const data = await services.store.setSessionMetadata(
         request.principal.userId,
         request.params.sessionId,
@@ -1262,27 +1085,7 @@ function registerApiRoutes(
     "/api/v1/sessions/:sessionId/turns",
     { bodyLimit: CODEX_IMAGE_BODY_LIMIT_BYTES },
     async (request, reply) => {
-      const body = z
-        .object({
-          text: z.string().trim().max(100_000).default(""),
-          images: codexInputImagesSchema,
-          modelId: z.string().trim().min(1).max(200).optional(),
-          reasoningEffort: codexReasoningEffortSchema.optional(),
-          clientMessageId: z.string().trim().min(1).max(200).optional(),
-          collaborationMode: z.literal("plan").optional(),
-          serviceTier: z.string().trim().min(1).max(100).optional(),
-          localImages: codexLocalImagesSchema,
-        })
-        .refine(
-          (value) =>
-            value.text.length > 0 ||
-            value.images.length > 0 ||
-            value.localImages.length > 0,
-          {
-            message: "A Turn requires text or an image.",
-          },
-        )
-        .parse(request.body);
+      const body = turnCreateSchema.parse(request.body);
       const result = await services.codex.startTurn({
         userId: request.principal.userId,
         sessionId: request.params.sessionId,
@@ -1302,24 +1105,7 @@ function registerApiRoutes(
     "/api/v1/sessions/:sessionId/turns/steer",
     { bodyLimit: CODEX_IMAGE_BODY_LIMIT_BYTES },
     async (request, reply) => {
-      const body = z
-        .object({
-          expectedTurnId: z.string().trim().min(1).max(200),
-          text: z.string().trim().max(100_000).default(""),
-          images: codexInputImagesSchema,
-          clientMessageId: z.string().trim().min(1).max(200).optional(),
-          localImages: codexLocalImagesSchema,
-        })
-        .refine(
-          (value) =>
-            value.text.length > 0 ||
-            value.images.length > 0 ||
-            value.localImages.length > 0,
-          {
-            message: "Additional Turn input requires text or an image.",
-          },
-        )
-        .parse(request.body);
+      const body = turnSteerSchema.parse(request.body);
       const result = await services.codex.steerTurn({
         userId: request.principal.userId,
         sessionId: request.params.sessionId,
@@ -1335,11 +1121,7 @@ function registerApiRoutes(
   app.post<{ Params: { sessionId: string } }>(
     "/api/v1/sessions/:sessionId/turns/interrupt",
     async (request, reply) => {
-      const body = z
-        .object({
-          turnId: z.string().trim().min(1).max(200).optional(),
-        })
-        .parse(request.body);
+      const body = turnInterruptSchema.parse(request.body);
       const result = await services.codex.interruptActiveTurn({
         userId: request.principal.userId,
         sessionId: request.params.sessionId,
@@ -1361,12 +1143,7 @@ function registerApiRoutes(
   app.post<{ Params: { sessionId: string } }>(
     "/api/v1/sessions/:sessionId/review",
     async (request, reply) => {
-      const body = z
-        .object({
-          instructions: z.string().trim().min(1).max(100_000).optional(),
-        })
-        .default({})
-        .parse(request.body);
+      const body = sessionReviewSchema.parse(request.body);
       return reply.status(202).send({
         data: await services.codex.startReview({
           userId: request.principal.userId,
@@ -1388,17 +1165,7 @@ function registerApiRoutes(
   app.put<{ Params: { sessionId: string } }>(
     "/api/v1/sessions/:sessionId/goal",
     async (request) => {
-      const body = z
-        .object({
-          objective: z.string().trim().min(1).max(10_000).optional(),
-          status: z.enum(["active", "paused"]).optional(),
-        })
-        .refine(
-          (value) =>
-            value.objective !== undefined || value.status !== undefined,
-          { message: "A goal update is required." },
-        )
-        .parse(request.body);
+      const body = sessionGoalUpdateSchema.parse(request.body);
       return {
         data: await services.codex.setSessionGoal({
           userId: request.principal.userId,
@@ -1429,11 +1196,7 @@ function registerApiRoutes(
   app.put<{ Params: { sessionId: string } }>(
     "/api/v1/sessions/:sessionId/personality",
     async (request) => {
-      const body = z
-        .object({
-          personality: z.enum(["friendly", "pragmatic"]),
-        })
-        .parse(request.body);
+      const body = codexPersonalitySelectionSchema.parse(request.body);
       return {
         data: await services.codex.setSessionPersonality({
           userId: request.principal.userId,
@@ -1455,13 +1218,7 @@ function registerApiRoutes(
   app.put<{ Params: { sessionId: string } }>(
     "/api/v1/sessions/:sessionId/memories",
     async (request) => {
-      const settings = z
-        .object({
-          featureEnabled: z.boolean(),
-          useMemories: z.boolean(),
-          generateMemories: z.boolean(),
-        })
-        .parse(request.body);
+      const settings = codexMemoriesSettingsSchema.parse(request.body);
       return {
         data: await services.codex.setSessionMemories({
           userId: request.principal.userId,
@@ -1512,10 +1269,7 @@ function registerApiRoutes(
   app.post<{ Params: { sessionId: string } }>(
     "/api/v1/sessions/:sessionId/fork",
     async (request, reply) => {
-      const body = z
-        .object({ title: z.string().trim().min(1).max(200).optional() })
-        .default({})
-        .parse(request.body);
+      const body = sessionForkSchema.parse(request.body);
       const sessionId = await services.codex.forkSession({
         userId: request.principal.userId,
         sessionId: request.params.sessionId,
@@ -1534,10 +1288,7 @@ function registerApiRoutes(
   }>(
     "/api/v1/sessions/:sessionId/turns/:nativeTurnId/fork",
     async (request, reply) => {
-      const body = z
-        .object({ title: z.string().trim().min(1).max(200).optional() })
-        .default({})
-        .parse(request.body);
+      const body = sessionForkSchema.parse(request.body);
       const sessionId = await services.codex.forkTurn({
         userId: request.principal.userId,
         sessionId: request.params.sessionId,
@@ -1848,10 +1599,7 @@ function registerApiRoutes(
   app.post<{ Params: { environmentId: string }; Body: unknown }>(
     "/api/v1/environments/:environmentId/browser/session",
     async (request, reply) => {
-      const input = z
-        .object({ force: z.boolean().optional() })
-        .strict()
-        .parse(request.body ?? {});
+      const input = browserSessionSchema.parse(request.body ?? {});
       await services.browser.ensureSession(
         request.principal.userId,
         request.params.environmentId,
@@ -1863,10 +1611,7 @@ function registerApiRoutes(
   app.post<{ Params: { environmentId: string }; Body: unknown }>(
     "/api/v1/environments/:environmentId/browser/open",
     async (request, reply) => {
-      const input = z
-        .object({ url: z.string().trim().min(1).max(8_192) })
-        .strict()
-        .parse(request.body);
+      const input = browserOpenSchema.parse(request.body);
       const url = sandboxLoopbackUrl(input.url);
       if (!url) {
         throw new HttpError(
@@ -2865,83 +2610,3 @@ function isOptionalCodexRuntimeError(error: unknown): error is HttpError {
         [404, 409, 503].includes(error.statusCode)))
   );
 }
-
-const preferencesSchema: z.ZodType<SandpiPreferences> = z.object({
-  general: z.object({
-    language: z.enum(["en", "zh-CN"]),
-    timeZone: z.string().min(1).max(100),
-    sendShortcut: z.enum(["enter", "mod-enter"]),
-  }),
-  appearance: z.object({
-    theme: z.enum(["system", "light", "dark"]),
-    density: z.enum(["comfortable", "compact"]),
-  }),
-});
-
-const workspaceIdeWriteSchema = z.object({
-  encoding: z.literal("base64"),
-  content: z
-    .string()
-    .max(Math.ceil((5 * 1024 * 1024 * 4) / 3) + 4)
-    .regex(
-      /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/,
-      "content must be canonical base64",
-    ),
-  baseRevision: z.string().regex(/^sha256:[A-Za-z0-9_-]{43}$/),
-});
-
-const workspaceIdeCreateEntrySchema = z
-  .object({
-    parentPath: z.string().trim().min(1).max(4_096),
-    name: z.string().trim().min(1).max(255),
-    kind: z.enum(["file", "folder"]),
-  })
-  .strict();
-
-const workspaceIdeRenameEntrySchema = z
-  .object({
-    path: z.string().trim().min(1).max(4_096),
-    name: z.string().trim().min(1).max(255),
-  })
-  .strict();
-
-const terminalInputSchema = z.discriminatedUnion("type", [
-  z.object({
-    type: z.literal("input"),
-    data: z.string().max(1_000_000),
-    requestId: z.string().optional(),
-  }),
-  z.object({
-    type: z.literal("binary"),
-    dataBase64: z
-      .string()
-      .max(1_000_000)
-      .regex(
-        /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/,
-        "dataBase64 must be canonical base64",
-      ),
-    requestId: z.string().optional(),
-  }),
-  z.object({
-    type: z.literal("resize"),
-    rows: z.number().int().min(1).max(1_000),
-    cols: z.number().int().min(1).max(1_000),
-    requestId: z.string().optional(),
-  }),
-  z.object({
-    type: z.literal("signal"),
-    signal: z.enum(["HUP", "INT", "QUIT", "TERM", "KILL", "WINCH"]),
-    requestId: z.string().optional(),
-  }),
-]);
-
-const codexInputImagesSchema = z
-  .array(
-    z.object({
-      name: z.string().trim().min(1).max(255),
-      mimeType: z.enum(["image/gif", "image/jpeg", "image/png", "image/webp"]),
-      dataBase64: z.string().max(MAX_CODEX_INPUT_BASE64_LENGTH),
-    }),
-  )
-  .max(MAX_CODEX_INPUT_IMAGES)
-  .default([]);

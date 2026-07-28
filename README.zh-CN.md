@@ -173,6 +173,21 @@ docker compose ps
 Kubernetes 部署请参阅
 [`deploy/kubernetes`](./deploy/kubernetes/README.md)。
 
+## OpenAPI 契约
+
+生成的 [OpenAPI 3.0.3 契约](./openapi.yaml) 覆盖 Sandpi 的 HTTP、SSE、
+WebSocket 和内置 Browser 接口。使用以下命令生成并校验：
+
+```bash
+npm run openapi:generate
+npm run openapi:check
+```
+
+不要直接修改 `openapi.yaml`。生成流程复用 server 的真实路由注册，无需启动
+PostgreSQL 或 Sandbox0，并会在路由与契约发生漂移时失败。契约的单一来源和特殊
+transport 规则请参阅
+[`docs/architecture/openapi-contract.md`](./docs/architecture/openapi-contract.md)。
+
 ## 连接 Codex
 
 创建或打开一个 Environment，然后在 New Session 页面选择 **Connect Codex**，或者
@@ -211,7 +226,9 @@ Sandbox0
 
 - 本地浏览器只与 Sandpi 通信，不会收到 Sandbox0 deployment API key 或直接访问
   Sandbox0 的 endpoint。Sandpi 对官方 Playwright Dashboard 的 HTTP 和
-  WebSocket 流量进行鉴权与代理。
+  WebSocket 流量进行鉴权与代理。内置 tab 与 agent 共享同一个 Playwright
+  profile：human 可以在其中完成交互式登录，然后把同一份已登录 Browser 交还给
+  agent 继续操作。Browser 中的 loopback URL 解析到 Environment sandbox 内部。
 - Sandpi 只通过官方 JavaScript SDK 使用 Sandbox0，不读取 Sandbox0 数据库、内部
   metering endpoint 或 ClickHouse 凭证。
 - Sandbox0 负责 Sandbox 生命周期、Volume、网络执行、凭证注入和 usage truth。
@@ -242,6 +259,7 @@ Sandbox0
 
 ## 文档
 
+- [OpenAPI 契约](./docs/architecture/openapi-contract.md)
 - [原生 Session authority 与恢复](./docs/architecture/native-session-authority.md)
 - [Environment 出站凭证](./docs/architecture/environment-egress-credentials.md)
 - [Billing 与 usage 边界](./docs/architecture/billing-and-usage.md)
