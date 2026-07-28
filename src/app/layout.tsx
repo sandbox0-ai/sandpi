@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Script from "next/script";
 
 import {
   DEFAULT_CLIENT_PREFERENCES,
@@ -17,6 +18,8 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
   const preferencesScript = getClientPreferencesBootstrapScript(
     DEFAULT_CLIENT_PREFERENCES,
   );
+  const googleAnalyticsMeasurementId =
+    process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID?.trim();
 
   return (
     <html
@@ -28,6 +31,21 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
     >
       <head>
         <script dangerouslySetInnerHTML={{ __html: preferencesScript }} />
+        {googleAnalyticsMeasurementId ? (
+          <>
+            <Script
+              async
+              src={`https://www.googletagmanager.com/gtag/js?id=${encodeURIComponent(googleAnalyticsMeasurementId)}`}
+              strategy="afterInteractive"
+            />
+            <Script id="google-analytics" strategy="afterInteractive">
+              {`window.dataLayer = window.dataLayer || [];
+function gtag(){dataLayer.push(arguments);}
+gtag("js", new Date());
+gtag("config", ${JSON.stringify(googleAnalyticsMeasurementId)});`}
+            </Script>
+          </>
+        ) : null}
       </head>
       <body>{children}</body>
     </html>
