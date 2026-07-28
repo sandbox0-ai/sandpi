@@ -172,6 +172,8 @@ const copy = {
       copyMessage: "Copy message",
       messageAgent: (agent: string) => `Message ${agent}`,
       askPlaceholder: (agent: string) => `Ask ${agent} to work in this session…`,
+      steerPlaceholder: (agent: string) =>
+        `Add guidance to the running ${agent} turn…`,
       modelListUnavailable: "The Codex model list is unavailable while this runtime is offline.",
       nativeRolloutUnavailableTitle: "Codex history unavailable",
       nativeRolloutUnavailableBody:
@@ -193,6 +195,10 @@ const copy = {
       checkingRuntime: "Checking Codex runtime",
       runtimeUnavailable: "Codex runtime unavailable",
       sendMessage: "Send message",
+      steerTurn: "Send to running Codex turn",
+      steerTurnFailed: "Could not add input to the running Codex turn.",
+      steerTurnNotAccepted:
+        "Codex finished the turn before it accepted that input. The message was restored.",
       interruptTurn: "Interrupt running Codex turn",
       interruptingTurn: "Interrupting Codex turn",
       interruptTurnFailed: "Could not interrupt the running Codex turn.",
@@ -511,6 +517,8 @@ const copy = {
       copyMessage: "复制消息",
       messageAgent: (agent: string) => `向 ${agent} 发送消息`,
       askPlaceholder: (agent: string) => `让 ${agent} 在此会话中执行任务…`,
+      steerPlaceholder: (agent: string) =>
+        `向正在运行的 ${agent} Turn 追加要求…`,
       modelListUnavailable: "当前运行时离线，无法获取 Codex 模型列表。",
       nativeRolloutUnavailableTitle: "Codex 历史不可用",
       nativeRolloutUnavailableBody:
@@ -532,6 +540,10 @@ const copy = {
       checkingRuntime: "正在检查 Codex 运行时",
       runtimeUnavailable: "Codex 运行时不可用",
       sendMessage: "发送消息",
+      steerTurn: "追加到正在运行的 Codex Turn",
+      steerTurnFailed: "无法向正在运行的 Codex Turn 追加输入。",
+      steerTurnNotAccepted:
+        "Codex 在接收这条输入前已结束 Turn，消息已恢复到输入框。",
       interruptTurn: "中断正在运行的 Codex Turn",
       interruptingTurn: "正在中断 Codex Turn",
       interruptTurnFailed: "无法中断正在运行的 Codex Turn。",

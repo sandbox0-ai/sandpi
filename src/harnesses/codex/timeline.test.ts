@@ -11,7 +11,10 @@ import {
   projectCodexTimeline,
   shouldRefreshCodexNativeSnapshot,
 } from "./events";
-import { groupCodexTimelineByTurn } from "./timeline";
+import {
+  groupCodexTimelineByTurn,
+  withPendingCodexUserMessages,
+} from "./timeline";
 import {
   CODEX_SESSION_NOTIFICATION_METHODS,
   CODEX_TRANSCRIPT_NOTIFICATION_METHODS,
@@ -413,6 +416,75 @@ test("preserves steering messages between native activity blocks", () => {
   const firstMessage = group.blocks[0];
   assert.ok(firstMessage?.kind === "message");
   assert.equal(firstMessage.entry.clientId, "client-user-one");
+});
+
+test("keeps an optimistic steer after active work until Codex echoes its client id", () => {
+  const turnId = "turn-with-pending-steer";
+  const startedAt = timestamp("2026-07-12T02:00:00Z");
+  const projection = {
+    entries: [
+      {
+        kind: "message" as const,
+        id: "native-user",
+        clientId: "client-initial",
+        turnId,
+        role: "user" as const,
+        content: "Inspect the project",
+        createdAt: startedAt,
+      },
+      {
+        kind: "command" as const,
+        id: "native-command",
+        turnId,
+        createdAt: startedAt,
+        status: "running" as const,
+        command: "npm test",
+        cwd: "/workspace",
+        output: "",
+        outputTruncated: false,
+        exitCode: null,
+        durationMs: null,
+        exploration: false,
+        waitingForProcess: false,
+      },
+    ],
+    turns: [],
+    activeTurn: {
+      turnId,
+      startedAt,
+      state: "working" as const,
+    },
+  };
+  const pendingMessage = {
+    kind: "message" as const,
+    id: "client-steer",
+    clientId: "client-steer",
+    turnId,
+    role: "user" as const,
+    content: "Also run lint after the current command.",
+    createdAt: startedAt + 1,
+  };
+
+  const optimistic = withPendingCodexUserMessages(projection, [pendingMessage]);
+  const [group] = groupCodexTimelineByTurn(optimistic);
+  assert.ok(group);
+  assert.deepEqual(
+    group.blocks.map((block) =>
+      block.kind === "message" ? block.entry.content : block.kind,
+    ),
+    ["Inspect the project", "activity", "Also run lint after the current command."],
+  );
+  assert.equal(group.activeActivityBlockId, group.blocks[1]?.id);
+
+  const nativeEcho = {
+    ...projection,
+    entries: [
+      ...projection.entries,
+      { ...pendingMessage, id: "native-steer-message" },
+    ],
+  };
+  const reconciled = withPendingCodexUserMessages(nativeEcho, [pendingMessage]);
+  assert.equal(reconciled, nativeEcho);
 });
 
 test("keeps a live tool attached to its work block after a steering message", () => {

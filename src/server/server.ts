@@ -1299,6 +1299,40 @@ function registerApiRoutes(
     },
   );
   app.post<{ Params: { sessionId: string } }>(
+    "/api/v1/sessions/:sessionId/turns/steer",
+    { bodyLimit: CODEX_IMAGE_BODY_LIMIT_BYTES },
+    async (request, reply) => {
+      const body = z
+        .object({
+          expectedTurnId: z.string().trim().min(1).max(200),
+          text: z.string().trim().max(100_000).default(""),
+          images: codexInputImagesSchema,
+          clientMessageId: z.string().trim().min(1).max(200).optional(),
+          localImages: codexLocalImagesSchema,
+        })
+        .refine(
+          (value) =>
+            value.text.length > 0 ||
+            value.images.length > 0 ||
+            value.localImages.length > 0,
+          {
+            message: "Additional Turn input requires text or an image.",
+          },
+        )
+        .parse(request.body);
+      const result = await services.codex.steerTurn({
+        userId: request.principal.userId,
+        sessionId: request.params.sessionId,
+        expectedTurnId: body.expectedTurnId,
+        text: body.text,
+        images: body.images,
+        clientMessageId: body.clientMessageId,
+        localImages: body.localImages,
+      });
+      return reply.status(202).send({ data: result });
+    },
+  );
+  app.post<{ Params: { sessionId: string } }>(
     "/api/v1/sessions/:sessionId/turns/interrupt",
     async (request, reply) => {
       const body = z

@@ -57,6 +57,7 @@ import {
 } from "@/harnesses/codex/models";
 import {
   canInterruptCodexSession,
+  codexComposerSubmissionTarget,
   codexTurnCapabilitySets,
   shouldRefreshSettledCodexProjection,
 } from "@/harnesses/codex/capabilities";
@@ -92,6 +93,7 @@ import { normalizeCodexRolloutActivityFeed } from "@/harnesses/codex/rollout-act
 import {
   groupCodexTimelineByTurn,
   type CodexTurnTimelineGroup,
+  withPendingCodexUserMessages,
 } from "@/harnesses/codex/timeline";
 import type {
   CodexComposerImage,
@@ -190,6 +192,16 @@ const SETTLED_PROJECTION_REFRESH_DELAY_MS = 250;
 interface PendingCodexTurn {
   clientMessageId: string;
   nativeTurnId?: string;
+  content: string;
+  images: CodexComposerImage[];
+  localImages: CodexComposerLocalImage[];
+  startedAt: number;
+  phase: "submitting" | "accepted";
+}
+
+interface PendingCodexSteer {
+  clientMessageId: string;
+  nativeTurnId: string;
   content: string;
   images: CodexComposerImage[];
   localImages: CodexComposerLocalImage[];
@@ -306,6 +318,7 @@ export function CodexConversation({
   const [nativeHistoryWaitLong, setNativeHistoryWaitLong] = useState(false);
   const [activityClock, setActivityClock] = useState(() => Date.now());
   const [pendingTurn, setPendingTurn] = useState<PendingCodexTurn | null>(null);
+  const [pendingSteers, setPendingSteers] = useState<PendingCodexSteer[]>([]);
   const [agentThreadsOpen, setAgentThreadsOpen] = useState(false);
   const [nativeDialog, setNativeDialog] = useState<{
     mode: CodexNativeDialogMode;
@@ -347,9 +360,45 @@ export function CodexConversation({
   const visibleTimeline = useMemo(() => {
     return projectCodexTimeline(nativeSnapshot?.thread, liveNotifications);
   }, [liveNotifications, nativeSnapshot?.thread]);
+  const nativeSteerClientMessageIds = useMemo(() => {
+    const pendingClientIds = new Set(
+      pendingSteers.map((steer) => steer.clientMessageId),
+    );
+    return new Set(
+      visibleTimeline.entries
+        .filter(
+          (entry): entry is CodexMessageView =>
+            entry.kind === "message" &&
+            entry.role === "user" &&
+            Boolean(entry.clientId) &&
+            pendingClientIds.has(entry.clientId ?? ""),
+        )
+        .map((entry) => entry.clientId as string),
+    );
+  }, [pendingSteers, visibleTimeline.entries]);
+  const timelineWithPendingSteers = useMemo(
+    () =>
+      withPendingCodexUserMessages(
+        visibleTimeline,
+        pendingSteers.map((steer) => ({
+          kind: "message",
+          id: steer.clientMessageId,
+          clientId: steer.clientMessageId,
+          turnId: steer.nativeTurnId,
+          role: "user",
+          content: steer.content,
+          createdAt: steer.startedAt,
+          attachments: steer.images.length ? steer.images : undefined,
+          localImages: steer.localImages.length
+            ? steer.localImages
+            : undefined,
+        })),
+      ),
+    [pendingSteers, visibleTimeline],
+  );
   const timelineTurns = useMemo(
-    () => groupCodexTimelineByTurn(visibleTimeline),
-    [visibleTimeline],
+    () => groupCodexTimelineByTurn(timelineWithPendingSteers),
+    [timelineWithPendingSteers],
   );
   const turnCapabilities = useMemo(
     () => codexTurnCapabilitySets(nativeSnapshot),
@@ -406,6 +455,12 @@ export function CodexConversation({
     shouldRefreshSettledCodexProjection(interruptProjection);
   const nativeReady =
     Boolean(nativeSnapshot) && nativeStreamReady && !nativeHistoryError;
+  const composerSubmissionTarget = codexComposerSubmissionTarget({
+    nativeReady,
+    turnRunning,
+    activeTurnId: visibleTimeline.activeTurn?.turnId,
+    sessionStatus: session.status,
+  });
   const contextUsedPercent = codexContextUsedPercent(
     nativeSnapshot?.tokenUsage,
   );
@@ -507,6 +562,7 @@ export function CodexConversation({
     pendingTurnStartedAtRef.current = null;
     nativeAcceptedMessageIdsRef.current.clear();
     setPendingTurn(null);
+    setPendingSteers([]);
     setDraft("");
     setPastedImages([]);
     setLocalImages([]);
@@ -549,6 +605,69 @@ export function CodexConversation({
       current?.clientMessageId === clientMessageId ? null : current,
     );
   }, [pendingNativeMessage, pendingTurn]);
+
+  useEffect(() => {
+    if (nativeSteerClientMessageIds.size === 0) return;
+    for (const clientMessageId of nativeSteerClientMessageIds) {
+      nativeAcceptedMessageIdsRef.current.add(clientMessageId);
+    }
+    setPendingSteers((current) =>
+      current.filter(
+        (steer) =>
+          !nativeSteerClientMessageIds.has(steer.clientMessageId),
+      ),
+    );
+  }, [nativeSteerClientMessageIds]);
+
+  useEffect(() => {
+    if (!nativeReady || turnRunning) return;
+    const orphaned = pendingSteers.filter(
+      (steer) =>
+        steer.phase === "accepted" &&
+        !nativeSteerClientMessageIds.has(steer.clientMessageId),
+    );
+    if (orphaned.length === 0) return;
+    const orphanedIds = new Set(
+      orphaned.map((steer) => steer.clientMessageId),
+    );
+    const restoredDraft = orphaned
+      .map((steer) => steer.content)
+      .filter(Boolean)
+      .join("\n");
+    setPendingSteers((current) =>
+      current.filter((steer) => !orphanedIds.has(steer.clientMessageId)),
+    );
+    setDraft((current) =>
+      current && restoredDraft
+        ? `${restoredDraft}${restoredDraft.endsWith("\n") ? "" : "\n"}${current}`
+        : restoredDraft || current,
+    );
+    setPastedImages((current) =>
+      [...orphaned.flatMap((steer) => steer.images), ...current].slice(
+        0,
+        MAX_CODEX_COMPOSER_IMAGES,
+      ),
+    );
+    setLocalImages((current) => {
+      const restored = new Map(
+        [
+          ...orphaned.flatMap((steer) => steer.localImages),
+          ...current,
+        ].map((localImage) => [localImage.path, localImage]),
+      );
+      return [...restored.values()].slice(
+        0,
+        MAX_CODEX_COMPOSER_UPLOAD_FILES,
+      );
+    });
+    setAttachmentError(ui.steerTurnNotAccepted);
+  }, [
+    nativeReady,
+    nativeSteerClientMessageIds,
+    pendingSteers,
+    turnRunning,
+    ui.steerTurnNotAccepted,
+  ]);
 
   useEffect(() => {
     if (!runningTurnId) return;
@@ -1415,20 +1534,34 @@ export function CodexConversation({
     ) {
       return;
     }
-    if (sending || turnRunning || session.status !== "waiting" || !nativeReady) {
-      return;
-    }
+    const submissionTarget = composerSubmissionTarget;
+    if (sending || !submissionTarget) return;
     const clientMessageId = createId("user-message", 24);
     const startedAt = Date.now() / 1_000;
-    pendingTurnStartedAtRef.current = startedAt;
-    setPendingTurn({
-      clientMessageId,
-      content,
-      images: submittedImages,
-      localImages: submittedLocalImages,
-      startedAt,
-      phase: "submitting",
-    });
+    if (submissionTarget.kind === "steer") {
+      setPendingSteers((current) => [
+        ...current,
+        {
+          clientMessageId,
+          nativeTurnId: submissionTarget.turnId,
+          content,
+          images: submittedImages,
+          localImages: submittedLocalImages,
+          startedAt,
+          phase: "submitting",
+        },
+      ]);
+    } else {
+      pendingTurnStartedAtRef.current = startedAt;
+      setPendingTurn({
+        clientMessageId,
+        content,
+        images: submittedImages,
+        localImages: submittedLocalImages,
+        startedAt,
+        phase: "submitting",
+      });
+    }
     setSending(true);
     setDraft("");
     setPastedImages([]);
@@ -1443,7 +1576,9 @@ export function CodexConversation({
           nativeTurnId?: string;
         }>
       >(
-        `/api/v1/sessions/${encodeURIComponent(session.id)}/turns`,
+        `/api/v1/sessions/${encodeURIComponent(session.id)}/turns${
+          submissionTarget.kind === "steer" ? "/steer" : ""
+        }`,
         {
           method: "POST",
           body: JSON.stringify({
@@ -1451,56 +1586,84 @@ export function CodexConversation({
             images: submittedImages.map(encodeCodexComposerImage),
             localImages: encodeCodexComposerLocalImages(submittedLocalImages),
             clientMessageId,
-            ...(selectedModel.id !== "default"
-              ? { modelId: selectedModel.id }
-              : {}),
-            ...(selectedReasoningEffort
-              ? { reasoningEffort: selectedReasoningEffort }
-              : {}),
-            ...((options.collaborationMode ?? (planMode ? "plan" : undefined))
-              ? {
-                  collaborationMode:
-                    options.collaborationMode ??
-                    (planMode ? ("plan" as const) : undefined),
-                }
-              : {}),
-            ...(fastMode && selectedModel.fastServiceTier
-              ? { serviceTier: selectedModel.fastServiceTier.id }
-              : {}),
+            ...(submissionTarget.kind === "steer"
+              ? { expectedTurnId: submissionTarget.turnId }
+              : {
+                  ...(selectedModel.id !== "default"
+                    ? { modelId: selectedModel.id }
+                    : {}),
+                  ...(selectedReasoningEffort
+                    ? { reasoningEffort: selectedReasoningEffort }
+                    : {}),
+                  ...((options.collaborationMode ??
+                  (planMode ? "plan" : undefined))
+                    ? {
+                        collaborationMode:
+                          options.collaborationMode ??
+                          (planMode ? ("plan" as const) : undefined),
+                      }
+                    : {}),
+                  ...(fastMode && selectedModel.fastServiceTier
+                    ? { serviceTier: selectedModel.fastServiceTier.id }
+                    : {}),
+                }),
           }),
         },
       );
-      setPendingTurn((current) =>
-        current?.clientMessageId === clientMessageId
-          ? {
-              ...current,
-              nativeTurnId:
-                response.data.nativeTurnId ?? current.nativeTurnId,
-              phase: "accepted",
-            }
-          : current,
-      );
-      const next = {
-        ...sessionRef.current,
-        status: "running" as const,
-        unread: false,
-        harnessState: {
-          ...sessionRef.current.harnessState,
-          modelId: selectedModel.id,
-          reasoningEffort: selectedReasoningEffort,
-        },
-      };
-      sessionRef.current = next;
-      onSessionChange(next);
+      if (submissionTarget.kind === "steer") {
+        setPendingSteers((current) =>
+          current.map((steer) =>
+            steer.clientMessageId === clientMessageId
+              ? {
+                  ...steer,
+                  nativeTurnId:
+                    response.data.nativeTurnId ?? steer.nativeTurnId,
+                  phase: "accepted",
+                }
+              : steer,
+          ),
+        );
+      } else {
+        setPendingTurn((current) =>
+          current?.clientMessageId === clientMessageId
+            ? {
+                ...current,
+                nativeTurnId:
+                  response.data.nativeTurnId ?? current.nativeTurnId,
+                phase: "accepted",
+              }
+            : current,
+        );
+        const next = {
+          ...sessionRef.current,
+          status: "running" as const,
+          unread: false,
+          harnessState: {
+            ...sessionRef.current.harnessState,
+            modelId: selectedModel.id,
+            reasoningEffort: selectedReasoningEffort,
+          },
+        };
+        sessionRef.current = next;
+        onSessionChange(next);
+      }
     } catch (error) {
       if (nativeAcceptedMessageIdsRef.current.has(clientMessageId)) {
         setSending(false);
         return;
       }
-      pendingTurnStartedAtRef.current = null;
-      setPendingTurn((current) =>
-        current?.clientMessageId === clientMessageId ? null : current,
-      );
+      if (submissionTarget.kind === "steer") {
+        setPendingSteers((current) =>
+          current.filter(
+            (steer) => steer.clientMessageId !== clientMessageId,
+          ),
+        );
+      } else {
+        pendingTurnStartedAtRef.current = null;
+        setPendingTurn((current) =>
+          current?.clientMessageId === clientMessageId ? null : current,
+        );
+      }
       setDraft((current) =>
         current && submittedDraft
           ? `${submittedDraft}${submittedDraft.endsWith("\n") ? "" : "\n"}${current}`
@@ -1522,7 +1685,11 @@ export function CodexConversation({
         );
       });
       setAttachmentError(
-        error instanceof Error ? error.message : "Could not start the Codex Turn.",
+        error instanceof Error
+          ? error.message
+          : submissionTarget.kind === "steer"
+            ? ui.steerTurnFailed
+            : "Could not start the Codex Turn.",
       );
       setSending(false);
       return;
@@ -2202,7 +2369,11 @@ export function CodexConversation({
                   : undefined
               }
               aria-label={ui.messageAgent(environment.codingAgent.label)}
-              placeholder={ui.askPlaceholder(environment.codingAgent.label)}
+              placeholder={
+                turnRunning
+                  ? ui.steerPlaceholder(environment.codingAgent.label)
+                  : ui.askPlaceholder(environment.codingAgent.label)
+              }
               rows={1}
             />
             <CodexComposerToolbar
@@ -2219,13 +2390,15 @@ export function CodexConversation({
               selectedModel={selectedModel}
               modelPlaceholder={selectedModel.displayName}
               modelTitle={modelCatalogUnavailable || undefined}
-              modelDisabled={modelOptions.length === 0 || sending}
-              reasoningDisabled={sending}
+              modelDisabled={
+                modelOptions.length === 0 || sending || turnRunning
+              }
+              reasoningDisabled={sending || turnRunning}
               selectedReasoningEffort={selectedReasoningEffort}
               onModelChange={selectModel}
               onReasoningEffortChange={selectReasoningEffort}
               fastEnabled={fastMode}
-              fastDisabled={sending}
+              fastDisabled={sending || turnRunning}
               onFastEnabledChange={(enabled) => {
                 setFastMode(enabled);
                 setCommandNotice(null);
@@ -2245,50 +2418,63 @@ export function CodexConversation({
                     : ui.checkingRuntime,
               }}
               action={
-                turnRunning ? (
-                  <button
-                    type="button"
-                    className={`send-button is-running ${
-                      !canInterruptTurn ? "is-starting" : ""
-                    } ${interrupting ? "is-interrupting" : ""}`}
-                    disabled={interrupting || !canInterruptTurn}
-                    aria-label={
-                      interrupting
-                        ? ui.interruptingTurn
-                        : canInterruptTurn
-                          ? ui.interruptTurn
-                          : ui.turnStarting
-                    }
-                    aria-busy={interrupting || !canInterruptTurn}
-                    title={
-                      canInterruptTurn ? ui.interruptTurn : ui.turnStarting
-                    }
-                    onClick={() => void interruptActiveTurn()}
-                  >
-                    {interrupting || !canInterruptTurn ? (
-                      <span className="activity-spinner" aria-hidden="true" />
-                    ) : (
-                      <Square size={10} fill="currentColor" aria-hidden="true" />
-                    )}
-                  </button>
-                ) : (
+                <>
+                  {turnRunning ? (
+                    <button
+                      type="button"
+                      className={`send-button is-running is-interrupt ${
+                        !canInterruptTurn ? "is-starting" : ""
+                      } ${interrupting ? "is-interrupting" : ""}`}
+                      disabled={interrupting || !canInterruptTurn}
+                      aria-label={
+                        interrupting
+                          ? ui.interruptingTurn
+                          : canInterruptTurn
+                            ? ui.interruptTurn
+                            : ui.turnStarting
+                      }
+                      aria-busy={interrupting || !canInterruptTurn}
+                      title={
+                        canInterruptTurn ? ui.interruptTurn : ui.turnStarting
+                      }
+                      onClick={() => void interruptActiveTurn()}
+                    >
+                      {interrupting || !canInterruptTurn ? (
+                        <span className="activity-spinner" aria-hidden="true" />
+                      ) : (
+                        <Square
+                          size={10}
+                          fill="currentColor"
+                          aria-hidden="true"
+                        />
+                      )}
+                    </button>
+                  ) : null}
                   <button
                     type="button"
                     className="send-button"
                     disabled={
                       sending ||
-                      session.status !== "waiting" ||
-                      !nativeReady ||
+                      !composerSubmissionTarget ||
                       (!draft.trim() &&
                         pastedImages.length === 0 &&
                         localImages.length === 0)
                     }
-                    aria-label={ui.sendMessage}
+                    aria-label={
+                      composerSubmissionTarget?.kind === "steer"
+                        ? ui.steerTurn
+                        : ui.sendMessage
+                    }
+                    title={
+                      composerSubmissionTarget?.kind === "steer"
+                        ? ui.steerTurn
+                        : undefined
+                    }
                     onClick={() => void submitMessage()}
                   >
                     <ArrowUp size={17} strokeWidth={2.5} />
                   </button>
-                )
+                </>
               }
             />
           </div>

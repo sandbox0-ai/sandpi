@@ -314,6 +314,18 @@ composer if submission fails before native acceptance, and is never written to
 PostgreSQL or treated as conversation authority. Tool Activity can therefore
 remain below its prompt without introducing a second transcript.
 
+While a regular Turn is active, the Session composer sends additional text or
+images through native `turn/steer` with that exact `expectedTurnId` and a new
+`clientUserMessageId`. It does not start another Turn or resend model,
+reasoning, collaboration-mode or service-tier settings. Codex owns the
+same-Turn pending-input queue, so an input submitted during a tool call appears
+after that native call and participates in Codex's following model
+continuation. Review and manual-compaction Turns remain non-steerable. Sandpi
+shows an ephemeral steering row until Codex echoes the native `userMessage`;
+an ambiguous transport result is never replayed because doing so could append
+the input twice. If the Turn settles without that native message, the browser
+restores the input to the composer.
+
 The conversation keeps Codex commentary and tool items in native order inside
 Turn-level work disclosures. A running item owns the disclosure that already
 contains that item, even when a later steering message is present; Sandpi does

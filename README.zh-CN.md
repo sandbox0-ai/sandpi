@@ -83,6 +83,7 @@ Environment。如果多个 Session 本来就应该共享文件、工具和执行
 
 - 原生 Codex device login 和 Environment 级账号连接
 - 原生 model/reasoning 能力发现、Session/Turn 历史和分支
+- 支持在工具运行期间向同一个 Codex Turn 追加消息，并保留原生消息顺序
 - Sandbox/Codex 进程自恢复，以及有上限的可见 continuation
 - 在输入框实时显示原生上下文窗口和 Sandbox CPU/内存使用率
 - Codex tools、Skills、MCP 配置、审批和已支持的 slash-command 界面

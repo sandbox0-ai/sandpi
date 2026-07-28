@@ -30,6 +30,36 @@ export type CodexTurnTimelineBlock =
       entry: CodexTurnResultView;
     };
 
+/**
+ * Add browser-ephemeral same-Turn messages without competing with Codex
+ * history. A matching native client id always wins and removes the optimistic
+ * duplicate on the next projection.
+ */
+export function withPendingCodexUserMessages(
+  projection: CodexConversationProjection,
+  pendingMessages: readonly CodexMessageView[],
+): CodexConversationProjection {
+  if (pendingMessages.length === 0) return projection;
+  const nativeClientIds = new Set(
+    projection.entries
+      .filter(
+        (entry): entry is CodexMessageView =>
+          entry.kind === "message" &&
+          entry.role === "user" &&
+          Boolean(entry.clientId),
+      )
+      .map((entry) => entry.clientId),
+  );
+  const optimisticMessages = pendingMessages.filter(
+    (message) => !message.clientId || !nativeClientIds.has(message.clientId),
+  );
+  if (optimisticMessages.length === 0) return projection;
+  return {
+    ...projection,
+    entries: [...projection.entries, ...optimisticMessages],
+  };
+}
+
 function entryShowsActiveWork(entry: CodexTimelineEntry) {
   if (entry.kind === "message") {
     return entry.role === "assistant" && Boolean(entry.streaming);

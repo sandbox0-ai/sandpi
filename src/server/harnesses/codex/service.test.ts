@@ -512,6 +512,10 @@ function fixture(
       lastStartedTurnId = `turn-new-${childSequence || 1}`;
       return { id, result: { turn: { id: lastStartedTurnId } } };
     }
+    if (message.method === "turn/steer") {
+      const params = message.params as { expectedTurnId: string };
+      return { id, result: { turnId: params.expectedTurnId } };
+    }
     if (message.method === "review/start") {
       return {
         id,
@@ -5821,6 +5825,192 @@ test("lazily attaches only the native Session that starts a Turn", async () => {
       context.writes.filter(({ message }) => message.method === "thread/resume")
         .length,
       1,
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("steers the active native Turn without starting a second Turn", async () => {
+  const context = fixture({
+    sessions: [
+      {
+        id: "session-one",
+        nativeSessionId: "thread-one",
+        status: "running",
+        activeNativeTurnId: "turn-active",
+        activeTurnAttemptId: "attempt-environment-test",
+        activeTurnRuntimeGeneration: 1,
+      },
+    ],
+  });
+  try {
+    const steered = await context.service.steerTurn({
+      userId: "user",
+      sessionId: "session-one",
+      expectedTurnId: "turn-active",
+      text: "Focus on the failing test after this tool finishes.",
+      images: [],
+      clientMessageId: "user-message:steer-one",
+    });
+
+    assert.equal(steered.nativeTurnId, "turn-active");
+    assert.equal(steered.clientMessageId, "user-message:steer-one");
+    const nativeMethods = context.writes.filter(({ message }) =>
+      ["thread/resume", "turn/steer", "turn/start"].includes(
+        String(message.method),
+      ),
+    );
+    assert.deepEqual(
+      nativeMethods.map(({ message }) => message.method),
+      ["thread/resume", "turn/steer"],
+    );
+    const steer = nativeMethods[1]?.message;
+    assert.deepEqual(steer?.params, {
+      threadId: "thread-one",
+      clientUserMessageId: "user-message:steer-one",
+      input: [
+        {
+          type: "text",
+          text: "Focus on the failing test after this tool finishes.",
+          text_elements: [],
+        },
+      ],
+      expectedTurnId: "turn-active",
+    });
+  } finally {
+    await context.close();
+  }
+});
+
+test("preserves Codex turn/steer rejection as an active-Turn conflict", async () => {
+  const context = fixture({
+    sessions: [
+      {
+        id: "session-one",
+        nativeSessionId: "thread-one",
+        status: "running",
+        activeNativeTurnId: "turn-active",
+        activeTurnAttemptId: "attempt-environment-test",
+        activeTurnRuntimeGeneration: 1,
+      },
+    ],
+    onRequest(message) {
+      if (message.method !== "turn/steer") return undefined;
+      return {
+        id: message.id,
+        error: {
+          code: -32602,
+          message:
+            "expected active turn id `turn-active` but found `turn-newer`",
+        },
+      };
+    },
+  });
+  try {
+    await assert.rejects(
+      context.service.steerTurn({
+        userId: "user",
+        sessionId: "session-one",
+        expectedTurnId: "turn-active",
+        text: "This target is stale.",
+        images: [],
+      }),
+      (error: unknown) =>
+        error instanceof HttpError &&
+        error.statusCode === 409 &&
+        error.code === "codex_turn_steer_rejected" &&
+        error.message.includes("turn-newer"),
+    );
+    const steer = context.writes.find(
+      ({ message }) => message.method === "turn/steer",
+    )?.message;
+    assert.equal(
+      (steer?.params as { expectedTurnId?: string })?.expectedTurnId,
+      "turn-active",
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("does not replay an ambiguously delivered turn/steer request", async () => {
+  const context = fixture({
+    sessions: [
+      {
+        id: "session-one",
+        nativeSessionId: "thread-one",
+        status: "running",
+        activeNativeTurnId: "turn-active",
+        activeTurnAttemptId: "attempt-environment-test",
+        activeTurnRuntimeGeneration: 1,
+      },
+    ],
+    rpcTimeoutMs: 5,
+    onRequest(message) {
+      if (message.method === "turn/steer") return null;
+      return undefined;
+    },
+  });
+  try {
+    const steered = await context.service.steerTurn({
+      userId: "user",
+      sessionId: "session-one",
+      expectedTurnId: "turn-active",
+      text: "Do not duplicate this input.",
+      images: [],
+      clientMessageId: "user-message:ambiguous-steer",
+    });
+
+    assert.deepEqual(
+      {
+        clientMessageId: steered.clientMessageId,
+        nativeTurnId: steered.nativeTurnId,
+      },
+      {
+        clientMessageId: "user-message:ambiguous-steer",
+        nativeTurnId: "turn-active",
+      },
+    );
+    assert.equal(
+      context.writes.filter(({ message }) => message.method === "turn/steer")
+        .length,
+      1,
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("does not steer a Turn that belongs to a replaced runtime", async () => {
+  const context = fixture({
+    sessions: [
+      {
+        id: "session-one",
+        nativeSessionId: "thread-one",
+        status: "running",
+        activeNativeTurnId: "turn-from-replaced-runtime",
+        activeTurnAttemptId: "attempt-replaced",
+        activeTurnRuntimeGeneration: 0,
+      },
+    ],
+    exceptionalSessionRecoveryDelayMs: 60_000,
+  });
+  try {
+    await assert.rejects(
+      context.service.steerTurn({
+        userId: "user",
+        sessionId: "session-one",
+        expectedTurnId: "turn-from-replaced-runtime",
+        text: "Do not send this to the replacement runtime.",
+        images: [],
+      }),
+      (error: unknown) =>
+        error instanceof HttpError && error.code === "codex_turn_steer_stale",
+    );
+    assert.equal(
+      context.writes.some(({ message }) => message.method === "turn/steer"),
+      false,
     );
   } finally {
     await context.close();

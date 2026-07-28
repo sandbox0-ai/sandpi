@@ -3350,6 +3350,21 @@ code.codex-compact-activity-subject {
   opacity: 1;
 }
 
+.send-button.is-interrupt {
+  border: 1px solid var(--line);
+  background: var(--panel-strong);
+  color: var(--ink);
+}
+
+.send-button.is-interrupt:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+.send-button.is-interrupt:disabled {
+  background: var(--panel-strong);
+  color: var(--ink-faint);
+}
+
 .composer-footnote {
   display: flex;
   width: min(
@@ -7402,6 +7417,16 @@ html[data-resolved-theme="dark"] .send-button:disabled {
 html[data-resolved-theme="dark"] .send-button.is-running:disabled {
   background: var(--ink);
   color: var(--canvas);
+}
+
+html[data-resolved-theme="dark"] .send-button.is-interrupt,
+html[data-resolved-theme="dark"] .send-button.is-interrupt:disabled {
+  background: var(--panel-strong);
+  color: var(--ink);
+}
+
+html[data-resolved-theme="dark"] .send-button.is-interrupt:hover:not(:disabled) {
+  background: var(--hover);
 }
 
 @media (prefers-reduced-motion: reduce) {

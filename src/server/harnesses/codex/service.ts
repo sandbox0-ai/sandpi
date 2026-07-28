@@ -1999,6 +1999,112 @@ export class CodexService {
     }
   }
 
+  /**
+   * Adds native user input to the currently active regular Codex Turn.
+   *
+   * Codex owns the pending-input queue and emits the authoritative
+   * userMessage. Sandpi keeps no secondary transcript or delivery projection
+   * for this same-Turn input.
+   */
+  async steerTurn(input: {
+    userId: string;
+    sessionId: string;
+    expectedTurnId: string;
+    text: string;
+    images: EncodedCodexInputImage[];
+    localImages?: EncodedCodexLocalImage[];
+    clientMessageId?: string;
+  }) {
+    const sessionRuntime = await this.requireNativeSessionRuntime(
+      input.userId,
+      input.sessionId,
+    );
+    const releaseInteractiveOperation =
+      this.retainInteractiveEnvironmentOperation(sessionRuntime.environmentId);
+    const clientMessageId =
+      input.clientMessageId ?? `user-message:${randomUUID()}`;
+    const requestId = rpcId("turn-steer", input.sessionId);
+    try {
+      const environmentRuntime = await this.environmentRuntimeForSession(
+        input.userId,
+        input.sessionId,
+      );
+      if (
+        nativeTurnTargetBelongsToReplacedRuntime(
+          sessionRuntime,
+          input.expectedTurnId,
+          environmentRuntime,
+        )
+      ) {
+        this.scheduleExceptionalSessionReconciliation(environmentRuntime, {
+          delayMs: 0,
+        });
+        throw new HttpError(
+          409,
+          "codex_turn_steer_stale",
+          "The active Codex Turn belongs to a replaced runtime. Refresh the Session before sending more input.",
+        );
+      }
+      await this.ensureNativeSessionAttached(
+        environmentRuntime,
+        sessionRuntime,
+      );
+
+      let response: Record<string, unknown>;
+      try {
+        response = await this.requestCodex(
+          sessionRuntime.environmentId,
+          environmentRuntime,
+          {
+            method: "turn/steer",
+            id: requestId,
+            params: {
+              threadId: sessionRuntime.nativeSessionId,
+              clientUserMessageId: clientMessageId,
+              input: nativeCodexTurnInput(
+                input.text,
+                input.images,
+                input.localImages ?? [],
+              ),
+              expectedTurnId: input.expectedTurnId,
+            },
+          },
+          input.sessionId,
+          `turn-steer:${input.sessionId}:${randomUUID()}`,
+        );
+      } catch (error) {
+        if (!isAmbiguousTurnDelivery(error)) throw error;
+        // Once delivery begins, replay could append the same user input twice.
+        // Keep the browser's ephemeral row until the native userMessage or
+        // Turn completion establishes whether Codex accepted it.
+        this.ensureEnvironmentWorker(sessionRuntime.environmentId);
+        return {
+          requestId,
+          clientMessageId,
+          nativeTurnId: input.expectedTurnId,
+        };
+      }
+      if (response.error) {
+        throw new HttpError(
+          409,
+          "codex_turn_steer_rejected",
+          rpcErrorMessage(response.error),
+        );
+      }
+      const nativeTurnId = steeredTurnIdFromRpcResponse(response);
+      if (!nativeTurnId || nativeTurnId !== input.expectedTurnId) {
+        throw invalidCodexResponse(
+          "codex_turn_steer_failed",
+          "Codex returned an invalid active Turn after accepting additional input.",
+        );
+      }
+      this.ensureEnvironmentWorker(sessionRuntime.environmentId);
+      return { requestId, clientMessageId, nativeTurnId };
+    } finally {
+      releaseInteractiveOperation();
+    }
+  }
+
   async listModels(userId: string, sessionId: string) {
     const sessionRuntime = await this.store.getSessionRuntime(
       userId,
@@ -2609,7 +2715,7 @@ export class CodexService {
       );
       if (
         input.turnId !== turnId &&
-        nativeInterruptTargetBelongsToReplacedRuntime(
+        nativeTurnTargetBelongsToReplacedRuntime(
           sessionRuntime,
           turnId,
           environmentRuntime,
@@ -5409,6 +5515,10 @@ function turnIdFromRpcResponse(response: Record<string, unknown>) {
   return objectString(objectRecord(objectRecord(response.result)?.turn), "id");
 }
 
+function steeredTurnIdFromRpcResponse(response: Record<string, unknown>) {
+  return objectString(objectRecord(response.result), "turnId");
+}
+
 function nativeThreadGoal(response: Record<string, unknown>) {
   const result = objectRecord(response.result);
   const goalValue = result?.goal;
@@ -6586,7 +6696,7 @@ function scheduledTurnNeedsRuntimeRecovery(
   );
 }
 
-function nativeInterruptTargetBelongsToReplacedRuntime(
+function nativeTurnTargetBelongsToReplacedRuntime(
   session: StoredSessionRuntime,
   nativeTurnId: string,
   runtime: StoredEnvironmentRuntime,
