@@ -378,6 +378,22 @@ pre,
   white-space: nowrap;
 }
 
+.environment-runtime-config-status {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--blue);
+}
+
+.environment-runtime-config-status.is-applying {
+  animation: runtime-status-pulse 1.4s ease-in-out infinite;
+}
+
+.environment-runtime-config-status.is-failed {
+  background: var(--red);
+}
+
 .environment-private-icon {
   flex: 0 0 auto;
   color: var(--ink-faint);
@@ -4988,6 +5004,17 @@ code.codex-compact-activity-subject {
   border-radius: 7px;
   background: color-mix(in srgb, var(--green) 9%, var(--panel));
   color: var(--green);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.settings-inline-status {
+  margin: 0;
+  padding: 9px 11px;
+  border: 1px solid color-mix(in srgb, var(--blue) 42%, var(--line));
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--blue-soft) 68%, var(--panel));
+  color: var(--blue);
   font-size: 10px;
   line-height: 1.45;
 }

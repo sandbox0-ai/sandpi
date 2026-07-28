@@ -26,6 +26,7 @@ export class EnvironmentService {
     environmentId: string,
     store: SandpiStore,
   ) => Promise<void> | void;
+  private requestRuntimeConfigReconciliation?: () => Promise<void> | void;
 
   constructor(
     private readonly store: SandpiStore,
@@ -49,6 +50,10 @@ export class EnvironmentService {
     ) => Promise<void> | void,
   ) {
     this.afterRuntimeDelete = handler;
+  }
+
+  setRuntimeConfigReconciler(handler: () => Promise<void> | void) {
+    this.requestRuntimeConfigReconciliation = handler;
   }
 
   reconcilePending() {
@@ -124,10 +129,6 @@ export class EnvironmentService {
     },
   ): Promise<Environment> {
     const current = await this.store.getManageableEnvironment(userId, environmentId);
-    const networkChanged =
-      JSON.stringify(current.networkPolicy) !== JSON.stringify(input.networkPolicy);
-    const idlePauseChanged =
-      current.idlePauseTimeoutSeconds !== input.idlePauseTimeoutSeconds;
     const memoryChanged = current.sandboxMemoryMiB !== input.sandboxMemoryMiB;
     if (memoryChanged) {
       await this.quota?.assertMemoryConfigurationAllowed(
@@ -136,79 +137,17 @@ export class EnvironmentService {
         input.sandboxMemoryMiB,
       );
     }
-    const backupPolicyChanged =
-      current.workspaceBackup.intervalSeconds !==
-        input.workspaceBackup.intervalSeconds ||
-      current.workspaceBackup.retentionCount !==
-        input.workspaceBackup.retentionCount;
-    if (
-      !networkChanged &&
-      !idlePauseChanged &&
-      !memoryChanged &&
-      !backupPolicyChanged
-    ) {
-      return this.store.updateEnvironment(userId, environmentId, input);
-    }
-
-    const updateWhileLifecycleLocked = async (scopedStore: SandpiStore) => {
-      const locked = await scopedStore.getManageableEnvironment(
-        userId,
-        environmentId,
-      );
-      const lockedNetworkChanged =
-        JSON.stringify(locked.networkPolicy) !== JSON.stringify(input.networkPolicy);
-      const lockedMemoryChanged =
-        locked.sandboxMemoryMiB !== input.sandboxMemoryMiB;
-      if (lockedMemoryChanged) {
-        await this.quota?.assertMemoryConfigurationAllowed(
-          userId,
-          locked.sandboxMemoryMiB,
-          input.sandboxMemoryMiB,
-        );
-      }
-      if (lockedNetworkChanged || lockedMemoryChanged) {
-        const runtime = await scopedStore.getEnvironmentRuntime(
-          userId,
-          environmentId,
-        );
-        if (runtime.desiredState === "terminated") {
-          throw new HttpError(
-            409,
-            "environment_terminated",
-            "The Environment is being deleted.",
-          );
-        }
-        if (locked.status === "ready") {
-          // The Sandbox is owned by the Environment, so runtime edits apply to
-          // the existing Sandbox instead of waiting for a future Session.
-          if (lockedNetworkChanged) {
-            const credentials =
-              await scopedStore.listEnvironmentEgressCredentialsByEnvironmentId(
-                environmentId,
-              );
-            await this.runtime.updateEnvironmentNetworkPolicy(
-              runtime,
-              input.networkPolicy,
-              credentials,
-            );
-          }
-          if (lockedMemoryChanged) {
-            await this.runtime.updateEnvironmentMemory(
-              runtime,
-              input.sandboxMemoryMiB,
-            );
-          }
-        }
-      }
-      return scopedStore.updateEnvironment(userId, environmentId, input);
-    };
-
-    // Runtime edits use the lifecycle lock so they cannot race a pause,
-    // snapshot, resume, reprovision or deletion.
-    return this.waitForLifecycleLock(
+    // Persist desired state before any Sandbox0 call. The lifecycle reconciler
+    // owns external mutation and can safely resume after a process restart.
+    const updated = await this.store.updateEnvironment(
+      userId,
       environmentId,
-      updateWhileLifecycleLocked,
+      input,
     );
+    if (updated.runtimeConfig.status !== "applied") {
+      this.triggerRuntimeConfigReconciliation(environmentId);
+    }
+    return updated;
   }
 
   /**
@@ -320,12 +259,16 @@ export class EnvironmentService {
       });
       resources = provisioned;
       try {
-        const ready = await this.store.markEnvironmentReady(
+        await this.store.markEnvironmentReady(
           environmentId,
           provisioned,
+          {
+            generation: environment.runtimeConfig.desiredGeneration,
+            sandboxMemoryMiB: environment.sandboxMemoryMiB,
+          },
         );
+        this.triggerRuntimeConfigReconciliation(environmentId);
         this.logger.info({ environmentId }, "Environment is ready");
-        return ready;
       } catch (error) {
         await this.runtime.deleteEnvironmentResources(provisioned);
         throw error;
@@ -343,6 +286,17 @@ export class EnvironmentService {
       await this.store.markEnvironmentFailed(environmentId, errorMessage(error));
       throw error;
     }
+  }
+
+  private triggerRuntimeConfigReconciliation(environmentId: string) {
+    void Promise.resolve()
+      .then(() => this.requestRuntimeConfigReconciliation?.())
+      .catch((error) => {
+        this.logger.error(
+          { environmentId, error: errorMessage(error) },
+          "Environment runtime configuration reconciliation could not start",
+        );
+      });
   }
 }
 

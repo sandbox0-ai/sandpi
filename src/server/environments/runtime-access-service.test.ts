@@ -20,6 +20,9 @@ const environmentRuntime: StoredEnvironmentRuntime = {
   desiredState: "running",
   observedState: "running",
   lifecyclePolicyVersion: 1,
+  appliedRuntimeConfigGeneration: 1,
+  appliedSandboxMemoryMiB: 2_048,
+  runtimeConfigAttemptCount: 0,
 };
 
 test("executes a warm Environment access without a runtime probe", async () => {

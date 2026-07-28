@@ -16,6 +16,12 @@ const environment: Environment = {
   ownerId: "user-one",
   idlePauseTimeoutSeconds: 1_800,
   sandboxMemoryMiB: 2_048,
+  runtimeConfig: {
+    status: "applied",
+    desiredGeneration: 1,
+    appliedGeneration: 1,
+    appliedSandboxMemoryMiB: 2_048,
+  },
   workspaceBackup: { intervalSeconds: 0, retentionCount: 7 },
   name: "Automation",
   description: "",

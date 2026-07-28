@@ -29,6 +29,9 @@ const runtimeState: StoredEnvironmentRuntime = {
   desiredState: "running",
   observedState: "running",
   lifecyclePolicyVersion: 1,
+  appliedRuntimeConfigGeneration: 1,
+  appliedSandboxMemoryMiB: 2_048,
+  runtimeConfigAttemptCount: 0,
 };
 
 const environment: Environment = {
@@ -36,6 +39,12 @@ const environment: Environment = {
   ownerId: "user-one",
   idlePauseTimeoutSeconds: 1_800,
   sandboxMemoryMiB: 2_048,
+  runtimeConfig: {
+    status: "applied",
+    desiredGeneration: 1,
+    appliedGeneration: 1,
+    appliedSandboxMemoryMiB: 2_048,
+  },
   workspaceBackup: {
     intervalSeconds: 86_400,
     retentionCount: 1,

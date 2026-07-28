@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import type { Pool, PoolClient, QueryResultRow } from "pg";
 
 import type { CodexHarnessState } from "@/harnesses/codex/types";
@@ -70,6 +71,18 @@ export interface StoredEnvironmentRuntime extends EnvironmentRuntimeRecord {
   idlePauseDueAt?: Date;
   lifecycleError?: string;
   pausedAt?: Date;
+  appliedRuntimeConfigGeneration: number;
+  appliedSandboxMemoryMiB?: number;
+  runtimeConfigAttemptCount: number;
+  runtimeConfigRetryAt?: Date;
+  runtimeConfigError?: string;
+}
+
+export interface PreparedEnvironmentRuntimeConfig {
+  runtime: StoredEnvironmentRuntime;
+  generation: number;
+  sandboxMemoryMiB: number;
+  networkPolicy: NetworkPolicy;
 }
 
 export interface PreparedEnvironmentWorkspaceBackup {
@@ -142,6 +155,7 @@ interface EnvironmentRow extends QueryResultRow {
   created_by_user_id: string;
   idle_pause_timeout_seconds: number;
   sandbox_memory_mib: number;
+  runtime_config_generation: string | number;
   workspace_backup_interval_seconds: number;
   workspace_backup_retention_count: number;
   name: string;
@@ -163,6 +177,9 @@ interface EnvironmentRow extends QueryResultRow {
   workspace_backup_due_at: Date | null;
   workspace_backup_last_completed_at: Date | null;
   workspace_backup_error: string | null;
+  applied_runtime_config_generation: string | number | null;
+  applied_sandbox_memory_mib: number | null;
+  runtime_config_error: string | null;
 }
 
 interface EnvironmentEgressCredentialRow extends QueryResultRow {
@@ -233,6 +250,14 @@ interface EnvironmentRuntimeRow extends QueryResultRow {
   credential_revision?: string | number;
   bound_credential_revision?: string | number | null;
   credential_binding_status?: "active" | "stale" | "revoked" | null;
+  desired_runtime_config_generation?: string | number;
+  desired_sandbox_memory_mib?: number;
+  desired_network_policy?: NetworkPolicy;
+  applied_runtime_config_generation: string | number;
+  applied_sandbox_memory_mib: number | null;
+  runtime_config_attempt_count: number;
+  runtime_config_retry_at: Date | null;
+  runtime_config_error: string | null;
 }
 
 interface EnvironmentPauseIntervalRow extends QueryResultRow {
@@ -707,7 +732,8 @@ export class SandpiStore {
         await client.query(
           `UPDATE environment_runtime
            SET sandbox_id = COALESCE(sandbox_id, $2),
-               observed_state = 'provisioning', provisioning_error = NULL
+               observed_state = 'provisioning', provisioning_error = NULL,
+               runtime_config_error = NULL, runtime_config_retry_at = NULL
            WHERE environment_id = $1
              AND (sandbox_id IS NULL OR sandbox_id = $2)`,
           [environmentId, resources.sandboxId],
@@ -734,6 +760,11 @@ export class SandpiStore {
            decoder_attempt_id = NULL, decoder_runtime_generation = 0,
            lifecycle_policy_version = 0,
            idle_pause_due_at = NULL, lifecycle_error = NULL, paused_at = NULL,
+           applied_runtime_config_generation = 0,
+           applied_sandbox_memory_mib = NULL,
+           runtime_config_attempt_count = 0,
+           runtime_config_retry_at = NULL,
+           runtime_config_error = NULL,
            workspace_backup_due_at = NULL,
            workspace_backup_retry_at = NULL,
            workspace_backup_error = NULL
@@ -745,6 +776,10 @@ export class SandpiStore {
   async markEnvironmentReady(
     environmentId: string,
     resources: ProvisionedEnvironment,
+    appliedConfig: {
+      generation: number;
+      sandboxMemoryMiB: number;
+    },
   ) {
     const client = await this.pool.connect();
     try {
@@ -766,7 +801,8 @@ export class SandpiStore {
         `INSERT INTO environment_runtime (
            environment_id, sandbox_id, desired_state, observed_state,
            lifecycle_policy_version, idle_pause_due_at,
-           workspace_backup_due_at
+           workspace_backup_due_at, applied_runtime_config_generation,
+           applied_sandbox_memory_mib
          )
          SELECT $1, $2, 'running', 'running', $3,
                 CASE
@@ -783,7 +819,8 @@ export class SandpiStore {
                     environment.workspace_backup_interval_seconds::BIGINT
                     * INTERVAL '1 second'
                   )
-                END
+                END,
+                $4, $5
          FROM environments environment
          WHERE environment.id = $1
          ON CONFLICT (environment_id) DO UPDATE
@@ -795,11 +832,20 @@ export class SandpiStore {
              workspace_backup_retry_at = NULL,
              workspace_backup_error = NULL,
              lifecycle_error = NULL, paused_at = NULL,
-             provisioning_error = NULL`,
+             provisioning_error = NULL,
+             applied_runtime_config_generation =
+               EXCLUDED.applied_runtime_config_generation,
+             applied_sandbox_memory_mib =
+               EXCLUDED.applied_sandbox_memory_mib,
+             runtime_config_attempt_count = 0,
+             runtime_config_retry_at = NULL,
+             runtime_config_error = NULL`,
         [
           environmentId,
           resources.sandboxId,
           ENVIRONMENT_LIFECYCLE_POLICY_VERSION,
+          appliedConfig.generation,
+          appliedConfig.sandboxMemoryMiB,
         ],
       );
       await client.query("COMMIT");
@@ -881,19 +927,63 @@ export class SandpiStore {
       networkPolicy: NetworkPolicy;
     },
   ) {
-    const current = await this.getManageableEnvironment(userId, environmentId);
-    const timeoutChanged =
-      current.idlePauseTimeoutSeconds !== input.idlePauseTimeoutSeconds;
-    const backupIntervalChanged =
-      current.workspaceBackup.intervalSeconds !==
-      input.workspaceBackup.intervalSeconds;
-    const backupPolicyChanged =
-      backupIntervalChanged ||
-      current.workspaceBackup.retentionCount !==
-        input.workspaceBackup.retentionCount;
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
+      const lockedEnvironment = await client.query<{
+        idle_pause_timeout_seconds: number;
+        sandbox_memory_mib: number;
+        workspace_backup_interval_seconds: number;
+        workspace_backup_retention_count: number;
+        network_policy: NetworkPolicy;
+      }>(
+        `SELECT idle_pause_timeout_seconds, sandbox_memory_mib,
+                workspace_backup_interval_seconds,
+                workspace_backup_retention_count, network_policy
+         FROM environments
+         WHERE id = $2
+           AND created_by_user_id = $1
+           AND status <> 'archived'
+         FOR UPDATE`,
+        [userId, environmentId],
+      );
+      const current = lockedEnvironment.rows[0];
+      if (!current) {
+        throw notFound("environment_not_found", "Environment not found.");
+      }
+      const lockedRuntime = await client.query<{
+        desired_state: StoredEnvironmentRuntime["desiredState"];
+      }>(
+        `SELECT desired_state
+         FROM environment_runtime
+         WHERE environment_id = $1
+         FOR UPDATE`,
+        [environmentId],
+      );
+      if (lockedRuntime.rows[0]?.desired_state === "terminated") {
+        throw new HttpError(
+          409,
+          "environment_terminated",
+          "The Environment is being deleted.",
+        );
+      }
+
+      const timeoutChanged =
+        current.idle_pause_timeout_seconds !==
+        input.idlePauseTimeoutSeconds;
+      const memoryChanged =
+        current.sandbox_memory_mib !== input.sandboxMemoryMiB;
+      const networkChanged =
+        !isDeepStrictEqual(current.network_policy, input.networkPolicy);
+      const runtimeConfigChanged = memoryChanged || networkChanged;
+      const backupIntervalChanged =
+        current.workspace_backup_interval_seconds !==
+        input.workspaceBackup.intervalSeconds;
+      const backupPolicyChanged =
+        backupIntervalChanged ||
+        current.workspace_backup_retention_count !==
+          input.workspaceBackup.retentionCount;
+
       await client.query(
         `UPDATE environments
          SET name = $2, description = $3, color = $4,
@@ -902,6 +992,8 @@ export class SandpiStore {
              workspace_backup_interval_seconds = $7,
              workspace_backup_retention_count = $8,
              network_policy = $9::JSONB,
+             runtime_config_generation =
+               runtime_config_generation + $10::BIGINT,
              revision = revision + 1
          WHERE id = $1`,
         [
@@ -914,8 +1006,20 @@ export class SandpiStore {
           input.workspaceBackup.intervalSeconds,
           input.workspaceBackup.retentionCount,
           JSON.stringify(input.networkPolicy),
+          runtimeConfigChanged ? 1 : 0,
         ],
       );
+      if (runtimeConfigChanged) {
+        await client.query(
+          `UPDATE environment_runtime
+           SET runtime_config_attempt_count = 0,
+               runtime_config_retry_at = NULL,
+               runtime_config_error = NULL,
+               version = version + 1
+           WHERE environment_id = $1`,
+          [environmentId],
+        );
+      }
       if (timeoutChanged) {
         await client.query(
           `UPDATE environment_runtime
@@ -1224,6 +1328,128 @@ export class SandpiStore {
       }
       client.release();
     }
+  }
+
+  async environmentRuntimeConfigCandidateIds(limit = 50) {
+    const result = await this.pool.query<{ environment_id: string }>(
+      `SELECT runtime.environment_id
+       FROM environment_runtime runtime
+       JOIN environments environment ON environment.id = runtime.environment_id
+       WHERE environment.status = 'ready'
+         AND runtime.sandbox_id IS NOT NULL
+         AND runtime.desired_state <> 'terminated'
+         AND runtime.applied_runtime_config_generation
+           < environment.runtime_config_generation
+         AND (
+           runtime.runtime_config_retry_at IS NULL
+           OR runtime.runtime_config_retry_at <= NOW()
+         )
+       ORDER BY runtime.runtime_config_retry_at NULLS FIRST,
+                runtime.created_at, runtime.environment_id
+       LIMIT $1`,
+      [limit],
+    );
+    return result.rows.map((row) => row.environment_id);
+  }
+
+  /** Reads one immutable desired snapshot while holding the lifecycle lock. */
+  async prepareEnvironmentRuntimeConfig(
+    environmentId: string,
+  ): Promise<PreparedEnvironmentRuntimeConfig | undefined> {
+    const result = await this.pool.query<EnvironmentRuntimeRow>(
+      `${ENVIRONMENT_RUNTIME_SELECT}
+       WHERE runtime.environment_id = $1
+         AND environment.status = 'ready'
+         AND runtime.sandbox_id IS NOT NULL
+         AND runtime.desired_state <> 'terminated'
+         AND runtime.applied_runtime_config_generation
+           < environment.runtime_config_generation
+         AND (
+           runtime.runtime_config_retry_at IS NULL
+           OR runtime.runtime_config_retry_at <= NOW()
+         )`,
+      [environmentId],
+    );
+    const row = result.rows[0];
+    if (
+      !row ||
+      row.desired_runtime_config_generation === undefined ||
+      row.desired_sandbox_memory_mib === undefined ||
+      row.desired_network_policy === undefined
+    ) {
+      return undefined;
+    }
+    return {
+      runtime: environmentRuntimeFromRow(row),
+      generation: Number(row.desired_runtime_config_generation),
+      sandboxMemoryMiB: row.desired_sandbox_memory_mib,
+      networkPolicy: row.desired_network_policy,
+    };
+  }
+
+  /**
+   * Records the memory confirmed on Sandbox0 even when a newer desired
+   * generation arrived during the external call. Only the still-current
+   * generation is marked completely applied.
+   */
+  async recordEnvironmentRuntimeConfigApplied(
+    environmentId: string,
+    sandboxId: string,
+    generation: number,
+    sandboxMemoryMiB: number,
+  ) {
+    const result = await this.pool.query<{ generation_current: boolean }>(
+      `UPDATE environment_runtime runtime
+       SET applied_sandbox_memory_mib = $4,
+           applied_runtime_config_generation = CASE
+             WHEN environment.runtime_config_generation = $3
+             THEN GREATEST(
+               runtime.applied_runtime_config_generation,
+               $3::BIGINT
+             )
+             ELSE runtime.applied_runtime_config_generation
+           END,
+           runtime_config_attempt_count = 0,
+           runtime_config_retry_at = NULL,
+           runtime_config_error = NULL,
+           version = version + 1
+       FROM environments environment
+       WHERE runtime.environment_id = $1
+         AND runtime.sandbox_id = $2
+         AND runtime.desired_state <> 'terminated'
+         AND environment.id = runtime.environment_id
+       RETURNING
+         environment.runtime_config_generation = $3 AS generation_current`,
+      [environmentId, sandboxId, generation, sandboxMemoryMiB],
+    );
+    return result.rows[0]?.generation_current === true;
+  }
+
+  async recordEnvironmentRuntimeConfigFailure(
+    environmentId: string,
+    sandboxId: string,
+    generation: number,
+    error: string,
+    retryAt: Date,
+  ) {
+    const result = await this.pool.query(
+      `UPDATE environment_runtime runtime
+       SET runtime_config_attempt_count =
+             runtime_config_attempt_count + 1,
+           runtime_config_retry_at = $5,
+           runtime_config_error = $4,
+           version = version + 1
+       FROM environments environment
+       WHERE runtime.environment_id = $1
+         AND runtime.sandbox_id = $2
+         AND runtime.desired_state <> 'terminated'
+         AND environment.id = runtime.environment_id
+         AND environment.runtime_config_generation = $3
+         AND runtime.applied_runtime_config_generation < $3
+       RETURNING runtime.environment_id`,
+      [environmentId, sandboxId, generation, error, retryAt],
+    );
+    return Boolean(result.rowCount);
   }
 
   async environmentLifecyclePolicyCandidateIds(limit = 50) {
@@ -3361,7 +3587,10 @@ const ENVIRONMENT_SELECT = `
          runtime.observed_state AS sandbox_state,
          runtime.workspace_backup_due_at,
          runtime.workspace_backup_last_completed_at,
-         runtime.workspace_backup_error
+         runtime.workspace_backup_error,
+         runtime.applied_runtime_config_generation,
+         runtime.applied_sandbox_memory_mib,
+         runtime.runtime_config_error
   FROM environments environment
   LEFT JOIN environment_runtime runtime
     ON runtime.environment_id = environment.id
@@ -3370,6 +3599,10 @@ const ENVIRONMENT_SELECT = `
 const ENVIRONMENT_RUNTIME_SELECT = `
   SELECT runtime.*, environment.workspace_volume_id,
          environment.credential_revision,
+         environment.runtime_config_generation
+           AS desired_runtime_config_generation,
+         environment.sandbox_memory_mib AS desired_sandbox_memory_mib,
+         environment.network_policy AS desired_network_policy,
          credential_binding.source_revision AS bound_credential_revision,
          credential_binding.status AS credential_binding_status
   FROM environment_runtime runtime
@@ -3423,11 +3656,34 @@ function userFromRow(row: UserRow): SandpiUser {
 
 function environmentFromRow(row: EnvironmentRow): EnvironmentRecord {
   const metadata = row.harness_metadata ?? {};
+  const desiredRuntimeConfigGeneration = Number(
+    row.runtime_config_generation ?? 1,
+  );
+  const appliedRuntimeConfigGeneration = Number(
+    row.applied_runtime_config_generation ?? 0,
+  );
+  const runtimeConfigPending =
+    appliedRuntimeConfigGeneration < desiredRuntimeConfigGeneration;
   return {
     id: row.id,
     ownerId: row.created_by_user_id,
     idlePauseTimeoutSeconds: row.idle_pause_timeout_seconds,
     sandboxMemoryMiB: row.sandbox_memory_mib,
+    runtimeConfig: {
+      status: runtimeConfigPending
+        ? row.runtime_config_error
+          ? "failed"
+          : "applying"
+        : "applied",
+      desiredGeneration: desiredRuntimeConfigGeneration,
+      appliedGeneration: appliedRuntimeConfigGeneration,
+      ...(row.applied_sandbox_memory_mib == null
+        ? {}
+        : { appliedSandboxMemoryMiB: row.applied_sandbox_memory_mib }),
+      ...(runtimeConfigPending && row.runtime_config_error
+        ? { lastError: row.runtime_config_error }
+        : {}),
+    },
     workspaceBackup: {
       intervalSeconds: row.workspace_backup_interval_seconds,
       retentionCount: row.workspace_backup_retention_count,
@@ -3558,6 +3814,14 @@ function environmentRuntimeFromRow(
     idlePauseDueAt: row.idle_pause_due_at ?? undefined,
     lifecycleError: row.lifecycle_error ?? undefined,
     pausedAt: row.paused_at ?? undefined,
+    appliedRuntimeConfigGeneration: Number(
+      row.applied_runtime_config_generation,
+    ),
+    appliedSandboxMemoryMiB:
+      row.applied_sandbox_memory_mib ?? undefined,
+    runtimeConfigAttemptCount: row.runtime_config_attempt_count,
+    runtimeConfigRetryAt: row.runtime_config_retry_at ?? undefined,
+    runtimeConfigError: row.runtime_config_error ?? undefined,
   };
 }
 

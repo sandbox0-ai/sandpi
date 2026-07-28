@@ -252,6 +252,11 @@ test("projects Sandbox and Supervisor coordinates from Environment runtime", asy
           idle_pause_due_at: new Date("2026-07-16T00:04:00.000Z"),
           lifecycle_error: null,
           paused_at: null,
+          applied_runtime_config_generation: "2",
+          applied_sandbox_memory_mib: 2_048,
+          runtime_config_attempt_count: 1,
+          runtime_config_retry_at: new Date("2026-07-16T00:02:00.000Z"),
+          runtime_config_error: "retryable",
           version: "5",
         },
       ],
@@ -283,6 +288,11 @@ test("projects Sandbox and Supervisor coordinates from Environment runtime", asy
     idlePauseDueAt: new Date("2026-07-16T00:04:00.000Z"),
     lifecycleError: undefined,
     pausedAt: undefined,
+    appliedRuntimeConfigGeneration: 2,
+    appliedSandboxMemoryMiB: 2_048,
+    runtimeConfigAttemptCount: 1,
+    runtimeConfigRetryAt: new Date("2026-07-16T00:02:00.000Z"),
+    runtimeConfigError: "retryable",
   });
 });
 
@@ -292,6 +302,9 @@ test("schedules a newly ready Sandbox from its Environment idle timeout", async 
   await fixture.store.markEnvironmentReady("environment-one", {
     sandboxId: "sandbox-one",
     workspaceVolumeId: "volume-one",
+  }, {
+    generation: 3,
+    sandboxMemoryMiB: 4_096,
   });
 
   const runtimeInsert = fixture.calls.find((call) =>
@@ -305,6 +318,11 @@ test("schedules a newly ready Sandbox from its Environment idle timeout", async 
     runtimeInsert.sql,
     /idle_pause_due_at = EXCLUDED\.idle_pause_due_at/,
   );
+  assert.match(
+    runtimeInsert.sql,
+    /applied_runtime_config_generation[\s\S]+applied_sandbox_memory_mib/,
+  );
+  assert.deepEqual(runtimeInsert.values?.slice(-2), [3, 4_096]);
 });
 
 test("records successful runtime access without promoting the Codex epoch", async () => {

@@ -162,6 +162,17 @@ export interface Environment {
   idlePauseTimeoutSeconds: number;
   /** Desired memory limit for the one shared Environment Sandbox, in MiB. */
   sandboxMemoryMiB: number;
+  /**
+   * Durable convergence state for Sandbox memory and network policy. Desired
+   * settings remain visible while Sandpi retries a failed Sandbox0 update.
+   */
+  runtimeConfig: {
+    status: "applied" | "applying" | "failed";
+    desiredGeneration: number;
+    appliedGeneration: number;
+    appliedSandboxMemoryMiB?: number;
+    lastError?: string;
+  };
   /** Native SandboxVolume snapshot policy and its durable scheduler state. */
   workspaceBackup: EnvironmentWorkspaceBackupPolicy;
   name: string;

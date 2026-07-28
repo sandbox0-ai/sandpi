@@ -45,6 +45,12 @@ const environment: Environment = {
   ownerId: "user-test",
   idlePauseTimeoutSeconds: 30 * 60,
   sandboxMemoryMiB: 2 * 1024,
+  runtimeConfig: {
+    status: "applied",
+    desiredGeneration: 1,
+    appliedGeneration: 1,
+    appliedSandboxMemoryMiB: 2 * 1024,
+  },
   workspaceBackup: { intervalSeconds: 0, retentionCount: 7 },
   name: "Development",
   description: "",
@@ -405,6 +411,9 @@ function fixture(
     desiredState: "running",
     observedState: "running",
     lifecyclePolicyVersion: 1,
+    appliedRuntimeConfigGeneration: 1,
+    appliedSandboxMemoryMiB: 2 * 1024,
+    runtimeConfigAttemptCount: 0,
   };
   const events: Array<Record<string, unknown> & { seq: number }> = [];
   const activeStreams = new Set<{

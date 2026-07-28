@@ -153,6 +153,29 @@ test("clears the idle deadline when automatic Environment pause is disabled", as
   const client = {
     async query(sql: string, values?: readonly unknown[]) {
       queries.push({ sql, values });
+      if (
+        sql.includes("SELECT idle_pause_timeout_seconds") &&
+        sql.includes("FROM environments")
+      ) {
+        return {
+          rowCount: 1,
+          rows: [
+            {
+              idle_pause_timeout_seconds: 30 * 60,
+              sandbox_memory_mib: 2 * 1024,
+              workspace_backup_interval_seconds: 0,
+              workspace_backup_retention_count: 7,
+              network_policy: {
+                mode: "allow-all",
+                domainExceptions: [],
+              },
+            },
+          ],
+        };
+      }
+      if (sql.includes("SELECT desired_state")) {
+        return { rowCount: 1, rows: [{ desired_state: "running" }] };
+      }
       return { rowCount: 1, rows: [] };
     },
     release() {},
@@ -189,6 +212,10 @@ test("clears the idle deadline when automatic Environment pause is disabled", as
   assert.match(environmentUpdate.sql, /sandbox_memory_mib = \$6/);
   assert.match(
     environmentUpdate.sql,
+    /runtime_config_generation[\s\S]+runtime_config_generation \+ \$10::BIGINT/,
+  );
+  assert.match(
+    environmentUpdate.sql,
     /workspace_backup_interval_seconds = \$7/,
   );
   assert.match(
@@ -201,6 +228,11 @@ test("clears the idle deadline when automatic Environment pause is disabled", as
     86_400,
     7,
   ]);
+  assert.equal(environmentUpdate.values?.[9], 1);
+  const runtimeConfigUpdate = queries.find(({ sql }) =>
+    sql.includes("runtime_config_attempt_count = 0"),
+  );
+  assert.ok(runtimeConfigUpdate);
   const runtimeUpdate = queries.find(({ sql }) =>
     sql.includes("UPDATE environment_runtime") &&
     sql.includes("idle_pause_due_at"),

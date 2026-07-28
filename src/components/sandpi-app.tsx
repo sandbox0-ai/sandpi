@@ -319,9 +319,15 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
   }, [openWorkspacePath, selectedEnvironment, selectedSession]);
 
   useEffect(() => {
-    if (!environments.some((environment) => environment.status === "updating")) {
-      return;
-    }
+    const activelyChanging = environments.some(
+      (environment) =>
+        environment.status === "updating" ||
+        environment.runtimeConfig.status === "applying",
+    );
+    const waitingForRetry = environments.some(
+      (environment) => environment.runtimeConfig.status === "failed",
+    );
+    if (!activelyChanging && !waitingForRetry) return;
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
       void apiFetch<ApiEnvelope<Environment[]>>("/api/v1/environments", {
@@ -330,10 +336,10 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
         .then((response) => setEnvironments(response.data))
         .catch((error) => {
           if (!controller.signal.aborted) {
-            console.error("Unable to refresh Environment provisioning", error);
+            console.error("Unable to refresh Environment state", error);
           }
         });
-    }, 1_500);
+    }, activelyChanging ? 1_500 : 5_000);
     return () => {
       controller.abort();
       window.clearTimeout(timer);

@@ -23,6 +23,12 @@ const environment: Environment = {
   ownerId: "user-test",
   idlePauseTimeoutSeconds: 30 * 60,
   sandboxMemoryMiB: 2 * 1024,
+  runtimeConfig: {
+    status: "applied",
+    desiredGeneration: 1,
+    appliedGeneration: 1,
+    appliedSandboxMemoryMiB: 2 * 1024,
+  },
   workspaceBackup: { intervalSeconds: 0, retentionCount: 7 },
   name: "Development",
   description: "",

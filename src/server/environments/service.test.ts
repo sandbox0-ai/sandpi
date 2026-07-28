@@ -11,6 +11,12 @@ const environment = {
   ownerId: "user-test",
   idlePauseTimeoutSeconds: 30 * 60,
   sandboxMemoryMiB: 2 * 1024,
+  runtimeConfig: {
+    status: "applied",
+    desiredGeneration: 1,
+    appliedGeneration: 1,
+    appliedSandboxMemoryMiB: 2 * 1024,
+  },
   workspaceBackup: { intervalSeconds: 0, retentionCount: 7 },
   status: "ready",
   networkPolicy: {
@@ -39,7 +45,15 @@ test("pending Environment reconciliation is coalesced within one server", async 
       return [];
     },
     async recordEnvironmentAllocation() {},
-    async markEnvironmentReady() {
+    async markEnvironmentReady(
+      _environmentId: string,
+      _resources: unknown,
+      appliedConfig: { generation: number; sandboxMemoryMiB: number },
+    ) {
+      assert.deepEqual(appliedConfig, {
+        generation: 1,
+        sandboxMemoryMiB: 2 * 1024,
+      });
       readyCalls += 1;
       return environment;
     },
@@ -72,56 +86,46 @@ test("pending Environment reconciliation is coalesced within one server", async 
   assert.equal(readyCalls, 2);
 });
 
-test("applies a changed network policy to the shared Environment Sandbox", async () => {
-  const applied: Environment["networkPolicy"][] = [];
+test("persists network intent and starts reconciliation without waiting for Sandbox0", async () => {
+  const steps: string[] = [];
   const nextPolicy: Environment["networkPolicy"] = {
     mode: "block-all",
     domainExceptions: ["github.com"],
   };
+  const pending = {
+    ...environment,
+    networkPolicy: nextPolicy,
+    runtimeConfig: {
+      ...environment.runtimeConfig,
+      status: "applying" as const,
+      desiredGeneration: 2,
+    },
+  };
   const store = {
     async getManageableEnvironment() {
+      steps.push("read");
       return environment;
     },
-    async withEnvironmentLifecycleLock(
-      _environmentId: string,
-      operation: (lockedStore: SandpiStore) => Promise<Environment>,
-    ) {
-      return {
-        acquired: true as const,
-        value: await operation(store as unknown as SandpiStore),
-      };
-    },
-    async getEnvironmentRuntime() {
-      return {
-        id: environment.id,
-        sandboxId: "sandbox-test",
-        workspaceVolumeId: "volume-test",
-        runtimeGeneration: 1,
-        decoder: {
-          supervisorCursor: 0,
-          tailBase64: "",
-          runtimeGeneration: 1,
-        },
-      };
-    },
-    async listEnvironmentEgressCredentialsByEnvironmentId() {
-      return [];
-    },
     async updateEnvironment() {
-      return { ...environment, networkPolicy: nextPolicy };
+      steps.push("persist");
+      return pending;
     },
   } as unknown as SandpiStore;
   const runtime = {
-    async updateEnvironmentNetworkPolicy(
-      _runtime: unknown,
-      policy: Environment["networkPolicy"],
-    ) {
-      applied.push(policy);
+    async updateEnvironmentNetworkPolicy() {
+      assert.fail("the request path must not call Sandbox0");
+    },
+    async updateEnvironmentMemory() {
+      assert.fail("the request path must not call Sandbox0");
     },
   } as unknown as RuntimeAdapter;
   const service = new EnvironmentService(store, runtime, {
     info() {},
     error() {},
+  });
+  service.setRuntimeConfigReconciler(() => {
+    steps.push("reconcile");
+    return new Promise<void>(() => undefined);
   });
 
   const updated = await service.update("user-test", environment.id, {
@@ -134,29 +138,17 @@ test("applies a changed network policy to the shared Environment Sandbox", async
     networkPolicy: nextPolicy,
   });
 
-  assert.deepEqual(applied, [nextPolicy]);
   assert.deepEqual(updated.networkPolicy, nextPolicy);
+  assert.equal(updated.runtimeConfig.status, "applying");
+  assert.deepEqual(steps, ["read", "persist", "reconcile"]);
 });
 
-test("serializes an idle timeout change with Environment lifecycle transitions", async () => {
+test("persists an idle timeout without scheduling runtime configuration", async () => {
   const steps: string[] = [];
   const store = {
     async getManageableEnvironment() {
       steps.push("read");
       return environment;
-    },
-    async withEnvironmentLifecycleLock(
-      _environmentId: string,
-      operation: (lockedStore: SandpiStore) => Promise<Environment>,
-    ) {
-      steps.push("lifecycle-lock");
-      return {
-        acquired: true as const,
-        value: await operation(store as unknown as SandpiStore),
-      };
-    },
-    async getEnvironmentRuntime() {
-      assert.fail("an idle timeout change does not need a runtime policy apply");
     },
     async updateEnvironment(
       _userId: string,
@@ -176,6 +168,9 @@ test("serializes an idle timeout change with Environment lifecycle transitions",
     } as unknown as RuntimeAdapter,
     { info() {}, error() {} },
   );
+  service.setRuntimeConfigReconciler(() => {
+    steps.push("reconcile");
+  });
 
   const updated = await service.update("user-test", environment.id, {
     name: "Development",
@@ -188,28 +183,15 @@ test("serializes an idle timeout change with Environment lifecycle transitions",
   });
 
   assert.equal(updated.idlePauseTimeoutSeconds, 0);
-  assert.deepEqual(steps, ["read", "lifecycle-lock", "read", "write"]);
+  assert.deepEqual(steps, ["read", "write"]);
 });
 
-test("serializes a Workspace backup policy change without mutating Sandbox resources", async () => {
+test("persists a Workspace backup policy without mutating Sandbox resources", async () => {
   const steps: string[] = [];
   const store = {
     async getManageableEnvironment() {
       steps.push("read");
       return environment;
-    },
-    async withEnvironmentLifecycleLock(
-      _environmentId: string,
-      operation: (lockedStore: SandpiStore) => Promise<Environment>,
-    ) {
-      steps.push("lifecycle-lock");
-      return {
-        acquired: true as const,
-        value: await operation(store as unknown as SandpiStore),
-      };
-    },
-    async getEnvironmentRuntime() {
-      assert.fail("backup policy persistence does not mutate Sandbox resources");
     },
     async updateEnvironment(
       _userId: string,
@@ -247,41 +229,15 @@ test("serializes a Workspace backup policy change without mutating Sandbox resou
     intervalSeconds: 86_400,
     retentionCount: 3,
   });
-  assert.deepEqual(steps, ["read", "lifecycle-lock", "read", "write"]);
+  assert.deepEqual(steps, ["read", "write"]);
 });
 
-test("applies a memory change to the shared Sandbox under the lifecycle lock", async () => {
+test("persists a memory change as desired state after checking entitlement", async () => {
   const steps: string[] = [];
-  const runtimeRecord = {
-    id: environment.id,
-    sandboxId: "sandbox-test",
-    workspaceVolumeId: "volume-test",
-    desiredState: "running",
-    runtimeGeneration: 1,
-    decoder: {
-      supervisorCursor: 0,
-      tailBase64: "",
-      runtimeGeneration: 1,
-    },
-  };
   const store = {
     async getManageableEnvironment() {
       steps.push("read");
       return environment;
-    },
-    async withEnvironmentLifecycleLock(
-      _environmentId: string,
-      operation: (lockedStore: SandpiStore) => Promise<Environment>,
-    ) {
-      steps.push("lifecycle-lock");
-      return {
-        acquired: true as const,
-        value: await operation(store as unknown as SandpiStore),
-      };
-    },
-    async getEnvironmentRuntime() {
-      steps.push("runtime");
-      return runtimeRecord;
     },
     async updateEnvironment(
       _userId: string,
@@ -289,7 +245,15 @@ test("applies a memory change to the shared Sandbox under the lifecycle lock", a
       input: Environment,
     ) {
       steps.push("write");
-      return { ...environment, ...input };
+      return {
+        ...environment,
+        ...input,
+        runtimeConfig: {
+          ...environment.runtimeConfig,
+          status: "applying" as const,
+          desiredGeneration: 2,
+        },
+      };
     },
   } as unknown as SandpiStore;
   const runtime = {
@@ -297,14 +261,31 @@ test("applies a memory change to the shared Sandbox under the lifecycle lock", a
       assert.fail("an unchanged network policy must not be reapplied");
     },
     async updateEnvironmentMemory(received: unknown, memoryMiB: number) {
-      assert.strictEqual(received, runtimeRecord);
-      assert.equal(memoryMiB, 4 * 1024);
-      steps.push("memory");
+      assert.fail(
+        `the request path must not resize Sandbox0: ${String(received)} ${memoryMiB}`,
+      );
     },
   } as unknown as RuntimeAdapter;
+  const quota = {
+    async environmentLimit() {
+      return 1;
+    },
+    async assertMemoryConfigurationAllowed(
+      _userId: string,
+      currentMemoryMiB: number,
+      requestedMemoryMiB: number,
+    ) {
+      assert.equal(currentMemoryMiB, 2 * 1024);
+      assert.equal(requestedMemoryMiB, 4 * 1024);
+      steps.push("quota");
+    },
+  };
   const service = new EnvironmentService(store, runtime, {
     info() {},
     error() {},
+  }, quota);
+  service.setRuntimeConfigReconciler(() => {
+    steps.push("reconcile");
   });
 
   const updated = await service.update("user-test", environment.id, {
@@ -318,58 +299,34 @@ test("applies a memory change to the shared Sandbox under the lifecycle lock", a
   });
 
   assert.equal(updated.sandboxMemoryMiB, 4 * 1024);
-  assert.deepEqual(steps, [
-    "read",
-    "lifecycle-lock",
-    "read",
-    "runtime",
-    "memory",
-    "write",
-  ]);
+  assert.equal(updated.runtimeConfig.status, "applying");
+  assert.deepEqual(steps, ["read", "quota", "write", "reconcile"]);
 });
 
-test("rechecks the memory entitlement after acquiring the lifecycle lock", async () => {
+test("rejects a disallowed memory change before persisting desired state", async () => {
   let quotaChecks = 0;
-  let runtimeUpdates = 0;
   let writes = 0;
   const store = {
     async getManageableEnvironment() {
       return environment;
-    },
-    async withEnvironmentLifecycleLock(
-      _environmentId: string,
-      operation: (lockedStore: SandpiStore) => Promise<Environment>,
-    ) {
-      return {
-        acquired: true as const,
-        value: await operation(store as unknown as SandpiStore),
-      };
-    },
-    async getEnvironmentRuntime() {
-      return { desiredState: "running" };
     },
     async updateEnvironment() {
       writes += 1;
       return environment;
     },
   } as unknown as SandpiStore;
-  const runtime = {
-    async updateEnvironmentMemory() {
-      runtimeUpdates += 1;
-    },
-  } as unknown as RuntimeAdapter;
   const quota = {
     async environmentLimit() {
       return 1;
     },
     async assertMemoryConfigurationAllowed() {
       quotaChecks += 1;
-      if (quotaChecks === 2) throw new Error("plan changed");
+      throw new Error("plan changed");
     },
   };
   const service = new EnvironmentService(
     store,
-    runtime,
+    {} as RuntimeAdapter,
     { info() {}, error() {} },
     quota,
   );
@@ -387,8 +344,7 @@ test("rechecks the memory entitlement after acquiring the lifecycle lock", async
     /plan changed/,
   );
 
-  assert.equal(quotaChecks, 2);
-  assert.equal(runtimeUpdates, 0);
+  assert.equal(quotaChecks, 1);
   assert.equal(writes, 0);
 });
 
@@ -402,21 +358,11 @@ test("rejects network policy changes after the Environment deletion gate", async
     async getManageableEnvironment() {
       return environment;
     },
-    async withEnvironmentLifecycleLock(
-      _environmentId: string,
-      operation: (lockedStore: SandpiStore) => Promise<Environment>,
-    ) {
-      return {
-        acquired: true as const,
-        value: await operation(store as unknown as SandpiStore),
-      };
-    },
-    async getEnvironmentRuntime() {
-      return { desiredState: "terminated" };
-    },
     async updateEnvironment() {
       updates += 1;
-      return environment;
+      throw Object.assign(new Error("The Environment is being deleted."), {
+        code: "environment_terminated",
+      });
     },
   } as unknown as SandpiStore;
   const service = new EnvironmentService(
@@ -440,7 +386,7 @@ test("rejects network policy changes after the Environment deletion gate", async
       "code" in error &&
       error.code === "environment_terminated",
   );
-  assert.equal(updates, 0);
+  assert.equal(updates, 1);
 });
 
 test("deletes Environment-owned resources before removing metadata", async () => {

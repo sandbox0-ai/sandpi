@@ -5,6 +5,9 @@ import {
   ENVIRONMENT_LIFECYCLE_POLICY_VERSION,
 } from "./lifecycle-policy";
 
+const RUNTIME_CONFIG_RETRY_BASE_MS = 5_000;
+const RUNTIME_CONFIG_RETRY_MAX_MS = 5 * 60_000;
+
 interface LifecycleLogger {
   debug(fields: object, message: string): void;
   info(fields: object, message: string): void;
@@ -19,6 +22,7 @@ interface LifecycleLogger {
 export class EnvironmentLifecycleService {
   private timer?: NodeJS.Timeout;
   private reconciliation?: Promise<void>;
+  private reconciliationRequested = false;
   private closed = false;
   private started = false;
   private readonly controller = new AbortController();
@@ -68,14 +72,24 @@ export class EnvironmentLifecycleService {
     await this.reconciliation;
   }
 
-  async reconcileOnce() {
-    if (this.closed || this.runtime.mode === "unconfigured") return;
+  reconcileOnce(): Promise<void> {
+    if (this.closed || this.runtime.mode === "unconfigured") {
+      return Promise.resolve();
+    }
+    this.reconciliationRequested = true;
     if (this.reconciliation) return this.reconciliation;
-    const run = this.reconcileLifecycle().finally(() => {
+    const run = this.runRequestedReconciliations().finally(() => {
       if (this.reconciliation === run) this.reconciliation = undefined;
     });
     this.reconciliation = run;
     return run;
+  }
+
+  private async runRequestedReconciliations() {
+    do {
+      this.reconciliationRequested = false;
+      await this.reconcileLifecycle();
+    } while (this.reconciliationRequested && !this.closed);
   }
 
   async pauseForQuota(environmentId: string) {
@@ -139,6 +153,80 @@ export class EnvironmentLifecycleService {
 
   private async reconcileLifecycle() {
     const limit = this.options.batchSize ?? 50;
+    const runtimeConfigCandidates =
+      await this.store.environmentRuntimeConfigCandidateIds(limit);
+    for (const environmentId of runtimeConfigCandidates) {
+      await this.store.withEnvironmentLifecycleLock(
+        environmentId,
+        async (lockedStore) => {
+          const scopedStore = lockedStore ?? this.store;
+          const prepared =
+            await scopedStore.prepareEnvironmentRuntimeConfig(environmentId);
+          if (!prepared) return;
+          try {
+            const credentials =
+              await scopedStore.listEnvironmentEgressCredentialsByEnvironmentId(
+                environmentId,
+              );
+            // Apply the complete desired snapshot on every attempt. Both
+            // Sandbox0 updates are idempotent, so a crash between either call
+            // and the PostgreSQL acknowledgement is recoverable.
+            await this.runtime.updateEnvironmentNetworkPolicy(
+              prepared.runtime,
+              prepared.networkPolicy,
+              credentials,
+            );
+            await this.runtime.updateEnvironmentMemory(
+              prepared.runtime,
+              prepared.sandboxMemoryMiB,
+            );
+            const generationCurrent =
+              await scopedStore.recordEnvironmentRuntimeConfigApplied(
+                environmentId,
+                prepared.runtime.sandboxId,
+                prepared.generation,
+                prepared.sandboxMemoryMiB,
+              );
+            this.logger.info(
+              {
+                environmentId,
+                generation: prepared.generation,
+                generationCurrent,
+              },
+              generationCurrent
+                ? "Environment runtime configuration applied"
+                : "Environment runtime configuration was superseded",
+            );
+          } catch (error) {
+            const retryExponent = Math.min(
+              prepared.runtime.runtimeConfigAttemptCount,
+              6,
+            );
+            const retryDelayMs = Math.min(
+              RUNTIME_CONFIG_RETRY_MAX_MS,
+              RUNTIME_CONFIG_RETRY_BASE_MS * 2 ** retryExponent,
+            );
+            await scopedStore.recordEnvironmentRuntimeConfigFailure(
+              environmentId,
+              prepared.runtime.sandboxId,
+              prepared.generation,
+              errorMessage(error),
+              new Date(Date.now() + retryDelayMs),
+            );
+            this.logger.warn(
+              {
+                environmentId,
+                generation: prepared.generation,
+                retryDelayMs,
+                error: errorMessage(error),
+              },
+              "Environment runtime configuration deferred",
+            );
+          }
+        },
+      );
+    }
+
     const policyCandidates =
       await this.store.environmentLifecyclePolicyCandidateIds(limit);
     for (const environmentId of policyCandidates) {

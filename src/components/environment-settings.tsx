@@ -1248,10 +1248,36 @@ export function EnvironmentSettings({
                     </small>
                   ) : (
                     <small>
-                      Applies immediately to the shared Sandbox. Sandbox0
-                      derives CPU capacity from the configured memory ratio.
+                      Saves immediately, then applies to the shared Sandbox in
+                      the background. Sandbox0 derives CPU capacity from the
+                      configured memory ratio.
                     </small>
                   )}
+                  {draft.runtimeConfig.status === "applying" ? (
+                    <small className="settings-inline-status" role="status">
+                      Runtime settings are applying. You can close this panel;
+                      Sandpi will keep retrying in the background.
+                      {draft.runtimeConfig.appliedSandboxMemoryMiB !==
+                        undefined &&
+                      draft.runtimeConfig.appliedSandboxMemoryMiB !==
+                        draft.sandboxMemoryMiB
+                        ? ` The Sandbox is still using ${
+                            draft.runtimeConfig.appliedSandboxMemoryMiB < 1024
+                              ? `${draft.runtimeConfig.appliedSandboxMemoryMiB} MiB`
+                              : `${draft.runtimeConfig.appliedSandboxMemoryMiB / 1024} GiB`
+                          }.`
+                        : ""}
+                    </small>
+                  ) : null}
+                  {draft.runtimeConfig.status === "failed" ? (
+                    <small className="settings-inline-error" role="alert">
+                      Runtime settings have not reached Sandbox0 yet. Sandpi
+                      will retry automatically
+                      {draft.runtimeConfig.lastError
+                        ? `: ${draft.runtimeConfig.lastError}`
+                        : "."}
+                    </small>
+                  ) : null}
                   {billingSummaryError ? (
                     <small className="settings-inline-error" role="alert">
                       {billingSummaryError}

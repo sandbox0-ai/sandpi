@@ -202,6 +202,21 @@ export function Sidebar({
                       <span className="environment-name">
                         {environment.name}
                       </span>
+                      {environment.runtimeConfig.status !== "applied" ? (
+                        <span
+                          className={`environment-runtime-config-status is-${environment.runtimeConfig.status}`}
+                          aria-label={
+                            environment.runtimeConfig.status === "failed"
+                              ? "Runtime settings failed to apply"
+                              : "Runtime settings are applying"
+                          }
+                          title={
+                            environment.runtimeConfig.status === "failed"
+                              ? "Runtime settings failed to apply; Sandpi will retry"
+                              : "Runtime settings are applying"
+                          }
+                        />
+                      ) : null}
                     </button>
                     <span className="environment-row-actions">
                       <button

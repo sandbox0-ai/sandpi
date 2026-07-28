@@ -26,6 +26,9 @@ function storedRuntime(
     desiredState: "running",
     observedState: "running",
     lifecyclePolicyVersion: ENVIRONMENT_LIFECYCLE_POLICY_VERSION,
+    appliedRuntimeConfigGeneration: 1,
+    appliedSandboxMemoryMiB: 2_048,
+    runtimeConfigAttemptCount: 0,
     ...overrides,
   };
 }
@@ -36,10 +39,268 @@ const logger = {
   warn() {},
 };
 
+const noRuntimeConfigCandidates = {
+  async environmentRuntimeConfigCandidateIds() {
+    return [];
+  },
+};
+
+test("applies one durable runtime-config generation under the lifecycle lock", async () => {
+  const calls: string[] = [];
+  const runtimeState = storedRuntime({
+    appliedRuntimeConfigGeneration: 1,
+    appliedSandboxMemoryMiB: 1_024,
+  });
+  const networkPolicy = {
+    mode: "block-all" as const,
+    domainExceptions: ["github.com"],
+  };
+  const scopedStore = {
+    async prepareEnvironmentRuntimeConfig() {
+      calls.push("prepare");
+      return {
+        runtime: runtimeState,
+        generation: 2,
+        sandboxMemoryMiB: 2_048,
+        networkPolicy,
+      };
+    },
+    async listEnvironmentEgressCredentialsByEnvironmentId() {
+      calls.push("credentials");
+      return [];
+    },
+    async recordEnvironmentRuntimeConfigApplied(
+      environmentId: string,
+      sandboxId: string,
+      generation: number,
+      memoryMiB: number,
+    ) {
+      assert.equal(environmentId, runtimeState.id);
+      assert.equal(sandboxId, runtimeState.sandboxId);
+      assert.equal(generation, 2);
+      assert.equal(memoryMiB, 2_048);
+      calls.push("record");
+      return true;
+    },
+    async recordEnvironmentRuntimeConfigFailure() {
+      assert.fail("successful convergence must not record a failure");
+    },
+  } as unknown as SandpiStore;
+  const store = {
+    async environmentRuntimeConfigCandidateIds() {
+      return [runtimeState.id];
+    },
+    async environmentLifecyclePolicyCandidateIds() {
+      return [];
+    },
+    async environmentIdlePauseCandidateIds() {
+      return [];
+    },
+    async withEnvironmentLifecycleLock(
+      environmentId: string,
+      operation: (store: SandpiStore) => Promise<void>,
+    ) {
+      assert.equal(environmentId, runtimeState.id);
+      calls.push("lock");
+      return { acquired: true as const, value: await operation(scopedStore) };
+    },
+  } as unknown as SandpiStore;
+  const runtime = {
+    mode: "sandbox0",
+    async updateEnvironmentNetworkPolicy(
+      received: StoredEnvironmentRuntime,
+      receivedPolicy: typeof networkPolicy,
+    ) {
+      assert.strictEqual(received, runtimeState);
+      assert.deepEqual(receivedPolicy, networkPolicy);
+      calls.push("network");
+    },
+    async updateEnvironmentMemory(
+      received: StoredEnvironmentRuntime,
+      memoryMiB: number,
+    ) {
+      assert.strictEqual(received, runtimeState);
+      assert.equal(memoryMiB, 2_048);
+      calls.push("memory");
+    },
+  } as unknown as RuntimeAdapter;
+  const service = new EnvironmentLifecycleService(store, runtime, logger);
+
+  await service.reconcileOnce();
+  await service.close();
+
+  assert.deepEqual(calls, [
+    "lock",
+    "prepare",
+    "credentials",
+    "network",
+    "memory",
+    "record",
+  ]);
+});
+
+test("records a retry after failure and a restarted reconciler can finish it", async () => {
+  const calls: string[] = [];
+  let shouldFail = true;
+  const runtimeState = storedRuntime({
+    appliedRuntimeConfigGeneration: 1,
+    appliedSandboxMemoryMiB: 1_024,
+  });
+  const prepared = {
+    runtime: runtimeState,
+    generation: 2,
+    sandboxMemoryMiB: 2_048,
+    networkPolicy: {
+      mode: "allow-all" as const,
+      domainExceptions: [],
+    },
+  };
+  const store = {
+    async environmentRuntimeConfigCandidateIds() {
+      return [runtimeState.id];
+    },
+    async environmentLifecyclePolicyCandidateIds() {
+      return [];
+    },
+    async environmentIdlePauseCandidateIds() {
+      return [];
+    },
+    async withEnvironmentLifecycleLock(
+      _environmentId: string,
+      operation: (store: SandpiStore) => Promise<void>,
+    ) {
+      return {
+        acquired: true as const,
+        value: await operation(store as unknown as SandpiStore),
+      };
+    },
+    async prepareEnvironmentRuntimeConfig() {
+      calls.push("prepare");
+      return prepared;
+    },
+    async listEnvironmentEgressCredentialsByEnvironmentId() {
+      return [];
+    },
+    async recordEnvironmentRuntimeConfigFailure(
+      _environmentId: string,
+      _sandboxId: string,
+      generation: number,
+      error: string,
+      retryAt: Date,
+    ) {
+      assert.equal(generation, 2);
+      assert.equal(error, "Sandbox0 resize timed out");
+      assert.ok(retryAt.getTime() > Date.now());
+      calls.push("failure");
+    },
+    async recordEnvironmentRuntimeConfigApplied() {
+      calls.push("applied");
+      return true;
+    },
+  } as unknown as SandpiStore;
+  const runtime = {
+    mode: "sandbox0",
+    async updateEnvironmentNetworkPolicy() {
+      calls.push("network");
+    },
+    async updateEnvironmentMemory() {
+      calls.push("memory");
+      if (shouldFail) throw new Error("Sandbox0 resize timed out");
+    },
+  } as unknown as RuntimeAdapter;
+
+  const firstServer = new EnvironmentLifecycleService(store, runtime, logger);
+  await firstServer.reconcileOnce();
+  await firstServer.close();
+  shouldFail = false;
+  const restartedServer = new EnvironmentLifecycleService(store, runtime, logger);
+  await restartedServer.reconcileOnce();
+  await restartedServer.close();
+
+  assert.deepEqual(calls, [
+    "prepare",
+    "network",
+    "memory",
+    "failure",
+    "prepare",
+    "network",
+    "memory",
+    "applied",
+  ]);
+});
+
+test("a reconciliation request during an active pass schedules another scan", async () => {
+  let releaseMemoryUpdate!: () => void;
+  const memoryUpdateGate = new Promise<void>((resolve) => {
+    releaseMemoryUpdate = resolve;
+  });
+  let candidateScans = 0;
+  const runtimeState = storedRuntime({
+    appliedRuntimeConfigGeneration: 1,
+  });
+  const store = {
+    async environmentRuntimeConfigCandidateIds() {
+      candidateScans += 1;
+      return candidateScans === 1 ? [runtimeState.id] : [];
+    },
+    async environmentLifecyclePolicyCandidateIds() {
+      return [];
+    },
+    async environmentIdlePauseCandidateIds() {
+      return [];
+    },
+    async withEnvironmentLifecycleLock(
+      _environmentId: string,
+      operation: (store: SandpiStore) => Promise<void>,
+    ) {
+      return {
+        acquired: true as const,
+        value: await operation(store as unknown as SandpiStore),
+      };
+    },
+    async prepareEnvironmentRuntimeConfig() {
+      return {
+        runtime: runtimeState,
+        generation: 2,
+        sandboxMemoryMiB: 2_048,
+        networkPolicy: {
+          mode: "allow-all" as const,
+          domainExceptions: [],
+        },
+      };
+    },
+    async listEnvironmentEgressCredentialsByEnvironmentId() {
+      return [];
+    },
+    async recordEnvironmentRuntimeConfigApplied() {
+      return true;
+    },
+  } as unknown as SandpiStore;
+  const runtime = {
+    mode: "sandbox0",
+    async updateEnvironmentNetworkPolicy() {},
+    async updateEnvironmentMemory() {
+      await memoryUpdateGate;
+    },
+  } as unknown as RuntimeAdapter;
+  const service = new EnvironmentLifecycleService(store, runtime, logger);
+
+  const first = service.reconcileOnce();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const second = service.reconcileOnce();
+  assert.strictEqual(first, second);
+  releaseMemoryUpdate();
+  await first;
+  await service.close();
+
+  assert.equal(candidateScans, 2);
+});
+
 test("one elected worker applies policy and pauses a due idle Environment", async () => {
   const calls: string[] = [];
   const policyRuntime = storedRuntime({ lifecyclePolicyVersion: 0 });
   const store = {
+    ...noRuntimeConfigCandidates,
     async environmentLifecyclePolicyCandidateIds() {
       return [policyRuntime.id];
     },
@@ -129,6 +390,7 @@ test("idle pause passes the lifecycle-scoped Store through credential flush", as
     },
   } as unknown as SandpiStore;
   const rootStore = {
+    ...noRuntimeConfigCandidates,
     async environmentLifecyclePolicyCandidateIds() {
       return [];
     },
@@ -186,6 +448,7 @@ test("idle pause passes the lifecycle-scoped Store through credential flush", as
 test("a replica that loses the advisory-lock election does no external work", async () => {
   let externalCalls = 0;
   const store = {
+    ...noRuntimeConfigCandidates,
     async environmentLifecyclePolicyCandidateIds() {
       return [];
     },
@@ -214,6 +477,7 @@ test("a failed pause remains a durable retry instead of failing the scheduler", 
   const runtimeState = storedRuntime();
   let recordedError = "";
   const store = {
+    ...noRuntimeConfigCandidates,
     async environmentLifecyclePolicyCandidateIds() {
       return [];
     },

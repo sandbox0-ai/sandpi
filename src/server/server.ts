@@ -308,6 +308,7 @@ export async function createSandpiServer(
     runtime,
     app.log,
   );
+  environments.setRuntimeConfigReconciler(() => lifecycle.reconcileOnce());
   lifecycle.setBeforePause(async (environmentId) => {
     await codex.flushEnvironmentCredentials(environmentId);
     codex.suspendEnvironmentWorker(environmentId);

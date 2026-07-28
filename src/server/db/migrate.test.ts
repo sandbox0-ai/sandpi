@@ -78,6 +78,7 @@ test("migration history contains every durable Sandpi boundary", async () => {
       "0051_restore_codex_fault_recovery",
       "0052_environment_schedules",
       "0053_disable_schedules_for_archived_sessions",
+      "0054_durable_environment_runtime_config",
     ],
   );
 
@@ -205,6 +206,28 @@ test("migration history contains every durable Sandpi boundary", async () => {
     /ALTER COLUMN sandbox_memory_mib SET DEFAULT 1024/,
   );
   assert.doesNotMatch(environmentResourceDefaultsSql, /UPDATE environments/i);
+
+  const durableRuntimeConfigSql = migrations[53]?.sql ?? "";
+  assert.match(
+    durableRuntimeConfigSql,
+    /ADD COLUMN runtime_config_generation BIGINT NOT NULL DEFAULT 1/,
+  );
+  assert.match(
+    durableRuntimeConfigSql,
+    /ADD COLUMN applied_runtime_config_generation BIGINT NOT NULL DEFAULT 0/,
+  );
+  assert.match(
+    durableRuntimeConfigSql,
+    /DROP TRIGGER IF EXISTS environments_project_memory_usage/,
+  );
+  assert.match(
+    durableRuntimeConfigSql,
+    /AFTER UPDATE OF applied_sandbox_memory_mib ON environment_runtime/,
+  );
+  assert.match(
+    durableRuntimeConfigSql,
+    /NEW\.applied_sandbox_memory_mib/,
+  );
 
   const turnSubmissionSql = migrations[16]?.sql ?? "";
   assert.match(turnSubmissionSql, /pending_turn_request_id TEXT/);
