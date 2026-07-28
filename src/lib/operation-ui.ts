@@ -122,6 +122,8 @@ const copy = {
       loadingView: (view: string) => `Loading ${view.toLowerCase()}…`,
       browserTitle: "Shared Environment browser",
       browserStarting: "Starting the shared Environment browser…",
+      browserUnavailable:
+        "The shared Environment browser did not become ready. Retry after the Environment finishes resuming.",
       browserRetry: "Retry",
       browserTabs: "Browser tabs",
       browserNewTab: "New tab",
@@ -263,6 +265,8 @@ const copy = {
       loadingView: (view: string) => `正在加载${view}…`,
       browserTitle: "共享 Environment 浏览器",
       browserStarting: "正在启动共享 Environment 浏览器…",
+      browserUnavailable:
+        "共享 Environment 浏览器未能就绪，请等待 Environment 恢复完成后重试。",
       browserRetry: "重试",
       browserTabs: "浏览器标签页",
       browserNewTab: "新建标签页",

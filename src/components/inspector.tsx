@@ -332,6 +332,8 @@ export function Inspector({
   const resizePointerRef = useRef<number | null>(null);
   const resizeRatioRef = useRef(widthRatio);
   const [resizing, setResizing] = useState(false);
+  const [mountedBrowserEnvironmentId, setMountedBrowserEnvironmentId] =
+    useState(activeTab === "browser" ? environment.id : "");
   const metricRangeOptions = [
     {
       seconds: 15 * 60,
@@ -406,6 +408,12 @@ export function Inspector({
       onTabChange("files");
     }
   }, [activeTab, onTabChange, sessionActivity]);
+
+  useEffect(() => {
+    if (activeTab === "browser") {
+      setMountedBrowserEnvironmentId(environment.id);
+    }
+  }, [activeTab, environment.id]);
 
   useEffect(() => {
     if (!dataTab) {
@@ -625,8 +633,12 @@ export function Inspector({
         ? sessionActivity.content
         : null}
 
-      {activeTab === "browser" ? (
-        <div className="inspector-panel browser-panel">
+      {activeTab === "browser" ||
+      mountedBrowserEnvironmentId === environment.id ? (
+        <div
+          className="inspector-panel browser-panel"
+          hidden={activeTab !== "browser"}
+        >
           <EnvironmentBrowser
             key={environment.id}
             environmentId={environment.id}
@@ -635,6 +647,7 @@ export function Inspector({
             copy={{
               title: ui.browserTitle,
               starting: ui.browserStarting,
+              unavailable: ui.browserUnavailable,
               retry: ui.browserRetry,
               tabs: ui.browserTabs,
               newTab: ui.browserNewTab,

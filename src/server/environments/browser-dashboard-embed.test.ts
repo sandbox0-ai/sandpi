@@ -31,7 +31,7 @@ test("leaves an unrecognized Dashboard document untouched", () => {
   assert.equal(embedBrowserDashboard(html), html);
 });
 
-test("selects the shared default session before announcing a live frame", () => {
+test("selects the shared default session before announcing readiness", () => {
   assert.match(BROWSER_DASHBOARD_EMBED_SCRIPT, /"sessionName":"default"/);
   assert.match(BROWSER_DASHBOARD_EMBED_SCRIPT, /\.session-chip-name/);
   assert.match(
@@ -43,13 +43,22 @@ test("selects the shared default session before announcing a live frame", () => 
     BROWSER_DASHBOARD_EMBED_SCRIPT,
     /sandpi:browser-dashboard-session-ready/,
   );
-  assert.match(BROWSER_DASHBOARD_EMBED_SCRIPT, /liveFrameMatchesViewport/);
-  assert.match(BROWSER_DASHBOARD_EMBED_SCRIPT, /crossProductDifference/);
-  assert.match(BROWSER_DASHBOARD_EMBED_SCRIPT, /setTimeout\(\(\) => \{/);
+  assert.match(
+    BROWSER_DASHBOARD_EMBED_SCRIPT,
+    /if \(!sessionReady && session && firstTab\)/,
+  );
+  assert.doesNotMatch(
+    BROWSER_DASHBOARD_EMBED_SCRIPT,
+    /liveFrameMatchesViewport|crossProductDifference/,
+  );
+  assert.match(
+    BROWSER_DASHBOARD_EMBED_SCRIPT,
+    /optional session projection unavailable/,
+  );
   assert.match(BROWSER_DASHBOARD_EMBED_SCRIPT, /5_000/);
 });
 
-test("reports a mode-aware viewport and waits for the resized frame", () => {
+test("reports a mode-aware viewport without blocking Dashboard readiness", () => {
   assert.match(BROWSER_DASHBOARD_EMBED_SCRIPT, /new ResizeObserver/);
   assert.match(
     BROWSER_DASHBOARD_EMBED_SCRIPT,
@@ -63,10 +72,8 @@ test("reports a mode-aware viewport and waits for the resized frame", () => {
     BROWSER_DASHBOARD_EMBED_SCRIPT,
     /sandpi:browser-dashboard-viewport-applied/,
   );
-  assert.match(
-    BROWSER_DASHBOARD_EMBED_SCRIPT,
-    /desiredViewport\.width === appliedViewport\.width/,
-  );
+  assert.match(BROWSER_DASHBOARD_EMBED_SCRIPT, /desiredViewport\?\.width/);
+  assert.doesNotMatch(BROWSER_DASHBOARD_EMBED_SCRIPT, /appliedViewport/);
   assert.match(BROWSER_DASHBOARD_EMBED_SCRIPT, /desktopMinimumWidth/);
   assert.match(BROWSER_DASHBOARD_EMBED_SCRIPT, /viewportMode === "mobile"/);
   assert.match(

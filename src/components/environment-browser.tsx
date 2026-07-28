@@ -34,7 +34,8 @@ import {
 import { updateLocalUiPreferences } from "@/lib/local-ui-preferences";
 import { useLocalUiPreferences } from "@/lib/use-local-ui-preferences";
 
-const BROWSER_VIEWPORT_RESIZE_DEBOUNCE_MS = 150;
+const BROWSER_VIEWPORT_RESIZE_DEBOUNCE_MS = 300;
+const BROWSER_DASHBOARD_STARTUP_TIMEOUT_MS = 30_000;
 
 export interface EnvironmentBrowserNavigationRequest {
   id: number;
@@ -51,6 +52,7 @@ interface EnvironmentBrowserProps {
   copy: {
     title: string;
     starting: string;
+    unavailable: string;
     retry: string;
     tabs: string;
     newTab: string;
@@ -81,6 +83,8 @@ export function EnvironmentBrowser({
   onNavigationHandled,
   copy,
 }: EnvironmentBrowserProps) {
+  // Browser recovery and Dashboard startup run independently. The iframe is
+  // mounted immediately below while this flag prevents duplicate recovery.
   const [ready, setReady] = useState(false);
   const [dashboardReady, setDashboardReady] = useState(false);
   const [dashboardIntegrated, setDashboardIntegrated] = useState(false);
@@ -272,10 +276,23 @@ export function EnvironmentBrowser({
   ]);
 
   useEffect(() => {
-    if (ready) sendDashboardViewportMode();
-  }, [ready, sendDashboardViewportMode]);
+    if (dashboardReady) sendDashboardViewportMode();
+  }, [dashboardReady, sendDashboardViewportMode]);
 
   useEffect(() => {
+    if (dashboardReady || error) return;
+    const timeout = setTimeout(() => {
+      setError(copy.unavailable);
+    }, BROWSER_DASHBOARD_STARTUP_TIMEOUT_MS);
+    return () => clearTimeout(timeout);
+  }, [copy.unavailable, dashboardReady, error, retry]);
+
+  useEffect(() => {
+    // The Dashboard AppService starts the default persistent browser in its
+    // own Sandbox-native lifetime. Avoid a separate control API command on the
+    // normal mount; the session endpoint is reserved for explicit recovery.
+    if (!requestedNavigation && retry === 0) return;
+    if (requestedNavigation && !dashboardReady) return;
     if (!requestedNavigation && ready) return;
     if (
       requestedNavigation &&
@@ -302,7 +319,10 @@ export function EnvironmentBrowser({
               method: "POST",
               body: JSON.stringify({ url: requestedNavigation.url }),
             })
-          : apiFetch<void>(`${base}/session`, { method: "POST" }),
+          : apiFetch<void>(`${base}/session`, {
+              method: "POST",
+              body: JSON.stringify({ force: retry > 0 }),
+            }),
       };
       pendingRequest.current = request;
       const clearPendingRequest = () => {
@@ -341,6 +361,7 @@ export function EnvironmentBrowser({
     };
   }, [
     environmentId,
+    dashboardReady,
     onNavigationHandled,
     ready,
     requestedNavigation,
@@ -449,8 +470,9 @@ export function EnvironmentBrowser({
         </label>
       </div>
       <div className="environment-browser-stage">
-        {ready ? (
+        {retry === 0 || ready ? (
           <iframe
+            key={retry}
             ref={dashboardFrame}
             className="environment-browser-frame"
             src={apiUrl(
@@ -465,7 +487,7 @@ export function EnvironmentBrowser({
             }}
           />
         ) : null}
-        {!ready || !dashboardReady || visibleError ? (
+        {!dashboardReady || visibleError ? (
           <div
             className={`environment-browser-state ${visibleError ? "is-error" : ""}`}
             role={visibleError ? "alert" : "status"}

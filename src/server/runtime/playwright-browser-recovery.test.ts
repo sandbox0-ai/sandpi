@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
+import { spawn, spawnSync } from "node:child_process";
 import { mkdtemp, lstat, readlink, symlink } from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
 import test from "node:test";
 
 import {
@@ -100,11 +100,29 @@ test("removes only stale Chromium singleton symlinks", async (context) => {
     });
   }
 
+  const browser = spawn(
+    process.execPath,
+    [
+      "-e",
+      "setInterval(() => undefined, 60_000)",
+      "--",
+      `--user-data-dir=${profile}`,
+    ],
+    { stdio: "ignore" },
+  );
+  context.after(() => {
+    browser.kill();
+  });
+  await new Promise<void>((resolve, reject) => {
+    browser.once("spawn", resolve);
+    browser.once("error", reject);
+  });
+  assert.ok(browser.pid);
   await Promise.all(
     locks.map((name) =>
       symlink(
         name === "SingletonLock"
-          ? `${hostname()}-${process.pid}`
+          ? `${hostname()}-${browser.pid}`
           : `live-${name}`,
         path.join(profile, name),
       ),
@@ -118,6 +136,28 @@ test("removes only stale Chromium singleton symlinks", async (context) => {
   assert.equal(refused.status, 12, refused.stderr);
   assert.equal(
     await readlink(path.join(profile, "SingletonLock")),
-    `${hostname()}-${process.pid}`,
+    `${hostname()}-${browser.pid}`,
   );
+
+  const browserExited = new Promise<void>((resolve) =>
+    browser.once("exit", () => resolve()),
+  );
+  browser.kill();
+  await browserExited;
+  const reusedPidLock = `${hostname()}-${process.pid}`;
+  await import("node:fs/promises").then(({ unlink }) =>
+    unlink(path.join(profile, "SingletonLock")),
+  );
+  await symlink(reusedPidLock, path.join(profile, "SingletonLock"));
+  const recoveredReusedPid = spawnSync(
+    process.execPath,
+    ["-e", PLAYWRIGHT_STALE_PROFILE_LOCK_RECOVERY_SCRIPT, profile],
+    { encoding: "utf8" },
+  );
+  assert.equal(recoveredReusedPid.status, 0, recoveredReusedPid.stderr);
+  for (const name of locks) {
+    await assert.rejects(lstat(path.join(profile, name)), {
+      code: "ENOENT",
+    });
+  }
 });

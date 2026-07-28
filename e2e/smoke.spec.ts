@@ -1235,12 +1235,12 @@ test("keeps New Session header operations aligned with the conversation", async 
   ).toHaveAttribute("aria-pressed", "true");
 
   await browserView.click();
-  await expect.poll(() => browserSessionStarts).toBe(1);
   await expect(
     page
       .frameLocator('iframe[title="Shared Environment browser"]')
       .getByText("Official Playwright Dashboard fixture"),
   ).toBeVisible();
+  expect(browserSessionStarts).toBe(0);
   await expect(
     page.getByRole("tab", { name: "Fixture tab", exact: true }),
   ).toHaveAttribute("aria-selected", "true");
@@ -1251,6 +1251,19 @@ test("keeps New Session header operations aligned with the conversation", async 
     width: 1280,
     height: 800,
   });
+
+  const browserFrame = page.locator(
+    'iframe[title="Shared Environment browser"]',
+  );
+  await expect(browserFrame).toHaveCount(1);
+  await inspectorViews
+    .getByRole("button", { name: "Files", exact: true })
+    .click();
+  await expect(browserFrame).toHaveCount(1);
+  await expect(browserFrame).toBeHidden();
+  await browserView.click();
+  await expect(browserFrame).toBeVisible();
+  expect(browserSessionStarts).toBe(0);
 
   await page.getByRole("button", { name: "New tab", exact: true }).click();
   await expect(page.getByRole("tab", { name: "New Tab" })).toHaveAttribute(

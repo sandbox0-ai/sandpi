@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import type { BrowserDashboardViewport } from "@/lib/environment-browser";
 import {
   EnvironmentBrowserService,
+  dashboardAssetCacheControl,
   dashboardAssetPath,
   dashboardProxyPrefix,
   dashboardRedirectLocation,
@@ -30,6 +32,7 @@ const runtimeRecord: EnvironmentRuntimeRecord = {
 test("reuses protected coordinates but admits every HTTP and WebSocket request", async () => {
   let admissions = 0;
   let dashboardEnsures = 0;
+  const dashboardRestarts: boolean[] = [];
   const runtimeAccess = {
     async withRuntimeAccess(
       userId: string,
@@ -45,9 +48,11 @@ test("reuses protected coordinates but admits every HTTP and WebSocket request",
   const runtime = {
     async ensureEnvironmentBrowserDashboard(
       runtime: EnvironmentRuntimeRecord,
+      restart = false,
     ) {
       assert.equal(runtime, runtimeRecord);
       dashboardEnsures += 1;
+      dashboardRestarts.push(restart);
       return {
         publicUrl: "https://dashboard.example.invalid/generated",
         requestHeaders: { "X-Sandpi-Browser-Proxy": "secret" },
@@ -94,10 +99,13 @@ test("reuses protected coordinates but admits every HTTP and WebSocket request",
   );
   assert.equal(admissions, 4);
   assert.equal(dashboardEnsures, 1);
+  assert.deepEqual(dashboardRestarts, [false]);
 });
 
-test("restarts the Dashboard only after the shared browser is restarted", async () => {
-  const dashboardRevisions: number[] = [];
+test("reuses the session probe and restarts the Dashboard only on forced recovery", async () => {
+  const dashboardRestarts: boolean[] = [];
+  const operations: string[] = [];
+  let sessionEnsures = 0;
   let browserRestarted = true;
   const runtimeAccess = {
     async withRuntimeAccess(
@@ -110,13 +118,16 @@ test("restarts the Dashboard only after the shared browser is restarted", async 
   } as unknown as EnvironmentRuntimeAccessService;
   const runtime = {
     async ensureEnvironmentBrowserSession() {
+      operations.push("session");
+      sessionEnsures += 1;
       return browserRestarted;
     },
     async ensureEnvironmentBrowserDashboard(
       _runtime: EnvironmentRuntimeRecord,
-      sessionRevision: number,
+      restart = false,
     ) {
-      dashboardRevisions.push(sessionRevision);
+      operations.push("dashboard");
+      dashboardRestarts.push(restart);
       return {
         publicUrl: "https://dashboard.example.invalid",
         requestHeaders: {},
@@ -132,15 +143,58 @@ test("restarts the Dashboard only after the shared browser is restarted", async 
   browserRestarted = false;
   await service.ensureSession("user-browser", runtimeRecord.id);
   await service.httpUpstream("user-browser", runtimeRecord.id, undefined);
-
-  browserRestarted = true;
-  await service.ensureSession("user-browser", runtimeRecord.id);
+  await service.ensureSession("user-browser", runtimeRecord.id, true);
   await service.httpUpstream("user-browser", runtimeRecord.id, undefined);
 
-  assert.deepEqual(dashboardRevisions, [1, 2]);
+  browserRestarted = true;
+  await service.ensureSession("user-browser", runtimeRecord.id, true);
+  await service.httpUpstream("user-browser", runtimeRecord.id, undefined);
+
+  assert.equal(sessionEnsures, 3);
+  assert.deepEqual(dashboardRestarts, [false, true, true]);
+  assert.deepEqual(operations, [
+    "dashboard",
+    "session",
+    "dashboard",
+    "session",
+    "dashboard",
+    "session",
+  ]);
 });
 
-test("resizes the shared browser through protected runtime access", async () => {
+test("refreshes invalidated coordinates without restarting the AppService", async () => {
+  const dashboardRestarts: boolean[] = [];
+  const runtimeAccess = {
+    async withRuntimeAccess(
+      _userId: string,
+      _environmentId: string,
+      operation: (runtime: EnvironmentRuntimeRecord) => Promise<unknown>,
+    ) {
+      return operation(runtimeRecord);
+    },
+  } as unknown as EnvironmentRuntimeAccessService;
+  const runtime = {
+    async ensureEnvironmentBrowserDashboard(
+      _runtime: EnvironmentRuntimeRecord,
+      restart = false,
+    ) {
+      dashboardRestarts.push(restart);
+      return {
+        publicUrl: "https://dashboard.example.invalid",
+        requestHeaders: {},
+      };
+    },
+  } as unknown as RuntimeAdapter;
+  const service = new EnvironmentBrowserService(runtimeAccess, runtime);
+
+  await service.httpUpstream("user-browser", runtimeRecord.id, undefined);
+  service.invalidate(runtimeRecord.id);
+  await service.httpUpstream("user-browser", runtimeRecord.id, undefined);
+
+  assert.deepEqual(dashboardRestarts, [false, false]);
+});
+
+test("deduplicates viewport updates within one runtime generation", async () => {
   const calls: Array<{
     runtime: EnvironmentRuntimeRecord;
     width: number;
@@ -171,6 +225,10 @@ test("resizes the shared browser through protected runtime access", async () => 
     width: 519,
     height: 759,
   });
+  await service.resizeViewport("user-browser", runtimeRecord.id, {
+    width: 519,
+    height: 759,
+  });
 
   assert.deepEqual(calls, [
     {
@@ -179,6 +237,88 @@ test("resizes the shared browser through protected runtime access", async () => 
       height: 759,
     },
   ]);
+});
+
+test("coalesces intermediate viewport updates while one resize is running", async () => {
+  const calls: BrowserDashboardViewport[] = [];
+  let releaseFirst: (() => void) | undefined;
+  const firstResize = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+  const runtimeAccess = {
+    async withRuntimeAccess(
+      _userId: string,
+      _environmentId: string,
+      operation: (runtime: EnvironmentRuntimeRecord) => Promise<unknown>,
+    ) {
+      return operation(runtimeRecord);
+    },
+  } as unknown as EnvironmentRuntimeAccessService;
+  const runtime = {
+    async resizeEnvironmentBrowserViewport(
+      _runtime: EnvironmentRuntimeRecord,
+      viewport: BrowserDashboardViewport,
+    ) {
+      calls.push(viewport);
+      if (calls.length === 1) await firstResize;
+    },
+  } as unknown as RuntimeAdapter;
+  const service = new EnvironmentBrowserService(runtimeAccess, runtime);
+
+  const first = service.resizeViewport("user-browser", runtimeRecord.id, {
+    width: 500,
+    height: 700,
+  });
+  const middle = service.resizeViewport("user-browser", runtimeRecord.id, {
+    width: 600,
+    height: 700,
+  });
+  const latest = service.resizeViewport("user-browser", runtimeRecord.id, {
+    width: 700,
+    height: 700,
+  });
+
+  assert.deepEqual(calls, [{ width: 500, height: 700 }]);
+  releaseFirst?.();
+  await Promise.all([first, middle, latest]);
+  assert.deepEqual(calls, [
+    { width: 500, height: 700 },
+    { width: 700, height: 700 },
+  ]);
+});
+
+test("refreshes Dashboard coordinates after the runtime generation changes", async () => {
+  let currentRuntime = runtimeRecord;
+  let dashboardEnsures = 0;
+  const runtimeAccess = {
+    async withRuntimeAccess(
+      _userId: string,
+      _environmentId: string,
+      operation: (runtime: EnvironmentRuntimeRecord) => Promise<unknown>,
+    ) {
+      return operation(currentRuntime);
+    },
+  } as unknown as EnvironmentRuntimeAccessService;
+  const runtime = {
+    async ensureEnvironmentBrowserDashboard() {
+      dashboardEnsures += 1;
+      return {
+        publicUrl: "https://dashboard.example.invalid",
+        requestHeaders: {},
+      };
+    },
+  } as unknown as RuntimeAdapter;
+  const service = new EnvironmentBrowserService(runtimeAccess, runtime);
+
+  await service.httpUpstream("user-browser", runtimeRecord.id, undefined);
+  await service.httpUpstream("user-browser", runtimeRecord.id, undefined);
+  currentRuntime = {
+    ...runtimeRecord,
+    runtimeGeneration: runtimeRecord.runtimeGeneration + 1,
+  };
+  await service.httpUpstream("user-browser", runtimeRecord.id, undefined);
+
+  assert.equal(dashboardEnsures, 2);
 });
 
 test("maps only official Dashboard static paths", () => {
@@ -190,6 +330,35 @@ test("maps only official Dashboard static paths", () => {
   );
   assert.throws(() => dashboardAssetPath("../credential"));
   assert.throws(() => dashboardAssetPath("other/runtime.json"));
+});
+
+test("caches only static Dashboard assets with bounded private freshness", () => {
+  assert.equal(
+    dashboardAssetCacheControl(undefined, "public, max-age=14400"),
+    "private, no-store",
+  );
+  assert.equal(
+    dashboardAssetCacheControl("index.html", "public, max-age=14400"),
+    "private, no-store",
+  );
+  assert.equal(
+    dashboardAssetCacheControl(
+      "assets/index-BY2S1tHT.css",
+      "public, max-age=14400",
+    ),
+    "private, max-age=14400, immutable",
+  );
+  assert.equal(
+    dashboardAssetCacheControl(
+      "playwright-logo.svg",
+      "public, max-age=999999",
+    ),
+    "private, max-age=86400",
+  );
+  assert.equal(
+    dashboardAssetCacheControl("assets/runtime.js", null),
+    "private, max-age=3600",
+  );
 });
 
 test("rewrites the official Dashboard redirect and root-relative assets", () => {

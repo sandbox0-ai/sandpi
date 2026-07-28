@@ -40,10 +40,19 @@ try {
   if (lockHost === os.hostname()) {
     try {
       process.kill(lockPid, 0);
-      process.exit(12);
     } catch (error) {
       if (error && error.code === "EPERM") process.exit(12);
       if (!error || error.code !== "ESRCH") throw error;
+    }
+    try {
+      const command = fs
+        .readFileSync("/proc/" + lockPid + "/cmdline", "utf8")
+        .split("\0");
+      if (command.includes("--user-data-dir=" + profilePath)) {
+        process.exit(12);
+      }
+    } catch (error) {
+      if (!error || error.code !== "ENOENT") process.exit(12);
     }
   }
 

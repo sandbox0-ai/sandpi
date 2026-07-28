@@ -186,9 +186,19 @@ The Browser Inspector embeds the official Playwright Dashboard. Playwright
 remains authoritative for browser processes, pages, tabs, snapshots,
 interaction and profiles; Sandpi does not define an MCP browser tool, CDP
 contract, general automation RPC or replacement CLI. Sandpi invokes only the
-official `playwright-cli` to materialize its bundled Agent Skill, initialize
-the default persistent session and open an explicitly selected loopback URL.
-The coding agent can use that same command directly.
+official `playwright-cli`. Codex Workspace preparation materializes the bundled
+Agent Skill once per installed Playwright package version, before app-server
+startup. Every newly provisioned Environment includes the protected Dashboard
+AppService definition. Its lazy ingress process starts the Dashboard and
+starts prewarming the default persistent session as soon as the Dashboard port
+is listening, while the client loads Dashboard assets. This avoids making
+separate high-latency control API commands on a normal Browser mount and avoids
+cold-loading two Playwright CLI processes at exactly the same time. The same
+process periodically verifies the local Playwright session and reopens it after
+an ordinary browser-process exit without crossing the Sandbox0 control API.
+Sandpi otherwise invokes the CLI directly only for explicit session recovery,
+viewport changes and selected loopback URLs. The coding agent can use that same
+command directly.
 
 The default Playwright session is shared at Environment scope. The coding-agent
 template sets `HOME=/workspace`, so Playwright's official daemon registry and
@@ -208,23 +218,25 @@ model. Navigation and tab activity produce a non-blocking loading indicator
 until the next live frame.
 
 The embedded shell measures the Dashboard's live screen bounds and sends
-bounded, debounced updates through Sandpi's authenticated API. The default
-`Desktop fit` mode preserves that aspect ratio while targeting a minimum
-1280 CSS-pixel width within bounded viewport limits.
+bounded, debounced updates through Sandpi's authenticated API. Sandpi
+deduplicates an already-applied viewport within one Sandbox runtime generation
+and coalesces intermediate updates while one CLI resize is running. The default
+`Desktop fit` mode preserves that aspect ratio while targeting a minimum 1280
+CSS-pixel width within bounded viewport limits.
 This keeps desktop sites out of mobile breakpoints while still filling the
 available screen without stretching or cropping. `Responsive` uses the
 Inspector screen at 1:1 CSS pixels, while `Mobile` uses a fixed 390 by 844
 viewport. The selected mode is a browser-local UI preference. Sandpi applies
 all three modes through the official `playwright-cli resize` command.
 
-Playwright's `show --session default` reveal applies only to the Dashboard
-connection present when that command runs, so every newly embedded connection
-also selects the first tab in `default` after Playwright publishes it. Sandpi
-keeps its startup surface above the frame until the selected tab has delivered
-a live screencast image matching the applied viewport aspect ratio. The
-aspect-ratio check preserves this readiness guarantee when Playwright
-downscales a large screencast for transport. Users never need to operate the
-session picker.
+Sandpi starts `playwright-cli show` without pinning a session so Dashboard
+readiness does not wait for Chromium startup. Every newly embedded connection
+selects the first tab in `default` after Playwright publishes it, then reveals
+the official Dashboard as soon as that shared session and first tab exist.
+Viewport reconciliation continues in the background instead of imposing a
+fixed wait for a resized screencast frame. A bounded compatibility fallback
+reveals the native Dashboard if Sandpi cannot recognize a future session
+markup. Users never need to operate the session picker in the supported shape.
 
 The adapter is injected by Sandpi's authenticated HTML proxy; it does not edit
 the coding-agent template or the installed Playwright package. Hiding the
@@ -236,16 +248,19 @@ pages, profiles and interaction behavior.
 
 An Environment resume can terminate Chromium while leaving its persistent
 profile's `Singleton*` symlinks on the Workspace Volume. If Playwright reports
-that `default` is stopped and then reports that its validated default profile
-is still in use, Sandpi checks that `SingletonLock` names another Sandbox host
-or a dead local PID, removes only the three ephemeral singleton symlinks, and
-retries the official CLI once. It never deletes profile data. A successful
-browser restart increments the Dashboard service revision so the embedded
-Dashboard reconnects to the replacement daemon; an already-running browser
-does not restart connected Dashboard clients. Missing CLI or Chromium
-dependencies remain a template compatibility error; other failed starts are
-reported as runtime recovery failures instead of telling the user to recreate
-the Environment unconditionally.
+that `default` is stopped and then reports its validated default profile is
+still in use, Sandpi checks that `SingletonLock` names another Sandbox host or
+a dead local PID, removes only the three ephemeral singleton symlinks, and
+retries the official CLI once. It never deletes profile data. Sandpi reuses an
+identical published AppService rather than rewriting it on each mount or server
+restart. A forced user retry increments the persisted service revision so the
+embedded client reconnects cleanly. An HTTP authorization rejection refreshes
+only the cached coordinates; ordinary WebSocket failures retain
+generation-fenced coordinates, while browser startup is discovered dynamically
+by Playwright's Dashboard. None of these paths restarts a healthy AppService.
+Missing CLI or Chromium dependencies remain a template compatibility error;
+other failed starts are reported as runtime recovery failures instead of
+telling the user to recreate the Environment unconditionally.
 
 An authenticated chat link using HTTP or HTTPS on `localhost`, `127.0.0.1` or
 `::1` opens in a new tab in that remote browser, where loopback resolves inside
@@ -256,14 +271,22 @@ Environment's network policy.
 
 Sandbox0 currently exposes the Dashboard through an app-service ingress rather
 than a private port-tunnel API. That public DNS name is transport, not the user
-authorization boundary: Sandpi derives a per-Sandbox HMAC request token,
-Sandbox0 stores only its SHA-256 verifier, and the route cannot auto-resume a
-paused Environment. The upstream URL and request token remain server-only.
+authorization boundary: Sandpi derives a per-Environment HMAC request token,
+Sandbox0 stores only its SHA-256 verifier, and the upstream URL and request
+token remain server-only. The token is scoped to the Sandpi Environment rather
+than exposed or persisted in the browser. After Sandpi authenticates the user
+and authorizes Environment ownership, the protected ingress may perform
+Sandbox0-native auto-resume. This avoids a separate control API wake-up command
+without exposing the ingress credential to the browser.
 Every Dashboard asset and WebSocket upgrade first crosses Sandpi login,
 ownership and lifecycle admission, then Sandpi forwards it with the protected
 header. The client receives only the authenticated Sandpi proxy path. Static
-paths and Dashboard socket identifiers are allowlisted, and a live downstream
-WebSocket heartbeat keeps the already-running Environment active.
+paths and Dashboard socket identifiers are allowlisted. Rewritten HTML remains
+uncached, while static assets use bounded private browser caching. The
+WebSocket relay preserves all control traffic but retains only the latest
+unsent screencast frame when a downstream is slower than Playwright, preventing
+stale frames from accumulating. A live downstream WebSocket heartbeat keeps the
+already-running Environment active.
 
 ## Start, resume and event routing
 

@@ -187,7 +187,7 @@ export interface RuntimeAdapter {
   ): Promise<RuntimeMcpOAuthCallbackService>;
   ensureEnvironmentBrowserDashboard(
     runtime: EnvironmentRuntimeRecord,
-    sessionRevision?: number,
+    restart?: boolean,
   ): Promise<RuntimeBrowserDashboard>;
   ensureEnvironmentBrowserSession(
     runtime: EnvironmentRuntimeRecord,

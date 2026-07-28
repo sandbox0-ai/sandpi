@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import test from "node:test";
 import { zstdCompressSync } from "node:zlib";
@@ -188,6 +189,19 @@ test("claims exactly one Environment Sandbox around its shared Workspace Volume"
       },
       credentialBindings: [],
     },
+  );
+  const provisionedServices = (
+    ((claimInput?.config ?? {}) as Record<string, unknown>)
+      .services as Array<Record<string, unknown>>
+  );
+  assert.equal(provisionedServices.length, 1);
+  assert.equal(provisionedServices[0]?.id, "sandpi-browser-dashboard");
+  assert.deepEqual(
+    (provisionedServices[0]?.runtime as { command: string[] }).command.slice(
+      0,
+      2,
+    ),
+    ["sh", "-c"],
   );
   assert.deepEqual(allocations, [
     {
@@ -804,6 +818,22 @@ test("preserves unrelated services and installs a constrained MCP OAuth callback
 
 test("publishes the official Dashboard behind a server-only hashed header", async () => {
   let replacement: Array<Record<string, unknown>> = [];
+  let serviceUpdates = 0;
+  let loseFirstUpdateResponse = true;
+  let currentServices: Array<Record<string, unknown>> = [
+    {
+      id: "preview",
+      displayName: "Preview",
+      port: 3000,
+      runtime: { type: "manual" },
+      ingress: {
+        _public: true,
+        routes: [{ id: "preview", pathPrefix: "/", resume: true }],
+      },
+      publishable: true,
+      publicUrl: "https://preview.example.invalid",
+    },
+  ];
   const runtime = runtimeWithClient({
     sandboxes: {
       sandbox(sandboxId: string) {
@@ -812,35 +842,54 @@ test("publishes the official Dashboard behind a server-only hashed header", asyn
           async getServices() {
             return {
               sandboxId,
-              services: [
-                {
-                  id: "preview",
-                  displayName: "Preview",
-                  port: 3000,
-                  runtime: { type: "manual" },
-                  ingress: {
-                    _public: true,
-                    routes: [{ id: "preview", pathPrefix: "/", resume: true }],
-                  },
-                  publishable: true,
-                  publicUrl: "https://preview.example.invalid",
-                },
-              ],
+              services: currentServices,
             };
           },
           async updateServices(services: Array<Record<string, unknown>>) {
+            serviceUpdates += 1;
             replacement = services;
-            return {
-              sandboxId,
-              services: services.map((service) => ({
+            currentServices = services.map((service) => ({
                 ...service,
+                healthCheck: undefined,
+                runtime: service.runtime
+                  ? {
+                      ...(service.runtime as Record<string, unknown>),
+                      _function: undefined,
+                    }
+                  : undefined,
+                ingress: {
+                  ...(service.ingress as Record<string, unknown>),
+                  routes: (
+                    (service.ingress as {
+                      routes?: Array<Record<string, unknown>>;
+                    }).routes ?? []
+                  ).map((route) => ({
+                    ...route,
+                    rewritePrefix: undefined,
+                    timeoutSeconds: undefined,
+                    auth: route.auth
+                      ? {
+                          ...(route.auth as Record<string, unknown>),
+                          bearerTokenSha256: undefined,
+                        }
+                      : undefined,
+                  })),
+                },
                 publishable: true,
                 publicUrl:
                   service.id === "sandpi-browser-dashboard"
                     ? "https://browser.example.invalid"
                     : "https://preview.example.invalid",
-              })),
-            };
+              }));
+            if (loseFirstUpdateResponse) {
+              loseFirstUpdateResponse = false;
+              throw new APIError({
+                statusCode: 500,
+                code: "unexpected_response",
+                message: "Internal Server Error",
+              });
+            }
+            return { sandboxId, services: currentServices };
           },
         };
       },
@@ -888,24 +937,55 @@ test("publishes the official Dashboard behind a server-only hashed header", asyn
     };
   };
   assert.equal(service.port, 43_420);
-  assert.deepEqual(service.runtime.command, [
-    "playwright-cli",
-    "show",
-    "--session",
-    "default",
-    "--host",
-    "0.0.0.0",
-    "--port",
-    "43420",
-  ]);
+  assert.deepEqual(service.runtime.command.slice(0, 2), ["sh", "-c"]);
+  assert.match(
+    service.runtime.command[2] ?? "",
+    /recover_stale_profiles\(\).*node -e.*recovery_status.*ensure_browser\(\).*recover_stale_profiles && return 0.*playwright-cli open about:blank.*node -e.*playwright-cli open about:blank/,
+  );
+  assert.doesNotMatch(
+    service.runtime.command[2] ?? "",
+    /playwright-cli tab-list/,
+  );
+  assert.match(
+    service.runtime.command[2] ?? "",
+    /wait_for_dashboard\(\).*SANDPI_PLAYWRIGHT_DASHBOARD_READY_SCRIPT_BASE64.*\(wait_for_dashboard 43420 && ensure_browser; while :; do sleep 15; ensure_browser; done\) & exec playwright-cli show --host 0\.0\.0\.0 --port 43420/,
+  );
+  assert.equal(
+    spawnSync("sh", ["-n", "-c", service.runtime.command[2] ?? ""]).status,
+    0,
+  );
   assert.equal(service.runtime.cwd, "/workspace");
   assert.equal(service.runtime.envVars.PLAYWRIGHT_MCP_BROWSER, "chromium");
   assert.equal(service.runtime.envVars.PLAYWRIGHT_MCP_ISOLATED, "false");
   assert.equal(service.runtime.envVars.PLAYWRIGHT_MCP_SANDBOX, "false");
+  assert.equal(service.runtime.envVars.NO_UPDATE_NOTIFIER, "1");
+  assert.equal(
+    spawnSync(process.execPath, ["--check"], {
+      input: Buffer.from(
+        service.runtime.envVars
+          .SANDPI_PLAYWRIGHT_DASHBOARD_READY_SCRIPT_BASE64,
+        "base64",
+      ).toString("utf8"),
+    }).status,
+    0,
+  );
+  assert.match(
+    Buffer.from(
+      service.runtime.envVars
+        .SANDPI_PLAYWRIGHT_LOCK_RECOVERY_SCRIPT_BASE64,
+      "base64",
+    ).toString("utf8"),
+    /SingletonLock/,
+  );
+  assert.ok(
+    [...service.runtime.command, ...Object.values(service.runtime.envVars)]
+      .reduce((bytes, value) => bytes + Buffer.byteLength(value), 0) <
+      8 * 1024,
+  );
   assert.equal(service.runtime.envVars.SANDPI_BROWSER_SESSION_REVISION, "0");
   assert.equal(service.ingress._public, true);
   assert.deepEqual(service.ingress.routes[0]?.methods, ["GET"]);
-  assert.equal(service.ingress.routes[0]?.resume, false);
+  assert.equal(service.ingress.routes[0]?.resume, true);
   assert.deepEqual(service.ingress.routes[0]?.auth, {
     mode: "header",
     headerName: "X-Sandpi-Browser-Proxy",
@@ -915,6 +995,19 @@ test("publishes the official Dashboard behind a server-only hashed header", asyn
   });
   assert.equal(JSON.stringify(replacement).includes(requestToken), false);
   assert.equal(replacement[0]?.id, "preview");
+
+  const reused = await runtime.ensureEnvironmentBrowserDashboard(coordinates);
+  assert.equal(reused.publicUrl, dashboard.publicUrl);
+  assert.equal(serviceUpdates, 1);
+
+  await runtime.ensureEnvironmentBrowserDashboard(coordinates, true);
+  assert.equal(serviceUpdates, 2);
+  const restarted = replacement.find(
+    (candidate) => candidate.id === "sandpi-browser-dashboard",
+  ) as {
+    runtime: { envVars: Record<string, string> };
+  };
+  assert.equal(restarted.runtime.envVars.SANDPI_BROWSER_SESSION_REVISION, "1");
 });
 
 test("uses only official Playwright CLI commands for the shared browser", async () => {
@@ -986,7 +1079,6 @@ test("uses only official Playwright CLI commands for the shared browser", async 
   assert.deepEqual(
     commands.map((entry) => entry.command),
     [
-      ["playwright-cli", "install", "--skills=agents"],
       ["playwright-cli", "tab-list"],
       [
         "playwright-cli",
@@ -996,8 +1088,6 @@ test("uses only official Playwright CLI commands for the shared browser", async 
         "chromium",
         "--persistent",
       ],
-      ["playwright-cli", "install", "--skills=agents"],
-      ["playwright-cli", "tab-list"],
       ["playwright-cli", "tab-new", "http://localhost:3000/"],
       ["playwright-cli", "resize", "519", "759"],
     ],
@@ -1066,7 +1156,6 @@ test("recovers one stale persistent browser profile lock", async () => {
   assert.deepEqual(
     commands.map(({ alias, command }) => [alias, command[0], command[1]]),
     [
-      ["playwright-cli", "playwright-cli", "install"],
       ["playwright-cli", "playwright-cli", "tab-list"],
       ["playwright-cli", "playwright-cli", "open"],
       ["playwright-profile-lock-recovery", "node", "-e"],
@@ -2093,6 +2182,12 @@ test("starts one Environment-scoped Codex app-server without unsupported plugin 
       (command) =>
         command.name === "prepare-environment-codex-home" &&
         command.command?.at(-1)?.includes("environment_v1") &&
+        command.command
+          ?.at(-1)
+          ?.includes("playwright-cli install --skills=agents") &&
+        command.command
+          ?.at(-1)
+          ?.includes("playwright-cli-agent-skill-package-version") &&
         command.command
           ?.at(-1)
           ?.includes(

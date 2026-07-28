@@ -61,11 +61,16 @@ import { EnvironmentLifecycleService } from "@/server/environments/lifecycle-ser
 import { EnvironmentRuntimeAccessService } from "@/server/environments/runtime-access-service";
 import {
   EnvironmentBrowserService,
+  dashboardAssetCacheControl,
   dashboardProxyPrefix,
   dashboardRedirectLocation,
   rewriteDashboardCss,
   rewriteDashboardHtml,
 } from "@/server/environments/browser-service";
+import {
+  BrowserWebSocketDownstreamRelay,
+  websocketRawDataSize,
+} from "@/server/environments/browser-websocket-relay";
 import {
   EnvironmentScheduleService,
   type EnvironmentScheduleConfiguration,
@@ -1806,12 +1811,17 @@ function registerApiRoutes(
       }
     },
   );
-  app.post<{ Params: { environmentId: string } }>(
+  app.post<{ Params: { environmentId: string }; Body: unknown }>(
     "/api/v1/environments/:environmentId/browser/session",
     async (request, reply) => {
+      const input = z
+        .object({ force: z.boolean().optional() })
+        .strict()
+        .parse(request.body ?? {});
       await services.browser.ensureSession(
         request.principal.userId,
         request.params.environmentId,
+        input.force ?? false,
       );
       return reply.status(204).send();
     },
@@ -2375,7 +2385,8 @@ async function streamHarnessEvents(
 
 const BROWSER_DASHBOARD_PROXY_TIMEOUT_MS = 130_000;
 const BROWSER_DASHBOARD_MAX_ASSET_BYTES = 8 * 1024 * 1024;
-const BROWSER_DASHBOARD_MAX_QUEUED_WS_BYTES = 1024 * 1024;
+const BROWSER_DASHBOARD_MAX_QUEUED_CLIENT_WS_BYTES = 1024 * 1024;
+const BROWSER_DASHBOARD_MAX_QUEUED_DOWNSTREAM_WS_BYTES = 8 * 1024 * 1024;
 
 async function proxyEnvironmentBrowserAsset(
   browser: EnvironmentBrowserService,
@@ -2413,7 +2424,11 @@ async function proxyEnvironmentBrowserAsset(
         "The Playwright Dashboard returned an invalid redirect.",
       );
     }
-    return reply.status(response.status).header("Location", location).send();
+    return reply
+      .status(response.status)
+      .header("Cache-Control", "private, no-store")
+      .header("Location", location)
+      .send();
   }
 
   const contentLength = Number(response.headers.get("content-length") ?? 0);
@@ -2438,6 +2453,15 @@ async function proxyEnvironmentBrowserAsset(
 
   const contentType = response.headers.get("content-type");
   if (contentType) reply.header("Content-Type", contentType);
+  reply.header(
+    "Cache-Control",
+    response.ok
+      ? dashboardAssetCacheControl(
+          assetPath,
+          response.headers.get("cache-control"),
+        )
+      : "private, no-store",
+  );
   const normalizedAssetPath = assetPath?.replace(/^\/+|\/+$/g, "");
   const payload =
     normalizedAssetPath === "index.html"
@@ -2480,6 +2504,31 @@ async function proxyEnvironmentBrowserWebSocket(
   let queuedBytes = 0;
   let upstream: WebSocket | undefined;
   let downstreamClosed = false;
+  const downstreamRelay = new BrowserWebSocketDownstreamRelay({
+    maxQueuedBytes: BROWSER_DASHBOARD_MAX_QUEUED_DOWNSTREAM_WS_BYTES,
+    send(data, isBinary, callback) {
+      if (socket.readyState !== WebSocket.OPEN) {
+        callback(new Error("Dashboard downstream is closed"));
+        return;
+      }
+      socket.send(data, { binary: isBinary }, callback);
+    },
+    onOverflow() {
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.close(1009, "Dashboard downstream queue exceeded");
+      }
+    },
+    onSendError(error) {
+      request.log.debug(
+        { err: error, environmentId: request.params.environmentId },
+        "Playwright Dashboard downstream send failed",
+      );
+      upstream?.terminate();
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.close(1011, "Dashboard downstream unavailable");
+      }
+    },
+  });
   const heartbeat = new RuntimeWebSocketHeartbeat(socket, touchRuntime, {
     // The UI permits a one-minute idle timeout, so the live Browser must
     // establish activity before that shortest configured window elapses.
@@ -2499,8 +2548,8 @@ async function proxyEnvironmentBrowserWebSocket(
       upstream.send(data, { binary: isBinary });
       return;
     }
-    queuedBytes += websocketDataSize(data);
-    if (queuedBytes > BROWSER_DASHBOARD_MAX_QUEUED_WS_BYTES) {
+    queuedBytes += websocketRawDataSize(data);
+    if (queuedBytes > BROWSER_DASHBOARD_MAX_QUEUED_CLIENT_WS_BYTES) {
       socket.close(1009, "Dashboard connection queue exceeded");
       return;
     }
@@ -2509,10 +2558,19 @@ async function proxyEnvironmentBrowserWebSocket(
   socket.once("close", () => {
     downstreamClosed = true;
     heartbeat.stop();
+    downstreamRelay.close();
+    request.log.debug(
+      {
+        environmentId: request.params.environmentId,
+        ...downstreamRelay.stats(),
+      },
+      "Playwright Dashboard downstream relay closed",
+    );
     upstream?.close();
   });
   socket.once("error", () => {
     heartbeat.stop();
+    downstreamRelay.close();
     upstream?.terminate();
   });
 
@@ -2536,19 +2594,20 @@ async function proxyEnvironmentBrowserWebSocket(
       queuedBytes = 0;
     });
     upstream.on("message", (data, isBinary) => {
-      if (socket.readyState === WebSocket.OPEN) {
-        socket.send(data, { binary: isBinary });
-      }
+      downstreamRelay.enqueue(data, isBinary);
     });
     upstream.once("close", (code, reason) => {
       heartbeat.stop();
+      downstreamRelay.close();
       if (socket.readyState === WebSocket.OPEN) {
         socket.close(websocketCloseCode(code), reason.toString().slice(0, 123));
       }
     });
     upstream.once("error", (error) => {
       heartbeat.stop();
-      browser.invalidate(request.params.environmentId);
+      // HTTP auth failures and runtime-generation fencing refresh stale
+      // coordinates. A transient socket failure must not force the next
+      // Browser mount through another regional control API lookup.
       request.log.warn(
         { err: error, environmentId: request.params.environmentId },
         "Playwright Dashboard WebSocket upstream failed",
@@ -2559,7 +2618,6 @@ async function proxyEnvironmentBrowserWebSocket(
     });
   } catch (error) {
     heartbeat.stop();
-    browser.invalidate(request.params.environmentId);
     request.log.warn(
       { err: error, environmentId: request.params.environmentId },
       "Playwright Dashboard WebSocket setup failed",
@@ -2568,13 +2626,6 @@ async function proxyEnvironmentBrowserWebSocket(
       socket.close(1011, "Dashboard unavailable");
     }
   }
-}
-
-function websocketDataSize(data: RawData) {
-  if (Array.isArray(data)) {
-    return data.reduce((size, chunk) => size + chunk.byteLength, 0);
-  }
-  return data.byteLength;
 }
 
 function websocketCloseCode(code: number) {

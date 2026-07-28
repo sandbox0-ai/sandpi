@@ -94,7 +94,6 @@ export const BROWSER_DASHBOARD_EMBED_SCRIPT = `
     let observedScreen;
     let observedDisplay;
     let desiredViewport;
-    let appliedViewport;
     let viewportMode = config.defaultViewportMode;
     let sessionReady = false;
     let pendingCommand;
@@ -236,53 +235,11 @@ export const BROWSER_DASHBOARD_EMBED_SCRIPT = `
       target.click();
     };
 
-    const liveFrameMatchesViewport = (liveFrame, viewport) => {
-      const naturalWidth = liveFrame?.naturalWidth ?? 0;
-      const naturalHeight = liveFrame?.naturalHeight ?? 0;
-      if (naturalWidth <= 0 || naturalHeight <= 0) return false;
-      const crossProductDifference = Math.abs(
-        naturalWidth * viewport.height -
-          naturalHeight * viewport.width,
-      );
-      return (
-        crossProductDifference <=
-        2 *
-          Math.max(
-            naturalWidth,
-            naturalHeight,
-            viewport.width,
-            viewport.height,
-          )
-      );
-    };
-
     const selectDefaultSession = () => {
       const { session, options } = collectTabs();
       const selectedTab = session?.querySelector(
         '[role="option"][aria-selected="true"]',
       );
-      const liveFrame = document.querySelector("#display");
-      if (
-        !sessionReady &&
-        liveFrame &&
-        desiredViewport &&
-        appliedViewport &&
-        desiredViewport.width === appliedViewport.width &&
-        desiredViewport.height === appliedViewport.height &&
-        liveFrame?.getAttribute("src")?.startsWith("data:image/") &&
-        liveFrame.complete &&
-        liveFrameMatchesViewport(liveFrame, appliedViewport)
-      ) {
-        sessionReady = true;
-        post(
-          {
-            type: config.sessionReadyMessage,
-            width: appliedViewport.width,
-            height: appliedViewport.height,
-          },
-        );
-      }
-
       const firstTab = options[0];
       if (
         !sessionReady &&
@@ -292,6 +249,13 @@ export const BROWSER_DASHBOARD_EMBED_SCRIPT = `
       ) {
         selectedDefaultTab = firstTab;
         firstTab.click();
+      }
+      // Viewport reconciliation runs in the background. Reveal the official
+      // Dashboard as soon as its shared session exists instead of holding a
+      // fixed overlay until a resized screencast frame happens to arrive.
+      if (!sessionReady && session && firstTab) {
+        sessionReady = true;
+        post({ type: config.sessionReadyMessage });
       }
       applyPendingCommand();
     };
@@ -475,10 +439,6 @@ export const BROWSER_DASHBOARD_EMBED_SCRIPT = `
       ) {
         return;
       }
-      appliedViewport = {
-        width: message.width,
-        height: message.height,
-      };
       selectDefaultSession();
     };
 
@@ -509,6 +469,8 @@ export const BROWSER_DASHBOARD_EMBED_SCRIPT = `
         applyPendingCommand();
       }
     });
+    // Keep the official Dashboard usable if an upstream markup change makes
+    // Sandpi's optional session projection unavailable.
     setTimeout(() => {
       if (sessionReady) return;
       sessionReady = true;
