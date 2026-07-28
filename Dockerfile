@@ -7,6 +7,8 @@ RUN npm ci
 
 FROM dependencies AS builder
 COPY . .
+ARG NEXT_PUBLIC_GA_MEASUREMENT_ID
+ENV NEXT_PUBLIC_GA_MEASUREMENT_ID=${NEXT_PUBLIC_GA_MEASUREMENT_ID}
 RUN npm run build
 
 FROM node:24-bookworm-slim AS runtime

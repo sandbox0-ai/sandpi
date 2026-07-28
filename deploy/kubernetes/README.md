@@ -57,6 +57,12 @@ Required repository secrets:
 - `SANDPI_STRIPE_SECRET_KEY`
 - `SANDPI_STRIPE_WEBHOOK_SECRET`
 
+Optional production Environment variables:
+
+- `NEXT_PUBLIC_GA_MEASUREMENT_ID` — a public Google Analytics 4 measurement
+  ID compiled into the browser bundle. Leave it unset to disable analytics,
+  including for self-hosted deployments.
+
 The production workflow requires `SANDPI_BILLING_MODE=stripe`. Configure the
 Stripe webhook endpoint as
 `https://sandpi.ai/api/v1/billing/webhook`. Sandpi verifies the raw request
