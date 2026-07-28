@@ -93,7 +93,14 @@ function emptyMetricSeries(
   statistic: RuntimeMetricSeries["statistic"],
   dimensions?: Record<string, string>,
 ): RuntimeMetricSeries {
-  return { metric, unit, statistic, dimensions, segments: [] };
+  return {
+    metric,
+    unit,
+    statistic,
+    stepSeconds: 0,
+    dimensions,
+    segments: [],
+  };
 }
 
 function emptyEnvironmentMetrics(): EnvironmentMetrics {
@@ -720,6 +727,7 @@ export function Inspector({
                 {
                   id: "cpu",
                   label: "CPU",
+                  stepSeconds: metrics.cpuUtilization.stepSeconds,
                   segments: metrics.cpuUtilization.segments,
                   tone: "green",
                 },
@@ -758,6 +766,7 @@ export function Inspector({
                 {
                   id: "memory",
                   label: ui.memory,
+                  stepSeconds: metrics.memoryWorkingSet.stepSeconds,
                   segments: metrics.memoryWorkingSet.segments,
                   tone: "green",
                 },
@@ -799,12 +808,14 @@ export function Inspector({
                 {
                   id: "network-receive",
                   label: ui.received,
+                  stepSeconds: metrics.networkReceive.stepSeconds,
                   segments: metrics.networkReceive.segments,
                   tone: "blue",
                 },
                 {
                   id: "network-transmit",
                   label: ui.sent,
+                  stepSeconds: metrics.networkTransmit.stepSeconds,
                   segments: metrics.networkTransmit.segments,
                   tone: "amber",
                 },

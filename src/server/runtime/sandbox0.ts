@@ -2154,12 +2154,12 @@ export class Sandbox0Runtime implements RuntimeAdapter {
       );
 
       return {
-        cpuUtilization: metricProjection(cpu),
-        memoryWorkingSet: metricProjection(memory),
+        cpuUtilization: metricProjection(cpu, gauges.stepSeconds),
+        memoryWorkingSet: metricProjection(memory, gauges.stepSeconds),
         memoryLimitBytes:
           memoryLimit.segments.at(-1)?.points.at(-1)?.value ?? 0,
-        networkReceive: metricProjection(receive),
-        networkTransmit: metricProjection(transmit),
+        networkReceive: metricProjection(receive, network.stepSeconds),
+        networkTransmit: metricProjection(transmit, network.stepSeconds),
       };
     } catch (error) {
       throw translateMetricsError(error);
@@ -3132,7 +3132,10 @@ function emptyMetric(
   };
 }
 
-function metricProjection(series: SdkRuntimeMetricSeries): RuntimeMetricSeries {
+function metricProjection(
+  series: SdkRuntimeMetricSeries,
+  stepSeconds: number,
+): RuntimeMetricSeries {
   return {
     metric: series.metric as RuntimeMetricSeries["metric"],
     unit:
@@ -3140,6 +3143,7 @@ function metricProjection(series: SdkRuntimeMetricSeries): RuntimeMetricSeries {
         ? "bytes_per_second"
         : (series.unit as RuntimeMetricSeries["unit"]),
     statistic: series.statistic as RuntimeMetricSeries["statistic"],
+    stepSeconds,
     dimensions: series.dimensions,
     segments: series.segments.map((segment) => ({
       points: segment.points.map((point) => ({

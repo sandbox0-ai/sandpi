@@ -374,6 +374,8 @@ export interface RuntimeMetricSeries {
     | "sandbox.network.io";
   unit: "ratio" | "bytes" | "bytes_per_second";
   statistic: "average" | "rate";
+  /** Effective Sandbox0 aggregation bucket width for this projected series. */
+  stepSeconds: number;
   dimensions?: Record<string, string>;
   segments: MetricSegment[];
 }

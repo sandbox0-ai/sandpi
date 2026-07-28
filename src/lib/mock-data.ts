@@ -35,7 +35,7 @@ function mockCodexModelId(modelId: string) {
 
 function metricSeries(
   values: number[],
-  descriptor: Omit<RuntimeMetricSeries, "segments">,
+  descriptor: Omit<RuntimeMetricSeries, "segments" | "stepSeconds">,
 ): RuntimeMetricSeries {
   const start = timestamp("2026-07-12T08:30:00+08:00");
   const points = values.map((value, index) => ({
@@ -45,6 +45,7 @@ function metricSeries(
 
   return {
     ...descriptor,
+    stepSeconds: 5 * 60,
     // The split exercises the same no-join contract as sdk-js after a runtime restart.
     segments: [{ points: points.slice(0, 7) }, { points: points.slice(7) }],
   };
