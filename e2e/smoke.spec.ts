@@ -561,6 +561,18 @@ test("uses the Sandpi logo and sidebar viewer avatar in conversation messages", 
         .evaluate((element) => getComputedStyle(element).maskImage),
     )
     .toContain("icon.svg");
+  await expect(assistantAvatar).toHaveCSS("border-top-width", "0px");
+  await expect(assistantAvatar).toHaveCSS("padding-top", "0px");
+  await expect(assistantAvatar).toHaveCSS(
+    "background-color",
+    "rgba(0, 0, 0, 0)",
+  );
+  const [assistantAvatarBox, assistantMarkBox] = await Promise.all([
+    assistantAvatar.boundingBox(),
+    assistantAvatar.locator(".assistant-avatar-mark").boundingBox(),
+  ]);
+  expect(assistantAvatarBox).not.toBeNull();
+  expect(assistantMarkBox).toEqual(assistantAvatarBox);
 });
 
 test("keeps anonymous visitors on the app home until they send a message", async ({
