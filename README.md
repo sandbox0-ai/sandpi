@@ -94,7 +94,8 @@ same files, tools and execution context.
 - Codex tools, Skills, MCP configuration, approvals and supported slash-command
   surfaces
 - Persistent multi-Environment and multi-Session Web UI
-- Live Workspace file browser, Monaco editor, media previews and Git changes
+- Live Workspace file browser with a resizable, collapsible file tree, Monaco
+  editor, media previews and Git changes
 - Shared official Playwright Browser with multi-tab controls, loading feedback
   and persisted desktop-fit, responsive and mobile viewport modes
 - Environment terminal, runtime metrics and configurable idle pause

@@ -4,7 +4,9 @@ import {
   type EnvironmentMetricRangeSeconds,
 } from "./environment-metrics";
 import {
+  DEFAULT_FILE_BROWSER_SIDEBAR_WIDTH,
   DEFAULT_INSPECTOR_WIDTH_RATIO,
+  normalizeFileBrowserSidebarWidth,
   normalizeInspectorWidthRatio,
 } from "./workspace-layout";
 import {
@@ -36,6 +38,8 @@ export interface SandpiLocalUiPreferences {
     inspectorOpen: boolean;
     inspectorTab: LocalInspectorTab;
     inspectorWidthRatio: number;
+    fileBrowserSidebarCollapsed: boolean;
+    fileBrowserSidebarWidth: number;
     browserViewportMode: BrowserDashboardViewportMode;
     metricsRangeSeconds: EnvironmentMetricRangeSeconds;
     terminalHeight: number;
@@ -52,6 +56,8 @@ export const DEFAULT_LOCAL_UI_PREFERENCES: SandpiLocalUiPreferences = {
     inspectorOpen: false,
     inspectorTab: "files",
     inspectorWidthRatio: DEFAULT_INSPECTOR_WIDTH_RATIO,
+    fileBrowserSidebarCollapsed: false,
+    fileBrowserSidebarWidth: DEFAULT_FILE_BROWSER_SIDEBAR_WIDTH,
     browserViewportMode: DEFAULT_BROWSER_DASHBOARD_VIEWPORT_MODE,
     metricsRangeSeconds: DEFAULT_ENVIRONMENT_METRIC_RANGE_SECONDS,
     terminalHeight: 320,
@@ -224,6 +230,14 @@ export function normalizeLocalUiPreferences(
       ),
       inspectorWidthRatio: normalizeInspectorWidthRatio(
         workspace.inspectorWidthRatio,
+      ),
+      fileBrowserSidebarCollapsed:
+        typeof workspace.fileBrowserSidebarCollapsed === "boolean"
+          ? workspace.fileBrowserSidebarCollapsed
+          : DEFAULT_LOCAL_UI_PREFERENCES.workspace
+              .fileBrowserSidebarCollapsed,
+      fileBrowserSidebarWidth: normalizeFileBrowserSidebarWidth(
+        workspace.fileBrowserSidebarWidth,
       ),
       browserViewportMode: oneOf(
         BROWSER_VIEWPORT_MODES,

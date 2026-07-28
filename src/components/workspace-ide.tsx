@@ -18,6 +18,8 @@ import {
   FolderOpen,
   GitBranch,
   GitCommitHorizontal,
+  PanelLeftClose,
+  PanelLeftOpen,
   Radio,
   RefreshCw,
   Save,
@@ -25,7 +27,10 @@ import {
 } from "lucide-react";
 import dynamic from "next/dynamic";
 import {
+  type CSSProperties,
   type FormEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
   useCallback,
   useEffect,
   useId,
@@ -41,7 +46,9 @@ import {
   type ApiEnvelope,
 } from "@/lib/api-client";
 import type { OperationLanguage } from "@/lib/operation-ui";
+import { updateLocalUiPreferences } from "@/lib/local-ui-preferences";
 import { formatUnixTimestamp } from "@/lib/time";
+import { useLocalUiPreferences } from "@/lib/use-local-ui-preferences";
 import {
   mergeWorkspaceGitFiles,
   userVisibleWorkspaceFiles,
@@ -58,6 +65,14 @@ import {
   WORKSPACE_ROOT,
 } from "@/lib/workspace-path-policy";
 import { workspacePreviewKindForName } from "@/lib/workspace-file-preview";
+import {
+  clampFileBrowserSidebarWidthForAvailableWidth,
+  DEFAULT_FILE_BROWSER_SIDEBAR_WIDTH,
+  fileBrowserSidebarWidthFromPointer,
+  MAX_FILE_BROWSER_SIDEBAR_WIDTH,
+  MIN_FILE_BROWSER_SIDEBAR_WIDTH,
+  normalizeFileBrowserSidebarWidth,
+} from "@/lib/workspace-layout";
 import type {
   CodingSession,
   Environment,
@@ -133,6 +148,13 @@ const copy = {
     polling: "Polling",
     offline: "Disconnected",
     refresh: "Refresh Workspace",
+    files: "Files",
+    collapseFileBrowser: "Collapse file browser",
+    expandFileBrowser: "Expand file browser",
+    resizeFileBrowser: "Resize file browser",
+    resizeFileBrowserValue: (width: number) => `${width} pixels wide`,
+    resizeFileBrowserHelp:
+      "Drag to resize. Use Left and Right Arrow keys. Double-click to reset.",
     openFull: "Open full Web IDE",
     back: "Back to Session",
     backEnvironment: "Back to Environment",
@@ -197,6 +219,13 @@ const copy = {
     polling: "轮询更新",
     offline: "已断开",
     refresh: "刷新 Workspace",
+    files: "文件",
+    collapseFileBrowser: "折叠文件浏览器",
+    expandFileBrowser: "展开文件浏览器",
+    resizeFileBrowser: "调整文件浏览器宽度",
+    resizeFileBrowserValue: (width: number) => `宽 ${width} 像素`,
+    resizeFileBrowserHelp:
+      "拖拽调整宽度；也可以使用左右方向键，双击恢复默认宽度。",
     openFull: "在完整 Web IDE 中打开",
     back: "返回 Session",
     backEnvironment: "返回 Environment",
@@ -1209,6 +1238,11 @@ export function WorkspaceIde({
   onNavigationHandled,
 }: WorkspaceIdeProps) {
   const ui = copy[language];
+  const localUiPreferences = useLocalUiPreferences();
+  const fileBrowserSidebarCollapsed =
+    localUiPreferences.workspace.fileBrowserSidebarCollapsed;
+  const storedFileBrowserSidebarWidth =
+    localUiPreferences.workspace.fileBrowserSidebarWidth;
   const [snapshot, setSnapshot] = useState<WorkspaceIdeSnapshot | undefined>(
     initialSnapshot,
   );
@@ -1233,7 +1267,18 @@ export function WorkspaceIde({
   const [connection, setConnection] = useState<
     "connecting" | "live" | "reconnecting" | "polling" | "offline"
   >("connecting");
+  const [fileBrowserSidebarWidth, setFileBrowserSidebarWidth] = useState(
+    storedFileBrowserSidebarWidth,
+  );
+  const [fileBrowserWorkbenchWidth, setFileBrowserWorkbenchWidth] = useState(0);
+  const [fileBrowserResizing, setFileBrowserResizing] = useState(false);
   const documentsRef = useRef(documents);
+  const fileBrowserWorkbenchRef = useRef<HTMLDivElement>(null);
+  const fileBrowserResizePointerRef = useRef<number | null>(null);
+  const fileBrowserSidebarWidthRef = useRef(fileBrowserSidebarWidth);
+  const fileBrowserCollapseButtonRef = useRef<HTMLButtonElement>(null);
+  const fileBrowserExpandButtonRef = useRef<HTMLButtonElement>(null);
+  const fileBrowserSidebarId = useId();
   const environmentIdRef = useRef(environment.id);
   const directoryListingsRef = useRef(directoryListings);
   const directoryRequestsRef = useRef(
@@ -1274,6 +1319,38 @@ export function WorkspaceIde({
   useEffect(() => {
     directoryListingsRef.current = directoryListings;
   }, [directoryListings]);
+
+  useEffect(() => {
+    if (fileBrowserResizePointerRef.current !== null) return;
+    fileBrowserSidebarWidthRef.current = storedFileBrowserSidebarWidth;
+    setFileBrowserSidebarWidth(storedFileBrowserSidebarWidth);
+  }, [storedFileBrowserSidebarWidth]);
+
+  useEffect(() => {
+    const workbench = fileBrowserWorkbenchRef.current;
+    if (!workbench) return;
+    const updateWidth = () => {
+      setFileBrowserWorkbenchWidth(
+        Math.round(workbench.getBoundingClientRect().width),
+      );
+    };
+    updateWidth();
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", updateWidth);
+      return () => window.removeEventListener("resize", updateWidth);
+    }
+    const observer = new ResizeObserver(updateWidth);
+    observer.observe(workbench);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(
+    () => () => {
+      window.document.body.style.removeProperty("cursor");
+      window.document.body.style.removeProperty("user-select");
+    },
+    [],
+  );
 
   const loadDirectory = useCallback(
     (requestedPath: string, force = false) => {
@@ -2444,6 +2521,140 @@ export function WorkspaceIde({
     polling: ui.polling,
     offline: ui.offline,
   }[connection];
+  const displayedFileBrowserSidebarWidth =
+    fileBrowserWorkbenchWidth > 0
+      ? clampFileBrowserSidebarWidthForAvailableWidth(
+          fileBrowserSidebarWidth,
+          fileBrowserWorkbenchWidth,
+        )
+      : fileBrowserSidebarWidth;
+  const displayedFileBrowserMinimumWidth =
+    fileBrowserWorkbenchWidth > 0
+      ? clampFileBrowserSidebarWidthForAvailableWidth(
+          MIN_FILE_BROWSER_SIDEBAR_WIDTH,
+          fileBrowserWorkbenchWidth,
+        )
+      : MIN_FILE_BROWSER_SIDEBAR_WIDTH;
+  const displayedFileBrowserMaximumWidth =
+    fileBrowserWorkbenchWidth > 0
+      ? clampFileBrowserSidebarWidthForAvailableWidth(
+          MAX_FILE_BROWSER_SIDEBAR_WIDTH,
+          fileBrowserWorkbenchWidth,
+        )
+      : MAX_FILE_BROWSER_SIDEBAR_WIDTH;
+  const fileBrowserWorkbenchStyle = {
+    "--workspace-file-sidebar-width": `${displayedFileBrowserSidebarWidth}px`,
+  } as CSSProperties;
+
+  function updateFileBrowserSidebarWidth(width: number, persist: boolean) {
+    const normalizedWidth = normalizeFileBrowserSidebarWidth(width);
+    fileBrowserSidebarWidthRef.current = normalizedWidth;
+    setFileBrowserSidebarWidth(normalizedWidth);
+    if (!persist) return;
+    updateLocalUiPreferences((current) => ({
+      ...current,
+      workspace: {
+        ...current.workspace,
+        fileBrowserSidebarWidth: normalizedWidth,
+      },
+    }));
+  }
+
+  function setFileBrowserSidebarCollapsed(collapsed: boolean) {
+    updateLocalUiPreferences((current) => ({
+      ...current,
+      workspace: {
+        ...current.workspace,
+        fileBrowserSidebarCollapsed: collapsed,
+      },
+    }));
+    window.requestAnimationFrame(() => {
+      (collapsed
+        ? fileBrowserExpandButtonRef
+        : fileBrowserCollapseButtonRef
+      ).current?.focus({ preventScroll: true });
+    });
+  }
+
+  function fileBrowserWidthForPointer(
+    event: ReactPointerEvent<HTMLDivElement>,
+  ) {
+    const workbench = fileBrowserWorkbenchRef.current;
+    if (!workbench) return fileBrowserSidebarWidthRef.current;
+    const workbenchRect = workbench.getBoundingClientRect();
+    return fileBrowserSidebarWidthFromPointer({
+      pointerX: event.clientX,
+      workbenchLeft: workbenchRect.left,
+      workbenchWidth: workbenchRect.width,
+    });
+  }
+
+  function finishFileBrowserResize(
+    event: ReactPointerEvent<HTMLDivElement>,
+    width: number,
+  ) {
+    updateFileBrowserSidebarWidth(width, true);
+    fileBrowserResizePointerRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    setFileBrowserResizing(false);
+    window.document.body.style.removeProperty("cursor");
+    window.document.body.style.removeProperty("user-select");
+  }
+
+  function handleFileBrowserResizePointerDown(
+    event: ReactPointerEvent<HTMLDivElement>,
+  ) {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    fileBrowserResizePointerRef.current = event.pointerId;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setFileBrowserResizing(true);
+    window.document.body.style.cursor = "col-resize";
+    window.document.body.style.userSelect = "none";
+  }
+
+  function handleFileBrowserResizePointerMove(
+    event: ReactPointerEvent<HTMLDivElement>,
+  ) {
+    if (fileBrowserResizePointerRef.current !== event.pointerId) return;
+    updateFileBrowserSidebarWidth(fileBrowserWidthForPointer(event), false);
+  }
+
+  function handleFileBrowserResizePointerUp(
+    event: ReactPointerEvent<HTMLDivElement>,
+  ) {
+    if (fileBrowserResizePointerRef.current !== event.pointerId) return;
+    finishFileBrowserResize(event, fileBrowserWidthForPointer(event));
+  }
+
+  function handleFileBrowserResizePointerCancel(
+    event: ReactPointerEvent<HTMLDivElement>,
+  ) {
+    if (fileBrowserResizePointerRef.current !== event.pointerId) return;
+    finishFileBrowserResize(
+      event,
+      fileBrowserSidebarWidthRef.current,
+    );
+  }
+
+  function handleFileBrowserResizeKeyDown(
+    event: ReactKeyboardEvent<HTMLDivElement>,
+  ) {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    const nextWidth =
+      displayedFileBrowserSidebarWidth +
+      (event.key === "ArrowLeft" ? -16 : 16);
+    updateFileBrowserSidebarWidth(
+      clampFileBrowserSidebarWidthForAvailableWidth(
+        nextWidth,
+        fileBrowserWorkbenchWidth,
+      ),
+      true,
+    );
+  }
 
   return (
     <section
@@ -2469,44 +2680,118 @@ export function WorkspaceIde({
         </header>
       ) : null}
 
-      <div className={styles.workbench}>
-        <aside className={styles.sidebar} aria-label="Workspace files">
-          <div className={styles.treeRoot}>
-            {workspaceFiles.length > 0 ? (
-              <IdeFileTree
-                key={environment.id}
-                language={language}
-                environmentId={environment.id}
-                sessionId={session?.id}
-                files={workspaceFiles}
-                changes={changesByPath}
-                repositories={repositoriesByRoot}
-                selectedPath={selectedPath}
-                revealRequest={revealRequest}
-                onOpen={openFile}
-                loadedDirectories={loadedDirectories}
-                loadingDirectories={loadingDirectories}
-                directoryErrors={directoryErrors}
-                onExpand={(directoryPath, force) =>
-                  void loadDirectory(directoryPath, force)
-                }
-                loadingFolderLabel={ui.loadingFolder}
-                folderUnavailableLabel={ui.folderUnavailable}
-                onDownloadFile={(filePath) =>
-                  void downloadWorkspaceFile(filePath)
-                }
-                onCreateEntry={createWorkspaceEntry}
-                onRenameEntry={renameWorkspaceEntry}
-                onDeleteEntry={deleteWorkspaceEntry}
-              />
-            ) : (
-              <p className={styles.sidebarEmpty}>{ui.noFiles}</p>
-            )}
+      <div
+        ref={fileBrowserWorkbenchRef}
+        className={`${styles.workbench} ${
+          fileBrowserSidebarCollapsed ? styles.sidebarCollapsed : ""
+        } ${fileBrowserResizing ? styles.resizing : ""}`}
+        style={fileBrowserWorkbenchStyle}
+      >
+        <aside
+          id={fileBrowserSidebarId}
+          className={styles.sidebar}
+          aria-label="Workspace files"
+          aria-hidden={fileBrowserSidebarCollapsed || undefined}
+          inert={fileBrowserSidebarCollapsed || undefined}
+        >
+          <header className={styles.sidebarHeader}>
+            <span>
+              <Folder size={13} aria-hidden="true" />
+              {ui.files}
+            </span>
+            <button
+              ref={fileBrowserCollapseButtonRef}
+              type="button"
+              aria-label={ui.collapseFileBrowser}
+              title={ui.collapseFileBrowser}
+              aria-controls={fileBrowserSidebarId}
+              aria-expanded="true"
+              onClick={() => setFileBrowserSidebarCollapsed(true)}
+            >
+              <PanelLeftClose size={14} aria-hidden="true" />
+            </button>
+          </header>
+          <div className={styles.treeViewport}>
+            <div className={styles.treeRoot}>
+              {workspaceFiles.length > 0 ? (
+                <IdeFileTree
+                  key={environment.id}
+                  language={language}
+                  environmentId={environment.id}
+                  sessionId={session?.id}
+                  files={workspaceFiles}
+                  changes={changesByPath}
+                  repositories={repositoriesByRoot}
+                  selectedPath={selectedPath}
+                  revealRequest={revealRequest}
+                  onOpen={openFile}
+                  loadedDirectories={loadedDirectories}
+                  loadingDirectories={loadingDirectories}
+                  directoryErrors={directoryErrors}
+                  onExpand={(directoryPath, force) =>
+                    void loadDirectory(directoryPath, force)
+                  }
+                  loadingFolderLabel={ui.loadingFolder}
+                  folderUnavailableLabel={ui.folderUnavailable}
+                  onDownloadFile={(filePath) =>
+                    void downloadWorkspaceFile(filePath)
+                  }
+                  onCreateEntry={createWorkspaceEntry}
+                  onRenameEntry={renameWorkspaceEntry}
+                  onDeleteEntry={deleteWorkspaceEntry}
+                />
+              ) : (
+                <p className={styles.sidebarEmpty}>{ui.noFiles}</p>
+              )}
+            </div>
           </div>
         </aside>
 
+        <div
+          className={styles.sidebarResizeHandle}
+          role="separator"
+          aria-label={ui.resizeFileBrowser}
+          aria-orientation="vertical"
+          aria-controls={fileBrowserSidebarId}
+          aria-valuemin={displayedFileBrowserMinimumWidth}
+          aria-valuemax={displayedFileBrowserMaximumWidth}
+          aria-valuenow={displayedFileBrowserSidebarWidth}
+          aria-valuetext={ui.resizeFileBrowserValue(
+            displayedFileBrowserSidebarWidth,
+          )}
+          title={ui.resizeFileBrowserHelp}
+          tabIndex={fileBrowserSidebarCollapsed ? -1 : 0}
+          onDoubleClick={() =>
+            updateFileBrowserSidebarWidth(
+              DEFAULT_FILE_BROWSER_SIDEBAR_WIDTH,
+              true,
+            )
+          }
+          onKeyDown={handleFileBrowserResizeKeyDown}
+          onPointerDown={handleFileBrowserResizePointerDown}
+          onPointerMove={handleFileBrowserResizePointerMove}
+          onPointerUp={handleFileBrowserResizePointerUp}
+          onPointerCancel={handleFileBrowserResizePointerCancel}
+        >
+          <span aria-hidden="true" />
+        </div>
+
         <main className={styles.editor}>
           <div className={styles.tabs} role="tablist" aria-label="Open files">
+            {fileBrowserSidebarCollapsed ? (
+              <button
+                ref={fileBrowserExpandButtonRef}
+                type="button"
+                className={styles.sidebarExpandButton}
+                aria-label={ui.expandFileBrowser}
+                title={ui.expandFileBrowser}
+                aria-controls={fileBrowserSidebarId}
+                aria-expanded="false"
+                onClick={() => setFileBrowserSidebarCollapsed(false)}
+              >
+                <PanelLeftOpen size={14} aria-hidden="true" />
+              </button>
+            ) : null}
             {openPaths.map((filePath) => (
               <button
                 type="button"

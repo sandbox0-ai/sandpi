@@ -86,7 +86,8 @@ Environment。如果多个 Session 本来就应该共享文件、工具和执行
 - 在输入框实时显示原生上下文窗口和 Sandbox CPU/内存使用率
 - Codex tools、Skills、MCP 配置、审批和已支持的 slash-command 界面
 - 持久化多 Environment、多 Session Web UI
-- 实时 Workspace 文件浏览器、Monaco 编辑器、媒体预览和 Git 变更
+- 实时 Workspace 文件浏览器，支持可调整宽度、可折叠的文件树，以及 Monaco
+  编辑器、媒体预览和 Git 变更
 - Human 与 coding agent 共用的官方 Playwright Browser，支持多 Tab、加载反馈以及
   本地持久化的桌面自适应、响应式和移动端 viewport 模式
 - Environment 终端、runtime 指标和可配置 idle pause
