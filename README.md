@@ -187,6 +187,22 @@ origin before enabling OIDC.
 For Kubernetes deployment, see
 [`deploy/kubernetes`](./deploy/kubernetes/README.md).
 
+## OpenAPI contract
+
+The generated [OpenAPI 3.0.3 contract](./openapi.yaml) covers Sandpi's HTTP,
+SSE, WebSocket and embedded Browser surfaces. Generate and verify it with:
+
+```bash
+npm run openapi:generate
+npm run openapi:check
+```
+
+Do not edit `openapi.yaml` directly. Generation reuses the server's real route
+registrations and fails on route/contract drift without requiring PostgreSQL or
+Sandbox0. See
+[`docs/architecture/openapi-contract.md`](./docs/architecture/openapi-contract.md)
+for the source-of-truth and special-transport rules.
+
 ## Connect Codex
 
 Create or open an Environment, then choose **Connect Codex** from the New
@@ -228,7 +244,10 @@ Sandbox0
 
 - The browser talks only to Sandpi. It receives neither the Sandbox0 deployment
   API key nor a direct Sandbox0 endpoint. Sandpi authenticates and proxies the
-  official Playwright Dashboard's HTTP and WebSocket traffic.
+  official Playwright Dashboard's HTTP and WebSocket traffic. The embedded tab
+  and the agent share one Playwright profile: a human can complete an
+  interactive login there and hand the authenticated browser back to the
+  agent. Loopback Browser URLs resolve inside the Environment sandbox.
 - Sandpi uses Sandbox0 through the official JavaScript SDK; it does not read a
   Sandbox0 database, internal metering endpoint or ClickHouse credential.
 - Sandbox0 owns Sandbox lifecycle, Volumes, network enforcement, credential
@@ -273,6 +292,7 @@ Sandbox0
 
 ## Documentation
 
+- [OpenAPI contract](./docs/architecture/openapi-contract.md)
 - [Native Session authority and recovery](./docs/architecture/native-session-authority.md)
 - [Environment Schedules](./docs/architecture/environment-schedules.md)
 - [Environment egress credentials](./docs/architecture/environment-egress-credentials.md)

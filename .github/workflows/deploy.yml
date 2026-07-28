@@ -25,6 +25,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
+      - run: npm run openapi:check
       - run: npm run typecheck
       - run: npm run build
       - uses: azure/setup-kubectl@v5.1.0
