@@ -911,6 +911,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
           language={preferences.general.language}
           timeZone={preferences.general.timeZone}
           sendShortcut={preferences.general.sendShortcut}
+          viewer={initialData.viewer}
           environment={selectedEnvironment}
           session={selectedSession}
           inspectorOpen={showInspector}

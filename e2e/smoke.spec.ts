@@ -403,6 +403,166 @@ test("shows live native context usage inside the Session composer", async ({
   }
 });
 
+test("uses the Sandpi logo and sidebar viewer avatar in conversation messages", async ({
+  page,
+}) => {
+  const bootstrap = getMockBootstrap();
+  useEnglishUi(bootstrap);
+  bootstrap.viewer.avatarInitials = "SP";
+  const session = bootstrap.sessions.find(
+    (candidate) => candidate.harness === "codex" && !candidate.archived,
+  );
+  const environment = bootstrap.environments.find(
+    (candidate) => candidate.id === session?.environmentId,
+  );
+  expect(session).toBeTruthy();
+  expect(environment).toBeTruthy();
+  if (!session || !environment || session.harness !== "codex") return;
+  const codexSession = session as CodexSession;
+  session.status = "waiting";
+  bootstrap.selectedEnvironmentId = environment.id;
+  bootstrap.selectedSessionId = session.id;
+
+  const nativeSessionId = codexSession.harnessState.threadId;
+  const now = Date.now() / 1_000;
+  const turn: CodexTurn = {
+    id: "turn-avatar-e2e",
+    items: [
+      {
+        type: "userMessage",
+        id: "user-avatar-e2e",
+        clientId: "client-avatar-e2e",
+        content: [
+          {
+            type: "text",
+            text: "Show the conversation identities.",
+            text_elements: [],
+          },
+        ],
+      },
+      {
+        type: "agentMessage",
+        id: "assistant-avatar-e2e",
+        text: "The shared avatars are visible.",
+        phase: null,
+        memoryCitation: null,
+      },
+    ],
+    itemsView: "full",
+    status: "completed",
+    error: null,
+    startedAt: now,
+    completedAt: now + 1,
+    durationMs: 1_000,
+  };
+  const snapshot: CodexNativeSnapshot = {
+    protocol: "codex-app-server",
+    nativeSessionId,
+    historyRevision: codexSession.harnessState.historyRevision,
+    modelId: codexSession.harnessState.modelId,
+    reasoningEffort: codexSession.harnessState.reasoningEffort,
+    sessionStatus: "waiting",
+    tokenUsage: null,
+    activity: {
+      source: "codex-rollout",
+      availability: "available",
+      records: [],
+      error: null,
+    },
+    forkableTurnIds: [turn.id],
+    thread: {
+      id: nativeSessionId,
+      createdAt: now,
+      updatedAt: now + 1,
+      status: { type: "idle" },
+      turns: [turn],
+    },
+  };
+
+  await installControlledEventSource(page);
+  await page.route(
+    (url) => url.pathname === "/api/v1/bootstrap",
+    async (route) => {
+      await route.fulfill({ json: { data: bootstrap } });
+    },
+  );
+  await page.route("**/api/v1/sessions/**/models", async (route) => {
+    await route.fulfill({
+      json: {
+        data: {
+          data: [
+            {
+              id: snapshot.modelId,
+              displayName: "E2E avatar model",
+              isDefault: true,
+              supportedReasoningEfforts: [],
+            },
+          ],
+        },
+        meta: { availability: "available", source: "codex" },
+      },
+    });
+  });
+  await page.route("**/api/v1/environments/**/metrics/current", async (route) => {
+    await route.fulfill({
+      json: {
+        data: { cpuUtilization: 0.1, memoryUtilization: 0.2 },
+      },
+    });
+  });
+
+  await page.goto(
+    `/?environment=${encodeURIComponent(environment.id)}&session=${encodeURIComponent(session.id)}`,
+  );
+  await emitControlledEvent(
+    page,
+    `/api/v1/sessions/${session.id}/events`,
+    "snapshot",
+    snapshot,
+  );
+
+  const sidebarAvatar = page.locator(
+    ".account-menu-trigger .account-avatar",
+  );
+  const messageAvatar = page.locator(
+    ".message-user .account-avatar.user-avatar",
+  );
+  await expect(sidebarAvatar).toHaveText("SP");
+  await expect(messageAvatar).toHaveText("SP");
+
+  const avatarVisualStyle = async (
+    locator: ReturnType<Page["locator"]>,
+  ) =>
+    locator.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return {
+        width: style.width,
+        height: style.height,
+        borderRadius: style.borderRadius,
+        backgroundColor: style.backgroundColor,
+        color: style.color,
+        fontSize: style.fontSize,
+        fontWeight: style.fontWeight,
+      };
+    });
+  expect(await avatarVisualStyle(messageAvatar)).toEqual(
+    await avatarVisualStyle(sidebarAvatar),
+  );
+
+  const assistantAvatar = page
+    .locator(".message-assistant .assistant-avatar")
+    .filter({ has: page.locator(".sandpi-mark") });
+  await expect(assistantAvatar).toHaveAttribute("aria-label", "Sandpi");
+  await expect(assistantAvatar.locator(".assistant-avatar-mark")).toBeVisible();
+  await expect
+    .poll(() =>
+      assistantAvatar
+        .locator(".assistant-avatar-mark")
+        .evaluate((element) => getComputedStyle(element).maskImage),
+    )
+    .toContain("icon.svg");
+});
+
 test("keeps anonymous visitors on the app home until they send a message", async ({
   page,
 }) => {

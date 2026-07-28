@@ -30,6 +30,10 @@ import {
 } from "react";
 
 import { Inspector, type InspectorTab } from "@/components/inspector";
+import {
+  SandpiMark,
+  UserAvatar,
+} from "@/components/identity-avatar";
 import { MarkdownContent } from "@/components/markdown-content";
 import type { EnvironmentBrowserNavigationRequest } from "@/components/environment-browser";
 import type { WorkspaceFileNavigationRequest } from "@/components/workspace-ide";
@@ -135,12 +139,13 @@ import type {
   EnvironmentSettingsOpenOptions,
   EnvironmentSettingsTab,
 } from "@/components/environment-settings";
-import type { Environment } from "@/lib/types";
+import type { Environment, SandpiUser } from "@/lib/types";
 
 interface ConversationProps {
   language: OperationLanguage;
   timeZone: string;
   sendShortcut: SendShortcut;
+  viewer: SandpiUser;
   environment: Environment;
   session: CodexSession;
   inspectorOpen: boolean;
@@ -230,6 +235,7 @@ export function CodexConversation({
   language,
   timeZone,
   sendShortcut,
+  viewer,
   environment,
   session,
   inspectorOpen,
@@ -1880,8 +1886,8 @@ export function CodexConversation({
         key={message.id}
       >
         {message.role === "assistant" ? (
-          <div className="assistant-avatar" aria-label="Codex">
-            <span />
+          <div className="assistant-avatar" role="img" aria-label="Sandpi">
+            <SandpiMark className="assistant-avatar-mark" />
           </div>
         ) : null}
         <div className="message-body">
@@ -1982,9 +1988,11 @@ export function CodexConversation({
           )}
         </div>
         {message.role === "user" ? (
-          <div className="user-avatar" role="img" aria-label={ui.you}>
-            YA
-          </div>
+          <UserAvatar
+            viewer={viewer}
+            className="user-avatar"
+            label={ui.you}
+          />
         ) : null}
       </article>
     );

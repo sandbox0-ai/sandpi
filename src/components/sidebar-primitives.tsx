@@ -1,9 +1,10 @@
+import { SandpiMark, UserAvatar } from "@/components/identity-avatar";
 import type { SandpiUser } from "@/lib/types";
 
 export function SandpiBrandLockup() {
   return (
     <div className="brand-lockup" aria-label="Sandpi" translate="no">
-      <span className="brand-mark" aria-hidden="true" />
+      <SandpiMark className="brand-mark" />
       <span>sandpi</span>
     </div>
   );
@@ -18,7 +19,7 @@ export function SidebarAccountSummary({
 }) {
   return (
     <>
-      <span className="account-avatar">{viewer.avatarInitials}</span>
+      <UserAvatar viewer={viewer} />
       <span className="account-copy">
         <strong>{viewer.name}</strong>
         <small>{context}</small>

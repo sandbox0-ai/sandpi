@@ -10,12 +10,13 @@ import type { WorkspaceFileNavigationRequest } from "@/components/workspace-ide"
 import { CodexConversation } from "@/harnesses/codex/conversation";
 import { isCodexSession } from "@/harnesses/codex/types";
 import type { OperationLanguage, SendShortcut } from "@/lib/operation-ui";
-import type { CodingSession, Environment } from "@/lib/types";
+import type { CodingSession, Environment, SandpiUser } from "@/lib/types";
 
 interface ConversationProps {
   language: OperationLanguage;
   timeZone: string;
   sendShortcut: SendShortcut;
+  viewer: SandpiUser;
   environment: Environment;
   session: CodingSession;
   inspectorOpen: boolean;
