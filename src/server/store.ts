@@ -1124,7 +1124,6 @@ export class SandpiStore {
          AND runtime.desired_state <> 'terminated'`,
       [environmentId],
     );
-    return this.environmentRuntime(environmentId);
   }
 
   /**

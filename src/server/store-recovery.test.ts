@@ -340,6 +340,7 @@ test("records successful runtime access without promoting the Codex epoch", asyn
 
   await fixture.store.recordEnvironmentRuntimeAccess("environment-one");
 
+  assert.equal(fixture.calls.length, 1);
   const update = fixture.calls.find((call) => call.sql.includes("NOW() + ("));
   assert.ok(update);
   assert.match(update.sql, /desired_state = 'running'/);

@@ -297,23 +297,26 @@ test("shows live native context usage inside the Session composer", async ({
   };
 
   await installControlledEventSource(page);
-  await page.route("**/api/v1/sessions/**/models", async (route) => {
-    await route.fulfill({
-      json: {
-        data: {
-          data: [
-            {
-              id: snapshot.modelId,
-              displayName: "E2E Codex",
-              isDefault: true,
-              supportedReasoningEfforts: [],
-            },
-          ],
+  await page.route(
+    "**/api/v1/environments/**/harnesses/codex/models",
+    async (route) => {
+      await route.fulfill({
+        json: {
+          data: {
+            data: [
+              {
+                id: snapshot.modelId,
+                displayName: "E2E Codex",
+                isDefault: true,
+                supportedReasoningEfforts: [],
+              },
+            ],
+          },
+          meta: { availability: "available", source: "codex" },
         },
-        meta: { availability: "available", source: "codex" },
-      },
-    });
-  });
+      });
+    },
+  );
 
   await page.goto(
     `/?environment=${encodeURIComponent(environment.id)}&session=${encodeURIComponent(session.id)}`,
@@ -403,6 +406,212 @@ test("shows live native context usage inside the Session composer", async ({
   }
 });
 
+test("restores a recent Session snapshot and draft without reloading Environment models", async ({
+  page,
+}) => {
+  const bootstrap = getMockBootstrap();
+  useEnglishUi(bootstrap);
+  const sessions = bootstrap.sessions.filter(
+    (candidate): candidate is CodexSession =>
+      candidate.harness === "codex" &&
+      candidate.environmentId === "env-default" &&
+      !candidate.archived,
+  );
+  const [firstSession, secondSession] = sessions;
+  const environment = bootstrap.environments.find(
+    (candidate) => candidate.id === firstSession?.environmentId,
+  );
+  expect(firstSession).toBeTruthy();
+  expect(secondSession).toBeTruthy();
+  expect(environment).toBeTruthy();
+  if (!firstSession || !secondSession || !environment) return;
+  firstSession.status = "waiting";
+  firstSession.unread = false;
+  secondSession.status = "waiting";
+  secondSession.unread = false;
+  bootstrap.selectedEnvironmentId = environment.id;
+  bootstrap.selectedSessionId = firstSession.id;
+
+  const snapshotFor = (
+    session: CodexSession,
+    assistantText: string,
+  ): CodexNativeSnapshot => {
+    const now = Date.now() / 1_000;
+    const turn: CodexTurn = {
+      id: `turn-${session.id}`,
+      items: [
+        {
+          type: "userMessage",
+          id: `user-${session.id}`,
+          clientId: `client-${session.id}`,
+          content: [
+            {
+              type: "text",
+              text: session.title,
+              text_elements: [],
+            },
+          ],
+        },
+        {
+          type: "agentMessage",
+          id: `assistant-${session.id}`,
+          text: assistantText,
+          phase: null,
+          memoryCitation: null,
+        },
+      ],
+      itemsView: "full",
+      status: "completed",
+      error: null,
+      startedAt: now,
+      completedAt: now + 1,
+      durationMs: 1_000,
+    };
+    return {
+      protocol: "codex-app-server",
+      nativeSessionId: session.harnessState.threadId,
+      historyRevision: session.harnessState.historyRevision,
+      modelId: session.harnessState.modelId,
+      reasoningEffort: session.harnessState.reasoningEffort,
+      sessionStatus: "waiting",
+      tokenUsage: null,
+      activity: {
+        source: "codex-rollout",
+        availability: "available",
+        records: [],
+        error: null,
+      },
+      forkableTurnIds: [turn.id],
+      thread: {
+        id: session.harnessState.threadId,
+        createdAt: now,
+        updatedAt: now + 1,
+        status: { type: "idle" },
+        turns: [turn],
+      },
+    };
+  };
+  const firstSnapshot = snapshotFor(
+    firstSession,
+    "First Session response from the native snapshot.",
+  );
+  const secondSnapshot = snapshotFor(
+    secondSession,
+    "Second Session response from the native snapshot.",
+  );
+  let modelRequests = 0;
+  let sessionReads = 0;
+
+  await installControlledEventSource(page);
+  await page.route(
+    (url) => url.pathname === "/api/v1/bootstrap",
+    async (route) => {
+      await route.fulfill({ json: { data: bootstrap } });
+    },
+  );
+  await page.route(
+    (url) => /^\/api\/v1\/sessions\/[^/]+$/.test(url.pathname),
+    async (route) => {
+      sessionReads += 1;
+      const sessionId = decodeURIComponent(
+        new URL(route.request().url()).pathname.split("/").at(-1) ?? "",
+      );
+      const session = bootstrap.sessions.find(
+        (candidate) => candidate.id === sessionId,
+      );
+      await route.fulfill({
+        status: session ? 200 : 404,
+        json: session
+          ? { data: session }
+          : {
+              error: {
+                code: "session_not_found",
+                message: "Session not found.",
+              },
+            },
+      });
+    },
+  );
+  await page.route(
+    "**/api/v1/environments/**/harnesses/codex/models",
+    async (route) => {
+      modelRequests += 1;
+      await route.fulfill({
+        json: {
+          data: {
+            data: [
+              {
+                id: firstSnapshot.modelId,
+                displayName: "E2E cached model",
+                isDefault: true,
+                supportedReasoningEfforts: [],
+              },
+            ],
+          },
+          meta: { availability: "available", source: "codex" },
+        },
+      });
+    },
+  );
+  await page.route("**/api/v1/environments/**/metrics/current", async (route) => {
+    await route.fulfill({
+      json: {
+        data: { cpuUtilization: 0.1, memoryUtilization: 0.2 },
+      },
+    });
+  });
+
+  await page.goto(
+    `/?environment=${encodeURIComponent(environment.id)}&session=${encodeURIComponent(firstSession.id)}`,
+  );
+  await emitControlledEvent(
+    page,
+    `/api/v1/sessions/${firstSession.id}/events`,
+    "snapshot",
+    firstSnapshot,
+  );
+  await expect(
+    page.getByText("First Session response from the native snapshot."),
+  ).toBeVisible();
+  const composer = page.getByPlaceholder(
+    "Ask Codex to work in this session…",
+  );
+  await composer.fill("Keep this draft with the first Session");
+
+  await page
+    .locator(".session-main-button")
+    .filter({ hasText: secondSession.title })
+    .click();
+  await expect(page).toHaveURL(
+    new RegExp(`session=${encodeURIComponent(secondSession.id)}`),
+  );
+  await expect(page.getByText("Loading conversation…")).toBeVisible();
+  await emitControlledEvent(
+    page,
+    `/api/v1/sessions/${secondSession.id}/events`,
+    "snapshot",
+    secondSnapshot,
+  );
+  await expect(
+    page.getByText("Second Session response from the native snapshot."),
+  ).toBeVisible();
+  await expect(composer).toHaveValue("");
+
+  await page
+    .locator(".session-main-button")
+    .filter({ hasText: firstSession.title })
+    .click();
+  await expect(
+    page.getByText("First Session response from the native snapshot."),
+  ).toBeVisible();
+  await expect(composer).toHaveValue(
+    "Keep this draft with the first Session",
+  );
+  await expect(page.getByText("Checking Codex runtime")).toBeVisible();
+  expect(modelRequests).toBe(1);
+  expect(sessionReads).toBe(0);
+});
+
 test("uses the Sandpi logo and sidebar viewer avatar in conversation messages", async ({
   page,
 }) => {
@@ -486,23 +695,26 @@ test("uses the Sandpi logo and sidebar viewer avatar in conversation messages", 
       await route.fulfill({ json: { data: bootstrap } });
     },
   );
-  await page.route("**/api/v1/sessions/**/models", async (route) => {
-    await route.fulfill({
-      json: {
-        data: {
-          data: [
-            {
-              id: snapshot.modelId,
-              displayName: "E2E avatar model",
-              isDefault: true,
-              supportedReasoningEfforts: [],
-            },
-          ],
+  await page.route(
+    "**/api/v1/environments/**/harnesses/codex/models",
+    async (route) => {
+      await route.fulfill({
+        json: {
+          data: {
+            data: [
+              {
+                id: snapshot.modelId,
+                displayName: "E2E avatar model",
+                isDefault: true,
+                supportedReasoningEfforts: [],
+              },
+            ],
+          },
+          meta: { availability: "available", source: "codex" },
         },
-        meta: { availability: "available", source: "codex" },
-      },
-    });
-  });
+      });
+    },
+  );
   await page.route("**/api/v1/environments/**/metrics/current", async (route) => {
     await route.fulfill({
       json: {
@@ -2918,29 +3130,32 @@ test("keeps an optimistic prompt ahead of native Activity without duplicating it
   });
 
   await installControlledEventSource(page);
-  await page.route("**/api/v1/sessions/**/models", async (route) => {
-    await route.fulfill({
-      json: {
-        data: {
-          data: [
-            {
-              id: snapshot.modelId,
-              displayName: "E2E order model",
-              isDefault: true,
-              defaultReasoningEffort: "high",
-              supportedReasoningEfforts: [
-                {
-                  reasoningEffort: "high",
-                  description: "Deep reasoning",
-                },
-              ],
-            },
-          ],
+  await page.route(
+    "**/api/v1/environments/**/harnesses/codex/models",
+    async (route) => {
+      await route.fulfill({
+        json: {
+          data: {
+            data: [
+              {
+                id: snapshot.modelId,
+                displayName: "E2E order model",
+                isDefault: true,
+                defaultReasoningEffort: "high",
+                supportedReasoningEfforts: [
+                  {
+                    reasoningEffort: "high",
+                    description: "Deep reasoning",
+                  },
+                ],
+              },
+            ],
+          },
+          meta: { availability: "available", source: "codex" },
         },
-        meta: { availability: "available", source: "codex" },
-      },
-    });
-  });
+      });
+    },
+  );
   await page.route(
     `**/api/v1/sessions/${encodeURIComponent(session.id)}/turns`,
     async (route) => {
@@ -3603,22 +3818,25 @@ await Promise.all(jobs.map((job) => tools.exec_command(job.args)));`,
         })}\n\n`,
     });
   });
-  await page.route("**/api/v1/sessions/**/models", async (route) => {
-    await route.fulfill({
-      json: {
-        data: {
-          data: [
-            {
-              id: snapshot.modelId,
-              displayName: "E2E native Codex model",
-              isDefault: true,
-            },
-          ],
+  await page.route(
+    "**/api/v1/environments/**/harnesses/codex/models",
+    async (route) => {
+      await route.fulfill({
+        json: {
+          data: {
+            data: [
+              {
+                id: snapshot.modelId,
+                displayName: "E2E native Codex model",
+                isDefault: true,
+              },
+            ],
+          },
+          meta: { availability: "available", source: "codex" },
         },
-        meta: { availability: "available", source: "codex" },
-      },
-    });
-  });
+      });
+    },
+  );
   await page.goto(
     `/?environment=${encodeURIComponent(environment.id)}&session=${encodeURIComponent(session.id)}`,
   );
@@ -3933,22 +4151,25 @@ test("opens Environment file and loopback links in their native inspectors", asy
       body: `event: snapshot\ndata: ${JSON.stringify(nativeSnapshot)}\n\n`,
     });
   });
-  await page.route("**/api/v1/sessions/**/models", async (route) => {
-    await route.fulfill({
-      json: {
-        data: {
-          data: [
-            {
-              id: nativeSnapshot.modelId,
-              displayName: "E2E workspace links model",
-              isDefault: true,
-            },
-          ],
+  await page.route(
+    "**/api/v1/environments/**/harnesses/codex/models",
+    async (route) => {
+      await route.fulfill({
+        json: {
+          data: {
+            data: [
+              {
+                id: nativeSnapshot.modelId,
+                displayName: "E2E workspace links model",
+                isDefault: true,
+              },
+            ],
+          },
+          meta: { availability: "available", source: "codex" },
         },
-        meta: { availability: "available", source: "codex" },
-      },
-    });
-  });
+      });
+    },
+  );
   await page.route("**/api/v1/environments/**/ide/file?*", async (route) => {
     const filePath = new URL(route.request().url()).searchParams.get("path");
     if (!filePath || !files.has(filePath)) {
@@ -4715,23 +4936,26 @@ test("resizes the Inspector proportionally and restores the local split", async 
       await route.fulfill({ json: { data: bootstrap } });
     },
   );
-  await page.route("**/api/v1/sessions/**/models", async (route) => {
-    await route.fulfill({
-      json: {
-        data: {
-          data: [
-            {
-              id: codexSession.harnessState.modelId,
-              displayName: "E2E layout model",
-              isDefault: true,
-              supportedReasoningEfforts: [],
-            },
-          ],
+  await page.route(
+    "**/api/v1/environments/**/harnesses/codex/models",
+    async (route) => {
+      await route.fulfill({
+        json: {
+          data: {
+            data: [
+              {
+                id: codexSession.harnessState.modelId,
+                displayName: "E2E layout model",
+                isDefault: true,
+                supportedReasoningEfforts: [],
+              },
+            ],
+          },
+          meta: { availability: "available", source: "codex" },
         },
-        meta: { availability: "available", source: "codex" },
-      },
-    });
-  });
+      });
+    },
+  );
   await page.route("**/api/v1/environments/**/metrics/current", async (route) => {
     await route.fulfill({
       json: {

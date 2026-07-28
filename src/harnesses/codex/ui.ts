@@ -183,9 +183,9 @@ const copy = {
       loadingConversation: "Loading conversation…",
       loadingConversationBody:
         "Restoring the latest native Codex session state.",
-      wakingConversation: "Restoring the Codex runtime…",
+      wakingConversation: "Still syncing the conversation…",
       wakingConversationBody:
-        "This Environment may be resuming from an idle checkpoint. Files and Terminal remain available independently.",
+        "A long native thread or an idle Environment can take longer to restore. Files and Terminal remain available independently.",
       attachedImages: "Attached images",
       removeImage: (name: string) => `Remove ${name}`,
       imageLimit: (count: number) => `Up to ${count} images per message.`,
@@ -528,9 +528,9 @@ const copy = {
       loadingConversation: "正在加载对话…",
       loadingConversationBody:
         "正在恢复最新的 Codex 原生会话状态。",
-      wakingConversation: "正在恢复 Codex 运行时…",
+      wakingConversation: "仍在同步完整会话…",
       wakingConversationBody:
-        "环境可能正在从空闲检查点恢复；文件和终端可独立打开，不必等待对话就绪。",
+        "较长的原生会话或空闲环境恢复可能需要更多时间；文件和终端可独立打开，不必等待对话就绪。",
       attachedImages: "已附加图片",
       removeImage: (name: string) => `移除 ${name}`,
       imageLimit: (count: number) => `每条消息最多添加 ${count} 张图片。`,

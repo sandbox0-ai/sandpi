@@ -49,6 +49,8 @@ interface SandpiAppProps {
   initialData: SandpiBootstrap;
 }
 
+const SESSION_HYDRATION_FRESHNESS_MS = 30_000;
+
 function replaceWorkspaceUrl(
   environmentId: string,
   sessionId?: string,
@@ -120,20 +122,45 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
   const workspaceNavigationRequestIdRef = useRef(0);
   const browserNavigationRequestIdRef = useRef(0);
   const restoredWorkspaceNavigationRef = useRef(false);
+  const sessionHydratedAtRef = useRef(
+    new Map(
+      initialData.sessions.map((session) => [session.id, Date.now()] as const),
+    ),
+  );
+  const sessionHydrationsRef = useRef(new Map<string, Promise<void>>());
 
-  const hydrateSession = useCallback(async (sessionId: string) => {
-    try {
-      const response = await apiFetch<ApiEnvelope<CodingSession>>(
-        `/api/v1/sessions/${encodeURIComponent(sessionId)}`,
-      );
-      setSessions((current) =>
-        current.map((session) =>
-          session.id === response.data.id ? response.data : session,
-        ),
-      );
-    } catch (error) {
-      console.error("Unable to load Session history", error);
+  const hydrateSession = useCallback((sessionId: string) => {
+    const now = Date.now();
+    const lastHydratedAt = sessionHydratedAtRef.current.get(sessionId);
+    if (
+      lastHydratedAt !== undefined &&
+      now - lastHydratedAt < SESSION_HYDRATION_FRESHNESS_MS
+    ) {
+      return Promise.resolve();
     }
+    const active = sessionHydrationsRef.current.get(sessionId);
+    if (active) return active;
+    const hydration = apiFetch<ApiEnvelope<CodingSession>>(
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}`,
+    )
+      .then((response) => {
+        sessionHydratedAtRef.current.set(sessionId, Date.now());
+        setSessions((current) =>
+          current.map((session) =>
+            session.id === response.data.id ? response.data : session,
+          ),
+        );
+      })
+      .catch((error) => {
+        console.error("Unable to refresh Session metadata", error);
+      })
+      .finally(() => {
+        if (sessionHydrationsRef.current.get(sessionId) === hydration) {
+          sessionHydrationsRef.current.delete(sessionId);
+        }
+      });
+    sessionHydrationsRef.current.set(sessionId, hydration);
+    return hydration;
   }, []);
 
   useEffect(() => {

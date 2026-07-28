@@ -301,6 +301,7 @@ function fixture(
     exceptionalSessionRetryBaseMs?: number;
     exceptionalSessionActiveRecheckMs?: number;
     exceptionalSessionRequestTimeoutMs?: number;
+    modelCatalogCacheTtlMs?: number;
     exceptionalCandidateErrors?: Error[];
     environmentRecoveryDelay?: Promise<void>;
     environmentRecoveryErrors?: Error[];
@@ -1517,6 +1518,7 @@ function fixture(
         input.exceptionalSessionActiveRecheckMs,
       exceptionalSessionRequestTimeoutMs:
         input.exceptionalSessionRequestTimeoutMs,
+      modelCatalogCacheTtlMs: input.modelCatalogCacheTtlMs,
     },
   );
   return {
@@ -1638,12 +1640,18 @@ function fixture(
   };
 }
 
-test("uses one Environment app-server for multiple native Sessions", async () => {
+test("uses one Environment app-server and model catalog for multiple native Sessions", async () => {
   const context = fixture();
   try {
     assert.deepEqual(await context.service.listModels("user", "session-one"), {
       data: [{ id: "gpt-test" }],
     });
+    assert.deepEqual(
+      await context.service.listEnvironmentModels("user", environment.id),
+      {
+        data: [{ id: "gpt-test" }],
+      },
+    );
     assert.deepEqual(await context.service.listModels("user", "session-two"), {
       data: [{ id: "gpt-test" }],
     });
@@ -1668,13 +1676,97 @@ test("uses one Environment app-server for multiple native Sessions", async () =>
     assert.equal(
       context.writes.filter((write) => write.message.method === "model/list")
         .length,
-      2,
+      1,
     );
     assert.equal(
       context.writes.filter((write) => write.message.method === "thread/resume")
         .length,
       0,
     );
+  } finally {
+    await context.close();
+  }
+});
+
+test("shares an in-flight Environment model catalog request", async () => {
+  let releaseWrite: (() => void) | undefined;
+  const blockedWrite = new Promise<void>((resolve) => {
+    releaseWrite = resolve;
+  });
+  const context = fixture({
+    writeDelays: { "model/list": blockedWrite },
+  });
+  try {
+    const first = context.service.listModels("user", "session-one");
+    await eventually(
+      () =>
+        context.writes.some((write) => write.message.method === "model/list"),
+      "first model/list was not submitted",
+    );
+    const second = context.service.listModels("user", "session-two");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    assert.equal(
+      context.writes.filter((write) => write.message.method === "model/list")
+        .length,
+      1,
+    );
+    releaseWrite?.();
+    assert.deepEqual(await Promise.all([first, second]), [
+      { data: [{ id: "gpt-test" }] },
+      { data: [{ id: "gpt-test" }] },
+    ]);
+  } finally {
+    releaseWrite?.();
+    await context.close();
+  }
+});
+
+test("refreshes the Environment model catalog after its runtime epoch changes", async () => {
+  const context = fixture();
+  try {
+    await context.service.listModels("user", "session-one");
+    context.recoverRuntimeAs({
+      attemptId: "attempt-environment-next",
+      runtimeGeneration: 2,
+    });
+    await context.service.listModels("user", "session-two");
+
+    assert.equal(
+      context.writes.filter((write) => write.message.method === "model/list")
+        .length,
+      2,
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("does not retain a failed Environment model catalog request", async () => {
+  let requests = 0;
+  const context = fixture({
+    onRequest(message) {
+      if (message.method !== "model/list") return undefined;
+      requests += 1;
+      return requests === 1
+        ? {
+            id: message.id,
+            error: { code: -32_603, message: "temporary model failure" },
+          }
+        : undefined;
+    },
+  });
+  try {
+    await assert.rejects(
+      context.service.listModels("user", "session-one"),
+      (error: unknown) =>
+        error instanceof HttpError &&
+        error.code === "codex_model_list_failed",
+    );
+    assert.deepEqual(await context.service.listModels("user", "session-two"), {
+      data: [{ id: "gpt-test" }],
+    });
+    assert.equal(requests, 2);
   } finally {
     await context.close();
   }

@@ -23,6 +23,7 @@ import {
   Fragment,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -122,6 +123,7 @@ import {
   apiUrl,
   type ApiEnvelope,
 } from "@/lib/api-client";
+import { BoundedLruCache } from "@/lib/bounded-lru-cache";
 import { copyTextToClipboard } from "@/lib/clipboard";
 import { createId } from "@/lib/id";
 import {
@@ -193,6 +195,16 @@ const CODEX_SESSION_STATUSES = new Set<CodexNativeSnapshot["sessionStatus"]>([
   "failed",
 ]);
 const SETTLED_PROJECTION_REFRESH_DELAY_MS = 250;
+const RECENT_SESSION_SNAPSHOT_CACHE_SIZE = 3;
+const RECENT_SESSION_DRAFT_CACHE_SIZE = 20;
+const EMPTY_CODEX_MODEL_OPTIONS: CodexModelOption[] = [];
+
+interface CodexModelCatalog {
+  environmentId: string;
+  credentialRevision: number;
+  options: CodexModelOption[];
+  unavailable: string;
+}
 
 interface PendingCodexTurn {
   clientMessageId: string;
@@ -260,7 +272,22 @@ export function CodexConversation({
   onDerivedSessionCreated,
 }: ConversationProps) {
   const ui = getCodexUiCopy(language).conversation;
-  const [modelOptions, setModelOptions] = useState<CodexModelOption[]>([]);
+  const [modelCatalog, setModelCatalog] = useState<CodexModelCatalog>(() => ({
+    environmentId: environment.id,
+    credentialRevision: environment.credentialRevision,
+    options: [],
+    unavailable: "",
+  }));
+  const modelOptions =
+    modelCatalog.environmentId === environment.id &&
+    modelCatalog.credentialRevision === environment.credentialRevision
+      ? modelCatalog.options
+      : EMPTY_CODEX_MODEL_OPTIONS;
+  const modelCatalogUnavailable =
+    modelCatalog.environmentId === environment.id &&
+    modelCatalog.credentialRevision === environment.credentialRevision
+      ? modelCatalog.unavailable
+      : "";
   const [selectedModelId, setSelectedModelId] = useState(
     session.harnessState.modelId,
   );
@@ -312,9 +339,9 @@ export function CodexConversation({
   const [interrupting, setInterrupting] = useState(false);
   const [openingAgentsFile, setOpeningAgentsFile] = useState(false);
   const [forkingMessageId, setForkingMessageId] = useState<string | null>(null);
-  const [modelCatalogUnavailable, setModelCatalogUnavailable] = useState("");
   const [nativeSnapshot, setNativeSnapshot] =
     useState<CodexNativeSnapshot | null>(null);
+  const [nativeSnapshotFromCache, setNativeSnapshotFromCache] = useState(false);
   const [liveNotifications, setLiveNotifications] = useState<
     CodexEventEnvelope[]
   >([]);
@@ -345,13 +372,44 @@ export function CodexConversation({
   const nativeSnapshotRefreshRequestedRef = useRef(false);
   const settledProjectionRefreshKeyRef = useRef<string | null>(null);
   const localComposerPreferenceActiveRef = useRef(false);
+  const modelCatalogRequestRef = useRef<{
+    key: string;
+    request: Promise<ApiEnvelope<unknown>>;
+  } | null>(null);
   const sessionRef = useRef(session);
+  const activeSessionIdRef = useRef(session.id);
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+  const [nativeSnapshotCache] = useState(
+    () =>
+      new BoundedLruCache<string, CodexNativeSnapshot>(
+        RECENT_SESSION_SNAPSHOT_CACHE_SIZE,
+      ),
+  );
+  const [sessionDraftCache] = useState(
+    () =>
+      new BoundedLruCache<string, string>(
+        RECENT_SESSION_DRAFT_CACHE_SIZE,
+      ),
+  );
+  const sessionTransitionRef = useRef({
+    session,
+    nativeSnapshotCache,
+    sessionDraftCache,
+  });
+  sessionTransitionRef.current = {
+    session,
+    nativeSnapshotCache,
+    sessionDraftCache,
+  };
   const requestNativeSnapshotRefresh = useCallback(
     (options: { clearProjection?: boolean } = {}) => {
       if (options.clearProjection) {
         liveNotificationSequencesRef.current.clear();
         liveNotificationCountRef.current = 0;
+        nativeSnapshotCache.delete(sessionRef.current.id);
         setNativeSnapshot(null);
+        setNativeSnapshotFromCache(false);
         setLiveNotifications([]);
       }
       hasNativeSnapshotRef.current = false;
@@ -361,7 +419,7 @@ export function CodexConversation({
       nativeSnapshotRefreshRequestedRef.current = true;
       setNativeStreamEpoch((current) => current + 1);
     },
-    [],
+    [nativeSnapshotCache],
   );
   const visibleTimeline = useMemo(() => {
     return projectCodexTimeline(nativeSnapshot?.thread, liveNotifications);
@@ -475,6 +533,8 @@ export function CodexConversation({
   // Do not infer a cold start from persisted Sandbox state here: bootstrap may
   // still say paused while an ordinary refresh is already loading the runtime.
   const nativeHistoryLoading = !nativeSnapshot && !nativeHistoryError;
+  const nativeHistorySyncing =
+    nativeSnapshotFromCache && !nativeStreamReady && !nativeHistoryError;
   const slashMenu = useCodexSlashCommandMenu({
     value: draft,
     context: "session",
@@ -564,12 +624,41 @@ export function CodexConversation({
     return () => window.clearTimeout(timer);
   }, [nativeHistoryLoading, session.id]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    const {
+      session: nextSession,
+      nativeSnapshotCache: snapshots,
+      sessionDraftCache: drafts,
+    } = sessionTransitionRef.current;
+    const previousSessionId = activeSessionIdRef.current;
+    if (previousSessionId !== nextSession.id) {
+      if (draftRef.current) {
+        drafts.set(previousSessionId, draftRef.current);
+      } else {
+        drafts.delete(previousSessionId);
+      }
+    }
+    activeSessionIdRef.current = nextSession.id;
+    sessionRef.current = nextSession;
+    const cachedDraft = drafts.get(nextSession.id) ?? "";
+    draftRef.current = cachedDraft;
+    const cachedSnapshotCandidate = snapshots.get(nextSession.id);
+    const cachedSnapshot =
+      cachedSnapshotCandidate?.nativeSessionId ===
+        nextSession.harnessState.threadId &&
+      cachedSnapshotCandidate.historyRevision ===
+        nextSession.harnessState.historyRevision
+        ? cachedSnapshotCandidate
+        : undefined;
+    if (cachedSnapshotCandidate && !cachedSnapshot) {
+      snapshots.delete(nextSession.id);
+    }
+
     pendingTurnStartedAtRef.current = null;
     nativeAcceptedMessageIdsRef.current.clear();
     setPendingTurn(null);
     setPendingSteers([]);
-    setDraft("");
+    setDraft(cachedDraft);
     setPastedImages([]);
     setLocalImages([]);
     setAttachmentError("");
@@ -580,7 +669,6 @@ export function CodexConversation({
     setSending(false);
     setInterrupting(false);
     setForkingMessageId(null);
-    setModelCatalogUnavailable("");
     const agentThreadUrl = new URL(window.location.href);
     const requestedAgentThread =
       agentThreadUrl.searchParams.get("agent")?.trim() || undefined;
@@ -590,7 +678,8 @@ export function CodexConversation({
         Boolean(requestedAgentThread),
     );
     setNativeDialog(undefined);
-    setNativeSnapshot(null);
+    setNativeSnapshot(cachedSnapshot ?? null);
+    setNativeSnapshotFromCache(Boolean(cachedSnapshot));
     setLiveNotifications([]);
     setNativeStreamReady(false);
     setNativeHistoryError("");
@@ -602,6 +691,21 @@ export function CodexConversation({
     settledProjectionRefreshKeyRef.current = null;
     localComposerPreferenceActiveRef.current = false;
   }, [session.id]);
+
+  useEffect(() => {
+    if (
+      !nativeSnapshot ||
+      nativeSnapshot.nativeSessionId !== session.harnessState.threadId
+    ) {
+      return;
+    }
+    nativeSnapshotCache.set(session.id, nativeSnapshot);
+  }, [
+    nativeSnapshot,
+    nativeSnapshotCache,
+    session.harnessState.threadId,
+    session.id,
+  ]);
 
   useEffect(() => {
     if (!pendingTurn || !pendingNativeMessage) return;
@@ -687,86 +791,106 @@ export function CodexConversation({
   }, [runningTurnId]);
 
   useEffect(() => {
-    if (localComposerPreferenceActiveRef.current) return;
-    setSelectedModelId(session.harnessState.modelId);
-    setReasoningEfforts(
-      session.harnessState.modelId && session.harnessState.reasoningEffort
-        ? {
-            [session.harnessState.modelId]:
-              session.harnessState.reasoningEffort,
-          }
-        : {},
-    );
+    const requestKey = `${environment.id}:${environment.credentialRevision}`;
+    setModelCatalog({
+      environmentId: environment.id,
+      credentialRevision: environment.credentialRevision,
+      options: [],
+      unavailable: "",
+    });
+    const currentRequest = modelCatalogRequestRef.current;
+    const request =
+      currentRequest?.key === requestKey
+        ? currentRequest.request
+        : apiFetch<ApiEnvelope<unknown>>(
+            `/api/v1/environments/${encodeURIComponent(environment.id)}/harnesses/codex/models`,
+          );
+    modelCatalogRequestRef.current = { key: requestKey, request };
+    let active = true;
+    void request
+      .then((response) => {
+        if (!active) return;
+        const models = codexModelOptionsFromNativeResult(response.data);
+        setModelCatalog({
+          environmentId: environment.id,
+          credentialRevision: environment.credentialRevision,
+          options: models,
+          unavailable:
+            response.meta?.availability === "runtime-unavailable"
+              ? typeof response.meta.message === "string"
+                ? response.meta.message
+                : ui.modelListUnavailable
+              : "",
+        });
+      })
+      .catch((error) => {
+        if (modelCatalogRequestRef.current?.request === request) {
+          modelCatalogRequestRef.current = null;
+        }
+        if (!active) return;
+        setModelCatalog({
+          environmentId: environment.id,
+          credentialRevision: environment.credentialRevision,
+          options: [],
+          unavailable:
+            error instanceof Error ? error.message : ui.modelListUnavailable,
+        });
+      });
+    return () => {
+      active = false;
+    };
   }, [
-    session.id,
-    session.harnessState.modelId,
-    session.harnessState.reasoningEffort,
+    environment.codingAgent.harness,
+    environment.credentialRevision,
+    environment.id,
+    ui.modelListUnavailable,
   ]);
 
   useEffect(() => {
-    const controller = new AbortController();
-    setModelCatalogUnavailable("");
-    void apiFetch<ApiEnvelope<unknown>>(
-      `/api/v1/sessions/${encodeURIComponent(session.id)}/models`,
-      { signal: controller.signal },
-    )
-      .then((response) => {
-        const models = codexModelOptionsFromNativeResult(response.data);
-        setModelOptions(models);
-        setModelCatalogUnavailable(
-          response.meta?.availability === "runtime-unavailable"
-            ? typeof response.meta.message === "string"
-              ? response.meta.message
-              : ui.modelListUnavailable
-            : "",
-        );
-        const localPreference = codingAgentComposerPreference({
-          environmentId: environment.id,
-          harness: environment.codingAgent.harness,
-          sessionId: session.id,
-        });
-        const localModelAvailable = Boolean(
-          localPreference &&
-          models.some((model) => model.id === localPreference.modelId),
-        );
-        const selection = reconcileCodexComposerPreference(
-          models,
-          localModelAvailable
-            ? localPreference
-            : {
-                modelId: session.harnessState.modelId,
-                reasoningEfforts:
-                  session.harnessState.modelId &&
-                  session.harnessState.reasoningEffort
-                    ? {
-                        [session.harnessState.modelId]:
-                          session.harnessState.reasoningEffort,
-                      }
-                    : {},
-              },
-        );
-        localComposerPreferenceActiveRef.current = localModelAvailable;
-        if (selection.model) {
-          setSelectedModelId(selection.model.id);
-          setReasoningEfforts(selection.reasoningEfforts);
-        }
-      })
-      .catch((error) => {
-        if (!controller.signal.aborted) {
-          setModelOptions([]);
-          setModelCatalogUnavailable(
-            error instanceof Error ? error.message : ui.modelListUnavailable,
-          );
-        }
-      });
-    return () => controller.abort();
+    const persistedPreference =
+      session.harnessState.modelId && session.harnessState.reasoningEffort
+        ? {
+            modelId: session.harnessState.modelId,
+            reasoningEfforts: {
+              [session.harnessState.modelId]:
+                session.harnessState.reasoningEffort,
+            },
+          }
+        : {
+            modelId: session.harnessState.modelId,
+            reasoningEfforts: {},
+          };
+    if (modelOptions.length === 0) {
+      localComposerPreferenceActiveRef.current = false;
+      setSelectedModelId(session.harnessState.modelId);
+      setReasoningEfforts(persistedPreference.reasoningEfforts);
+      return;
+    }
+    const localPreference = codingAgentComposerPreference({
+      environmentId: environment.id,
+      harness: environment.codingAgent.harness,
+      sessionId: session.id,
+    });
+    const localModelAvailable = Boolean(
+      localPreference &&
+      modelOptions.some((model) => model.id === localPreference.modelId),
+    );
+    const selection = reconcileCodexComposerPreference(
+      modelOptions,
+      localModelAvailable ? localPreference : persistedPreference,
+    );
+    localComposerPreferenceActiveRef.current = localModelAvailable;
+    if (selection.model) {
+      setSelectedModelId(selection.model.id);
+      setReasoningEfforts(selection.reasoningEfforts);
+    }
   }, [
     environment.codingAgent.harness,
     environment.id,
+    modelOptions,
     session.harnessState.modelId,
     session.harnessState.reasoningEffort,
     session.id,
-    ui.modelListUnavailable,
   ]);
 
   useEffect(() => {
@@ -809,6 +933,7 @@ export function CodexConversation({
         liveNotificationSequencesRef.current.clear();
         liveNotificationCountRef.current = 0;
         setNativeSnapshot(snapshot);
+        setNativeSnapshotFromCache(false);
         // A snapshot is the new native authority. Never replay the prior
         // connection's notification suffix on top of it.
         setLiveNotifications([]);
@@ -850,7 +975,9 @@ export function CodexConversation({
         hasNativeStreamFailureRef.current = true;
         liveNotificationSequencesRef.current.clear();
         liveNotificationCountRef.current = 0;
+        nativeSnapshotCache.delete(session.id);
         setNativeSnapshot(null);
+        setNativeSnapshotFromCache(false);
         setLiveNotifications([]);
         setNativeStreamReady(false);
         setNativeHistoryError(ui.nativeRolloutUnavailableBody);
@@ -989,7 +1116,9 @@ export function CodexConversation({
       hasNativeSnapshotRef.current = false;
       liveNotificationSequencesRef.current.clear();
       liveNotificationCountRef.current = 0;
+      nativeSnapshotCache.delete(session.id);
       setNativeSnapshot(null);
+      setNativeSnapshotFromCache(false);
       setLiveNotifications([]);
       setNativeStreamReady(false);
       const reason = invalidation.reason?.toLowerCase() ?? "";
@@ -1050,6 +1179,7 @@ export function CodexConversation({
     return () => source.close();
   }, [
     nativeStreamEpoch,
+    nativeSnapshotCache,
     onSessionChange,
     requestNativeSnapshotRefresh,
     session.id,
@@ -2158,7 +2288,7 @@ export function CodexConversation({
           <div
             ref={conversationContentRef}
             className="message-column"
-            aria-busy={nativeHistoryLoading}
+            aria-busy={nativeHistoryLoading || nativeHistorySyncing}
           >
             {nativeHistoryLoading ? (
               <div

@@ -105,6 +105,8 @@ const EXCEPTIONAL_SESSION_REQUEST_TIMEOUT_MS = 5_000;
 const AUTOMATIC_TURN_RECOVERY_MAX_ATTEMPTS = 1;
 const MAX_RPC_RESPONSES_PER_ENVIRONMENT = 512;
 const MAX_LIVE_NOTIFICATIONS_PER_SESSION = 1_000;
+const MODEL_CATALOG_CACHE_TTL_MS = 30_000;
+const MAX_MODEL_CATALOG_CACHE_ENTRIES = 128;
 const CODEX_ENVIRONMENT_CWD = "/workspace";
 const CODEX_ENVIRONMENT_HOME = "/workspace/.sandpi/harnesses/codex";
 const CODEX_ROLLOUT_ROOTS = [
@@ -196,6 +198,11 @@ interface RpcAnchor {
 interface NativeSessionAttachmentState {
   epoch: string;
   threads: Map<string, Promise<void>>;
+}
+
+interface ModelCatalogCacheEntry {
+  expiresAt: number;
+  promise: Promise<{ data: unknown[] }>;
 }
 
 interface ExceptionalSessionReconciliation {
@@ -303,6 +310,7 @@ export class CodexService {
     DeferredExceptionalSessionReconciliation
   >();
   private readonly interactiveEnvironmentOperations = new Map<string, number>();
+  private readonly modelCatalogs = new Map<string, ModelCatalogCacheEntry>();
   private readonly live = new Map<string, LiveNotificationState>();
   private readonly activeInlineReviews = new Map<string, string>();
   private readonly events = new EventEmitter();
@@ -325,6 +333,7 @@ export class CodexService {
       exceptionalSessionRetryBaseMs?: number;
       exceptionalSessionActiveRecheckMs?: number;
       exceptionalSessionRequestTimeoutMs?: number;
+      modelCatalogCacheTtlMs?: number;
       runtimeQuotaGate?: RuntimeQuotaGate;
     } = {},
   ) {
@@ -2106,16 +2115,12 @@ export class CodexService {
   }
 
   async listModels(userId: string, sessionId: string) {
-    const sessionRuntime = await this.store.getSessionRuntime(
-      userId,
-      sessionId,
-    );
     const environmentRuntime = await this.environmentRuntimeForSession(
       userId,
       sessionId,
     );
     return this.listModelsFromRuntime(
-      sessionRuntime.environmentId,
+      environmentRuntime.id,
       environmentRuntime,
       sessionId,
       sessionId,
@@ -2240,6 +2245,51 @@ export class CodexService {
     requestScopeId: string,
     ownerSessionId?: string,
   ) {
+    const key = environmentProtocolKey(environmentRuntime);
+    const now = Date.now();
+    const cached = this.modelCatalogs.get(key);
+    if (cached && cached.expiresAt > now) {
+      this.modelCatalogs.delete(key);
+      this.modelCatalogs.set(key, cached);
+      return cached.promise;
+    }
+    if (cached) this.modelCatalogs.delete(key);
+    this.pruneModelCatalogs(now);
+
+    const promise = this.loadModelsFromRuntime(
+      environmentId,
+      environmentRuntime,
+      requestScopeId,
+      ownerSessionId,
+    );
+    const entry: ModelCatalogCacheEntry = {
+      expiresAt: Number.POSITIVE_INFINITY,
+      promise,
+    };
+    this.modelCatalogs.set(key, entry);
+    void promise.then(
+      () => {
+        if (this.modelCatalogs.get(key) !== entry) return;
+        entry.expiresAt =
+          Date.now() +
+          (this.options.modelCatalogCacheTtlMs ??
+            MODEL_CATALOG_CACHE_TTL_MS);
+      },
+      () => {
+        if (this.modelCatalogs.get(key) === entry) {
+          this.modelCatalogs.delete(key);
+        }
+      },
+    );
+    return promise;
+  }
+
+  private async loadModelsFromRuntime(
+    environmentId: string,
+    environmentRuntime: StoredEnvironmentRuntime,
+    requestScopeId: string,
+    ownerSessionId?: string,
+  ) {
     const data: unknown[] = [];
     let cursor: string | undefined;
     do {
@@ -2265,6 +2315,17 @@ export class CodexService {
       cursor = page.nextCursor;
     } while (cursor);
     return { data };
+  }
+
+  private pruneModelCatalogs(now: number) {
+    for (const [key, entry] of this.modelCatalogs) {
+      if (entry.expiresAt <= now) this.modelCatalogs.delete(key);
+    }
+    while (this.modelCatalogs.size >= MAX_MODEL_CATALOG_CACHE_ENTRIES) {
+      const oldest = this.modelCatalogs.keys().next().value;
+      if (oldest === undefined) break;
+      this.modelCatalogs.delete(oldest);
+    }
   }
 
   async readScheduledTurnStatus(input: {
@@ -3018,6 +3079,7 @@ export class CodexService {
     this.workers.clear();
     this.workerTasks.clear();
     this.initializing.clear();
+    this.modelCatalogs.clear();
     this.rpcWaiters.clear();
     this.rpcResponses.clear();
     this.rpcAnchors.clear();
@@ -3038,10 +3100,9 @@ export class CodexService {
     await this.options.runtimeQuotaGate?.assertEnvironmentRuntimeAllowed(
       environment.id,
     );
-    const current = await this.store.getEnvironmentRuntime(
-      userId,
-      environment.id,
-    );
+    // Every caller supplies an Environment already authorized for this user.
+    // Avoid repeating the same ownership query before reading its runtime.
+    const current = await this.store.environmentRuntime(environment.id);
     if (
       current.desiredState === "running" &&
       current.observedState === "running" &&
@@ -4230,6 +4291,9 @@ export class CodexService {
     const prefix = `${environmentId}\0`;
     for (const key of this.initializing.keys()) {
       if (key.startsWith(prefix)) this.initializing.delete(key);
+    }
+    for (const key of this.modelCatalogs.keys()) {
+      if (key.startsWith(prefix)) this.modelCatalogs.delete(key);
     }
   }
 
