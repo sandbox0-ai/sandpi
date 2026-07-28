@@ -1,9 +1,12 @@
 # DigitalOcean Kubernetes deployment
 
 The production deployment uses the shared DigitalOcean nginx ingress, one
-Sandpi server replica, and one PostgreSQL 16 StatefulSet. PostgreSQL data uses a
-10 GiB `do-block-storage-retain` volume. Sandpi Workspaces and coding-agent
-processes remain in Sandbox0 rather than this cluster.
+steady-state Sandpi server replica, and one PostgreSQL 16 StatefulSet.
+Application rollouts temporarily add one surge replica, wait for it to remain
+ready, and only then terminate the previous replica so image pulls and startup
+do not leave the Service without an endpoint. PostgreSQL data uses a 10 GiB
+`do-block-storage-retain` volume. Sandpi Workspaces and coding-agent processes
+remain in Sandbox0 rather than this cluster.
 
 `bootstrap.yaml` is an operator-owned, one-time bootstrap. It creates the
 `sandpi` namespace, empty runtime secrets, and a GitHub deployer whose Role is

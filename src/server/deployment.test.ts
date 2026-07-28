@@ -13,15 +13,24 @@ function deploymentFile(relativePath: string): Promise<string> {
   return repositoryFile(`deploy/kubernetes/${relativePath}`);
 }
 
-test("the production workload keeps one hardened Sandpi worker", async () => {
+test("the production workload rolls one hardened Sandpi worker without downtime", async () => {
   const manifest = await deploymentFile("app/sandpi.yaml");
 
   assert.match(manifest, /kind: Deployment[\s\S]*?replicas: 1/);
-  assert.match(manifest, /strategy:\n    type: Recreate/);
+  assert.match(manifest, /minReadySeconds: 5/);
+  assert.match(
+    manifest,
+    /strategy:\n    type: RollingUpdate\n    rollingUpdate:\n      maxUnavailable: 0\n      maxSurge: 1/,
+  );
+  assert.doesNotMatch(manifest, /type: Recreate/);
   assert.match(manifest, /automountServiceAccountToken: false/);
   assert.match(manifest, /readOnlyRootFilesystem: true/);
   assert.match(manifest, /runAsNonRoot: true/);
   assert.match(manifest, /path: \/health\/ready/);
+  assert.match(
+    manifest,
+    /requests:\n              cpu: 40m\n              memory: 256Mi/,
+  );
   assert.equal(
     manifest.match(/ghcr\.io\/sandbox0-ai\/sandpi:main/g)?.length,
     1,

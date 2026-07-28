@@ -25,8 +25,12 @@ metadata:
 spec:
   replicas: 1
   revisionHistoryLimit: 3
+  minReadySeconds: 5
   strategy:
-    type: Recreate
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: sandpi
@@ -109,7 +113,7 @@ spec:
             failureThreshold: 6
           resources:
             requests:
-              cpu: 100m
+              cpu: 40m
               memory: 256Mi
             limits:
               cpu: "2"
