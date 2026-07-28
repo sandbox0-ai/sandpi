@@ -67,8 +67,33 @@ test("does not preserve scheme-less loopback targets without a Browser handler",
   assert.doesNotMatch(html, /data-browser-url/);
 });
 
-test("does not execute raw HTML from a harness message", () => {
-  const html = render("Safe <script>alert('unsafe')</script> text");
+test("renders raw HTML from a harness message as inert text", () => {
+  const html = render('Safe <script>alert("unsafe")</script> text');
+
   assert.doesNotMatch(html, /<script>/);
-  assert.doesNotMatch(html, /alert\('unsafe'\)/);
+  assert.match(
+    html,
+    /Safe &lt;script&gt;alert\(&quot;unsafe&quot;\)&lt;\/script&gt; text/,
+  );
+});
+
+test("preserves pasted multiline script blocks as inert text", () => {
+  const html = render(`Before
+
+<!-- Google tag -->
+<script async src="https://example.com/tag.js"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+</script>
+
+After`);
+
+  assert.doesNotMatch(html, /<script(?:\s|>)/i);
+  assert.match(html, /&lt;!-- Google tag --&gt;/);
+  assert.match(
+    html,
+    /&lt;script async src=&quot;https:\/\/example\.com\/tag\.js&quot;&gt;&lt;\/script&gt;/,
+  );
+  assert.match(html, /window\.dataLayer = window\.dataLayer \|\| \[\];/);
+  assert.match(html, /&lt;\/script&gt;/);
 });

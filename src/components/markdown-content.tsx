@@ -16,6 +16,7 @@ interface MarkdownContentProps {
 }
 
 const remarkPlugins = [remarkGfm];
+// Intentionally omit rehypeRaw so pasted HTML stays visible as inert text.
 
 function workspacePathFromHref(href: string | undefined) {
   if (!href) return undefined;
@@ -122,7 +123,6 @@ export function MarkdownContent({
         urlTransform={(value, key) =>
           markdownUrlTransform(value, key, Boolean(onOpenBrowserUrl))
         }
-        skipHtml
       >
         {content}
       </ReactMarkdown>
