@@ -7031,6 +7031,12 @@ code.codex-compact-activity-subject {
 }
 
 @media (max-width: 680px) {
+  .inspector {
+    width: 100vw;
+    border-left: 0;
+    box-shadow: none;
+  }
+
   .conversation-pane {
     --conversation-column-inline-padding: 15px;
     --conversation-message-rails: 72px;
