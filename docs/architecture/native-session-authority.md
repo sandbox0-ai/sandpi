@@ -718,7 +718,9 @@ this projection; temporary Sandbox0 pauses used for Workspace or Supervisor
 repair are not mislabeled. The Metrics endpoint queries intervals overlapping
 the exact Sandbox0 metrics window, and the Inspector shades them across every
 runtime chart so intentional checkpoint gaps remain distinguishable from
-collector failures.
+collector failures. Sandbox0 aggregation points retain their effective bucket
+step; the chart extends only adjacent segment endpoints within one step to the
+exact pause boundary, without joining longer collection or reset gaps.
 
 The lifecycle policy migration stores one absolute hard-expiry target before
 updating an older Sandbox. A retry sends only the seconds remaining to that

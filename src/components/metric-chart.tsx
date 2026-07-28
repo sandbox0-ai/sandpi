@@ -20,6 +20,7 @@ export type MetricChartTone = "green" | "blue" | "amber";
 export interface MetricChartSeries {
   id: string;
   label: string;
+  stepSeconds: number;
   segments: MetricSegment[];
   tone: MetricChartTone;
 }
@@ -118,6 +119,110 @@ export function metricChartPauseBands(
   });
 }
 
+/**
+ * Extends bucket-backed segment endpoints to an overlapping durable pause.
+ * Sandbox0 timestamps aggregates at the bucket start, so the final point on
+ * either side may otherwise stop up to one effective step short of the exact
+ * lifecycle boundary. Source segments stay separate and longer gaps remain
+ * visible.
+ */
+export function metricChartAlignedSegments(
+  segments: MetricSegment[],
+  stepSeconds: number,
+  pauseBands: MetricChartPauseBand[],
+): MetricSegment[] {
+  if (
+    !Number.isFinite(stepSeconds) ||
+    stepSeconds <= 0 ||
+    pauseBands.length === 0
+  ) {
+    return segments;
+  }
+
+  const aligned = segments.map((segment) => ({
+    points: [...segment.points],
+  }));
+
+  for (const band of pauseBands) {
+    let beforeIndex = -1;
+    let beforeAt = Number.NEGATIVE_INFINITY;
+
+    for (const [index, segment] of aligned.entries()) {
+      const last = segment.points.at(-1);
+      if (
+        last &&
+        Number.isFinite(last.at) &&
+        last.at <= band.startedAt &&
+        band.startedAt - last.at <= stepSeconds &&
+        last.at > beforeAt
+      ) {
+        beforeIndex = index;
+        beforeAt = last.at;
+      }
+    }
+
+    if (beforeIndex >= 0 && beforeAt < band.startedAt) {
+      const segment = aligned[beforeIndex];
+      const last = segment?.points.at(-1);
+      if (segment && last) {
+        segment.points.push({ at: band.startedAt, value: last.value });
+      }
+    }
+
+    if (band.active) {
+      continue;
+    }
+
+    let afterIndex = -1;
+    let afterDistance = Number.POSITIVE_INFINITY;
+    const firstAllowedIndex = beforeIndex >= 0 ? beforeIndex + 1 : 0;
+
+    for (let index = firstAllowedIndex; index < aligned.length; index += 1) {
+      const segment = aligned[index];
+      const first = segment?.points[0];
+      const last = segment?.points.at(-1);
+      if (
+        !first ||
+        !last ||
+        !Number.isFinite(first.at) ||
+        !Number.isFinite(last.at) ||
+        last.at < band.endedAt ||
+        first.at < band.startedAt - stepSeconds
+      ) {
+        continue;
+      }
+      const distance = Math.abs(first.at - band.endedAt);
+      if (distance <= stepSeconds && distance < afterDistance) {
+        afterIndex = index;
+        afterDistance = distance;
+      }
+    }
+
+    if (afterIndex < 0) {
+      continue;
+    }
+
+    const segment = aligned[afterIndex];
+    const first = segment?.points[0];
+    if (!segment || !first || first.at === band.endedAt) {
+      continue;
+    }
+    if (first.at > band.endedAt) {
+      segment.points.unshift({ at: band.endedAt, value: first.value });
+      continue;
+    }
+
+    const boundarySource =
+      segment.points.findLast((point) => point.at <= band.endedAt) ?? first;
+    segment.points = [
+      { at: band.endedAt, value: boundarySource.value },
+      ...segment.points.filter((point) => point.at > band.endedAt),
+    ];
+  }
+
+  return aligned;
+}
+
 export function InteractiveMetricChart({
   series,
   max,
@@ -159,6 +264,14 @@ export function InteractiveMetricChart({
     () => metricChartPauseBands(pauseIntervals, window),
     [pauseIntervals, window],
   );
+  const renderedSeries = visibleSeries.map((item) => ({
+    ...item,
+    segments: metricChartAlignedSegments(
+      item.segments,
+      item.stepSeconds,
+      pauseBands,
+    ),
+  }));
   const largestValue = Math.max(
     ...visibleSeries.flatMap((item) =>
       item.segments.flatMap((segment) =>
@@ -302,7 +415,7 @@ export function InteractiveMetricChart({
             className="metric-chart-grid"
             d={`M0,22 H${WIDTH} M0,44 H${WIDTH} M0,66 H${WIDTH}`}
           />
-          {visibleSeries.flatMap((item) =>
+          {renderedSeries.flatMap((item) =>
             item.segments.map((segment, index) => (
               <path
                 className={`metric-chart-area tone-${item.tone}`}
@@ -332,7 +445,7 @@ export function InteractiveMetricChart({
               </rect>
             );
           })}
-          {visibleSeries.flatMap((item) =>
+          {renderedSeries.flatMap((item) =>
             item.segments.map((segment, index) => (
               <path
                 className={`metric-chart-line tone-${item.tone}`}

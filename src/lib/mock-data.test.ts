@@ -115,6 +115,7 @@ test("models network throughput with the sdk-js metric contract", () => {
   assert.equal(metrics.networkReceive.metric, "sandbox.network.io");
   assert.equal(metrics.networkReceive.statistic, "rate");
   assert.equal(metrics.networkReceive.unit, "bytes_per_second");
+  assert.equal(metrics.networkReceive.stepSeconds, 5 * 60);
   assert.equal(metrics.networkReceive.dimensions?.direction, "receive");
   assert.equal(metrics.networkTransmit.dimensions?.direction, "transmit");
   assert.ok(metrics.networkReceive.segments.length > 1);

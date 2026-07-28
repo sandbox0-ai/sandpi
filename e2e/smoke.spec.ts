@@ -4295,17 +4295,29 @@ test("does not answer historical terminal queries on the live PTY", async ({
 
 test("shows a matching skeleton while each Inspector tab loads", async ({
   page,
-  request,
 }) => {
-  const workspace = await activeWorkspace(request);
-  test.skip(!workspace, "An active Session is required for this check.");
-  if (!workspace) return;
-  const { environment, session } = workspace;
+  const bootstrap = getMockBootstrap();
+  useEnglishUi(bootstrap);
+  const session = bootstrap.sessions.find((candidate) => !candidate.archived);
+  const environment = bootstrap.environments.find(
+    (candidate) => candidate.id === session?.environmentId,
+  );
+  expect(session).toBeTruthy();
+  expect(environment).toBeTruthy();
+  if (!session || !environment) return;
+  bootstrap.selectedEnvironmentId = environment.id;
+  bootstrap.selectedSessionId = session.id;
   const browserErrors: string[] = [];
   page.on("console", (message) => {
     if (message.type() === "error") browserErrors.push(message.text());
   });
   page.on("pageerror", (error) => browserErrors.push(error.message));
+  await page.route(
+    (url) => url.pathname === "/api/v1/bootstrap",
+    async (route) => {
+      await route.fulfill({ json: { data: bootstrap } });
+    },
+  );
   await page.route("**/api/v1/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (/\/sessions\/[^/]+\/events$/.test(path)) {
@@ -4407,6 +4419,46 @@ test("shows a matching skeleton while each Inspector tab loads", async ({
   await expect(
     page.locator(".metric-chart-pause-legend").first(),
   ).toContainText("Sandpi idle pause");
+  const metricChartEdges = await page
+    .locator(".metric-card")
+    .evaluateAll((cards) =>
+      cards.map((card) => {
+        const band = card.querySelector<SVGRectElement>(
+          ".metric-chart-pause-band",
+        );
+        const segmentEdges = Array.from(
+          card.querySelectorAll<SVGPathElement>(".metric-chart-line"),
+        ).map((path) => {
+          const length = path.getTotalLength();
+          return {
+            start: path.getPointAtLength(0).x,
+            end: path.getPointAtLength(length).x,
+          };
+        });
+        return {
+          bandStart: band?.x.baseVal.value ?? Number.NaN,
+          bandEnd:
+            (band?.x.baseVal.value ?? Number.NaN) +
+            (band?.width.baseVal.value ?? Number.NaN),
+          segmentEdges,
+        };
+      }),
+    );
+  expect(metricChartEdges).toHaveLength(3);
+  for (const chart of metricChartEdges) {
+    for (let index = 0; index < chart.segmentEdges.length; index += 2) {
+      expect(
+        Math.abs(
+          (chart.segmentEdges[index]?.end ?? Number.NaN) - chart.bandStart,
+        ),
+      ).toBeLessThan(0.2);
+      expect(
+        Math.abs(
+          (chart.segmentEdges[index + 1]?.start ?? Number.NaN) - chart.bandEnd,
+        ),
+      ).toBeLessThan(0.2);
+    }
+  }
 
   const modelPicker = page.getByRole("combobox", {
     name: `Select ${environment.codingAgent.label} model`,

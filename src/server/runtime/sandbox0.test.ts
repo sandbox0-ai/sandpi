@@ -691,6 +691,95 @@ test("queries only the latest Sandbox CPU and memory gauges for compact UI", asy
   ]);
 });
 
+test("preserves the effective Sandbox metric step for chart rendering", async () => {
+  const calls: Array<{ metrics: string[] }> = [];
+  const pointTime = new Date("2026-07-28T01:00:30.000Z");
+  const runtime = runtimeWithClient({
+    sandboxes: {
+      sandbox() {
+        return {
+          async getMetrics(options: { metrics: string[] }) {
+            calls.push(options);
+            if (options.metrics.length === 1) {
+              return {
+                stepSeconds: 60,
+                series: ["receive", "transmit"].map((direction) => ({
+                  metric: "sandbox.network.io",
+                  kind: "counter",
+                  unit: "bytes",
+                  statistic: "rate",
+                  dimensions: { direction },
+                  segments: [
+                    { points: [{ time: pointTime, value: 1_024 }] },
+                  ],
+                })),
+              };
+            }
+            return {
+              stepSeconds: 30,
+              series: [
+                {
+                  metric: "sandbox.cpu.utilization",
+                  kind: "gauge",
+                  unit: "ratio",
+                  statistic: "average",
+                  segments: [{ points: [{ time: pointTime, value: 0.25 }] }],
+                },
+                {
+                  metric: "sandbox.memory.working_set",
+                  kind: "gauge",
+                  unit: "bytes",
+                  statistic: "average",
+                  segments: [{ points: [{ time: pointTime, value: 512 }] }],
+                },
+                {
+                  metric: "sandbox.memory.limit",
+                  kind: "gauge",
+                  unit: "bytes",
+                  statistic: "average",
+                  segments: [{ points: [{ time: pointTime, value: 1_024 }] }],
+                },
+              ],
+            };
+          },
+        };
+      },
+    },
+  });
+  const coordinates: EnvironmentRuntimeRecord = {
+    id: environment.id,
+    sandboxId: environment.sandboxId,
+    workspaceVolumeId: environment.workspaceVolumeId,
+    runtimeGeneration: 1,
+    decoder: {
+      supervisorCursor: 0,
+      tailBase64: "",
+      runtimeGeneration: 1,
+    },
+  };
+
+  const metrics = await runtime.getMetrics(coordinates, {
+    startedAt: new Date("2026-07-28T01:00:00.000Z"),
+    endedAt: new Date("2026-07-28T02:00:00.000Z"),
+  });
+
+  assert.equal(metrics.cpuUtilization.stepSeconds, 30);
+  assert.equal(metrics.memoryWorkingSet.stepSeconds, 30);
+  assert.equal(metrics.networkReceive.stepSeconds, 60);
+  assert.equal(metrics.networkTransmit.stepSeconds, 60);
+  assert.deepEqual(
+    calls.map((call) => call.metrics),
+    [
+      [
+        "sandbox.cpu.utilization",
+        "sandbox.memory.working_set",
+        "sandbox.memory.limit",
+      ],
+      ["sandbox.network.io"],
+    ],
+  );
+});
+
 test("preserves unrelated services and installs a constrained MCP OAuth callback", async () => {
   assert.equal(CODEX_MCP_OAUTH_CALLBACK_BASE_PATH, "/callback");
   let replacement: unknown;
