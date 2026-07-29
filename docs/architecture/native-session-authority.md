@@ -718,9 +718,13 @@ runtime generation after auto-resume and grants a fresh configured idle window
 to avoid an immediately repeated pause, but the next native completion remains
 the authoritative deadline source. Sandbox0 may return `sandbox is waking up`
 while that transition commits; Sandpi waits for the native running generation
-and retries the same supported runtime access. No Sandpi worker calls an
-explicit resume API. Runtime recovery and pause share the Environment advisory
-lock, so their database projections cannot commit out of order.
+and retries the same supported runtime access. A definitive
+`sandbox_resume_failed` response skips lifecycle polling and receives exactly
+one immediate supported-access retry. If that retry also fails, Sandpi surfaces
+the error without entering its longer runtime-recovery retry loop. No Sandpi
+worker calls an explicit resume API. Runtime recovery and pause share the
+Environment advisory lock, so their database projections cannot commit out of
+order.
 
 `environment_runtime.paused_at` remains the current Sandpi lifecycle
 projection. Its transitions automatically append and close

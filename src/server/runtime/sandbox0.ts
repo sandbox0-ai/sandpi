@@ -209,6 +209,7 @@ const CODEX_ROLLOUT_REPRESENTATION_RETRY_MS = 50;
 const GIT_STATUS_CONCURRENCY = 4;
 const SANDBOX_AUTO_RESUME_TIMEOUT_MS = 120_000;
 const SANDBOX_AUTO_RESUME_RETRY_DELAY_MS = 250;
+const SANDBOX_RESUME_FAILURE_MAX_RETRIES = 1;
 const SANDBOX0_TRANSPORT_RETRY_DELAYS_MS = [100, 250] as const;
 // Sandbox0 commits the paused lifecycle before the deleted runtime Pod's
 // finalizer finishes unbinding its ctld volume portal. Retry only that narrow,
@@ -1298,10 +1299,22 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     access: () => Promise<T>,
   ): Promise<T> {
     const startedAt = Date.now();
+    let resumeFailureRetries = 0;
     while (true) {
       try {
         return await access();
       } catch (error) {
+        if (isSandboxResumeFailed(error)) {
+          if (resumeFailureRetries >= SANDBOX_RESUME_FAILURE_MAX_RETRIES) {
+            throw sandboxAutoResumeFailed(sandboxId);
+          }
+          resumeFailureRetries += 1;
+          const remainingMs =
+            SANDBOX_AUTO_RESUME_TIMEOUT_MS - (Date.now() - startedAt);
+          if (remainingMs <= 0) throw sandboxAutoResumeFailed(sandboxId);
+          await delay(sandboxAutoResumeRetryDelay(error, remainingMs));
+          continue;
+        }
         if (!isSandboxWakingUp(error)) throw error;
         const remainingMs =
           SANDBOX_AUTO_RESUME_TIMEOUT_MS - (Date.now() - startedAt);
@@ -1321,16 +1334,7 @@ export class Sandbox0Runtime implements RuntimeAdapter {
         const retryRemainingMs =
           SANDBOX_AUTO_RESUME_TIMEOUT_MS - (Date.now() - startedAt);
         if (retryRemainingMs <= 0) throw sandboxAutoResumeTimeout(sandboxId);
-        const retryDelayMs = Math.min(
-          retryRemainingMs,
-          error.retryAfter === undefined
-            ? SANDBOX_AUTO_RESUME_RETRY_DELAY_MS
-            : Math.max(
-                SANDBOX_AUTO_RESUME_RETRY_DELAY_MS,
-                error.retryAfter * 1_000,
-              ),
-        );
-        await delay(retryDelayMs);
+        await delay(sandboxAutoResumeRetryDelay(error, retryRemainingMs));
       }
     }
   }
@@ -3730,6 +3734,26 @@ function isSandboxWakingUp(error: unknown): error is APIError {
   );
 }
 
+function isSandboxResumeFailed(error: unknown): error is APIError {
+  return (
+    error instanceof APIError &&
+    error.statusCode === 503 &&
+    error.code === "sandbox_resume_failed"
+  );
+}
+
+function sandboxAutoResumeRetryDelay(error: APIError, remainingMs: number) {
+  return Math.min(
+    remainingMs,
+    error.retryAfter === undefined
+      ? SANDBOX_AUTO_RESUME_RETRY_DELAY_MS
+      : Math.max(
+          SANDBOX_AUTO_RESUME_RETRY_DELAY_MS,
+          error.retryAfter * 1_000,
+        ),
+  );
+}
+
 function isWorkspaceRestoreWaitingForUnmount(
   error: unknown,
 ): error is APIError {
@@ -3749,6 +3773,14 @@ function sandboxAutoResumeTimeout(sandboxId: string) {
     503,
     "sandbox0_wakeup_timeout",
     `Sandbox0 did not finish auto-resuming Environment Sandbox ${sandboxId}.`,
+  );
+}
+
+function sandboxAutoResumeFailed(sandboxId: string) {
+  return new HttpError(
+    503,
+    "sandbox0_resume_failed",
+    `Sandbox0 could not auto-resume Environment Sandbox ${sandboxId} after one retry.`,
   );
 }
 

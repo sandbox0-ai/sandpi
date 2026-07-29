@@ -6561,6 +6561,10 @@ function isRuntimeRecoveryRestartError(error: unknown) {
   if (isPreInputRuntimeEpochError(error)) return true;
   if (!(error instanceof HttpError)) return false;
   if (error.code === "codex_runtime_epoch_lost_after_submit") return true;
+  // The runtime adapter already gives a definitive Sandbox0 resume failure
+  // one bounded retry. Do not turn exhaustion into the recovery loop's
+  // 130-second retry window.
+  if (error.code === "sandbox0_resume_failed") return false;
   if (!error.code.startsWith("sandbox0_")) return false;
   // A missing Supervisor can be recreated from the Environment Workspace, but
   // a missing Sandbox is an ownership boundary: do not turn external resource
