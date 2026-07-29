@@ -936,6 +936,20 @@ test("keeps anonymous visitors on the app home until they send a message", async
   expect(loginRequestUrl()).toBeUndefined();
 
   const composer = page.getByPlaceholder("Ask Codex to work on something…");
+  await page.setViewportSize({ width: 390, height: 844 });
+  const guestComposer = page.locator(".composer-shell", { has: composer });
+  const [guestToolsBox, guestSendAreaBox] = await Promise.all([
+    guestComposer.locator(".composer-tools").boundingBox(),
+    guestComposer.locator(".composer-send-area").boundingBox(),
+  ]);
+  expect(guestToolsBox).not.toBeNull();
+  expect(guestSendAreaBox).not.toBeNull();
+  expect(Math.max(guestToolsBox!.y, guestSendAreaBox!.y)).toBeLessThan(
+    Math.min(
+      guestToolsBox!.y + guestToolsBox!.height,
+      guestSendAreaBox!.y + guestSendAreaBox!.height,
+    ),
+  );
   await composer.fill("Inspect this repository before changing anything");
   expect(loginRequestUrl()).toBeUndefined();
 

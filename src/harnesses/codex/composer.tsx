@@ -370,7 +370,7 @@ export function CodexComposerToolbar({
             : "";
 
   return (
-    <div className="composer-toolbar">
+    <div className="composer-toolbar codex-composer-toolbar">
       <div className="composer-tools">
         <button
           type="button"
