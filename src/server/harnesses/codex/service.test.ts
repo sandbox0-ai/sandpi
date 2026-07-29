@@ -2318,6 +2318,30 @@ test("fails closed when the Environment Sandbox resource is missing", async () =
   }
 });
 
+test("does not amplify an exhausted Sandbox0 resume retry", async () => {
+  const context = fixture({
+    environmentRecoveryErrors: [
+      new HttpError(
+        503,
+        "sandbox0_resume_failed",
+        "Sandbox0 could not auto-resume the Environment Sandbox after one retry.",
+      ),
+    ],
+  });
+  try {
+    await assert.rejects(
+      context.service.listModels("user", "session-one"),
+      (error: unknown) =>
+        error instanceof HttpError &&
+        error.code === "sandbox0_resume_failed",
+    );
+    assert.equal(context.runtimeRecoveryCount(), 1);
+    assert.equal(context.lifecycleLocks.length, 1);
+  } finally {
+    await context.close();
+  }
+});
+
 test("recovery keeps runtime reads on the lifecycle-scoped Store", async () => {
   const context = fixture({ assertScopedRecoveryLocks: true });
   try {

@@ -1641,7 +1641,7 @@ test("does not retry unrelated Workspace snapshot restore conflicts", async () =
   assert.equal(attempts, 1);
 });
 
- test("uses Sandbox0 runtime access to auto-resume a paused Environment", async () => {
+test("uses Sandbox0 runtime access to auto-resume a paused Environment", async () => {
   let paused = true;
   let runtimeGeneration = 1;
   let workspaceAccesses = 0;
@@ -1753,6 +1753,84 @@ test("does not retry unrelated Workspace snapshot restore conflicts", async () =
   assert.ok(
     operations.indexOf("credential-write") < operations.indexOf("workspace"),
   );
+});
+
+test("retries one definitive Sandbox0 auto-resume failure without lifecycle polling", async () => {
+  let workspaceAccesses = 0;
+  let lifecycleWaits = 0;
+  const runtime = runtimeWithClient({
+    sandboxes: {
+      sandbox() {
+        return {
+          async listFiles(path: string) {
+            assert.equal(path, "/workspace");
+            workspaceAccesses += 1;
+            if (workspaceAccesses === 1) {
+              throw new APIError({
+                statusCode: 503,
+                code: "sandbox_resume_failed",
+                message: "sandbox resume failed",
+              });
+            }
+            return [];
+          },
+        };
+      },
+      async get() {
+        return {
+          status: "running",
+          paused: false,
+          runtimeGeneration: 2,
+        };
+      },
+      async waitForLifecycle() {
+        lifecycleWaits += 1;
+        throw new Error("a definitive resume failure must not be polled");
+      },
+    },
+  });
+
+  await runtime.ensureEnvironmentRuntimeAccess(environmentRuntimeRecord());
+
+  assert.equal(workspaceAccesses, 2);
+  assert.equal(lifecycleWaits, 0);
+});
+
+test("stops after one retry of a definitive Sandbox0 auto-resume failure", async () => {
+  let workspaceAccesses = 0;
+  let lifecycleWaits = 0;
+  const runtime = runtimeWithClient({
+    sandboxes: {
+      sandbox() {
+        return {
+          async listFiles(path: string) {
+            assert.equal(path, "/workspace");
+            workspaceAccesses += 1;
+            throw new APIError({
+              statusCode: 503,
+              code: "sandbox_resume_failed",
+              message: "sandbox resume failed",
+            });
+          },
+        };
+      },
+      async waitForLifecycle() {
+        lifecycleWaits += 1;
+        throw new Error("a definitive resume failure must not be polled");
+      },
+    },
+  });
+
+  await assert.rejects(
+    runtime.ensureEnvironmentRuntimeAccess(environmentRuntimeRecord()),
+    (error: unknown) =>
+      error instanceof HttpError &&
+      error.statusCode === 503 &&
+      error.code === "sandbox0_resume_failed",
+  );
+
+  assert.equal(workspaceAccesses, 2);
+  assert.equal(lifecycleWaits, 0);
 });
 
 test("rehydrates the Codex credential after missing Supervisor repair restarts the Sandbox", async () => {
