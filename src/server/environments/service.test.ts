@@ -19,6 +19,49 @@ const environment = {
   },
 } as unknown as Environment;
 
+test("returns ready Environment lifecycle state from Sandbox0 instead of PostgreSQL", async () => {
+  const stored = {
+    ...environment,
+    sandboxId: "sandbox-test",
+    sandboxState: "running",
+  };
+  const bootstrap = {
+    environments: [stored],
+  } as unknown as Awaited<ReturnType<SandpiStore["getBootstrap"]>>;
+  const store = {
+    async listEnvironments() {
+      return [stored];
+    },
+    async getBootstrap() {
+      return bootstrap;
+    },
+  } as unknown as SandpiStore;
+  const reads: string[] = [];
+  const runtime = {
+    async getEnvironmentSandboxState(sandboxId: string) {
+      reads.push(sandboxId);
+      return "paused" as const;
+    },
+  } as unknown as RuntimeAdapter;
+  const service = new EnvironmentService(store, runtime, {
+    info() {},
+    error() {},
+  });
+
+  assert.equal((await service.list("user-test"))[0]?.sandboxState, "paused");
+  assert.equal(
+    (
+      await service.getBootstrap(
+        "user-test",
+        {} as Parameters<SandpiStore["getBootstrap"]>[1],
+      )
+    ).environments[0]?.sandboxState,
+    "paused",
+  );
+  assert.deepEqual(reads, ["sandbox-test", "sandbox-test"]);
+  assert.equal(stored.sandboxState, "running");
+});
+
 test("pending Environment reconciliation is coalesced within one server", async () => {
   let releaseProvisioning!: () => void;
   const provisioningGate = new Promise<void>((resolve) => {

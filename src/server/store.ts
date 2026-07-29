@@ -6,7 +6,6 @@ import type {
   CodingSession,
   Environment,
   EnvironmentPauseInterval,
-  EnvironmentSandboxState,
   EnvironmentWorkspaceBackup,
   NetworkPolicy,
   SandpiBootstrap,
@@ -62,8 +61,6 @@ export interface StoredEnvironmentRuntime extends EnvironmentRuntimeRecord {
   codexCredentialBindingCurrent?: boolean;
   version: number;
   desiredState: "running" | "paused" | "terminated";
-  observedState:
-    "pending" | "provisioning" | "running" | "paused" | "terminated" | "failed";
   provisioningError?: string;
   lifecyclePolicyVersion: number;
   lastTurnCompletedAt?: Date;
@@ -158,7 +155,6 @@ interface EnvironmentRow extends QueryResultRow {
   network_policy: NetworkPolicy;
   provisioning_error: string | null;
   sandbox_id: string | null;
-  sandbox_state: EnvironmentSandboxState | null;
   supervisor_session_id: string | null;
   workspace_backup_due_at: Date | null;
   workspace_backup_last_completed_at: Date | null;
@@ -222,7 +218,6 @@ interface EnvironmentRuntimeRow extends QueryResultRow {
   decoder_attempt_id?: string | null;
   decoder_runtime_generation?: string | number;
   desired_state: StoredEnvironmentRuntime["desiredState"];
-  observed_state: StoredEnvironmentRuntime["observedState"];
   provisioning_error: string | null;
   lifecycle_policy_version: string | number;
   last_turn_completed_at: Date | null;
@@ -673,8 +668,8 @@ export class SandpiStore {
       );
       await client.query(
         `INSERT INTO environment_runtime (
-           environment_id, desired_state, observed_state
-         ) VALUES ($1, 'running', 'provisioning')`,
+           environment_id, desired_state
+         ) VALUES ($1, 'running')`,
         [id],
       );
       await client.query("COMMIT");
@@ -707,7 +702,7 @@ export class SandpiStore {
         await client.query(
           `UPDATE environment_runtime
            SET sandbox_id = COALESCE(sandbox_id, $2),
-               observed_state = 'provisioning', provisioning_error = NULL
+               provisioning_error = NULL
            WHERE environment_id = $1
              AND (sandbox_id IS NULL OR sandbox_id = $2)`,
           [environmentId, resources.sandboxId],
@@ -764,11 +759,11 @@ export class SandpiStore {
       );
       await client.query(
         `INSERT INTO environment_runtime (
-           environment_id, sandbox_id, desired_state, observed_state,
+           environment_id, sandbox_id, desired_state,
            lifecycle_policy_version, idle_pause_due_at,
            workspace_backup_due_at
          )
-         SELECT $1, $2, 'running', 'running', $3,
+         SELECT $1, $2, 'running', $3,
                 CASE
                   WHEN environment.idle_pause_timeout_seconds = 0 THEN NULL
                   ELSE NOW() + (
@@ -788,7 +783,7 @@ export class SandpiStore {
          WHERE environment.id = $1
          ON CONFLICT (environment_id) DO UPDATE
          SET sandbox_id = EXCLUDED.sandbox_id,
-             desired_state = 'running', observed_state = 'running',
+             desired_state = 'running',
              lifecycle_policy_version = EXCLUDED.lifecycle_policy_version,
              idle_pause_due_at = EXCLUDED.idle_pause_due_at,
              workspace_backup_due_at = EXCLUDED.workspace_backup_due_at,
@@ -819,10 +814,10 @@ export class SandpiStore {
     );
     await this.pool.query(
       `INSERT INTO environment_runtime (
-         environment_id, desired_state, observed_state, provisioning_error
-       ) VALUES ($1, 'running', 'failed', $2)
+         environment_id, desired_state, provisioning_error
+       ) VALUES ($1, 'running', $2)
        ON CONFLICT (environment_id) DO UPDATE
-       SET observed_state = 'failed', provisioning_error = EXCLUDED.provisioning_error`,
+       SET provisioning_error = EXCLUDED.provisioning_error`,
       [environmentId, error],
     );
   }
@@ -837,11 +832,10 @@ export class SandpiStore {
     );
     await this.pool.query(
       `INSERT INTO environment_runtime (
-         environment_id, desired_state, observed_state
-       ) VALUES ($1, 'running', 'provisioning')
+         environment_id, desired_state
+       ) VALUES ($1, 'running')
        ON CONFLICT (environment_id) DO UPDATE
-       SET desired_state = 'running', observed_state = 'provisioning',
-           provisioning_error = NULL`,
+       SET desired_state = 'running', provisioning_error = NULL`,
       [environmentId],
     );
     return this.getManageableEnvironment(userId, environmentId);
@@ -858,7 +852,6 @@ export class SandpiStore {
          AND (
            environment.workspace_volume_id IS NULL
            OR runtime.sandbox_id IS NULL
-           OR runtime.observed_state <> 'running'
          )
        ORDER BY environment.created_at`,
     );
@@ -919,20 +912,14 @@ export class SandpiStore {
       if (timeoutChanged) {
         await client.query(
           `UPDATE environment_runtime
-           SET desired_state = CASE
-                 WHEN observed_state = 'running'
-                   AND desired_state <> 'terminated' THEN 'running'
-                 ELSE desired_state
-               END,
-               idle_pause_due_at = CASE
+           SET idle_pause_due_at = CASE
                  WHEN $2::INTEGER = 0 THEN NULL
-                 WHEN observed_state = 'running'
-                   AND desired_state <> 'terminated'
+                 WHEN desired_state = 'running'
                  THEN NOW() + ($2::BIGINT * INTERVAL '1 second')
                  ELSE idle_pause_due_at
                END,
                lifecycle_error = CASE
-                 WHEN observed_state = 'running' THEN NULL
+                 WHEN desired_state = 'running' THEN NULL
                  ELSE lifecycle_error
                END,
                version = version + 1
@@ -1000,8 +987,8 @@ export class SandpiStore {
   async recordEnvironmentDeletionFailure(environmentId: string, error: string) {
     await this.pool.query(
       `UPDATE environment_runtime
-       SET desired_state = 'terminated', observed_state = 'failed',
-           lifecycle_error = $2, version = version + 1
+       SET desired_state = 'terminated', lifecycle_error = $2,
+           version = version + 1
        WHERE environment_id = $1`,
       [environmentId, error],
     );
@@ -1097,14 +1084,13 @@ export class SandpiStore {
 
   /**
    * Records a successful user runtime access and grants it a fresh idle
-   * window. Sandbox0 remains authoritative for the native lifecycle; these
-   * fields are only Sandpi's desired/observed projection.
+   * window. Sandbox0 remains authoritative for the native lifecycle; this
+   * stores only Sandpi's lifecycle intent and pause-action history.
    */
   async recordEnvironmentRuntimeAccess(environmentId: string) {
     await this.pool.query(
       `UPDATE environment_runtime runtime
        SET desired_state = 'running',
-           observed_state = 'running',
            idle_pause_due_at = CASE
              WHEN environment.idle_pause_timeout_seconds = 0 THEN NULL
              ELSE GREATEST(
@@ -1127,9 +1113,9 @@ export class SandpiStore {
   }
 
   /**
-   * Extends an already-running Environment's idle window without projecting a
-   * paused Sandbox back to running. This is used only for live connection
-   * heartbeats that do not themselves prove Sandbox0 auto-resumed.
+   * Extends an Environment's idle window only while Sandpi still wants it
+   * running. This is used for live connection heartbeats and never changes
+   * Sandbox0 lifecycle state.
    */
   async touchRunningEnvironmentRuntime(environmentId: string) {
     const result = await this.pool.query(
@@ -1149,7 +1135,6 @@ export class SandpiStore {
        WHERE runtime.environment_id = $1
          AND environment.id = runtime.environment_id
          AND runtime.desired_state = 'running'
-         AND runtime.observed_state = 'running'
        RETURNING runtime.environment_id`,
       [environmentId],
     );
@@ -1729,7 +1714,7 @@ export class SandpiStore {
          AND runtime.sandbox_id IS NOT NULL
          AND runtime.idle_pause_due_at <= NOW()
          AND runtime.desired_state IN ('running', 'paused')
-         AND runtime.observed_state <> 'paused'
+         AND runtime.paused_at IS NULL
        ORDER BY runtime.idle_pause_due_at, runtime.environment_id
        LIMIT $1`,
       [limit],
@@ -1750,7 +1735,7 @@ export class SandpiStore {
          AND runtime.sandbox_id IS NOT NULL
          AND runtime.idle_pause_due_at <= NOW()
          AND runtime.desired_state IN ('running', 'paused')
-         AND runtime.observed_state <> 'paused'
+         AND runtime.paused_at IS NULL
          AND NOT EXISTS (
            SELECT 1
            FROM sessions session
@@ -1779,7 +1764,7 @@ export class SandpiStore {
        WHERE environment_id = $1
          AND sandbox_id IS NOT NULL
          AND desired_state <> 'terminated'
-         AND observed_state NOT IN ('paused', 'terminated')
+         AND paused_at IS NULL
        RETURNING environment_id`,
       [environmentId],
     );
@@ -1794,7 +1779,7 @@ export class SandpiStore {
   ) {
     await this.pool.query(
       `UPDATE environment_runtime
-       SET desired_state = 'paused', observed_state = 'paused',
+       SET desired_state = 'paused',
            idle_pause_due_at = NULL, lifecycle_error = NULL,
            pause_reason = $3, paused_at = NOW(), version = version + 1
        WHERE environment_id = $1 AND sandbox_id = $2`,
@@ -1813,7 +1798,7 @@ export class SandpiStore {
            version = version + 1
        WHERE environment_id = $1
          AND sandbox_id = $2
-         AND observed_state = 'running'`,
+         AND paused_at IS NULL`,
       [environmentId, sandboxId, error],
     );
   }
@@ -1825,7 +1810,7 @@ export class SandpiStore {
   ) {
     await this.pool.query(
       `UPDATE environment_runtime
-       SET desired_state = 'paused', observed_state = 'failed',
+       SET desired_state = 'paused',
            idle_pause_due_at = $3, lifecycle_error = $4,
            version = version + 1
        WHERE environment_id = $1 AND sandbox_id = $2`,
@@ -1898,7 +1883,7 @@ export class SandpiStore {
            idle_pause_due_at = CASE
              WHEN environment.idle_pause_timeout_seconds = 0 THEN NULL
              WHEN last_turn_completed_at IS NOT NULL
-               AND (runtime.observed_state <> 'running' OR $5::BOOLEAN)
+               AND (runtime.paused_at IS NOT NULL OR $5::BOOLEAN)
              THEN GREATEST(
                last_turn_completed_at + (
                  environment.idle_pause_timeout_seconds::BIGINT
@@ -1911,7 +1896,7 @@ export class SandpiStore {
              )
              ELSE idle_pause_due_at
            END,
-           desired_state = 'running', observed_state = 'running',
+           desired_state = 'running',
            lifecycle_error = NULL, paused_at = NULL,
            provisioning_error = NULL,
            version = version + 1
@@ -1955,7 +1940,6 @@ export class SandpiStore {
            AND runtime_generation = $4
            AND supervisor_cursor = $5
            AND desired_state = 'running'
-           AND observed_state = 'running'
          RETURNING environment_id`,
         [
           environmentId,
@@ -2420,7 +2404,6 @@ export class SandpiStore {
            AND attempt_id IS NOT DISTINCT FROM $3
            AND runtime_generation = $4
            AND desired_state = 'running'
-           AND observed_state = 'running'
          FOR SHARE`,
         [
           input.environmentId,
@@ -2928,7 +2911,6 @@ export class SandpiStore {
            AND attempt_id IS NOT DISTINCT FROM $3
            AND runtime_generation = $4
            AND desired_state = 'running'
-           AND observed_state = 'running'
          FOR SHARE`,
         [
           input.environmentId,
@@ -2976,7 +2958,6 @@ export class SandpiStore {
                AND environment.attempt_id IS NOT DISTINCT FROM $3
                AND environment.runtime_generation = $4
                AND environment.desired_state = 'running'
-               AND environment.observed_state = 'running'
            )
            AND runtime.interrupt_requested_native_turn_id IS DISTINCT FROM $8
            AND runtime.recovery_source_native_turn_id IS NULL
@@ -3357,7 +3338,6 @@ export class SandpiStore {
 
 const ENVIRONMENT_SELECT = `
   SELECT environment.*, runtime.sandbox_id, runtime.supervisor_session_id,
-         runtime.observed_state AS sandbox_state,
          runtime.workspace_backup_due_at,
          runtime.workspace_backup_last_completed_at,
          runtime.workspace_backup_error
@@ -3459,12 +3439,11 @@ function environmentFromRow(row: EnvironmentRow): EnvironmentRecord {
     workspaceVolumeId: row.workspace_volume_id ?? "",
     sandboxId: row.sandbox_id ?? "",
     sandboxState:
-      row.sandbox_state ??
-      (row.status === "error"
+      row.status === "error"
         ? "failed"
         : row.status === "updating"
           ? "provisioning"
-          : "pending"),
+          : "pending",
     supervisorSessionId: row.supervisor_session_id ?? "",
     workspaceRoot: "/workspace",
     credentialRevision: row.credential_revision,
@@ -3550,7 +3529,6 @@ function environmentRuntimeFromRow(
     },
     version: Number(row.version),
     desiredState: row.desired_state,
-    observedState: row.observed_state,
     provisioningError: row.provisioning_error ?? undefined,
     lifecyclePolicyVersion: Number(row.lifecycle_policy_version),
     lastTurnCompletedAt: row.last_turn_completed_at ?? undefined,

@@ -399,7 +399,6 @@ export class BillingRepository {
        JOIN environment_runtime runtime
          ON runtime.environment_id = ranked.id
        WHERE runtime.sandbox_id IS NOT NULL
-         AND runtime.observed_state = 'running'
          AND runtime.desired_state <> 'terminated'
        ORDER BY ranked.user_id, ranked.position`,
     );

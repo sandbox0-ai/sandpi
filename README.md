@@ -265,7 +265,10 @@ Sandbox0
   Sandbox0 database, internal metering endpoint or ClickHouse credential.
 - Sandbox0 owns Sandbox lifecycle, Volumes, network enforcement, credential
   injection and usage truth. Sandpi owns its users, Environment attribution,
-  native Session references and optional product entitlements.
+  native Session references and optional product entitlements. Public
+  Environment reads resolve lifecycle state through the Sandbox0 SDK; Sandpi
+  PostgreSQL stores lifecycle intent and runtime fencing coordinates, not a
+  second observed Sandbox state.
 - With Sandbox0's default storage runtime, persisted Environment rootfs
   checkpoint objects and default S0FS Workspace Volume objects are encrypted at
   the application layer before object storage. Sandbox0 manager and the active

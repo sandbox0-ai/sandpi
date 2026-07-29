@@ -78,6 +78,7 @@ test("migration history contains every durable Sandpi boundary", async () => {
       "0051_restore_codex_fault_recovery",
       "0052_environment_schedules",
       "0053_disable_schedules_for_archived_sessions",
+      "0054_use_sandbox0_lifecycle_truth",
     ],
   );
 
@@ -193,6 +194,28 @@ test("migration history contains every durable Sandpi boundary", async () => {
   assert.match(
     billingUsageSql,
     /public Sandbox0 SDK; Sandbox0 remains usage truth/,
+  );
+
+  const sandbox0LifecycleTruthSql = migrations[53]?.sql ?? "";
+  assert.match(
+    sandbox0LifecycleTruthSql,
+    /ALTER TABLE environment_runtime DROP COLUMN observed_state/,
+  );
+  assert.match(
+    sandbox0LifecycleTruthSql,
+    /DROP FUNCTION IF EXISTS project_sandbox_runtime_usage/,
+  );
+  assert.match(
+    sandbox0LifecycleTruthSql,
+    /UPDATE sandbox_runtime_segments[\s\S]+WHERE ended_at IS NULL/,
+  );
+  assert.match(
+    sandbox0LifecycleTruthSql,
+    /AFTER INSERT OR UPDATE OF sandbox_id[\s\S]+sync_sandbox_usage_attribution/,
+  );
+  assert.doesNotMatch(
+    sandbox0LifecycleTruthSql,
+    /UPDATE OF sandbox_id,\s*observed_state/,
   );
 
   const environmentResourceDefaultsSql = migrations[48]?.sql ?? "";

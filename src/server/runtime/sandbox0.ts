@@ -19,6 +19,7 @@ import type { BrowserDashboardViewport } from "@/lib/environment-browser";
 import type {
   Environment,
   EnvironmentResourceMetrics,
+  EnvironmentSandboxState,
   RuntimeMetricSeries,
   RuntimeMetrics,
   WorkspaceDirectoryListing,
@@ -265,6 +266,33 @@ export class Sandbox0Runtime implements RuntimeAdapter {
       // semantic boundaries, where idempotency can be proven separately.
       fetch: fetchSandbox0WithRetry,
     });
+  }
+
+  async getEnvironmentSandboxState(
+    sandboxId: string,
+  ): Promise<EnvironmentSandboxState> {
+    try {
+      const sandbox = await this.client.sandboxes.get(sandboxId);
+      if (sandbox.paused || sandbox.status === "paused") return "paused";
+      switch (sandbox.status) {
+        case "starting":
+          return "provisioning";
+        case "running":
+          return "running";
+        case "terminating":
+          return "terminated";
+        case "failed":
+          return "failed";
+        default:
+          throw new HttpError(
+            502,
+            "sandbox0_lifecycle_state_invalid",
+            `Sandbox0 returned unsupported lifecycle state ${JSON.stringify(sandbox.status)}.`,
+          );
+      }
+    } catch (error) {
+      throw translateSandbox0Error(error);
+    }
   }
 
   supportsUsageWindows() {

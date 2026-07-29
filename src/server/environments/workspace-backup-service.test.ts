@@ -27,7 +27,6 @@ const runtimeState: StoredEnvironmentRuntime = {
   },
   version: 1,
   desiredState: "running",
-  observedState: "running",
   lifecyclePolicyVersion: 1,
 };
 
@@ -396,7 +395,6 @@ test("restore leaves an originally paused Environment paused", async () => {
   const pausedRuntime: StoredEnvironmentRuntime = {
     ...runtimeState,
     desiredState: "paused",
-    observedState: "paused",
   };
   let recordedPaused = false;
   const store = {

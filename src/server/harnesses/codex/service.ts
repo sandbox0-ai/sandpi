@@ -2870,10 +2870,7 @@ export class CodexService {
       const runtime = await this.store.environmentRuntime(
         session.environmentId,
       );
-      if (
-        runtime.desiredState === "running" &&
-        runtime.observedState === "running"
-      ) {
+      if (runtime.desiredState === "running") {
         this.scheduleExceptionalSessionReconciliation(runtime, { delayMs: 0 });
       }
     } catch (error) {
@@ -3111,7 +3108,6 @@ export class CodexService {
     const current = await this.store.environmentRuntime(environment.id);
     if (
       current.desiredState === "running" &&
-      current.observedState === "running" &&
       current.supervisorSessionId &&
       current.attemptId &&
       current.codexCredentialBindingCurrent === true &&
@@ -3257,10 +3253,7 @@ export class CodexService {
 
   private async reconcileEnvironmentAfterRuntimeAccess(environmentId: string) {
     const current = await this.store.environmentRuntime(environmentId);
-    if (
-      current.desiredState === "running" &&
-      current.observedState === "running"
-    ) {
+    if (current.desiredState === "running") {
       return;
     }
     if (current.desiredState === "terminated") {
@@ -3272,8 +3265,8 @@ export class CodexService {
     }
     // An idle pause can begin after request authorization but before the native
     // operation. Sandbox0 serializes that operation and may auto-resume it; the
-    // shared lifecycle lock then makes Sandpi's runtime projection match the
-    // native generation before this request is considered complete.
+    // shared lifecycle lock then refreshes Sandpi's runtime fencing coordinates
+    // before this request is considered complete.
     await this.recoverEnvironmentRuntime(environmentId);
   }
 
@@ -3534,10 +3527,7 @@ export class CodexService {
       );
       return;
     }
-    if (
-      currentRuntime.desiredState !== "running" ||
-      currentRuntime.observedState !== "running"
-    ) {
+    if (currentRuntime.desiredState !== "running") {
       return;
     }
     const activeTurn = latestInProgressNativeTurn(thread);
@@ -3867,8 +3857,7 @@ export class CodexService {
       if (
         environmentRuntimeEpoch(deliveryRuntime) !==
           environmentRuntimeEpoch(runtime) ||
-        deliveryRuntime.desiredState !== "running" ||
-        deliveryRuntime.observedState !== "running"
+        deliveryRuntime.desiredState !== "running"
       ) {
         this.handoffExceptionalSessionReconciliation(
           deliveryRuntime,
@@ -4081,10 +4070,7 @@ export class CodexService {
           this.handoffExceptionalSessionReconciliation(runtime, reconciliation);
           return undefined;
         }
-        if (
-          runtime.desiredState !== "running" ||
-          runtime.observedState !== "running"
-        ) {
+        if (runtime.desiredState !== "running") {
           return undefined;
         }
         const request = this.prepareCodexRequest(
@@ -4264,7 +4250,6 @@ export class CodexService {
   ) {
     if (
       runtime.desiredState !== "running" ||
-      runtime.observedState !== "running" ||
       environmentRuntimeEpoch(runtime) === reconciliation.epoch
     ) {
       return;
@@ -4869,7 +4854,6 @@ export class CodexService {
             );
             if (
               current.desiredState !== "running" ||
-              current.observedState !== "running" ||
               environmentRuntimeEpoch(current) !==
                 environmentRuntimeEpoch(runtime)
             ) {

@@ -2,6 +2,7 @@ import type {
   SandpiAccountPlan,
   SandpiBillingSummary,
 } from "@/lib/billing";
+import type { EnvironmentSandboxState } from "@/lib/types";
 import { toUnixTimestamp } from "@/lib/time";
 import type { SandpiConfig } from "@/server/config";
 import { HttpError, notFound } from "@/server/http-error";
@@ -54,6 +55,12 @@ export interface RuntimeQuotaGate {
   ): Promise<boolean>;
 }
 
+export interface SandboxLifecycleReader {
+  getEnvironmentSandboxState(
+    sandboxId: string,
+  ): Promise<EnvironmentSandboxState>;
+}
+
 interface ResolvedEntitlement {
   account: BillingAccountRecord;
   plan: PlanDefinition;
@@ -67,6 +74,7 @@ export class BillingQuotaService
   constructor(
     private readonly store: BillingQuotaStore,
     private readonly billing: SandpiConfig["billing"],
+    private readonly runtime: SandboxLifecycleReader,
     private readonly now: () => Date = () => new Date(),
   ) {}
 
@@ -221,7 +229,21 @@ export class BillingQuotaService
 
   async runningEnvironmentViolations() {
     if (this.billing.mode === "disabled") return [];
-    const candidates = await this.store.runningEnvironmentCandidates();
+    const candidates = (
+      await Promise.all(
+        (await this.store.runningEnvironmentCandidates()).map(
+          async (candidate) =>
+            (await this.runtime.getEnvironmentSandboxState(
+              candidate.sandboxId,
+            )) === "running"
+              ? candidate
+              : undefined,
+        ),
+      )
+    ).filter(
+      (candidate): candidate is RunningEnvironmentCandidate =>
+        candidate !== undefined,
+    );
     const entitlementByUser = new Map<
       string,
       Promise<{

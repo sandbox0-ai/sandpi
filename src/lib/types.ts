@@ -180,8 +180,9 @@ export interface Environment {
   /** Shared execution coordinates. Sessions never own separate Sandboxes. */
   sandboxId: string;
   /**
-   * Read-only projection of Sandbox0 lifecycle state. It is intentionally
-   * separate from Session status, which describes native coding-agent Turns.
+   * Sandbox0 lifecycle state read from Sandbox0 when this Environment is
+   * returned. It is separate from Session status, which describes native
+   * coding-agent Turns.
    */
   sandboxState: EnvironmentSandboxState;
   supervisorSessionId: string;

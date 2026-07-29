@@ -24,7 +24,6 @@ function storedRuntime(
     },
     version: 1,
     desiredState: "running",
-    observedState: "running",
     lifecyclePolicyVersion: ENVIRONMENT_LIFECYCLE_POLICY_VERSION,
     ...overrides,
   };

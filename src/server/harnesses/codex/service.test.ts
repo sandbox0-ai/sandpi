@@ -203,7 +203,6 @@ interface Fixture {
   }>;
   setRuntimeState(input: {
     desiredState: StoredEnvironmentRuntime["desiredState"];
-    observedState: StoredEnvironmentRuntime["observedState"];
   }): void;
   setCredentialBindingCurrent(current: boolean): void;
   recoverRuntimeAs(input: {
@@ -408,7 +407,6 @@ function fixture(
     },
     version: 1,
     desiredState: "running",
-    observedState: "running",
     lifecyclePolicyVersion: 1,
   };
   const events: Array<Record<string, unknown> & { seq: number }> = [];
@@ -690,7 +688,7 @@ function fixture(
         attemptId: recovered.attemptId,
         runtimeGeneration: recovered.runtimeGeneration,
         desiredState: "running",
-        observedState: "running",
+        codexCredentialBindingCurrent: true,
         version: environmentRuntime.version + 1,
       };
       return environmentRuntime;
@@ -1541,11 +1539,10 @@ function fixture(
     runtimeRecoveryReplacements: () => [...runtimeRecoveryReplacements],
     environmentRuntime: () => environmentRuntime,
     reconciledEnvironmentEpochs: () => [...reconciledEnvironmentEpochs],
-    setRuntimeState: ({ desiredState, observedState }) => {
+    setRuntimeState: ({ desiredState }) => {
       environmentRuntime = {
         ...environmentRuntime,
         desiredState,
-        observedState,
         version: environmentRuntime.version + 1,
       };
     },
@@ -1571,7 +1568,7 @@ function fixture(
       environmentRuntime = {
         ...environmentRuntime,
         desiredState: "running",
-        observedState: "paused",
+        codexCredentialBindingCurrent: false,
         version: environmentRuntime.version + 1,
       };
     },
@@ -4613,7 +4610,6 @@ test("does not submit exceptional Session reads after the Environment is paused"
     await context.service.resumeWorkers();
     context.setRuntimeState({
       desiredState: "paused",
-      observedState: "paused",
     });
     await eventually(
       () => context.exceptionalCandidateQueryCount() === 1,
@@ -4666,7 +4662,6 @@ test("a submitted exceptional Session read cannot wake a subsequently paused Env
 
     context.setRuntimeState({
       desiredState: "paused",
-      observedState: "paused",
     });
     context.enqueue([
       {
@@ -4804,7 +4799,6 @@ test("interactive requests still reconcile an Environment paused after submissio
     )?.message;
     context.setRuntimeState({
       desiredState: "paused",
-      observedState: "paused",
     });
     context.enqueue([
       {

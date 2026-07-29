@@ -1,6 +1,11 @@
 import { setTimeout as delay } from "node:timers/promises";
 
-import type { Environment, NetworkPolicy } from "@/lib/types";
+import type {
+  Environment,
+  NetworkPolicy,
+  SandpiBootstrap,
+  SandpiDeploymentSummary,
+} from "@/lib/types";
 import { conflict, HttpError } from "@/server/http-error";
 import type { RuntimeAdapter } from "@/server/runtime/types";
 import { SandpiStore } from "@/server/store";
@@ -51,6 +56,58 @@ export class EnvironmentService {
     this.afterRuntimeDelete = handler;
   }
 
+  async getBootstrap(
+    userId: string,
+    deployment: SandpiDeploymentSummary,
+    requestedEnvironmentId?: string,
+    requestedSessionId?: string,
+    preferNewSession = false,
+  ): Promise<SandpiBootstrap> {
+    const bootstrap = await this.store.getBootstrap(
+      userId,
+      deployment,
+      requestedEnvironmentId,
+      requestedSessionId,
+      preferNewSession,
+    );
+    return {
+      ...bootstrap,
+      environments: await Promise.all(
+        bootstrap.environments.map((environment) =>
+          this.authoritativeEnvironment(environment),
+        ),
+      ),
+    };
+  }
+
+  async list(userId: string) {
+    const environments = await this.store.listEnvironments(userId);
+    return Promise.all(
+      environments.map((environment) =>
+        this.authoritativeEnvironment(environment),
+      ),
+    );
+  }
+
+  /**
+   * Resolves the public lifecycle field from Sandbox0 at read time. Sandpi
+   * owns provisioning metadata before a Sandbox exists, but never caches a
+   * ready Sandbox's observed lifecycle state in PostgreSQL.
+   */
+  async authoritativeEnvironment<T extends Environment>(
+    environment: T,
+  ): Promise<T> {
+    if (environment.status !== "ready" || !environment.sandboxId) {
+      return environment;
+    }
+    return {
+      ...environment,
+      sandboxState: await this.runtime.getEnvironmentSandboxState(
+        environment.sandboxId,
+      ),
+    };
+  }
+
   reconcilePending() {
     this.reconciliationRequested = true;
     this.reconciliation ??= this.runRequestedReconciliations().finally(() => {
@@ -93,18 +150,20 @@ export class EnvironmentService {
     // Return immediately so native harness login can run in an Auth Runner
     // while the Sandbox0 Volume is provisioned independently.
     void this.reconcilePending();
-    return environment;
+    return this.authoritativeEnvironment(environment);
   }
 
   async retry(userId: string, environmentId: string) {
     const current = await this.store.getManageableEnvironment(userId, environmentId);
-    if (current.status === "ready") return current;
+    if (current.status === "ready") {
+      return this.authoritativeEnvironment(current);
+    }
     const environment = await this.store.markEnvironmentProvisioning(
       userId,
       environmentId,
     );
     void this.reconcilePending();
-    return environment;
+    return this.authoritativeEnvironment(environment);
   }
 
   async update(
@@ -147,7 +206,9 @@ export class EnvironmentService {
       !memoryChanged &&
       !backupPolicyChanged
     ) {
-      return this.store.updateEnvironment(userId, environmentId, input);
+      return this.authoritativeEnvironment(
+        await this.store.updateEnvironment(userId, environmentId, input),
+      );
     }
 
     const updateWhileLifecycleLocked = async (scopedStore: SandpiStore) => {
@@ -205,10 +266,11 @@ export class EnvironmentService {
 
     // Runtime edits use the lifecycle lock so they cannot race a pause,
     // snapshot, resume, reprovision or deletion.
-    return this.waitForLifecycleLock(
+    const updated = await this.waitForLifecycleLock(
       environmentId,
       updateWhileLifecycleLocked,
     );
+    return this.authoritativeEnvironment(updated);
   }
 
   /**

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { HttpError } from "@/server/http-error";
+import type { EnvironmentSandboxState } from "@/lib/types";
 
 import { MIB_MILLISECONDS_PER_GIB_HOUR } from "./plans";
 import {
@@ -69,6 +70,22 @@ class FakeQuotaStore implements BillingQuotaStore {
   }
 }
 
+class FakeLifecycleReader {
+  readonly states = new Map<string, EnvironmentSandboxState>();
+
+  async getEnvironmentSandboxState(sandboxId: string) {
+    return this.states.get(sandboxId) ?? ("running" as const);
+  }
+}
+
+function quotaService(
+  store: BillingQuotaStore,
+  billing: typeof disabledBilling | typeof stripeBilling,
+  runtime = new FakeLifecycleReader(),
+) {
+  return new BillingQuotaService(store, billing, runtime, () => NOW);
+}
+
 const disabledBilling = { mode: "disabled" } as const;
 const stripeBilling = {
   mode: "stripe",
@@ -86,7 +103,7 @@ test("self-hosted deployments remain unlimited without Stripe", async () => {
     confirmedMiBMilliseconds: 30,
     projectedMiBMilliseconds: 50,
   };
-  const service = new BillingQuotaService(store, disabledBilling, () => NOW);
+  const service = quotaService(store, disabledBilling);
 
   const summary = await service.summary(account.userId);
 
@@ -113,7 +130,7 @@ test("free entitlement uses the larger confirmed or projected usage value", asyn
     confirmedMiBMilliseconds: MIB_MILLISECONDS_PER_GIB_HOUR / 2,
     projectedMiBMilliseconds: MIB_MILLISECONDS_PER_GIB_HOUR,
   };
-  const service = new BillingQuotaService(store, stripeBilling, () => NOW);
+  const service = quotaService(store, stripeBilling);
 
   const summary = await service.summary(account.userId);
 
@@ -148,7 +165,7 @@ test("active paid entitlement has a fixed weekly quota period", async () => {
     cancelAtPeriodEnd: false,
     quotaAnchorAt: new Date("2026-07-01T00:00:00.000Z"),
   };
-  const service = new BillingQuotaService(store, stripeBilling, () => NOW);
+  const service = quotaService(store, stripeBilling);
 
   const summary = await service.summary(account.userId);
 
@@ -178,7 +195,7 @@ test("an effective pending downgrade changes entitlement without waiting for a w
     pendingPriceId: "price_plus",
     pendingEffectiveAt: new Date("2026-07-26T00:00:00.000Z"),
   };
-  const service = new BillingQuotaService(store, stripeBilling, () => NOW);
+  const service = quotaService(store, stripeBilling);
 
   assert.equal((await service.summary(account.userId)).plan.id, "plus");
 });
@@ -197,7 +214,7 @@ test("exposes a future downgrade without applying it early", async () => {
     pendingPriceId: "price_plus",
     pendingEffectiveAt: new Date("2026-08-01T00:00:00.000Z"),
   };
-  const service = new BillingQuotaService(store, stripeBilling, () => NOW);
+  const service = quotaService(store, stripeBilling);
 
   const summary = await service.summary(account.userId);
 
@@ -211,7 +228,7 @@ test("exposes a future downgrade without applying it early", async () => {
 
 test("free users cannot resize memory or run outside plan limits", async () => {
   const store = new FakeQuotaStore();
-  const service = new BillingQuotaService(store, stripeBilling, () => NOW);
+  const service = quotaService(store, stripeBilling);
 
   await assert.rejects(
     service.assertMemoryConfigurationAllowed(account.userId, 2048, 4096),
@@ -242,7 +259,7 @@ test("free users cannot resize memory or run outside plan limits", async () => {
   );
 });
 
-test("background enforcement returns only running environments in violation", async () => {
+test("background enforcement checks Sandbox0 before returning running violations", async () => {
   const store = new FakeQuotaStore();
   store.candidates = [
     {
@@ -260,7 +277,13 @@ test("background enforcement returns only running environments in violation", as
       environmentCount: 2,
     },
   ];
-  const service = new BillingQuotaService(store, stripeBilling, () => NOW);
+  const runtime = new FakeLifecycleReader();
+  runtime.states.set("sandbox-two", "paused");
+  const service = quotaService(store, stripeBilling, runtime);
+
+  assert.deepEqual(await service.runningEnvironmentViolations(), []);
+
+  runtime.states.set("sandbox-two", "running");
 
   assert.deepEqual(await service.runningEnvironmentViolations(), [
     "environment-two",
