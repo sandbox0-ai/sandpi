@@ -359,9 +359,27 @@ test("shows live native context usage inside the Session composer", async ({
             data: [
               {
                 id: snapshot.modelId,
-                displayName: "E2E Codex",
+                displayName: "E2E Codex Mobile Layout Stress Model",
                 isDefault: true,
-                supportedReasoningEfforts: [],
+                defaultReasoningEffort: "high",
+                supportedReasoningEfforts: [
+                  {
+                    reasoningEffort: "medium",
+                    description: "Balanced reasoning",
+                  },
+                  {
+                    reasoningEffort: "high",
+                    description: "Deeper reasoning",
+                  },
+                ],
+                additionalSpeedTiers: ["fast"],
+                serviceTiers: [
+                  {
+                    id: "e2e-native-priority",
+                    name: "Fast",
+                    description: "Fast native processing",
+                  },
+                ],
               },
             ],
           },
@@ -450,13 +468,72 @@ test("shows live native context usage inside the Session composer", async ({
     memoryMeter.boundingBox(),
     meter.boundingBox(),
   ]);
+  const [
+    mobileToolsBox,
+    mobileSendAreaBox,
+    mobileModelBox,
+    mobileEffortBox,
+    mobileFastBox,
+  ] = await Promise.all([
+      composer.locator(".composer-tools").boundingBox(),
+      composer.locator(".composer-send-area").boundingBox(),
+      composer
+        .getByRole("combobox", { name: "Select Codex model" })
+        .boundingBox(),
+      composer
+        .getByRole("combobox", {
+          name: "Select reasoning effort for E2E Codex Mobile Layout Stress Model",
+        })
+        .boundingBox(),
+      composer.getByTestId("codex-fast-toggle").boundingBox(),
+    ]);
   expect(mobileComposerBox).not.toBeNull();
+  expect(mobileToolsBox).not.toBeNull();
+  expect(mobileSendAreaBox).not.toBeNull();
+  expect(mobileModelBox).not.toBeNull();
+  expect(mobileEffortBox).not.toBeNull();
+  expect(mobileFastBox).not.toBeNull();
+  expect(mobileToolsBox!.y + mobileToolsBox!.height).toBeLessThanOrEqual(
+    mobileSendAreaBox!.y + 1,
+  );
+  for (const controlBox of [mobileModelBox, mobileEffortBox, mobileFastBox]) {
+    expect(controlBox!.x).toBeGreaterThanOrEqual(mobileToolsBox!.x);
+    expect(controlBox!.x + controlBox!.width).toBeLessThanOrEqual(
+      mobileToolsBox!.x + mobileToolsBox!.width,
+    );
+  }
+  expect(mobileModelBox!.x + mobileModelBox!.width).toBeLessThanOrEqual(
+    mobileEffortBox!.x + 1,
+  );
+  expect(mobileEffortBox!.x + mobileEffortBox!.width).toBeLessThanOrEqual(
+    mobileFastBox!.x + 1,
+  );
+  await composer
+    .getByRole("button", { name: "Mention a Workspace file" })
+    .click();
+  const mentionPopover = composer.locator(".composer-mention-popover");
+  await expect(mentionPopover).toBeVisible();
+  expect(
+    await mentionPopover.evaluate((element) => {
+      const bounds = element.getBoundingClientRect();
+      const hit = document.elementFromPoint(
+        bounds.left + bounds.width / 2,
+        bounds.top + 10,
+      );
+      return hit !== null && element.contains(hit);
+    }),
+  ).toBe(true);
   for (const statusBox of mobileStatusBoxes) {
     expect(statusBox).not.toBeNull();
     expect(statusBox!.x).toBeGreaterThanOrEqual(mobileComposerBox!.x);
     expect(statusBox!.x + statusBox!.width).toBeLessThanOrEqual(
       mobileComposerBox!.x + mobileComposerBox!.width,
     );
+  }
+  for (let index = 0; index < mobileStatusBoxes.length - 1; index += 1) {
+    const current = mobileStatusBoxes[index]!;
+    const next = mobileStatusBoxes[index + 1]!;
+    expect(current!.x + current!.width).toBeLessThanOrEqual(next!.x + 1);
   }
 });
 

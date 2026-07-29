@@ -7093,12 +7093,42 @@ code.codex-compact-activity-subject {
     font-size: 16px;
   }
 
+  .composer-toolbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+  }
+
+  .composer-tools,
+  .composer-send-area {
+    width: 100%;
+  }
+
+  .composer-agent-bound {
+    flex: 1 1 0;
+  }
+
+  .composer-model-picker {
+    flex: 1 1 80px;
+  }
+
   .composer-model-picker select {
-    width: 100px;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .composer-reasoning-picker {
+    flex: 0 1 68px;
   }
 
   .composer-reasoning-picker select {
-    width: 68px;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .composer-send-area {
+    justify-content: flex-end;
+    gap: 8px;
   }
 
   .connection-copy,
