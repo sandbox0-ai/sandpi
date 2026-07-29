@@ -7089,6 +7089,10 @@ code.codex-compact-activity-subject {
     width: 100%;
   }
 
+  .composer-shell textarea {
+    font-size: 16px;
+  }
+
   .composer-model-picker select {
     width: 100px;
   }

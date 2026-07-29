@@ -391,6 +391,7 @@ test("shows live native context usage inside the Session composer", async ({
   }
 
   await page.setViewportSize({ width: 390, height: 844 });
+  await expect(composer.locator("textarea")).toHaveCSS("font-size", "16px");
   const [mobileComposerBox, ...mobileStatusBoxes] = await Promise.all([
     composer.boundingBox(),
     cpuMeter.boundingBox(),
