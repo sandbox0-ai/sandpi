@@ -11,6 +11,7 @@ import type {
   EnvironmentCredentialResolverKind,
 } from "@/lib/environment-credentials";
 import type { Environment } from "@/lib/types";
+import { environmentBrowserSessionName } from "@/server/environments/browser-session";
 import { HttpError } from "@/server/http-error";
 import { createSandbox0FetchWithRetry, Sandbox0Runtime } from "./sandbox0";
 import {
@@ -44,6 +45,7 @@ const environment: Environment = {
     domainExceptions: ["github.com"],
   },
 };
+const browserSessionName = environmentBrowserSessionName("session-browser");
 
 function runtimeWithClient(client: unknown) {
   const runtime = new Sandbox0Runtime({
@@ -1195,6 +1197,7 @@ test("uses only official Playwright CLI commands for the shared browser", async 
     envVars: Record<string, string>;
   }> = [];
   let browserOpen = false;
+  const attachments = new Set<string>();
   const runtime = runtimeWithClient({
     sandboxes: {
       sandbox() {
@@ -1208,17 +1211,29 @@ test("uses only official Playwright CLI commands for the shared browser", async 
             },
           ) {
             commands.push({ alias, ...options });
-            const operation = options.command[1];
+            const operation = options.command.find((value) =>
+              ["tab-list", "open", "attach", "tab-new", "goto", "resize"].includes(
+                value,
+              ),
+            );
+            const sessionName =
+              options.command.find((value) => value.startsWith("-s="))?.slice(3) ??
+              "default";
             if (operation === "tab-list") {
+              const open =
+                sessionName === "default"
+                  ? browserOpen
+                  : attachments.has(sessionName);
               return {
-                exitCode: browserOpen ? 0 : 1,
+                exitCode: open ? 0 : 1,
                 stdout: "",
-                stderr: browserOpen
+                stderr: open
                   ? ""
-                  : "Error: Browser 'default' is not open.",
+                  : `Error: Browser '${sessionName}' is not open.`,
               };
             }
             if (operation === "open") browserOpen = true;
+            if (operation === "attach") attachments.add(sessionName);
             return { exitCode: 0, stdout: "", stderr: "" };
           },
         };
@@ -1238,25 +1253,35 @@ test("uses only official Playwright CLI commands for the shared browser", async 
   };
 
   assert.equal(
-    await runtime.ensureEnvironmentBrowserSession(coordinates),
+    await runtime.ensureEnvironmentBrowserSession(
+      coordinates,
+      browserSessionName,
+    ),
     true,
   );
   assert.equal(
     await runtime.openEnvironmentBrowserUrl(
       coordinates,
+      browserSessionName,
       "http://localhost:3000/",
     ),
     false,
   );
-  await runtime.resizeEnvironmentBrowserViewport(coordinates, {
-    width: 519,
-    height: 759,
-  });
+  await runtime.resizeEnvironmentBrowserViewport(
+    coordinates,
+    browserSessionName,
+    { width: 519, height: 759 },
+  );
+  await runtime.releaseEnvironmentBrowserSession(
+    coordinates,
+    browserSessionName,
+  );
 
   assert.deepEqual(
     commands.map((entry) => entry.command),
     [
-      ["playwright-cli", "tab-list"],
+      ["playwright-cli", `-s=${browserSessionName}`, "tab-list"],
+      ["playwright-cli", "-s=default", "tab-list"],
       [
         "playwright-cli",
         "open",
@@ -1265,8 +1290,36 @@ test("uses only official Playwright CLI commands for the shared browser", async 
         "chromium",
         "--persistent",
       ],
-      ["playwright-cli", "tab-new", "http://localhost:3000/"],
-      ["playwright-cli", "resize", "519", "759"],
+      [
+        "playwright-cli",
+        `-s=${browserSessionName}`,
+        "attach",
+        "default",
+      ],
+      [
+        "playwright-cli",
+        `-s=${browserSessionName}`,
+        "tab-new",
+        "about:blank",
+      ],
+      ["playwright-cli", `-s=${browserSessionName}`, "tab-list"],
+      [
+        "playwright-cli",
+        `-s=${browserSessionName}`,
+        "goto",
+        "http://localhost:3000/",
+      ],
+      ["playwright-cli", `-s=${browserSessionName}`, "tab-list"],
+      [
+        "playwright-cli",
+        `-s=${browserSessionName}`,
+        "resize",
+        "519",
+        "759",
+      ],
+      ["playwright-cli", `-s=${browserSessionName}`, "tab-list"],
+      ["playwright-cli", `-s=${browserSessionName}`, "tab-close"],
+      ["playwright-cli", `-s=${browserSessionName}`, "detach"],
     ],
   );
   for (const command of commands) {
@@ -1292,7 +1345,9 @@ test("recovers one stale persistent browser profile lock", async () => {
               assert.equal(options.command.at(-1), profilePath);
               return { exitCode: 0, stdout: "", stderr: "" };
             }
-            const operation = options.command[1];
+            const operation = options.command.find((value) =>
+              ["tab-list", "open", "attach", "tab-new"].includes(value),
+            );
             if (operation === "tab-list") {
               return {
                 exitCode: 1,
@@ -1326,17 +1381,31 @@ test("recovers one stale persistent browser profile lock", async () => {
   };
 
   assert.equal(
-    await runtime.ensureEnvironmentBrowserSession(coordinates),
+    await runtime.ensureEnvironmentBrowserSession(
+      coordinates,
+      browserSessionName,
+    ),
     true,
   );
 
   assert.deepEqual(
-    commands.map(({ alias, command }) => [alias, command[0], command[1]]),
+    commands.map(({ alias, command }) => [
+      alias,
+      command[0],
+      alias === "playwright-profile-lock-recovery"
+        ? command[1]
+        : command.find((value) =>
+            ["tab-list", "open", "attach", "tab-new"].includes(value),
+          ),
+    ]),
     [
+      ["playwright-cli", "playwright-cli", "tab-list"],
       ["playwright-cli", "playwright-cli", "tab-list"],
       ["playwright-cli", "playwright-cli", "open"],
       ["playwright-profile-lock-recovery", "node", "-e"],
       ["playwright-cli", "playwright-cli", "open"],
+      ["playwright-cli", "playwright-cli", "attach"],
+      ["playwright-cli", "playwright-cli", "tab-new"],
     ],
   );
 });
@@ -1369,7 +1438,7 @@ test("distinguishes missing Playwright dependencies from failed recovery", async
     },
   });
   await assert.rejects(
-    missing.ensureEnvironmentBrowserSession(coordinates),
+    missing.ensureEnvironmentBrowserSession(coordinates, browserSessionName),
     (error) =>
       error instanceof HttpError &&
       error.code === "environment_browser_dependency_unavailable",
@@ -1388,14 +1457,14 @@ test("distinguishes missing Playwright dependencies from failed recovery", async
             if (alias === "playwright-profile-lock-recovery") {
               return { exitCode: 12, stdout: "", stderr: "" };
             }
-            if (options.command[1] === "tab-list") {
+            if (options.command.includes("tab-list")) {
               return {
                 exitCode: 1,
                 stdout: "",
                 stderr: "Error: Browser 'default' is not open.",
               };
             }
-            if (options.command[1] === "open") {
+            if (options.command.includes("open")) {
               return {
                 exitCode: 1,
                 stdout: "",
@@ -1409,7 +1478,10 @@ test("distinguishes missing Playwright dependencies from failed recovery", async
     },
   });
   await assert.rejects(
-    unrecoverable.ensureEnvironmentBrowserSession(coordinates),
+    unrecoverable.ensureEnvironmentBrowserSession(
+      coordinates,
+      browserSessionName,
+    ),
     (error) =>
       error instanceof HttpError &&
       error.code === "environment_browser_recovery_failed",
@@ -2354,6 +2426,10 @@ test("starts one Environment-scoped Codex app-server without unsupported plugin 
     String((sessions[0]?.spec.command as string[] | undefined)?.at(-1)),
     /codex app-server --stdio[\s\S]+--disable apps[\s\S]+--disable plugins[\s\S]+--disable remote_plugin[\s\S]+--disable tool_suggest/,
   );
+  assert.match(
+    String((sessions[0]?.spec.command as string[] | undefined)?.at(-1)),
+    /SANDPI_PLAYWRIGHT_CLI_REAL[\s\S]+browser\/bin:\$PATH/,
+  );
   assert.ok(
     commands.some(
       (command) =>
@@ -2365,6 +2441,9 @@ test("starts one Environment-scoped Codex app-server without unsupported plugin 
         command.command
           ?.at(-1)
           ?.includes("playwright-cli-agent-skill-package-version") &&
+        command.command
+          ?.at(-1)
+          ?.includes("browser/bin/playwright-cli") &&
         command.command
           ?.at(-1)
           ?.includes(

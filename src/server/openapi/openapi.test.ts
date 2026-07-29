@@ -39,12 +39,12 @@ test("OpenAPI preserves the shared Browser and streaming semantics", async () =>
     "post",
   );
   assert.equal(browserOpen["x-sandpi-shared-browser"], true);
-  assert.match(browserOpen.description ?? "", /human and the agent/i);
-  assert.match(browserOpen.description ?? "", /sign-in/i);
+  assert.match(browserOpen.description ?? "", /human and agent/i);
+  assert.match(browserOpen.description ?? "", /one persistent Playwright browser/i);
+  assert.match(browserOpen.description ?? "", /one fixed page/i);
   assert.match(browserOpen.description ?? "", /inside the Environment sandbox/i);
 
   for (const [path, method] of [
-    ["/api/v1/environments/{environmentId}/browser/session", "post"],
     ["/api/v1/sessions/{sessionId}/review", "post"],
     ["/api/v1/sessions/{sessionId}/fork", "post"],
     [
@@ -56,6 +56,13 @@ test("OpenAPI preserves the shared Browser and streaming semantics", async () =>
     assert.ok(requestBody && !("$ref" in requestBody));
     assert.equal(requestBody.required, false);
   }
+  const browserSessionBody = operation(
+    document,
+    "/api/v1/environments/{environmentId}/browser/session",
+    "post",
+  ).requestBody;
+  assert.ok(browserSessionBody && !("$ref" in browserSessionBody));
+  assert.equal(browserSessionBody.required, true);
 
   const sessionEvents = operation(
     document,

@@ -289,11 +289,12 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
 
   const openBrowserUrl = useCallback(
     (url: string) => {
-      if (!selectedEnvironment) return;
+      if (!selectedEnvironment || !selectedSession) return;
       browserNavigationRequestIdRef.current += 1;
       setBrowserNavigationRequest({
         id: browserNavigationRequestIdRef.current,
         environmentId: selectedEnvironment.id,
+        sessionId: selectedSession.id,
         url,
       });
       updateLocalUiPreferences((current) => ({
@@ -306,13 +307,14 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
       }));
       setInspectorOpen(true);
     },
-    [selectedEnvironment],
+    [selectedEnvironment, selectedSession],
   );
 
   const handleBrowserNavigationHandled = useCallback(
     (handled: EnvironmentBrowserNavigationRequest) => {
       setBrowserNavigationRequest((current) =>
         current?.environmentId === handled.environmentId &&
+        current.sessionId === handled.sessionId &&
         current.id === handled.id
           ? undefined
           : current,
@@ -326,9 +328,12 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
       current?.environmentId === selectedEnvironment?.id ? current : undefined,
     );
     setBrowserNavigationRequest((current) =>
-      current?.environmentId === selectedEnvironment?.id ? current : undefined,
+      current?.environmentId === selectedEnvironment?.id &&
+      current.sessionId === selectedSession?.id
+        ? current
+        : undefined,
     );
-  }, [selectedEnvironment?.id]);
+  }, [selectedEnvironment?.id, selectedSession?.id]);
 
   useEffect(() => {
     if (
@@ -1003,7 +1008,11 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
           onWorkspaceNavigationHandled={handleWorkspaceNavigationHandled}
           browserNavigationRequest={browserNavigationRequest}
           onBrowserNavigationHandled={handleBrowserNavigationHandled}
-          activeTab={inspectorTab === "activity" ? "files" : inspectorTab}
+          activeTab={
+            inspectorTab === "activity" || inspectorTab === "browser"
+              ? "files"
+              : inspectorTab
+          }
           onTabChange={handleInspectorTabChange}
           widthRatio={inspectorWidthRatio}
           onWidthRatioChange={handleInspectorWidthRatioChange}

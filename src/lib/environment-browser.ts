@@ -16,13 +16,8 @@ export const BROWSER_DASHBOARD_VIEWPORT_APPLIED_MESSAGE =
   "sandpi:browser-dashboard-viewport-applied";
 export const BROWSER_DASHBOARD_VIEWPORT_MODE_MESSAGE =
   "sandpi:browser-dashboard-viewport-mode";
-export const BROWSER_DASHBOARD_TABS_MESSAGE =
-  "sandpi:browser-dashboard-tabs";
-export const BROWSER_DASHBOARD_COMMAND_MESSAGE =
-  "sandpi:browser-dashboard-command";
 export const BROWSER_DASHBOARD_LOADING_MESSAGE =
   "sandpi:browser-dashboard-loading";
-export const BROWSER_DASHBOARD_SESSION_NAME = "default";
 export const DEFAULT_BROWSER_DASHBOARD_VIEWPORT_MODE = "desktop";
 export const BROWSER_DASHBOARD_DESKTOP_MIN_WIDTH = 1_280;
 export const BROWSER_DASHBOARD_MOBILE_VIEWPORT = {
@@ -65,8 +60,6 @@ export type BrowserDashboardViewportMode =
   | "desktop"
   | "responsive"
   | "mobile";
-export type BrowserDashboardCommandAction = "new" | "select" | "close";
-
 export interface BrowserDashboardThemeMessage {
   type: typeof BROWSER_DASHBOARD_THEME_MESSAGE;
   theme: BrowserDashboardTheme;
@@ -92,25 +85,6 @@ export interface BrowserDashboardViewportAppliedMessage
 export interface BrowserDashboardViewportModeMessage {
   type: typeof BROWSER_DASHBOARD_VIEWPORT_MODE_MESSAGE;
   mode: BrowserDashboardViewportMode;
-}
-
-export interface BrowserDashboardTab {
-  index: number;
-  title: string;
-  url: string;
-  selected: boolean;
-}
-
-export interface BrowserDashboardTabsMessage {
-  type: typeof BROWSER_DASHBOARD_TABS_MESSAGE;
-  integrated: boolean;
-  tabs: BrowserDashboardTab[];
-}
-
-export interface BrowserDashboardCommandMessage {
-  type: typeof BROWSER_DASHBOARD_COMMAND_MESSAGE;
-  action: BrowserDashboardCommandAction;
-  index?: number;
 }
 
 export interface BrowserDashboardLoadingMessage {
@@ -223,36 +197,6 @@ export function isBrowserDashboardSessionReadyMessage(
     "type" in value &&
     value.type === BROWSER_DASHBOARD_SESSION_READY_MESSAGE
   );
-}
-
-export function isBrowserDashboardTabsMessage(
-  value: unknown,
-): value is BrowserDashboardTabsMessage {
-  if (
-    typeof value !== "object" ||
-    value === null ||
-    !("type" in value) ||
-    value.type !== BROWSER_DASHBOARD_TABS_MESSAGE ||
-    !("integrated" in value) ||
-    typeof value.integrated !== "boolean" ||
-    !("tabs" in value) ||
-    !Array.isArray(value.tabs) ||
-    value.tabs.length > 100
-  ) {
-    return false;
-  }
-  return value.tabs.every((candidate, index) => {
-    if (typeof candidate !== "object" || candidate === null) return false;
-    const tab = candidate as Record<string, unknown>;
-    return (
-      tab.index === index &&
-      typeof tab.title === "string" &&
-      tab.title.length <= 2_000 &&
-      typeof tab.url === "string" &&
-      tab.url.length <= 8_192 &&
-      typeof tab.selected === "boolean"
-    );
-  });
 }
 
 export function isBrowserDashboardLoadingMessage(

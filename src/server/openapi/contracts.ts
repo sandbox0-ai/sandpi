@@ -5,6 +5,7 @@ import { WORKSPACE_ROOT } from "@/lib/workspace-path-policy";
 import {
   billingCheckoutSchema,
   browserOpenSchema,
+  browserProductSessionIdSchema,
   browserSessionSchema,
   codexComposerUploadSchema,
   codexHookUpdateSchema,
@@ -173,7 +174,7 @@ const workspaceRawFile = z.object({
 });
 
 const browserDescription =
-  "Sandpi's built-in Browser is one shared Playwright browser session for the human and the agent. The human can take over the embedded tab to complete an interactive sign-in, then hand the same authenticated profile back to the agent. Browser localhost and loopback URLs resolve inside the Environment sandbox, not on the client device.";
+  "Sandpi runs one persistent Playwright browser instance and authenticated profile per Environment. Each Sandpi Session receives one fixed page through a lightweight Playwright attachment, so concurrent Sessions do not compete for a current tab and do not launch separate browser instances. The human and agent within one Session share that page. Browser localhost and loopback URLs resolve inside the Environment sandbox, not on the client device.";
 
 export const openApiRouteContracts: readonly OpenApiRouteContract[] = [
   defineContract({
@@ -1180,12 +1181,11 @@ export const openApiRouteContracts: readonly OpenApiRouteContract[] = [
     url: "/api/v1/environments/:environmentId/browser/session",
     schema: {
       operationId: "ensureEnvironmentBrowserSession",
-      summary: "Ensure the shared Environment Browser session",
+      summary: "Ensure a Session's fixed Browser page",
       description: browserDescription,
       tags: ["Browser"],
       body: browserSessionSchema,
       response: { 204: noContent },
-      "x-sandpi-optional-request-body": true,
       "x-sandpi-shared-browser": true,
     },
   }),
@@ -1194,7 +1194,7 @@ export const openApiRouteContracts: readonly OpenApiRouteContract[] = [
     url: "/api/v1/environments/:environmentId/browser/open",
     schema: {
       operationId: "openEnvironmentBrowserUrl",
-      summary: "Open a loopback URL in the shared Browser",
+      summary: "Open a loopback URL in a Session's Browser page",
       description: browserDescription,
       tags: ["Browser"],
       body: browserOpenSchema,
@@ -1208,7 +1208,7 @@ export const openApiRouteContracts: readonly OpenApiRouteContract[] = [
     url: "/api/v1/environments/:environmentId/browser/viewport",
     schema: {
       operationId: "resizeEnvironmentBrowserViewport",
-      summary: "Resize the shared Browser viewport",
+      summary: "Resize a Session's Browser viewport",
       description: browserDescription,
       tags: ["Browser"],
       body: environmentBrowserViewportSchema,
@@ -1237,10 +1237,13 @@ export const openApiRouteContracts: readonly OpenApiRouteContract[] = [
     url: "/api/v1/environments/:environmentId/browser",
     schema: {
       operationId: "getEnvironmentBrowserDashboard",
-      summary: "Load the embedded shared Browser dashboard",
+      summary: "Load a Session's embedded Browser page",
       description: browserDescription,
       tags: ["Browser"],
-      querystring: z.looseObject({ embed: z.literal("1").optional() }),
+      querystring: z.looseObject({
+        sessionId: browserProductSessionIdSchema,
+        embed: z.literal("1").optional(),
+      }),
       response: { 200: z.string(), 302: redirect },
       "x-sandpi-content-type": "text/html",
       "x-sandpi-proxy-protocol": "opaque-playwright-dashboard",

@@ -1,6 +1,8 @@
 import type { EnvironmentRuntimeAccessService } from "./runtime-access-service";
 import { embedBrowserDashboard } from "./browser-dashboard-embed";
+import { environmentBrowserSessionName } from "./browser-session";
 import { HttpError } from "@/server/http-error";
+import type { SandpiStore } from "@/server/store";
 import type {
   EnvironmentRuntimeRecord,
   RuntimeAdapter,
@@ -51,6 +53,7 @@ export class EnvironmentBrowserService {
   private readonly viewports = new Map<string, BrowserViewportState>();
 
   constructor(
+    private readonly store: SandpiStore,
     private readonly runtimeAccess: EnvironmentRuntimeAccessService,
     private readonly runtime: RuntimeAdapter,
   ) {}
@@ -58,8 +61,14 @@ export class EnvironmentBrowserService {
   async ensureSession(
     userId: string,
     environmentId: string,
+    sessionId: string,
     force = false,
   ) {
+    const browserSessionName = await this.sessionName(
+      userId,
+      environmentId,
+      sessionId,
+    );
     if (force) this.restartDashboard(environmentId);
     // Sandbox0 does not reliably admit updateServices and cmd concurrently.
     // Serialize only the short service configuration; Chromium startup then
@@ -68,18 +77,33 @@ export class EnvironmentBrowserService {
     await this.runtimeAccess.withRuntimeAccess(
       userId,
       environmentId,
-      (runtime) => this.ensureRuntimeSession(runtime, force),
+      (runtime) =>
+        this.ensureRuntimeSession(runtime, browserSessionName, force),
     );
   }
 
-  async openUrl(userId: string, environmentId: string, url: string) {
+  async openUrl(
+    userId: string,
+    environmentId: string,
+    sessionId: string,
+    url: string,
+  ) {
+    const browserSessionName = await this.sessionName(
+      userId,
+      environmentId,
+      sessionId,
+    );
     await this.dashboard(userId, environmentId);
     await this.runtimeAccess.withRuntimeAccess(
       userId,
       environmentId,
       async (runtime) => {
-        await this.runtime.openEnvironmentBrowserUrl(runtime, url);
-        this.sessions.set(environmentId, {
+        await this.runtime.openEnvironmentBrowserUrl(
+          runtime,
+          browserSessionName,
+          url,
+        );
+        this.sessions.set(sessionCacheKey(environmentId, browserSessionName), {
           runtimeGeneration: runtime.runtimeGeneration,
           pending: Promise.resolve(false),
         });
@@ -90,13 +114,63 @@ export class EnvironmentBrowserService {
   async resizeViewport(
     userId: string,
     environmentId: string,
+    sessionId: string,
     viewport: BrowserDashboardViewport,
   ) {
+    const browserSessionName = await this.sessionName(
+      userId,
+      environmentId,
+      sessionId,
+    );
     await this.runtimeAccess.withRuntimeAccess(
       userId,
       environmentId,
-      (runtime) => this.queueViewportResize(runtime, viewport),
+      (runtime) =>
+        this.queueViewportResize(runtime, browserSessionName, viewport),
     );
+  }
+
+  async releaseSession(
+    userId: string,
+    environmentId: string,
+    sessionId: string,
+  ) {
+    const browserSessionName = await this.sessionName(
+      userId,
+      environmentId,
+      sessionId,
+    );
+    const key = sessionCacheKey(environmentId, browserSessionName);
+    try {
+      await this.runtimeAccess.tryWithRunningRuntimeAccess(
+        userId,
+        environmentId,
+        (runtime) =>
+          this.runtime.releaseEnvironmentBrowserSession(
+            runtime,
+            browserSessionName,
+          ),
+      );
+    } finally {
+      this.sessions.delete(key);
+      this.viewports.delete(key);
+    }
+  }
+
+  async sessionName(
+    userId: string,
+    environmentId: string,
+    sessionId: string,
+  ) {
+    const session = await this.store.getSessionRuntime(userId, sessionId);
+    if (session.environmentId !== environmentId) {
+      throw new HttpError(
+        404,
+        "session_not_found",
+        "Session not found in this Environment.",
+      );
+    }
+    return environmentBrowserSessionName(sessionId);
   }
 
   async httpUpstream(
@@ -145,7 +219,6 @@ export class EnvironmentBrowserService {
     // rewrite and restart a healthy recovered Dashboard merely because its old
     // WebSocket closed.
     this.dashboards.delete(environmentId);
-    this.viewports.delete(environmentId);
   }
 
   private async dashboard(userId: string, environmentId: string) {
@@ -208,9 +281,11 @@ export class EnvironmentBrowserService {
 
   private async ensureRuntimeSession(
     runtime: EnvironmentRuntimeRecord,
+    browserSessionName: string,
     force: boolean,
   ) {
-    const cached = this.sessions.get(runtime.id);
+    const key = sessionCacheKey(runtime.id, browserSessionName);
+    const cached = this.sessions.get(key);
     if (
       !force &&
       cached?.runtimeGeneration === runtime.runtimeGeneration
@@ -219,17 +294,20 @@ export class EnvironmentBrowserService {
       return false;
     }
 
-    const pending = this.runtime.ensureEnvironmentBrowserSession(runtime);
+    const pending = this.runtime.ensureEnvironmentBrowserSession(
+      runtime,
+      browserSessionName,
+    );
     const entry: CachedBrowserSession = {
       runtimeGeneration: runtime.runtimeGeneration,
       pending,
     };
-    this.sessions.set(runtime.id, entry);
+    this.sessions.set(key, entry);
     try {
       return await pending;
     } catch (error) {
-      if (this.sessions.get(runtime.id) === entry) {
-        this.sessions.delete(runtime.id);
+      if (this.sessions.get(key) === entry) {
+        this.sessions.delete(key);
       }
       throw error;
     }
@@ -237,12 +315,14 @@ export class EnvironmentBrowserService {
 
   private queueViewportResize(
     runtime: EnvironmentRuntimeRecord,
+    browserSessionName: string,
     viewport: BrowserDashboardViewport,
   ) {
-    let state = this.viewports.get(runtime.id);
+    const key = sessionCacheKey(runtime.id, browserSessionName);
+    let state = this.viewports.get(key);
     if (!state || state.runtimeGeneration !== runtime.runtimeGeneration) {
       state = { runtimeGeneration: runtime.runtimeGeneration };
-      this.viewports.set(runtime.id, state);
+      this.viewports.set(key, state);
     }
 
     const target = state.queued ?? state.inFlight ?? state.applied;
@@ -252,13 +332,17 @@ export class EnvironmentBrowserService {
     state.queued = viewport;
     if (!state.pending) {
       const current = state;
-      current.pending = this.flushViewportResizes(runtime, current)
+      current.pending = this.flushViewportResizes(
+        runtime,
+        browserSessionName,
+        current,
+      )
         .catch((error) => {
           current.queued = undefined;
           throw error;
         })
         .finally(() => {
-          if (this.viewports.get(runtime.id) === current) {
+          if (this.viewports.get(key) === current) {
             current.pending = undefined;
             current.inFlight = undefined;
           }
@@ -269,6 +353,7 @@ export class EnvironmentBrowserService {
 
   private async flushViewportResizes(
     runtime: EnvironmentRuntimeRecord,
+    browserSessionName: string,
     state: BrowserViewportState,
   ) {
     while (state.queued) {
@@ -276,11 +361,19 @@ export class EnvironmentBrowserService {
       state.queued = undefined;
       if (sameViewport(state.applied, viewport)) continue;
       state.inFlight = viewport;
-      await this.runtime.resizeEnvironmentBrowserViewport(runtime, viewport);
+      await this.runtime.resizeEnvironmentBrowserViewport(
+        runtime,
+        browserSessionName,
+        viewport,
+      );
       state.applied = viewport;
       state.inFlight = undefined;
     }
   }
+}
+
+function sessionCacheKey(environmentId: string, browserSessionName: string) {
+  return `${environmentId}\0${browserSessionName}`;
 }
 
 function sameViewport(
@@ -331,6 +424,7 @@ export function dashboardAssetCacheControl(
 export function dashboardRedirectLocation(
   location: string | null,
   proxyPrefix: string,
+  sessionId: string,
 ) {
   if (!location) return undefined;
   let target: URL;
@@ -350,15 +444,23 @@ export function dashboardRedirectLocation(
     /^\/+/,
     "",
   )}/ws/${socketId}`;
-  return `${proxyPrefix}/index.html?ws=${encodeURIComponent(dashboardSocketPath)}`;
+  const query = new URLSearchParams({
+    ws: dashboardSocketPath,
+    sessionId,
+  });
+  return `${proxyPrefix}/index.html?${query.toString()}`;
 }
 
-export function rewriteDashboardHtml(html: string, proxyPrefix: string) {
+export function rewriteDashboardHtml(
+  html: string,
+  proxyPrefix: string,
+  browserSessionName: string,
+) {
   const rewritten = html.replace(
     /((?:src|href)=["'])\/(?!\/)/g,
     `$1${proxyPrefix}/`,
   );
-  return embedBrowserDashboard(rewritten);
+  return embedBrowserDashboard(rewritten, browserSessionName);
 }
 
 export function rewriteDashboardCss(css: string, proxyPrefix: string) {

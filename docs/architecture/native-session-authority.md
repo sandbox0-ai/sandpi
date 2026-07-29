@@ -187,40 +187,56 @@ remains authoritative for browser processes, pages, tabs, snapshots,
 interaction and profiles; Sandpi does not define an MCP browser tool, CDP
 contract, general automation RPC or replacement CLI. Sandpi invokes only the
 official `playwright-cli`. Codex Workspace preparation materializes the bundled
-Agent Skill once per installed Playwright package version, before app-server
-startup. Every newly provisioned Environment includes the protected Dashboard
-AppService definition. Its lazy ingress process starts the Dashboard and
-starts prewarming the default persistent session as soon as the Dashboard port
-is listening, while the client loads Dashboard assets. This avoids making
-separate high-latency control API commands on a normal Browser mount and avoids
-cold-loading two Playwright CLI processes at exactly the same time. The same
-process periodically verifies the local Playwright session and reopens it after
-an ordinary browser-process exit without crossing the Sandbox0 control API.
-Sandpi otherwise invokes the CLI directly only for explicit session recovery,
-viewport changes and selected loopback URLs. The coding agent can use that same
-command directly.
+Agent Skill and a small command wrapper before app-server startup. Every
+Environment includes the protected Dashboard AppService definition. Its lazy
+ingress process starts the Dashboard and prewarms one persistent `default`
+browser as soon as the Dashboard port is listening. The same process
+periodically verifies that owner session and reopens it after an ordinary
+browser-process exit without crossing the Sandbox0 control API.
 
-The default Playwright session is shared at Environment scope. The coding-agent
-template sets `HOME=/workspace`, so Playwright's official daemon registry and
-persistent profile live on the Environment Workspace Volume. Human Dashboard
-interaction and agent CLI commands therefore observe the same tabs, cookies
-and authenticated sites. Sandpi stores no browser history, cookies, storage
-state or page model in PostgreSQL. Workspace backups do include the persistent
-browser profile, so access to those snapshots must be treated as access to the
-Environment's logged-in browser credentials.
+Browser process and profile ownership remain at Environment scope. The
+coding-agent template sets `HOME=/workspace`, so Playwright's official daemon
+registry and persistent profile live on the Environment Workspace Volume.
+There is exactly one Chromium browser instance and context per running
+Environment, regardless of the number of Sandpi Sessions. Cookies, storage and
+authenticated sites are intentionally shared by those Sessions; a fixed page
+is a concurrency boundary, not a credential-isolation boundary. Sandpi stores
+no browser history, cookies, storage state or duplicate page model in
+PostgreSQL. Workspace backups include the persistent profile, so access to a
+snapshot must be treated as access to the Environment's logged-in browser
+credentials.
 
-Sandpi adapts only the embedded Dashboard shell: it binds the Dashboard to the
-shared `default` session explicitly, projects the current Sandpi theme tokens
-into the frame, and exposes the upstream tabs as a compact horizontal tab
-strip. Tab selection, creation and closing still invoke Dashboard-owned
-controls; Sandpi projects but does not persist an independent page or tab
-model. Navigation and tab activity produce a non-blocking loading indicator
-until the next live frame.
+Each Sandpi Session derives an opaque `sandpi-<digest>` Playwright CLI name.
+On first Browser use, that lightweight CLI daemon attaches to `default` and
+creates one page. Playwright keeps an independent current-page pointer for
+each attachment, so commands from two product Sessions do not compete for the
+global `default` current tab. The extra per-Session object is an attachment
+daemon and page, not another Chromium browser instance or profile.
+
+Codex `thread/start`, `thread/resume` and `thread/fork` set
+`PLAYWRIGHT_CLI_SESSION` from the product Session id. The Workspace-local
+wrapper then scopes every agent-authored CLI command to that attachment. It
+maps `playwright-cli open` to navigation of the assigned page, maps `close` to
+clearing that page, rejects an explicit different CLI session, and rejects
+browser-session and tab lifecycle commands. This prevents the official
+`open` command from replacing an attachment with a second browser process.
+Commands remain official Playwright CLI operations after this routing step.
+
+The authenticated Browser API requires `sessionId` and verifies that the
+Session belongs to the requested Environment. The embedded HTML selects only
+the corresponding named attachment, projects Sandpi theme tokens, and hides
+the Dashboard's Environment-wide session/tab sidebar. Sandpi does not expose
+new, select or close-tab controls. If a future Dashboard no longer exposes the
+expected accessible Session markup, the fixed page does not announce
+readiness; the Inspector reports a compatibility failure instead of revealing
+other Sessions' page controls. Navigation activity still produces a
+non-blocking loading indicator until the next live frame.
 
 The embedded shell measures the Dashboard's live screen bounds and sends
 bounded, debounced updates through Sandpi's authenticated API. Sandpi
-deduplicates an already-applied viewport within one Sandbox runtime generation
-and coalesces intermediate updates while one CLI resize is running. The default
+deduplicates an already-applied viewport per product Session and Sandbox
+runtime generation, and coalesces intermediate updates while one CLI resize is
+running. The default
 `Desktop fit` mode preserves that aspect ratio while targeting a minimum 1280
 CSS-pixel width within bounded viewport limits.
 This keeps desktop sites out of mobile breakpoints while still filling the
@@ -230,21 +246,14 @@ viewport. The selected mode is a browser-local UI preference. Sandpi applies
 all three modes through the official `playwright-cli resize` command.
 
 Sandpi starts `playwright-cli show` without pinning a session so Dashboard
-readiness does not wait for Chromium startup. Every newly embedded connection
-selects the first tab in `default` after Playwright publishes it, then reveals
-the official Dashboard as soon as that shared session and first tab exist.
+readiness does not wait for Chromium startup. Each embedded connection carries
+its authorized product Session id; the injected adapter waits for the derived
+attachment and selects its assigned page before revealing the Dashboard.
 Viewport reconciliation continues in the background instead of imposing a
-fixed wait for a resized screencast frame. A bounded compatibility fallback
-reveals the native Dashboard if Sandpi cannot recognize a future session
-markup. Users never need to operate the session picker in the supported shape.
-
-The adapter is injected by Sandpi's authenticated HTML proxy; it does not edit
-the coding-agent template or the installed Playwright package. Hiding the
-native sidebar is capability-gated. If a future Dashboard no longer exposes
-the expected accessible tab controls, Sandpi leaves the official sidebar
-visible and stops presenting the compact tab strip, so the upstream UI remains
-usable after an image upgrade. Playwright continues to own the browser toolbar,
-pages, profiles and interaction behavior.
+fixed wait for a resized screencast frame. The adapter is injected by Sandpi's
+authenticated HTML proxy; it does not edit the installed Playwright package.
+Playwright continues to own the browser toolbar, page rendering, profile and
+interaction behavior.
 
 An Environment resume can terminate Chromium while leaving its persistent
 profile's `Singleton*` symlinks on the Workspace Volume. If Playwright reports
@@ -263,11 +272,11 @@ other failed starts are reported as runtime recovery failures instead of
 telling the user to recreate the Environment unconditionally.
 
 An authenticated chat link using HTTP or HTTPS on `localhost`, `127.0.0.1` or
-`::1` opens in a new tab in that remote browser, where loopback resolves inside
-the Sandbox rather than on the user's device. Scheme-less Markdown link targets
-for those exact hosts are normalized to HTTP. The Dashboard address bar remains
-an official Playwright surface and can navigate elsewhere subject to the
-Environment's network policy.
+`::1` navigates that Session's fixed remote page, where loopback resolves
+inside the Sandbox rather than on the user's device. Scheme-less Markdown link
+targets for those exact hosts are normalized to HTTP. The Dashboard address
+bar remains an official Playwright surface and can navigate elsewhere subject
+to the Environment's network policy.
 
 Sandbox0 currently exposes the Dashboard through an app-service ingress rather
 than a private port-tunnel API. That public DNS name is transport, not the user
@@ -392,9 +401,11 @@ The archive transaction uses the same Environment-runtime, Session-runtime,
 Session-metadata lock order as Turn admission. Archived Sessions can therefore
 be excluded both from background repair and from the idle-pause guard without
 pausing hidden work, and Turn admission rejects an archived Session until it is
-unarchived. Unarchive schedules exceptional control repair, while explicitly
-opening an archived Session still reads that one conversation and can repair
-sufficiently old pending scalar state.
+unarchived. Archiving also releases that Session's Browser attachment and page
+when the Environment is already running; this best-effort cleanup never wakes a
+paused Environment or postpones idle pause. Unarchive schedules exceptional
+control repair, while explicitly opening an archived Session still reads that
+one conversation and can repair sufficiently old pending scalar state.
 
 Operations that require a loaded Thread, including user `turn/start`,
 `turn/interrupt` and thread-scoped native command RPCs, attach only their target

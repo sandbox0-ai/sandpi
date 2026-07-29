@@ -90,6 +90,7 @@ import { TerminalInputQueue } from "@/server/terminal-input-queue";
 import {
   billingCheckoutSchema,
   browserOpenSchema,
+  browserProductSessionIdSchema,
   browserSessionSchema,
   codexComposerUploadSchema,
   codexHookUpdateSchema,
@@ -216,7 +217,7 @@ export async function createSandpiServer(
   const runtimeAccess = new EnvironmentRuntimeAccessService(store, runtime, {
     quotaGate: billingQuota,
   });
-  const browser = new EnvironmentBrowserService(runtimeAccess, runtime);
+  const browser = new EnvironmentBrowserService(store, runtimeAccess, runtime);
   const codex = new CodexService(store, runtime, app.log, codexAuth, {
     runtimeQuotaGate: billingQuota,
   });
@@ -1068,11 +1069,36 @@ export function registerApiRoutes(
     "/api/v1/sessions/:sessionId/metadata",
     async (request) => {
       const body = sessionMetadataSchema.parse(request.body);
+      const archivedRuntime =
+        body.archived === true
+          ? await services.store.getSessionRuntime(
+              request.principal.userId,
+              request.params.sessionId,
+            )
+          : undefined;
       const data = await services.store.setSessionMetadata(
         request.principal.userId,
         request.params.sessionId,
         body,
       );
+      if (archivedRuntime) {
+        try {
+          await services.browser.releaseSession(
+            request.principal.userId,
+            archivedRuntime.environmentId,
+            request.params.sessionId,
+          );
+        } catch (error) {
+          request.log.warn(
+            {
+              err: error,
+              environmentId: archivedRuntime.environmentId,
+              sessionId: request.params.sessionId,
+            },
+            "Archived Session Browser page could not be released",
+          );
+        }
+      }
       if (body.archived === false) {
         await services.codex.scheduleSessionControlStateRepair(
           request.params.sessionId,
@@ -1603,6 +1629,7 @@ export function registerApiRoutes(
       await services.browser.ensureSession(
         request.principal.userId,
         request.params.environmentId,
+        input.sessionId,
         input.force ?? false,
       );
       return reply.status(204).send();
@@ -1623,6 +1650,7 @@ export function registerApiRoutes(
       await services.browser.openUrl(
         request.principal.userId,
         request.params.environmentId,
+        input.sessionId,
         url,
       );
       return reply.status(204).send();
@@ -1631,11 +1659,12 @@ export function registerApiRoutes(
   app.post<{ Params: { environmentId: string }; Body: unknown }>(
     "/api/v1/environments/:environmentId/browser/viewport",
     async (request, reply) => {
-      const viewport = environmentBrowserViewportSchema.parse(request.body);
+      const input = environmentBrowserViewportSchema.parse(request.body);
       await services.browser.resizeViewport(
         request.principal.userId,
         request.params.environmentId,
-        viewport,
+        input.sessionId,
+        { width: input.width, height: input.height },
       );
       return reply.status(204).send();
     },
@@ -2174,6 +2203,20 @@ async function proxyEnvironmentBrowserAsset(
   assetPath: string | undefined,
 ) {
   const environmentId = request.params.environmentId;
+  const normalizedAssetPath = assetPath?.replace(/^\/+|\/+$/g, "");
+  const sessionId =
+    !normalizedAssetPath || normalizedAssetPath === "index.html"
+      ? browserProductSessionIdSchema.parse(
+          (request.query as Record<string, unknown> | undefined)?.sessionId,
+        )
+      : undefined;
+  const browserSessionName = sessionId
+    ? await browser.sessionName(
+        request.principal.userId,
+        environmentId,
+        sessionId,
+      )
+    : undefined;
   let upstream = await browser.httpUpstream(
     request.principal.userId,
     environmentId,
@@ -2192,9 +2235,17 @@ async function proxyEnvironmentBrowserAsset(
 
   const prefix = dashboardProxyPrefix(environmentId);
   if (response.status >= 300 && response.status < 400) {
+    if (!sessionId) {
+      throw new HttpError(
+        502,
+        "environment_browser_proxy_invalid",
+        "The Playwright Dashboard returned an unexpected asset redirect.",
+      );
+    }
     const location = dashboardRedirectLocation(
       response.headers.get("location"),
       prefix,
+      sessionId,
     );
     if (!location) {
       throw new HttpError(
@@ -2241,10 +2292,15 @@ async function proxyEnvironmentBrowserAsset(
         )
       : "private, no-store",
   );
-  const normalizedAssetPath = assetPath?.replace(/^\/+|\/+$/g, "");
   const payload =
     normalizedAssetPath === "index.html"
-      ? Buffer.from(rewriteDashboardHtml(body.toString("utf8"), prefix))
+      ? Buffer.from(
+          rewriteDashboardHtml(
+            body.toString("utf8"),
+            prefix,
+            browserSessionName!,
+          ),
+        )
       : normalizedAssetPath?.endsWith(".css")
         ? Buffer.from(rewriteDashboardCss(body.toString("utf8"), prefix))
       : body;

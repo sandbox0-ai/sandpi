@@ -23,8 +23,11 @@ import {
 } from "@/server/harnesses/codex/input-images";
 import { networkPolicySchema } from "@/server/network-policy-schema";
 
+export const browserProductSessionIdSchema = z.string().trim().min(1).max(200);
+
 export const environmentBrowserViewportSchema = z
   .object({
+    sessionId: browserProductSessionIdSchema,
     width: z
       .number()
       .int()
@@ -306,11 +309,15 @@ export const sessionForkSchema = z
   .default({});
 
 export const browserSessionSchema = z
-  .object({ force: z.boolean().optional() })
+  .object({
+    sessionId: browserProductSessionIdSchema,
+    force: z.boolean().optional(),
+  })
   .strict();
 
 export const browserOpenSchema = z
   .object({
+    sessionId: browserProductSessionIdSchema,
     url: z
       .string()
       .trim()

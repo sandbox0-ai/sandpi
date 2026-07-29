@@ -339,8 +339,8 @@ export function Inspector({
   const resizePointerRef = useRef<number | null>(null);
   const resizeRatioRef = useRef(widthRatio);
   const [resizing, setResizing] = useState(false);
-  const [mountedBrowserEnvironmentId, setMountedBrowserEnvironmentId] =
-    useState(activeTab === "browser" ? environment.id : "");
+  const [mountedBrowserSessionId, setMountedBrowserSessionId] =
+    useState(activeTab === "browser" ? (session?.id ?? "") : "");
   const metricRangeOptions = [
     {
       seconds: 15 * 60,
@@ -411,16 +411,19 @@ export function Inspector({
   }, [environment.id]);
 
   useEffect(() => {
-    if (activeTab === "activity" && !sessionActivity) {
+    if (
+      (activeTab === "activity" && !sessionActivity) ||
+      (activeTab === "browser" && !session)
+    ) {
       onTabChange("files");
     }
-  }, [activeTab, onTabChange, sessionActivity]);
+  }, [activeTab, onTabChange, session, sessionActivity]);
 
   useEffect(() => {
-    if (activeTab === "browser") {
-      setMountedBrowserEnvironmentId(environment.id);
+    if (activeTab === "browser" && session) {
+      setMountedBrowserSessionId(session.id);
     }
-  }, [activeTab, environment.id]);
+  }, [activeTab, session]);
 
   useEffect(() => {
     if (!dataTab) {
@@ -595,13 +598,15 @@ export function Inspector({
           >
             <FileCode2 size={14} /> {ui.files}
           </button>
-          <button
-            type="button"
-            className={activeTab === "browser" ? "is-active" : ""}
-            onClick={() => onTabChange("browser")}
-          >
-            <Globe2 size={14} /> {ui.browser}
-          </button>
+          {session ? (
+            <button
+              type="button"
+              className={activeTab === "browser" ? "is-active" : ""}
+              onClick={() => onTabChange("browser")}
+            >
+              <Globe2 size={14} /> {ui.browser}
+            </button>
+          ) : null}
           {sessionActivity ? (
             <button
               type="button"
@@ -640,15 +645,16 @@ export function Inspector({
         ? sessionActivity.content
         : null}
 
-      {activeTab === "browser" ||
-      mountedBrowserEnvironmentId === environment.id ? (
+      {session &&
+      (activeTab === "browser" || mountedBrowserSessionId === session.id) ? (
         <div
           className="inspector-panel browser-panel"
           hidden={activeTab !== "browser"}
         >
           <EnvironmentBrowser
-            key={environment.id}
+            key={session.id}
             environmentId={environment.id}
+            sessionId={session.id}
             navigationRequest={browserNavigationRequest}
             onNavigationHandled={onBrowserNavigationHandled}
             copy={{
@@ -656,10 +662,6 @@ export function Inspector({
               starting: ui.browserStarting,
               unavailable: ui.browserUnavailable,
               retry: ui.browserRetry,
-              tabs: ui.browserTabs,
-              newTab: ui.browserNewTab,
-              closeTab: ui.browserCloseTab,
-              untitledTab: ui.browserUntitledTab,
               loading: ui.browserLoading,
               viewport: ui.browserViewport,
               viewportDesktop: ui.browserViewportDesktop,

@@ -40,7 +40,7 @@ project。它让原生 coding agent 运行在远程 Sandbox0 Sandbox 中，并�
 | 持久化 Session | 原生 Session 状态和 Workspace 不在浏览器里。页面刷新、客户端断线和 runtime 恢复都不会让 Session 消失。 |
 | 更专注的隔离 | 可以按项目、任务或关注点创建独立 Environment。每个 Environment 都有自己的 Sandbox、Workspace、coding-agent 账号、网络策略和凭证。 |
 | 多个 coding plan | 不同 Environment 可以连接不同的 Codex/ChatGPT 订阅账号；即使使用同一个账号，也可以把不同工作彼此隔离。 |
-| 人与 Agent 共享浏览器 | Human 和 coding agent 使用同一个官方 Playwright browser session，共享 tab 和登录 profile。 |
+| 人与 Agent 共享浏览器 | 每个 Environment 只运行一个 Chromium 和登录 profile；每个 Sandpi Session 获得一个由 human 与 agent 共用的固定页面。 |
 | 可控的出站访问 | 按目标限制 Sandbox 出站流量，并只向匹配的请求注入受支持的凭证，避免把服务密钥放进仓库或浏览器。 |
 | Workspace 防丢失 | 通过 Sandbox0 Volume snapshot 手动或定时备份 Workspace，设置保留数量并按需恢复。 |
 | 持久化数据加密 | Sandbox0 在写入对象存储前，对 Environment rootfs checkpoint 对象和默认 S0FS Workspace Volume 对象做应用层加密。 |
@@ -53,7 +53,7 @@ Environment
 ├── Sandbox 和持久化 Workspace Volume
 ├── 一个原生 coding-agent harness 和 provider 账号
 ├── 网络策略和出站凭证
-├── runtime 资源、终端、共享 Browser 和指标
+├── runtime 资源、终端、共享 Browser 实例/profile 和指标
 ├── 持久化 Automation Schedules
 └── 多个原生 coding-agent Session
 ```
@@ -89,8 +89,9 @@ Environment。如果多个 Session 本来就应该共享文件、工具和执行
 - Codex tools、Skills、MCP 配置、审批和已支持的 slash-command 界面
 - 持久化多 Environment、多 Session Web UI
 - 实时 Workspace 文件浏览器、Monaco 编辑器、媒体预览和 Git 变更
-- Human 与 coding agent 共用的官方 Playwright Browser，支持多 Tab、加载反馈以及
-  本地持久化的桌面自适应、响应式和移动端 viewport 模式
+- Human 与 coding agent 共用的官方 Playwright Browser；每个 Sandpi Session
+  固定一个页面，支持加载反馈以及本地持久化的桌面自适应、响应式和移动端 viewport
+  模式，多个 Session 不会分别启动 Chromium 浏览器实例
 - Environment 终端、runtime 指标和可配置 idle pause
 - Environment Schedules，支持一次性或易读的周期设置、高级 Cron、IANA
   时区、后续运行预览、持久化运行历史和重叠跳过
@@ -218,7 +219,7 @@ Sandpi server ───────── PostgreSQL
 Sandbox0
     ├── Sandbox + 原生 Codex app-server
     ├── 持久化 Workspace Volume
-    ├── 官方 Playwright CLI、Dashboard 和共享 profile
+    ├── 单个 Chromium 浏览器实例、官方 Playwright CLI/Dashboard 和共享 profile
     ├── 终端和 runtime 指标
     ├── 网络策略和凭证注入
     └── Workspace snapshot
@@ -226,9 +227,10 @@ Sandbox0
 
 - 本地浏览器只与 Sandpi 通信，不会收到 Sandbox0 deployment API key 或直接访问
   Sandbox0 的 endpoint。Sandpi 对官方 Playwright Dashboard 的 HTTP 和
-  WebSocket 流量进行鉴权与代理。内置 tab 与 agent 共享同一个 Playwright
-  profile：human 可以在其中完成交互式登录，然后把同一份已登录 Browser 交还给
-  agent 继续操作。Browser 中的 loopback URL 解析到 Environment sandbox 内部。
+  WebSocket 流量进行鉴权与代理。每个产品 Session 都有一个由 human 与 agent
+  共用的固定页面；这些页面 attach 到 Environment 唯一的 Chromium 浏览器实例和登录
+  profile。Human 可以在页面中完成交互式登录，再把同一页面交还给 agent。
+  Browser 中的 loopback URL 解析到 Environment sandbox 内部。
 - Sandpi 只通过官方 JavaScript SDK 使用 Sandbox0，不读取 Sandbox0 数据库、内部
   metering endpoint 或 ClickHouse 凭证。
 - Sandbox0 负责 Sandbox 生命周期、Volume、网络执行、凭证注入和 usage truth。
@@ -251,6 +253,9 @@ Sandbox0
   不会在可能改变网络策略或凭证边界的情况下静默新建替代 Sandbox。
 - 同一个 Environment 中的 Session 共享可变 Workspace 和 harness 账号，它们不是互相
   隔离的 checkout。工作之间不能互相影响时，请创建不同 Environment。
+- Browser 页面拥有互不竞争的 current-page 指针，但同一个 Environment 内的 Session
+  会有意共享 cookie、storage 和已登录站点。浏览器凭证需要隔离时，请使用不同
+  Environment。
 - Browser 依赖当前 Sandbox0 `coding-agent` image。旧 Environment 需要重新创建，
   才能获得 Playwright CLI 和 Chromium 依赖。
 - 内置管理员模式只适用于受信任的单用户部署。公开或多用户部署应使用 OIDC，并配置
