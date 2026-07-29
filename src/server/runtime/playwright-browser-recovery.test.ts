@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtemp, lstat, readlink, symlink } from "node:fs/promises";
+import { lstat, mkdtemp, readlink, realpath, symlink } from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -72,7 +72,9 @@ test("recognizes a stopped browser separately from missing dependencies", () => 
 });
 
 test("removes only stale Chromium singleton symlinks", async (context) => {
-  const profile = await mkdtemp(path.join(tmpdir(), "sandpi-browser-profile-"));
+  const profile = await realpath(
+    await mkdtemp(path.join(tmpdir(), "sandpi-browser-profile-")),
+  );
   context.after(async () => {
     await import("node:fs/promises").then(({ rm }) =>
       rm(profile, { recursive: true, force: true }),
@@ -99,6 +101,7 @@ test("removes only stale Chromium singleton symlinks", async (context) => {
       code: "ENOENT",
     });
   }
+  if (process.platform !== "linux") return;
 
   const browser = spawn(
     process.execPath,
