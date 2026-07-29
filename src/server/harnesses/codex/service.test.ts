@@ -27,6 +27,10 @@ const logger = {
   error() {},
 };
 
+// Keep synthetic timeout tests fast while allowing protocol bootstrap RPCs to
+// complete under full-suite scheduler contention.
+const TEST_RPC_TIMEOUT_MS = 100;
+
 const credentials = {
   async credentialForEnvironment() {
     return { sourceId: "credential-test", revision: 1, authJson: "{}" };
@@ -1673,6 +1677,36 @@ test("uses one Environment app-server and model catalog for multiple native Sess
         capabilities: { experimentalApi: true },
       },
     );
+    assert.deepEqual(
+      context.writes
+        .filter(
+          (write) => write.message.method === "skills/extraRoots/set",
+        )
+        .map((write) => write.message.params),
+      [
+        {
+          extraRoots: ["/root/.codex/skills", "/root/.agents/skills"],
+        },
+      ],
+    );
+    assert.deepEqual(
+      context.writes
+        .filter(({ message }) =>
+          [
+            "initialize",
+            "initialized",
+            "skills/extraRoots/set",
+            "model/list",
+          ].includes(String(message.method)),
+        )
+        .map(({ message }) => message.method),
+      [
+        "initialize",
+        "initialized",
+        "skills/extraRoots/set",
+        "model/list",
+      ],
+    );
     assert.equal(
       context.writes.filter((write) => write.message.method === "model/list")
         .length,
@@ -1681,6 +1715,59 @@ test("uses one Environment app-server and model catalog for multiple native Sess
     assert.equal(
       context.writes.filter((write) => write.message.method === "thread/resume")
         .length,
+      0,
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("continues when older Codex lacks runtime extra skill roots", async () => {
+  const context = fixture({
+    onRequest(message) {
+      if (message.method !== "skills/extraRoots/set") return undefined;
+      return {
+        id: message.id,
+        error: { code: -32_601, message: "Method not found" },
+      };
+    },
+  });
+  try {
+    assert.deepEqual(await context.service.listModels("user", "session-one"), {
+      data: [{ id: "gpt-test" }],
+    });
+    assert.equal(
+      context.writes.filter(
+        ({ message }) => message.method === "skills/extraRoots/set",
+      ).length,
+      1,
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("fails initialization when Codex rejects runtime extra skill roots", async () => {
+  const context = fixture({
+    onRequest(message) {
+      if (message.method !== "skills/extraRoots/set") return undefined;
+      return {
+        id: message.id,
+        error: { code: -32_602, message: "Invalid extra roots" },
+      };
+    },
+  });
+  try {
+    await assert.rejects(
+      context.service.listModels("user", "session-one"),
+      (error: unknown) =>
+        error instanceof HttpError &&
+        error.code === "codex_skill_roots_registration_failed",
+    );
+    assert.equal(
+      context.writes.filter(
+        ({ message }) => message.method === "model/list",
+      ).length,
       0,
     );
   } finally {
@@ -1835,6 +1922,12 @@ test("restarts a warm app-server before publishing a replacement account credent
       "initialized-2",
       "materialized-2",
     ]);
+    assert.equal(
+      context.writes.filter(
+        ({ message }) => message.method === "skills/extraRoots/set",
+      ).length,
+      2,
+    );
   } finally {
     await context.close();
   }
@@ -2440,7 +2533,7 @@ test("passes native Plan collaboration settings to a new Thread and its first Tu
 test("reconciles a persisted native Thread when the thread/start response is lost", async () => {
   let creationSource: string | undefined;
   const context = fixture({
-    rpcTimeoutMs: 5,
+    rpcTimeoutMs: TEST_RPC_TIMEOUT_MS,
     onRequest(message) {
       if (message.method === "thread/start") {
         creationSource = (message.params as Record<string, unknown>)
@@ -2483,7 +2576,14 @@ test("reconciles a persisted native Thread when the thread/start response is los
     assert.deepEqual(
       context.writes
         .map(({ message }) => message.method)
-        .filter((method) => method !== "initialize" && method !== "initialized"),
+        .filter(
+          (method) =>
+            ![
+              "initialize",
+              "initialized",
+              "skills/extraRoots/set",
+            ].includes(String(method)),
+        ),
       ["thread/start", "thread/list", "thread/resume", "turn/start"],
     );
     assert.equal(
@@ -2502,7 +2602,7 @@ test("reconciles a persisted native Thread when the thread/start response is los
 test("fails closed when a creation key resolves to multiple native Threads", async () => {
   let creationSource: string | undefined;
   const context = fixture({
-    rpcTimeoutMs: 5,
+    rpcTimeoutMs: TEST_RPC_TIMEOUT_MS,
     onRequest(message) {
       if (message.method === "thread/start") {
         creationSource = (message.params as Record<string, unknown>)
@@ -5321,13 +5421,15 @@ test("starts the Codex RPC timeout only after input submission", async () => {
     releaseWrite = resolve;
   });
   const context = fixture({
-    rpcTimeoutMs: 5,
+    rpcTimeoutMs: TEST_RPC_TIMEOUT_MS,
     writeDelays: { "model/list": blockedWrite },
   });
   try {
     await context.service.resumeWorkers();
     const listing = context.service.listModels("user", "session-one");
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve) =>
+      setTimeout(resolve, TEST_RPC_TIMEOUT_MS + 25),
+    );
     releaseWrite?.();
 
     assert.deepEqual(await listing, { data: [{ id: "gpt-test" }] });
@@ -6062,7 +6164,7 @@ test("does not replay an ambiguously delivered turn/steer request", async () => 
         activeTurnRuntimeGeneration: 1,
       },
     ],
-    rpcTimeoutMs: 5,
+    rpcTimeoutMs: TEST_RPC_TIMEOUT_MS,
     onRequest(message) {
       if (message.method === "turn/steer") return null;
       return undefined;
@@ -6581,7 +6683,7 @@ test("rejects a lazy attachment returned for a different Thread", async () => {
 
 test("abandons pending Turn admission when lazy attachment times out", async () => {
   const context = fixture({
-    rpcTimeoutMs: 10,
+    rpcTimeoutMs: TEST_RPC_TIMEOUT_MS,
     onRequest(message) {
       if (message.method === "thread/resume") return null;
       return undefined;
@@ -6615,7 +6717,7 @@ test("abandons pending Turn admission when lazy attachment times out", async () 
 
 test("reconciles ambiguous Turn delivery lazily after its RPC timeout", async () => {
   const context = fixture({
-    rpcTimeoutMs: 10,
+    rpcTimeoutMs: TEST_RPC_TIMEOUT_MS,
     exceptionalSessionRecoveryDelayMs: 0,
     onRequest(message) {
       if (message.method === "turn/start") return null;
@@ -6667,7 +6769,7 @@ test("reconciles ambiguous Turn delivery lazily after its RPC timeout", async ()
 test("interactive preemption preserves another Session's exact timeout repair", async () => {
   let sessionOneReads = 0;
   const context = fixture({
-    rpcTimeoutMs: 30,
+    rpcTimeoutMs: TEST_RPC_TIMEOUT_MS,
     exceptionalSessionRecoveryDelayMs: 0,
     exceptionalPendingTurnGraceMs: 5_000,
     exceptionalSessionRetryBaseMs: 5,
@@ -7250,6 +7352,14 @@ test("recovers when the Supervisor journal restarts behind the committed cursor"
       context.environmentRuntime().decoder.attemptId,
       context.environmentRuntime().attemptId,
     );
+    assert.deepEqual(
+      context.writes.find(
+        ({ message }) => message.method === "skills/extraRoots/set",
+      )?.message.params,
+      {
+        extraRoots: ["/root/.codex/skills", "/root/.agents/skills"],
+      },
+    );
   } finally {
     await context.close();
   }
@@ -7307,7 +7417,7 @@ test("forks a product Session only through Codex thread/fork", async () => {
 test("reconciles a persisted native fork when the thread/fork response is lost", async () => {
   let creationSource: string | undefined;
   const context = fixture({
-    rpcTimeoutMs: 5,
+    rpcTimeoutMs: TEST_RPC_TIMEOUT_MS,
     onRequest(message) {
       if (message.method === "thread/fork") {
         creationSource = (message.params as Record<string, unknown>)
@@ -7348,7 +7458,14 @@ test("reconciles a persisted native fork when the thread/fork response is lost",
     assert.deepEqual(
       context.writes
         .map(({ message }) => message.method)
-        .filter((method) => method !== "initialize" && method !== "initialized"),
+        .filter(
+          (method) =>
+            ![
+              "initialize",
+              "initialized",
+              "skills/extraRoots/set",
+            ].includes(String(method)),
+        ),
       ["thread/fork", "thread/list"],
     );
   } finally {

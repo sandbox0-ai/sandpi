@@ -109,6 +109,12 @@ const MODEL_CATALOG_CACHE_TTL_MS = 30_000;
 const MAX_MODEL_CATALOG_CACHE_ENTRIES = 128;
 const CODEX_ENVIRONMENT_CWD = "/workspace";
 const CODEX_ENVIRONMENT_HOME = "/workspace/.sandpi/harnesses/codex";
+// Agents may install valid skills in conventional root-account locations even
+// though Sandpi isolates CODEX_HOME. Let Codex discover them in place.
+const CODEX_ENVIRONMENT_EXTRA_SKILL_ROOTS = [
+  "/root/.codex/skills",
+  "/root/.agents/skills",
+] as const;
 const CODEX_ROLLOUT_ROOTS = [
   `${CODEX_ENVIRONMENT_HOME}/sessions`,
   `${CODEX_ENVIRONMENT_HOME}/archived_sessions`,
@@ -4365,12 +4371,48 @@ export class CodexService {
         method: "initialized",
         params: {},
       });
+      await this.registerEnvironmentExtraSkillRoots(runtime);
     })().catch((error) => {
       this.initializing.delete(key);
       throw error;
     });
     this.initializing.set(key, initialize);
     return initialize;
+  }
+
+  private async registerEnvironmentExtraSkillRoots(
+    runtime: StoredEnvironmentRuntime,
+  ) {
+    const response = await this.requestCodex(
+      runtime.id,
+      runtime,
+      {
+        method: "skills/extraRoots/set",
+        id: rpcId("skills-extra-roots", runtime.id),
+        params: {
+          extraRoots: [...CODEX_ENVIRONMENT_EXTRA_SKILL_ROOTS],
+        },
+      },
+      undefined,
+      undefined,
+      false,
+    );
+    if (!response.error) return;
+    if (isMethodNotFoundError(response.error)) {
+      this.logger.warn(
+        {
+          environmentId: runtime.id,
+          error: rpcErrorMessage(response.error),
+        },
+        "Codex does not support runtime extra skill roots",
+      );
+      return;
+    }
+    throw new HttpError(
+      502,
+      "codex_skill_roots_registration_failed",
+      `Codex could not register compatibility skill roots. ${rpcErrorMessage(response.error)}`,
+    );
   }
 
   private async requireNativeSessionRuntime(userId: string, sessionId: string) {
@@ -6465,6 +6507,10 @@ function rpcErrorMessage(error: unknown) {
 
 function isAlreadyInitializedError(error: unknown) {
   return rpcErrorMessage(error).toLowerCase().includes("already initialized");
+}
+
+function isMethodNotFoundError(error: unknown) {
+  return objectRecord(error)?.code === -32_601;
 }
 
 function isAmbiguousTurnDelivery(error: unknown) {
