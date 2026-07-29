@@ -890,7 +890,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
           />
         ) : null}
         <section className="environment-empty-pane">
-          <header>
+          <header data-tauri-drag-region="deep">
             <button
               type="button"
               className="icon-button sidebar-expand-button"

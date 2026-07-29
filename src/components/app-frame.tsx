@@ -54,7 +54,7 @@ export function AppSidebar({
       className={`app-sidebar${className ? ` ${className}` : ""}`}
       aria-label={label}
     >
-      <div className="sidebar-brand-row">
+      <div className="sidebar-brand-row" data-tauri-drag-region="deep">
         <SandpiBrandLockup />
         {headerAction}
       </div>

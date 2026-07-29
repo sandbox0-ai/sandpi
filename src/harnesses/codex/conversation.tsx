@@ -2215,7 +2215,10 @@ export function CodexConversation({
         aria-label={ui.label}
         tabIndex={-1}
       >
-        <header className="conversation-header">
+        <header
+          className="conversation-header"
+          data-tauri-drag-region="deep"
+        >
           <div className="conversation-title-area">
             <button
               type="button"

@@ -2889,7 +2889,7 @@ export function WorkspaceIde({
       aria-label="Sandpi Web IDE"
     >
       {variant === "standalone" ? (
-        <header className={styles.topbar}>
+        <header className={styles.topbar} data-tauri-drag-region="deep">
           <a
             href={environmentHref(environment.id, session?.id)}
             className={styles.backLink}

@@ -251,6 +251,11 @@ test("keeps the disconnected Codex action compact on mobile", async ({
     `/?environment=${encodeURIComponent(environment.id)}&new=1`,
   );
 
+  await expect(
+    page.locator(
+      '#conversation > header[data-tauri-drag-region="deep"]',
+    ),
+  ).toBeVisible();
   const connectButton = page.getByRole("button", {
     name: "Connect Codex",
     exact: true,
