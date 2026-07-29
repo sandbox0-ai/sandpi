@@ -84,8 +84,45 @@ const browserDashboardEmbedConfig = scriptJson({
   viewportModeMessage: BROWSER_DASHBOARD_VIEWPORT_MODE_MESSAGE,
 });
 
+export const BROWSER_DASHBOARD_WEBSOCKET_COMPAT_SCRIPT = `
+  (() => {
+    const NativeWebSocket = window.WebSocket;
+    if (
+      !NativeWebSocket ||
+      NativeWebSocket.__sandpiRelativeUrlCompatibility
+    ) {
+      return;
+    }
+
+    class SandpiBrowserWebSocket extends NativeWebSocket {
+      constructor(url, protocols) {
+        let resolvedUrl = url;
+        if (
+          typeof url === "string" &&
+          !/^[a-z][a-z0-9+.-]*:/i.test(url)
+        ) {
+          const target = new URL(url, window.location.href);
+          target.protocol =
+            target.protocol === "https:" ? "wss:" : "ws:";
+          resolvedUrl = target.toString();
+        }
+        if (protocols === undefined) super(resolvedUrl);
+        else super(resolvedUrl, protocols);
+      }
+    }
+
+    Object.defineProperty(
+      SandpiBrowserWebSocket,
+      "__sandpiRelativeUrlCompatibility",
+      { value: true },
+    );
+    window.WebSocket = SandpiBrowserWebSocket;
+  })();
+`;
+
 export const BROWSER_DASHBOARD_EMBED_SCRIPT = `
 <script ${BROWSER_DASHBOARD_EMBED_MARKER}>
+  ${BROWSER_DASHBOARD_WEBSOCKET_COMPAT_SCRIPT}
   (() => {
     const config = ${browserDashboardEmbedConfig};
     const root = document.documentElement;
