@@ -121,6 +121,195 @@ const composerCopy = {
 
 const WORKSPACE_FILE_SEARCH_DEBOUNCE_MS = 250;
 
+interface ComposerPickerOption {
+  value: string;
+  label: string;
+  title?: string;
+}
+
+function ComposerPicker({
+  className,
+  name,
+  label,
+  value,
+  placeholder,
+  title,
+  disabled,
+  options,
+  onChange,
+}: {
+  className: string;
+  name: string;
+  label: string;
+  value: string;
+  placeholder: string;
+  title?: string;
+  disabled: boolean;
+  options: ComposerPickerOption[];
+  onChange: (value: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const controlRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const listboxRef = useRef<HTMLDivElement>(null);
+  const listboxId = useId();
+  const selectedIndex = options.findIndex((option) => option.value === value);
+  const selectedOption = options[selectedIndex];
+  const unavailable = disabled || options.length === 0;
+
+  useEffect(() => {
+    if (!open) return;
+    setActiveIndex(Math.max(0, selectedIndex));
+    const close = (event: PointerEvent) => {
+      if (
+        event.target instanceof Node &&
+        !controlRef.current?.contains(event.target)
+      ) {
+        setOpen(false);
+      }
+    };
+    const frame = window.requestAnimationFrame(() => {
+      listboxRef.current
+        ?.querySelector<HTMLElement>('[role="option"][aria-selected="true"]')
+        ?.scrollIntoView({ block: "nearest" });
+    });
+    document.addEventListener("pointerdown", close);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener("pointerdown", close);
+    };
+  }, [open, selectedIndex]);
+
+  useEffect(() => {
+    if (unavailable) setOpen(false);
+  }, [unavailable]);
+
+  function selectOption(index: number) {
+    const option = options[index];
+    if (!option) return;
+    onChange(option.value);
+    setOpen(false);
+    triggerRef.current?.focus();
+  }
+
+  function moveActive(delta: number) {
+    if (options.length === 0) return;
+    setActiveIndex((index) => (index + delta + options.length) % options.length);
+  }
+
+  return (
+    <div
+      className={className}
+      ref={controlRef}
+      title={title}
+      data-availability={title ? "runtime-unavailable" : "available"}
+    >
+      <select
+        className="composer-picker-native sr-only"
+        name={name}
+        aria-hidden="true"
+        tabIndex={-1}
+        value={value}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.value)}
+      >
+        {options.length > 0 ? (
+          options.map((option) => (
+            <option value={option.value} key={option.value}>
+              {option.label}
+            </option>
+          ))
+        ) : (
+          <option value="">{placeholder}</option>
+        )}
+      </select>
+      <button
+        ref={triggerRef}
+        type="button"
+        className="composer-picker-trigger"
+        role="combobox"
+        aria-label={label}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-controls={open ? listboxId : undefined}
+        aria-activedescendant={
+          open ? `${listboxId}-option-${activeIndex}` : undefined
+        }
+        aria-autocomplete="none"
+        aria-readonly="true"
+        disabled={unavailable}
+        onClick={() => {
+          setActiveIndex(Math.max(0, selectedIndex));
+          setOpen((current) => !current);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") {
+            event.preventDefault();
+            setOpen(false);
+          } else if (event.key === "ArrowDown") {
+            event.preventDefault();
+            if (!open) {
+              setActiveIndex(Math.max(0, selectedIndex));
+              setOpen(true);
+            } else {
+              moveActive(1);
+            }
+          } else if (event.key === "ArrowUp") {
+            event.preventDefault();
+            if (!open) {
+              setActiveIndex(
+                selectedIndex >= 0 ? selectedIndex : options.length - 1,
+              );
+              setOpen(true);
+            } else {
+              moveActive(-1);
+            }
+          } else if (event.key === "Home" && open) {
+            event.preventDefault();
+            setActiveIndex(0);
+          } else if (event.key === "End" && open) {
+            event.preventDefault();
+            setActiveIndex(options.length - 1);
+          } else if ((event.key === "Enter" || event.key === " ") && open) {
+            event.preventDefault();
+            selectOption(activeIndex);
+          }
+        }}
+      >
+        <span>{selectedOption?.label ?? placeholder}</span>
+        <ChevronDown size={12} aria-hidden="true" />
+      </button>
+      {open ? (
+        <div
+          ref={listboxRef}
+          id={listboxId}
+          className="composer-picker-popover"
+          role="listbox"
+          aria-label={label}
+        >
+          {options.map((option, index) => (
+            <button
+              type="button"
+              role="option"
+              id={`${listboxId}-option-${index}`}
+              aria-selected={index === selectedIndex}
+              className={index === activeIndex ? "is-active" : ""}
+              title={option.title}
+              key={option.value}
+              onPointerMove={() => setActiveIndex(index)}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => selectOption(index)}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export function encodeCodexComposerLocalImages(
   localImages: readonly CodexComposerLocalImage[],
 ) {
@@ -506,112 +695,94 @@ export function CodexComposerToolbar({
             </div>
           ) : null}
         </div>
-        <span className="composer-agent-bound" title={copy.boundToEnvironment}>
-          <span className="codex-glyph" />
-          <span className="composer-harness-label">{agentLabel}</span>
-          <label
-            className="composer-model-picker"
-            title={modelTitle}
-            data-availability={modelTitle ? "runtime-unavailable" : "available"}
-          >
-            <span className="sr-only">{copy.selectModel(agentLabel)}</span>
-            <select
-              name="coding-agent-model"
-              aria-label={copy.selectModel(agentLabel)}
-              value={selectedModel?.id ?? ""}
-              disabled={modelDisabled}
-              onChange={(event) => onModelChange(event.target.value)}
-            >
-              {modelOptions.length > 0 ? (
-                modelOptions.map((model) => (
-                  <option value={model.id} key={model.id}>
-                    {model.displayName}
-                  </option>
-                ))
-              ) : (
-                <option value="">{modelPlaceholder}</option>
-              )}
-            </select>
-            <ChevronDown size={12} aria-hidden="true" />
-          </label>
-          {selectedModel?.supportedReasoningEfforts.length ? (
-            <label
-              className="composer-reasoning-picker"
-              title={
-                selectedModel.supportedReasoningEfforts.find(
-                  (option) => option.id === selectedReasoningEffort,
-                )?.description
-              }
-            >
-              <span className="sr-only">
-                {copy.selectReasoning(selectedModel.displayName)}
-              </span>
-              <select
-                name="coding-agent-reasoning-effort"
-                aria-label={copy.selectReasoning(selectedModel.displayName)}
-                value={selectedReasoningEffort}
-                disabled={reasoningDisabled}
-                onChange={(event) =>
-                  onReasoningEffortChange(event.target.value)
-                }
-              >
-                {selectedModel.supportedReasoningEfforts.map((effort) => (
-                  <option value={effort.id} key={effort.id}>
-                    {codexReasoningEffortLabel(effort.id)}
-                  </option>
-                ))}
-              </select>
-              <ChevronDown size={12} aria-hidden="true" />
-            </label>
-          ) : null}
-          {selectedModel?.fastServiceTier ? (
-            <button
-              type="button"
-              className="composer-fast-toggle"
-              data-testid="codex-fast-toggle"
-              aria-label={copy.fastMode(selectedModel.fastServiceTier.name)}
-              aria-pressed={fastEnabled}
-              title={selectedModel.fastServiceTier.description}
-              disabled={fastDisabled}
-              onClick={() => onFastEnabledChange(!fastEnabled)}
-            >
-              {selectedModel.fastServiceTier.name}
-            </button>
-          ) : null}
-        </span>
       </div>
-      <div className="composer-send-area">
-        <EnvironmentResourceStatus
-          environmentId={environmentId}
-          language={language}
+      <span className="composer-agent-bound" title={copy.boundToEnvironment}>
+        <span className="codex-glyph" />
+        <span className="composer-harness-label">{agentLabel}</span>
+        <ComposerPicker
+          className="composer-model-picker"
+          name="coding-agent-model"
+          label={copy.selectModel(agentLabel)}
+          value={selectedModel?.id ?? ""}
+          placeholder={modelPlaceholder}
+          title={modelTitle}
+          disabled={modelDisabled}
+          options={modelOptions.map((model) => ({
+            value: model.id,
+            label: model.displayName,
+          }))}
+          onChange={onModelChange}
         />
-        {contextUsedPercent !== null &&
-        contextUsedPercent !== undefined ? (
-          <span
-            className="composer-context-usage"
-            role="meter"
-            aria-label={copy.contextUsedTitle(contextUsedPercent)}
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-valuenow={contextUsedPercent}
-            title={copy.contextUsedTitle(contextUsedPercent)}
-          >
-            {copy.contextUsed(contextUsedPercent)}
-          </span>
+        {selectedModel?.supportedReasoningEfforts.length ? (
+          <ComposerPicker
+            className="composer-reasoning-picker"
+            name="coding-agent-reasoning-effort"
+            label={copy.selectReasoning(selectedModel.displayName)}
+            value={selectedReasoningEffort}
+            placeholder={codexReasoningEffortLabel(selectedReasoningEffort)}
+            title={
+              selectedModel.supportedReasoningEfforts.find(
+                (option) => option.id === selectedReasoningEffort,
+              )?.description
+            }
+            disabled={reasoningDisabled}
+            options={selectedModel.supportedReasoningEfforts.map((effort) => ({
+              value: effort.id,
+              label: codexReasoningEffortLabel(effort.id),
+              title: effort.description,
+            }))}
+            onChange={onReasoningEffortChange}
+          />
         ) : null}
-        <span
-          className={`connection-copy ${
-            status.state === "unavailable"
-              ? "is-unavailable"
-              : status.state === "loading"
-                ? "is-loading"
-                : ""
-          }`}
-        >
-          <span />
-          {status.label}
+        {selectedModel?.fastServiceTier ? (
+          <button
+            type="button"
+            className="composer-fast-toggle"
+            data-testid="codex-fast-toggle"
+            aria-label={copy.fastMode(selectedModel.fastServiceTier.name)}
+            aria-pressed={fastEnabled}
+            title={selectedModel.fastServiceTier.description}
+            disabled={fastDisabled}
+            onClick={() => onFastEnabledChange(!fastEnabled)}
+          >
+            {selectedModel.fastServiceTier.name}
+          </button>
+        ) : null}
+      </span>
+      <div className="composer-send-area">
+        <span className="composer-telemetry">
+          <EnvironmentResourceStatus
+            environmentId={environmentId}
+            language={language}
+          />
+          {contextUsedPercent !== null &&
+          contextUsedPercent !== undefined ? (
+            <span
+              className="composer-context-usage"
+              role="meter"
+              aria-label={copy.contextUsedTitle(contextUsedPercent)}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={contextUsedPercent}
+              title={copy.contextUsedTitle(contextUsedPercent)}
+            >
+              {copy.contextUsed(contextUsedPercent)}
+            </span>
+          ) : null}
+          <span
+            className={`connection-copy ${
+              status.state === "unavailable"
+                ? "is-unavailable"
+                : status.state === "loading"
+                  ? "is-loading"
+                  : ""
+            }`}
+          >
+            <span />
+            {status.label}
+          </span>
         </span>
-        {action}
+        <span className="composer-actions">{action}</span>
       </div>
     </div>
   );

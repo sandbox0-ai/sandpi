@@ -65,6 +65,7 @@ import {
   unixTimestampToIso,
   type UnixTimestamp,
 } from "@/lib/time";
+import { useNativeChromeSurfaces } from "@/lib/use-native-chrome-surfaces";
 import type {
   CodingSession,
   Environment,
@@ -232,6 +233,8 @@ export function EnvironmentSettings({
   onRestoreSession,
   onClose,
 }: EnvironmentSettingsProps) {
+  useNativeChromeSurfaces("panel", "panel");
+
   const [activeTab, setActiveTab] =
     useState<EnvironmentSettingsTab>(initialTab);
   const [draft, setDraft] = useState(environment);

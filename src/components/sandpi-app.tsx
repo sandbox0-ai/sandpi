@@ -41,6 +41,7 @@ import {
 import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
 import { visibleSessionsForEnvironment } from "@/lib/session-list";
 import { useLocalUiPreferences } from "@/lib/use-local-ui-preferences";
+import { useNativeChromeSurfaces } from "@/lib/use-native-chrome-surfaces";
 import { userVisibleWorkspacePath } from "@/lib/workspace-path-policy";
 import { normalizeInspectorWidthRatio } from "@/lib/workspace-layout";
 import type {
@@ -109,6 +110,10 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
   const [terminalMaximized, setTerminalMaximized] = useState(false);
   const [terminalRestoreHeight, setTerminalRestoreHeight] = useState(320);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  useNativeChromeSurfaces(
+    sidebarOpen ? "sidebar" : "canvas",
+    sidebarOpen ? "sidebar" : terminalOpen ? "terminal" : "canvas",
+  );
   const [workspaceNavigationRequest, setWorkspaceNavigationRequest] =
     useState<WorkspaceFileNavigationRequest>();
   const [browserNavigationRequest, setBrowserNavigationRequest] =

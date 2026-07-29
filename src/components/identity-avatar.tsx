@@ -9,7 +9,12 @@ export function SandpiMark({ className }: { className?: string }) {
     <span
       className={classNames("sandpi-mark", className)}
       aria-hidden="true"
-    />
+    >
+      <span className="sandpi-mark-bubble">
+        <span className="sandpi-mark-eye sandpi-mark-eye-left" />
+        <span className="sandpi-mark-eye sandpi-mark-eye-right" />
+      </span>
+    </span>
   );
 }
 

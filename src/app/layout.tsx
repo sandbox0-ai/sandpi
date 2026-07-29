@@ -1,9 +1,11 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import Script from "next/script";
 
 import {
   DEFAULT_CLIENT_PREFERENCES,
   getClientPreferencesBootstrapScript,
+  NATIVE_CHROME_BOTTOM_COLOR_META_NAME,
+  NATIVE_CHROME_TOP_COLOR_META_NAME,
 } from "@/lib/client-preferences";
 
 import "@xterm/xterm/css/xterm.css";
@@ -12,6 +14,13 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "Sandpi",
   description: "Remote coding agents that keep working when you disconnect.",
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+  themeColor: "#f7f6f2",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
@@ -30,6 +39,15 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
       suppressHydrationWarning
     >
       <head>
+        <meta name="color-scheme" content="light dark" />
+        <meta
+          name={NATIVE_CHROME_TOP_COLOR_META_NAME}
+          content="#f7f6f2"
+        />
+        <meta
+          name={NATIVE_CHROME_BOTTOM_COLOR_META_NAME}
+          content="#f7f6f2"
+        />
         <script dangerouslySetInnerHTML={{ __html: preferencesScript }} />
         {googleAnalyticsMeasurementId ? (
           <>

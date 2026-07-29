@@ -676,6 +676,78 @@ export function CodexNewSessionWorkspace({
           </div>
         </div>
 
+        {environment.status === "updating" ||
+        (modelCatalogState === "loading" &&
+          environment.status === "ready" &&
+          environment.codingAgent.status === "connected") ? (
+          <p className={styles.runtimeStatus} role="status">
+            <LoaderCircle size={12} aria-hidden="true" />
+            {environment.status === "updating"
+              ? ui.preparingEnvironment
+              : ui.startingAgent(environment.codingAgent.label)}
+          </p>
+        ) : null}
+
+        {environment.codingAgent.status === "not-connected" &&
+        environment.status !== "error" ? (
+          <div className={styles.setupNotice}>
+            <span className={styles.setupNoticeIcon} aria-hidden="true">
+              <KeyRound size={15} />
+            </span>
+            <div>
+              <strong>
+                {ui.connectAgent(environment.codingAgent.label)}
+              </strong>
+              <p>
+                {canManageEnvironment
+                  ? ui.connectAgentDescription(environment.codingAgent.label)
+                  : ui.askAdminToConnect(environment.codingAgent.label)}
+              </p>
+            </div>
+            {canManageEnvironment ? (
+              <button type="button" onClick={onOpenAgentHarnessSettings}>
+                {ui.connectAgent(environment.codingAgent.label)}
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+
+        {error || modelCatalogError || environment.status === "error" ? (
+          <p className={styles.error} role="alert">
+            {error ||
+              modelCatalogError ||
+              environment.provisioningError ||
+              "Environment provisioning failed."}
+            {environment.status === "error" ? (
+              <button
+                type="button"
+                disabled={retryingEnvironment}
+                onClick={() => void retryEnvironmentProvisioning()}
+              >
+                {retryingEnvironment ? ui.retryingEnvironment : ui.retryEnvironment}
+              </button>
+            ) : null}
+          </p>
+        ) : null}
+
+        <div className={styles.starters} aria-label={ui.starterLabel}>
+          {ui.starters.map((starter) => (
+            <button
+              type="button"
+              key={starter}
+              onClick={() => {
+                setPrompt(starter);
+                setError("");
+                promptRef.current?.focus();
+              }}
+            >
+              <Sparkles size={13} aria-hidden="true" />
+              {starter}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className={styles.composerRegion}>
         <div className={`composer-shell ${styles.composer}`}>
           <CodexSlashCommandMenu
             id={slashMenu.id}
@@ -886,77 +958,6 @@ export function CodexNewSessionWorkspace({
               </button>
             }
           />
-        </div>
-
-        {environment.status === "updating" ||
-        (modelCatalogState === "loading" &&
-          environment.status === "ready" &&
-          environment.codingAgent.status === "connected") ? (
-          <p className={styles.runtimeStatus} role="status">
-            <LoaderCircle size={12} aria-hidden="true" />
-            {environment.status === "updating"
-              ? ui.preparingEnvironment
-              : ui.startingAgent(environment.codingAgent.label)}
-          </p>
-        ) : null}
-
-        {environment.codingAgent.status === "not-connected" &&
-        environment.status !== "error" ? (
-          <div className={styles.setupNotice}>
-            <span className={styles.setupNoticeIcon} aria-hidden="true">
-              <KeyRound size={15} />
-            </span>
-            <div>
-              <strong>
-                {ui.connectAgent(environment.codingAgent.label)}
-              </strong>
-              <p>
-                {canManageEnvironment
-                  ? ui.connectAgentDescription(environment.codingAgent.label)
-                  : ui.askAdminToConnect(environment.codingAgent.label)}
-              </p>
-            </div>
-            {canManageEnvironment ? (
-              <button type="button" onClick={onOpenAgentHarnessSettings}>
-                {ui.connectAgent(environment.codingAgent.label)}
-              </button>
-            ) : null}
-          </div>
-        ) : null}
-
-        {error || modelCatalogError || environment.status === "error" ? (
-          <p className={styles.error} role="alert">
-            {error ||
-              modelCatalogError ||
-              environment.provisioningError ||
-              "Environment provisioning failed."}
-            {environment.status === "error" ? (
-              <button
-                type="button"
-                disabled={retryingEnvironment}
-                onClick={() => void retryEnvironmentProvisioning()}
-              >
-                {retryingEnvironment ? ui.retryingEnvironment : ui.retryEnvironment}
-              </button>
-            ) : null}
-          </p>
-        ) : null}
-
-        <div className={styles.starters} aria-label={ui.starterLabel}>
-          {ui.starters.map((starter) => (
-            <button
-              type="button"
-              key={starter}
-              onClick={() => {
-                setPrompt(starter);
-                setError("");
-                promptRef.current?.focus();
-              }}
-            >
-              <Sparkles size={13} aria-hidden="true" />
-              {starter}
-            </button>
-          ))}
         </div>
       </div>
       {nativeDialog ? (

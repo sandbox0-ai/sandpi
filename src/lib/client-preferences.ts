@@ -2,6 +2,10 @@ import type { SandpiPreferences } from "./types";
 
 export const CLIENT_PREFERENCES_STORAGE_KEY = "sandpi.preferences.v1";
 export const CLIENT_PREFERENCES_CHANGED_EVENT = "sandpi:preferences-changed";
+export const NATIVE_CHROME_TOP_COLOR_META_NAME =
+  "sandpi-native-top-color";
+export const NATIVE_CHROME_BOTTOM_COLOR_META_NAME =
+  "sandpi-native-bottom-color";
 export const DEFAULT_CLIENT_PREFERENCES: SandpiPreferences = {
   general: {
     language: "en",
@@ -40,6 +44,7 @@ const themeVariables = {
     "--red-soft": "#f7e8e6",
     "--blue": "#416d9d",
     "--blue-soft": "#e8eef6",
+    "--terminal-background": "#151715",
   },
   dark: {
     "--canvas": "#181817",
@@ -61,10 +66,36 @@ const themeVariables = {
     "--red-soft": "#402724",
     "--blue": "#82a9d4",
     "--blue-soft": "#243548",
+    "--terminal-background": "#151715",
   },
 } as const;
 
 type ResolvedTheme = keyof typeof themeVariables;
+export type NativeChromeSurface =
+  | "canvas"
+  | "sidebar"
+  | "panel"
+  | "terminal";
+
+interface NativeChromeSurfaces {
+  top: NativeChromeSurface;
+  bottom: NativeChromeSurface;
+}
+
+const DEFAULT_NATIVE_CHROME_SURFACES: NativeChromeSurfaces = {
+  top: "canvas",
+  bottom: "canvas",
+};
+const nativeChromeVariable = {
+  canvas: "--canvas",
+  sidebar: "--sidebar",
+  panel: "--panel",
+  terminal: "--terminal-background",
+} as const;
+const nativeChromeSurfaceScopes: Array<{
+  token: symbol;
+  surfaces: NativeChromeSurfaces;
+}> = [];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -150,6 +181,63 @@ export function buildAppearancePreviewPreferences(
 
 let stopWatchingSystemTheme: (() => void) | undefined;
 
+function setMetaContent(name: string, content: string) {
+  let meta = document.querySelector<HTMLMetaElement>(
+    `meta[name="${name}"]`,
+  );
+  if (!meta) {
+    meta = document.createElement("meta");
+    meta.name = name;
+    document.head.append(meta);
+  }
+  meta.content = content;
+}
+
+function syncNativeChromeSurfaces(
+  resolvedTheme: ResolvedTheme,
+) {
+  const surfaces =
+    nativeChromeSurfaceScopes.at(-1)?.surfaces ??
+    DEFAULT_NATIVE_CHROME_SURFACES;
+  const colors = themeVariables[resolvedTheme];
+  const topColor = colors[nativeChromeVariable[surfaces.top]];
+  const bottomColor = colors[nativeChromeVariable[surfaces.bottom]];
+
+  setMetaContent("theme-color", topColor);
+  setMetaContent(NATIVE_CHROME_TOP_COLOR_META_NAME, topColor);
+  setMetaContent(NATIVE_CHROME_BOTTOM_COLOR_META_NAME, bottomColor);
+}
+
+function syncNativeChromeSurfacesFromDocument() {
+  if (typeof document === "undefined") {
+    return;
+  }
+  syncNativeChromeSurfaces(
+    document.documentElement.dataset.resolvedTheme === "dark"
+      ? "dark"
+      : "light",
+  );
+}
+
+export function activateNativeChromeSurfaces(
+  surfaces: NativeChromeSurfaces,
+) {
+  const token = Symbol("native-chrome-surfaces");
+  nativeChromeSurfaceScopes.push({ token, surfaces });
+  syncNativeChromeSurfacesFromDocument();
+
+  return () => {
+    const index = nativeChromeSurfaceScopes.findIndex(
+      (scope) => scope.token === token,
+    );
+    if (index === -1) {
+      return;
+    }
+    nativeChromeSurfaceScopes.splice(index, 1);
+    syncNativeChromeSurfacesFromDocument();
+  };
+}
+
 function setThemeVariables(
   root: HTMLElement,
   resolvedTheme: ResolvedTheme,
@@ -159,6 +247,7 @@ function setThemeVariables(
   }
   root.style.colorScheme = resolvedTheme;
   root.dataset.resolvedTheme = resolvedTheme;
+  syncNativeChromeSurfaces(resolvedTheme);
 }
 
 export function applyClientPreferences(preferences: SandpiPreferences) {
@@ -254,6 +343,9 @@ export function getClientPreferencesBootstrapScript(
           ? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
           : preferences.appearance.theme;
         Object.entries(themes[resolved]).forEach(([name, value]) => root.style.setProperty(name, value));
+        document.querySelector('meta[name="theme-color"]')?.setAttribute("content", themes[resolved]["--canvas"]);
+        document.querySelector('meta[name="${NATIVE_CHROME_TOP_COLOR_META_NAME}"]')?.setAttribute("content", themes[resolved]["--canvas"]);
+        document.querySelector('meta[name="${NATIVE_CHROME_BOTTOM_COLOR_META_NAME}"]')?.setAttribute("content", themes[resolved]["--canvas"]);
         root.style.colorScheme = resolved;
         root.dataset.resolvedTheme = resolved;
       };

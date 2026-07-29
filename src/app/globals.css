@@ -18,6 +18,7 @@
   --red-soft: #f7e8e6;
   --blue: #416d9d;
   --blue-soft: #e8eef6;
+  --terminal-background: #151715;
   --shadow-lg: 0 24px 70px rgb(24 24 20 / 18%);
   --radius-sm: 7px;
   --radius-md: 11px;
@@ -32,6 +33,7 @@
 html,
 body {
   margin: 0;
+  height: 100%;
   min-height: 100%;
   background: var(--canvas);
   color: var(--ink);
@@ -108,7 +110,7 @@ pre,
 
 .app-frame {
   width: 100vw;
-  height: 100dvh;
+  height: 100%;
   overflow: hidden;
   background: var(--canvas);
   color: var(--ink);
@@ -221,16 +223,55 @@ pre,
 }
 
 .sandpi-mark {
+  position: relative;
   display: block;
   flex: 0 0 auto;
-  -webkit-mask: url("/icon.svg") center / contain no-repeat;
-  mask: url("/icon.svg") center / contain no-repeat;
+}
+
+.sandpi-mark-bubble {
+  position: absolute;
+  top: 9.375%;
+  left: 6.25%;
+  display: block;
+  width: 87.5%;
+  height: 71.875%;
+  border-radius: 21.5%;
+  background: var(--ink);
+}
+
+.sandpi-mark-bubble::after {
+  position: absolute;
+  top: 100%;
+  left: 39.286%;
+  width: 25%;
+  height: 21.739%;
+  background: var(--ink);
+  clip-path: polygon(0 0, 100% 0, 0 100%);
+  content: "";
+}
+
+.sandpi-mark-eye {
+  position: absolute;
+  top: 36.957%;
+  width: 10.714%;
+  height: 21.739%;
+  border-radius: 999px;
+  background: var(--sandpi-mark-cutout, var(--canvas));
+}
+
+.sandpi-mark-eye-left {
+  left: 26.786%;
+}
+
+.sandpi-mark-eye-right {
+  left: 62.5%;
 }
 
 .brand-mark {
+  --sandpi-mark-cutout: var(--sidebar);
   width: 21px;
   height: 21px;
-  background: var(--ink);
+  color: var(--ink);
 }
 
 .new-session-button,
@@ -1162,9 +1203,10 @@ pre,
 }
 
 .assistant-avatar-mark {
+  --sandpi-mark-cutout: var(--canvas);
   width: 100%;
   height: 100%;
-  background: var(--ink);
+  color: var(--ink);
 }
 
 .codex-glyph {
@@ -2957,7 +2999,9 @@ code.codex-compact-activity-subject {
 
 .composer-toolbar,
 .composer-tools,
-.composer-send-area {
+.composer-send-area,
+.composer-telemetry,
+.composer-actions {
   display: flex;
   align-items: center;
 }
@@ -2967,8 +3011,17 @@ code.codex-compact-activity-subject {
   gap: 12px;
 }
 
+.codex-composer-toolbar {
+  justify-content: flex-start;
+}
+
+.codex-composer-toolbar > .composer-send-area {
+  margin-left: auto;
+}
+
 .composer-tools {
   min-width: 0;
+  flex: 0 0 auto;
   gap: 3px;
 }
 
@@ -2984,9 +3037,18 @@ code.codex-compact-activity-subject {
 .composer-icon-button {
   width: 29px;
   height: 29px;
+  min-width: 29px;
+  min-height: 29px;
+  flex: 0 0 29px;
   border-radius: 6px;
   background: transparent;
   color: var(--ink-faint);
+}
+
+.composer-icon-button > svg {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 17px;
 }
 
 .composer-icon-button:hover {
@@ -3140,11 +3202,14 @@ code.codex-compact-activity-subject {
   border-left: 1px solid var(--line);
 }
 
-.composer-model-picker select,
-.composer-reasoning-picker select {
+.composer-picker-trigger {
+  display: inline-flex;
   width: 120px;
   height: 22px;
-  appearance: none;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
   overflow: hidden;
   padding: 0 20px 0 5px;
   border: 0;
@@ -3152,41 +3217,90 @@ code.codex-compact-activity-subject {
   outline: 0;
   background: transparent;
   color: var(--ink-soft);
-  color-scheme: inherit;
   font-size: 9.5px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  text-align: left;
   cursor: pointer;
 }
 
-.composer-model-picker select:hover,
-.composer-reasoning-picker select:hover {
+.composer-picker-trigger > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-picker-trigger > svg {
+  position: absolute;
+  right: 4px;
+  flex: 0 0 auto;
+  color: var(--ink-faint);
+  pointer-events: none;
+}
+
+.composer-picker-trigger:hover {
   background: var(--hover);
   color: var(--ink);
 }
 
-.composer-model-picker select:focus-visible,
-.composer-reasoning-picker select:focus-visible {
+.composer-picker-trigger:focus-visible {
   background: var(--hover);
   color: var(--ink);
   box-shadow: inset 0 0 0 1px var(--ink-faint);
 }
 
-.composer-model-picker option,
-.composer-reasoning-picker option {
+.composer-picker-trigger:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.composer-picker-popover {
+  position: absolute;
+  z-index: 24;
+  bottom: calc(100% + 7px);
+  left: 0;
+  display: grid;
+  width: max-content;
+  min-width: 168px;
+  max-width: min(280px, calc(100vw - 32px));
+  max-height: min(320px, 46dvh);
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
   background: var(--panel-strong);
+  box-shadow:
+    0 16px 44px rgb(30 30 24 / 18%),
+    0 2px 8px rgb(30 30 24 / 9%);
   color: var(--ink);
 }
 
-.composer-model-picker > svg,
-.composer-reasoning-picker > svg {
-  position: absolute;
-  right: 4px;
-  color: var(--ink-faint);
-  pointer-events: none;
+.composer-reasoning-picker .composer-picker-popover {
+  right: 0;
+  left: auto;
 }
 
-.composer-reasoning-picker select {
+.composer-picker-popover > button {
+  width: 100%;
+  min-height: 30px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-soft);
+  font-size: 10px;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.composer-picker-popover > button:hover,
+.composer-picker-popover > button.is-active,
+.composer-picker-popover > button[aria-selected="true"] {
+  background: var(--selected);
+  color: var(--ink);
+}
+
+.composer-reasoning-picker .composer-picker-trigger {
   width: 74px;
 }
 
@@ -3244,6 +3358,16 @@ code.codex-compact-activity-subject {
 .composer-send-area {
   flex: 0 0 auto;
   gap: 10px;
+}
+
+.composer-telemetry {
+  min-width: 0;
+  gap: 10px;
+}
+
+.composer-actions {
+  flex: 0 0 auto;
+  gap: 6px;
 }
 
 .composer-resource-metrics {
@@ -6967,15 +7091,14 @@ code.codex-compact-activity-subject {
     position: fixed;
     top: 0;
     bottom: 0;
-    left: 0;
+    left: -268px;
     width: 268px;
     z-index: 12;
-    transform: translateX(-100%);
-    transition: transform 160ms ease;
+    transition: left 160ms ease;
   }
 
   .sidebar-is-open .sidebar {
-    transform: translateX(0);
+    left: 0;
   }
 
   .sidebar-collapse-button {
@@ -7082,11 +7205,13 @@ code.codex-compact-activity-subject {
   }
 
   .composer-region {
-    padding: 0 10px 8px;
+    padding: 0 10px max(8px, env(safe-area-inset-bottom));
   }
 
-  .composer-shell {
+  .composer-shell,
+  .composer-shell:focus-within {
     width: 100%;
+    box-shadow: none;
   }
 
   .composer-shell textarea {
@@ -7095,24 +7220,29 @@ code.codex-compact-activity-subject {
 
   .codex-composer-toolbar {
     display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    gap: 6px;
+    grid-template-areas:
+      "tools telemetry telemetry"
+      "agent agent actions";
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 6px 8px;
   }
 
-  .codex-composer-toolbar > .composer-tools,
-  .codex-composer-toolbar > .composer-send-area {
+  .codex-composer-toolbar > .composer-tools {
+    grid-area: tools;
+    width: auto;
+  }
+
+  .codex-composer-toolbar > .composer-agent-bound {
     width: 100%;
-  }
-
-  .codex-composer-toolbar .composer-agent-bound {
-    flex: 1 1 0;
+    grid-area: agent;
+    overflow: visible;
   }
 
   .codex-composer-toolbar .composer-model-picker {
     flex: 1 1 80px;
   }
 
-  .codex-composer-toolbar .composer-model-picker select {
+  .codex-composer-toolbar .composer-model-picker .composer-picker-trigger {
     width: 100%;
     min-width: 0;
   }
@@ -7121,14 +7251,26 @@ code.codex-compact-activity-subject {
     flex: 0 1 68px;
   }
 
-  .codex-composer-toolbar .composer-reasoning-picker select {
+  .codex-composer-toolbar .composer-reasoning-picker .composer-picker-trigger {
     width: 100%;
     min-width: 0;
   }
 
   .codex-composer-toolbar > .composer-send-area {
+    display: contents;
+  }
+
+  .codex-composer-toolbar .composer-telemetry {
+    grid-area: telemetry;
     justify-content: flex-end;
-    gap: 8px;
+    justify-self: stretch;
+    gap: 7px;
+  }
+
+  .codex-composer-toolbar .composer-actions {
+    grid-area: actions;
+    justify-self: end;
+    gap: 4px;
   }
 
   .connection-copy,
@@ -7318,7 +7460,7 @@ html[data-density="compact"] .codex-activity-heading {
 }
 
 html[data-density="compact"] .composer-region {
-  padding-bottom: 10px;
+  padding-bottom: max(10px, env(safe-area-inset-bottom));
 }
 
 html[data-density="compact"] .composer-shell {

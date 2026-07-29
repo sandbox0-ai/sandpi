@@ -462,6 +462,20 @@ test("shows live native context usage inside the Session composer", async ({
 
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(composer.locator("textarea")).toHaveCSS("font-size", "16px");
+  await expect(composer).toHaveCSS("box-shadow", "none");
+  const mobileToolIcons = await composer
+    .locator(".composer-icon-button > svg")
+    .evaluateAll((icons) =>
+      icons.map((icon) => {
+        const bounds = icon.getBoundingClientRect();
+        return { width: bounds.width, height: bounds.height };
+      }),
+    );
+  expect(mobileToolIcons).toHaveLength(2);
+  for (const icon of mobileToolIcons) {
+    expect(icon.width).toBeGreaterThanOrEqual(17);
+    expect(icon.height).toBeGreaterThanOrEqual(17);
+  }
   const [mobileComposerBox, ...mobileStatusBoxes] = await Promise.all([
     composer.boundingBox(),
     cpuMeter.boundingBox(),
@@ -470,38 +484,55 @@ test("shows live native context usage inside the Session composer", async ({
   ]);
   const [
     mobileToolsBox,
-    mobileSendAreaBox,
+    mobileTelemetryBox,
+    mobileAgentBox,
+    mobileActionsBox,
     mobileModelBox,
     mobileEffortBox,
     mobileFastBox,
   ] = await Promise.all([
-      composer.locator(".composer-tools").boundingBox(),
-      composer.locator(".composer-send-area").boundingBox(),
-      composer
-        .getByRole("combobox", { name: "Select Codex model" })
-        .boundingBox(),
-      composer
-        .getByRole("combobox", {
-          name: "Select reasoning effort for E2E Codex Mobile Layout Stress Model",
-        })
-        .boundingBox(),
-      composer.getByTestId("codex-fast-toggle").boundingBox(),
-    ]);
+    composer.locator(".composer-tools").boundingBox(),
+    composer.locator(".composer-telemetry").boundingBox(),
+    composer.locator(".composer-agent-bound").boundingBox(),
+    composer.locator(".composer-actions").boundingBox(),
+    composer
+      .getByRole("combobox", { name: "Select Codex model" })
+      .boundingBox(),
+    composer
+      .getByRole("combobox", {
+        name: "Select reasoning effort for E2E Codex Mobile Layout Stress Model",
+      })
+      .boundingBox(),
+    composer.getByTestId("codex-fast-toggle").boundingBox(),
+  ]);
   expect(mobileComposerBox).not.toBeNull();
   expect(mobileToolsBox).not.toBeNull();
-  expect(mobileSendAreaBox).not.toBeNull();
+  expect(mobileTelemetryBox).not.toBeNull();
+  expect(mobileAgentBox).not.toBeNull();
+  expect(mobileActionsBox).not.toBeNull();
   expect(mobileModelBox).not.toBeNull();
   expect(mobileEffortBox).not.toBeNull();
   expect(mobileFastBox).not.toBeNull();
-  expect(mobileToolsBox!.y + mobileToolsBox!.height).toBeLessThanOrEqual(
-    mobileSendAreaBox!.y + 1,
+  expect(mobileToolsBox!.x + mobileToolsBox!.width).toBeLessThanOrEqual(
+    mobileTelemetryBox!.x + 1,
+  );
+  expect(
+    Math.max(
+      mobileToolsBox!.y + mobileToolsBox!.height,
+      mobileTelemetryBox!.y + mobileTelemetryBox!.height,
+    ),
+  ).toBeLessThanOrEqual(
+    Math.min(mobileAgentBox!.y, mobileActionsBox!.y) + 1,
   );
   for (const controlBox of [mobileModelBox, mobileEffortBox, mobileFastBox]) {
-    expect(controlBox!.x).toBeGreaterThanOrEqual(mobileToolsBox!.x);
+    expect(controlBox!.x).toBeGreaterThanOrEqual(mobileAgentBox!.x);
     expect(controlBox!.x + controlBox!.width).toBeLessThanOrEqual(
-      mobileToolsBox!.x + mobileToolsBox!.width,
+      mobileAgentBox!.x + mobileAgentBox!.width,
     );
   }
+  expect(mobileAgentBox!.x + mobileAgentBox!.width).toBeLessThanOrEqual(
+    mobileActionsBox!.x + 1,
+  );
   expect(mobileModelBox!.x + mobileModelBox!.width).toBeLessThanOrEqual(
     mobileEffortBox!.x + 1,
   );
@@ -511,6 +542,7 @@ test("shows live native context usage inside the Session composer", async ({
   await composer
     .getByRole("button", { name: "Mention a Workspace file" })
     .click();
+  await expect(composer).toHaveCSS("box-shadow", "none");
   const mentionPopover = composer.locator(".composer-mention-popover");
   await expect(mentionPopover).toBeVisible();
   expect(
@@ -525,9 +557,9 @@ test("shows live native context usage inside the Session composer", async ({
   ).toBe(true);
   for (const statusBox of mobileStatusBoxes) {
     expect(statusBox).not.toBeNull();
-    expect(statusBox!.x).toBeGreaterThanOrEqual(mobileComposerBox!.x);
+    expect(statusBox!.x).toBeGreaterThanOrEqual(mobileTelemetryBox!.x);
     expect(statusBox!.x + statusBox!.width).toBeLessThanOrEqual(
-      mobileComposerBox!.x + mobileComposerBox!.width,
+      mobileTelemetryBox!.x + mobileTelemetryBox!.width,
     );
   }
   for (let index = 0; index < mobileStatusBoxes.length - 1; index += 1) {
@@ -535,6 +567,14 @@ test("shows live native context usage inside the Session composer", async ({
     const next = mobileStatusBoxes[index + 1]!;
     expect(current!.x + current!.width).toBeLessThanOrEqual(next!.x + 1);
   }
+  const lastStatusBox = mobileStatusBoxes.at(-1)!;
+  expect(
+    Math.abs(
+      lastStatusBox.x +
+        lastStatusBox.width -
+        (mobileTelemetryBox!.x + mobileTelemetryBox!.width),
+    ),
+  ).toBeLessThanOrEqual(1);
 });
 
 test("restores a recent Session snapshot and draft without reloading Environment models", async ({
@@ -854,6 +894,7 @@ test("uses the Sandpi logo and sidebar viewer avatar in conversation messages", 
     });
   });
 
+  await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(
     `/?environment=${encodeURIComponent(environment.id)}&session=${encodeURIComponent(session.id)}`,
   );
@@ -863,6 +904,8 @@ test("uses the Sandpi logo and sidebar viewer avatar in conversation messages", 
     "snapshot",
     snapshot,
   );
+  await page.getByRole("button", { name: "Open navigation" }).click();
+  await expect(page.locator(".sidebar")).toHaveCSS("left", "0px");
 
   const sidebarAvatar = page.locator(
     ".account-menu-trigger .account-avatar",
@@ -872,6 +915,21 @@ test("uses the Sandpi logo and sidebar viewer avatar in conversation messages", 
   );
   await expect(sidebarAvatar).toHaveText("SP");
   await expect(messageAvatar).toHaveText("SP");
+
+  const sidebarBrandMark = page.locator(
+    ".sidebar .brand-lockup .brand-mark",
+  );
+  await expect(sidebarBrandMark).toBeVisible();
+  await expect(sidebarBrandMark).toHaveCSS("width", "21px");
+  await expect(sidebarBrandMark).toHaveCSS("height", "21px");
+  await expect(sidebarBrandMark.locator(".sandpi-mark-bubble")).toHaveCSS(
+    "background-color",
+    "rgb(23, 23, 22)",
+  );
+  await expect(sidebarBrandMark.locator(".sandpi-mark-eye-left")).toHaveCSS(
+    "background-color",
+    "rgb(239, 238, 233)",
+  );
 
   const avatarVisualStyle = async (
     locator: ReturnType<Page["locator"]>,
@@ -896,14 +954,11 @@ test("uses the Sandpi logo and sidebar viewer avatar in conversation messages", 
     .locator(".message-assistant .assistant-avatar")
     .filter({ has: page.locator(".sandpi-mark") });
   await expect(assistantAvatar).toHaveAttribute("aria-label", "Sandpi");
-  await expect(assistantAvatar.locator(".assistant-avatar-mark")).toBeVisible();
-  await expect
-    .poll(() =>
-      assistantAvatar
-        .locator(".assistant-avatar-mark")
-        .evaluate((element) => getComputedStyle(element).maskImage),
-    )
-    .toContain("icon.svg");
+  const assistantMark = assistantAvatar.locator(
+    ".sandpi-mark.assistant-avatar-mark",
+  );
+  await expect(assistantMark).toBeVisible();
+  await expect(assistantMark.locator(".sandpi-mark-eye-right")).toBeVisible();
   await expect(assistantAvatar).toHaveCSS("border-top-width", "0px");
   await expect(assistantAvatar).toHaveCSS("padding-top", "0px");
   await expect(assistantAvatar).toHaveCSS(
@@ -912,10 +967,25 @@ test("uses the Sandpi logo and sidebar viewer avatar in conversation messages", 
   );
   const [assistantAvatarBox, assistantMarkBox] = await Promise.all([
     assistantAvatar.boundingBox(),
-    assistantAvatar.locator(".assistant-avatar-mark").boundingBox(),
+    assistantMark.boundingBox(),
   ]);
   expect(assistantAvatarBox).not.toBeNull();
   expect(assistantMarkBox).toEqual(assistantAvatarBox);
+
+  await page.locator("html").evaluate((element) => {
+    element.setAttribute("data-resolved-theme", "dark");
+    element.style.setProperty("--canvas", "#181817");
+    element.style.setProperty("--sidebar", "#20201e");
+    element.style.setProperty("--ink", "#f0efe9");
+  });
+  await expect(sidebarBrandMark.locator(".sandpi-mark-bubble")).toHaveCSS(
+    "background-color",
+    "rgb(240, 239, 233)",
+  );
+  await expect(sidebarBrandMark.locator(".sandpi-mark-eye-left")).toHaveCSS(
+    "background-color",
+    "rgb(32, 32, 30)",
+  );
 });
 
 test("keeps anonymous visitors on the app home until they send a message", async ({
@@ -4799,6 +4869,9 @@ test("opens the Environment terminal from New Session and replays only the last 
     name: `Terminal for ${environment.name}`,
   });
   await expect(terminal).toBeVisible();
+  await expect(
+    page.locator('meta[name="sandpi-native-bottom-color"]'),
+  ).toHaveAttribute("content", "#151715");
   await expect.poll(() => connectionUrls.length).toBe(1);
 
   const screen = terminal.locator(".xterm-rows");
@@ -4811,6 +4884,9 @@ test("opens the Environment terminal from New Session and replays only the last 
 
   await terminal.getByRole("button", { name: "Close terminal" }).click();
   await expect(terminal).toBeHidden();
+  await expect(
+    page.locator('meta[name="sandpi-native-bottom-color"]'),
+  ).toHaveAttribute("content", "#f7f6f2");
 
   await page.getByRole("button", { name: "Terminal" }).click();
   await expect(terminal).toBeVisible();

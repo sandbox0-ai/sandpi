@@ -32,6 +32,7 @@ import {
 } from "@/lib/client-preferences";
 import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
 import type { SandpiPreferences, SandpiUser } from "@/lib/types";
+import { useNativeChromeSurfaces } from "@/lib/use-native-chrome-surfaces";
 
 import styles from "./preferences-page.module.css";
 
@@ -65,6 +66,11 @@ export function PreferencesPage({
     { tone: "success" | "error"; message: string } | undefined
   >();
   const baselineRef = useRef(initialPreferences);
+
+  useNativeChromeSurfaces(
+    "sidebar",
+    activeTab === "billing" ? "canvas" : "panel",
+  );
 
   const hasChanges = useMemo(
     () => JSON.stringify(draft) !== JSON.stringify(baseline),

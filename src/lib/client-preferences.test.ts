@@ -6,6 +6,8 @@ import {
   buildAppearancePreviewPreferences,
   CLIENT_PREFERENCES_STORAGE_KEY,
   getClientPreferencesBootstrapScript,
+  NATIVE_CHROME_BOTTOM_COLOR_META_NAME,
+  NATIVE_CHROME_TOP_COLOR_META_NAME,
   parseClientPreferences,
 } from "./client-preferences";
 
@@ -56,6 +58,9 @@ test("bootstrap script applies the same storage contract before hydration", () =
   assert.match(script, /root\.dataset\.theme/);
   assert.match(script, /root\.dataset\.density/);
   assert.match(script, /root\.lang/);
+  assert.match(script, /meta\[name="theme-color"\]/);
+  assert.match(script, new RegExp(NATIVE_CHROME_TOP_COLOR_META_NAME));
+  assert.match(script, new RegExp(NATIVE_CHROME_BOTTOM_COLOR_META_NAME));
 });
 
 test("appearance preview preserves saved general preferences", () => {

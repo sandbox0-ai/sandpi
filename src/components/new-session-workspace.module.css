@@ -133,7 +133,15 @@
   align-self: center;
   justify-content: center;
   flex-direction: column;
-  padding: 40px 28px 80px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 40px 28px 20px;
+}
+
+.composerRegion {
+  width: 100%;
+  flex: 0 0 auto;
+  padding: 0 28px 28px;
 }
 
 .intro {
@@ -204,8 +212,8 @@
 }
 
 .composer {
-  width: 100%;
-  margin-top: 30px;
+  width: min(100%, 704px);
+  margin: 0 auto;
 }
 
 .imagePreviews {
@@ -410,7 +418,7 @@
 @media (max-width: 640px) {
   .content {
     justify-content: flex-start;
-    padding: 44px 14px 28px;
+    padding: 28px 14px 14px;
   }
 
   .intro h1 {
@@ -425,8 +433,8 @@
     display: none;
   }
 
-  .composer {
-    margin-top: 24px;
+  .composerRegion {
+    padding: 0 14px max(8px, env(safe-area-inset-bottom));
   }
 
   .starters {
