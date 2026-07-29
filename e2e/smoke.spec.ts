@@ -444,24 +444,20 @@ test("shows live native context usage inside the Session composer", async ({
 
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(composer.locator("textarea")).toHaveCSS("font-size", "16px");
-  await expect(cpuMeter).toBeHidden();
-  await expect(memoryMeter).toBeHidden();
-  await expect(meter).toBeHidden();
-  const [mobileComposerBox, mobileToolbarBox] = await Promise.all([
+  const [mobileComposerBox, ...mobileStatusBoxes] = await Promise.all([
     composer.boundingBox(),
-    composer.locator(".composer-toolbar").boundingBox(),
+    cpuMeter.boundingBox(),
+    memoryMeter.boundingBox(),
+    meter.boundingBox(),
   ]);
   expect(mobileComposerBox).not.toBeNull();
-  expect(mobileToolbarBox).not.toBeNull();
-  expect(mobileToolbarBox!.x).toBeGreaterThanOrEqual(mobileComposerBox!.x);
-  expect(mobileToolbarBox!.x + mobileToolbarBox!.width).toBeLessThanOrEqual(
-    mobileComposerBox!.x + mobileComposerBox!.width,
-  );
-  expect(
-    await composer
-      .locator(".composer-toolbar")
-      .evaluate((toolbar) => toolbar.scrollWidth <= toolbar.clientWidth),
-  ).toBe(true);
+  for (const statusBox of mobileStatusBoxes) {
+    expect(statusBox).not.toBeNull();
+    expect(statusBox!.x).toBeGreaterThanOrEqual(mobileComposerBox!.x);
+    expect(statusBox!.x + statusBox!.width).toBeLessThanOrEqual(
+      mobileComposerBox!.x + mobileComposerBox!.width,
+    );
+  }
 });
 
 test("restores a recent Session snapshot and draft without reloading Environment models", async ({
