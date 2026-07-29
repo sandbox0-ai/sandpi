@@ -222,6 +222,53 @@ async function captureLoginNavigation(page: Page) {
   return () => requestUrl;
 }
 
+test("keeps the disconnected Codex action compact on mobile", async ({
+  page,
+}) => {
+  const bootstrap = getMockBootstrap();
+  useEnglishUi(bootstrap);
+  const environment = bootstrap.environments[0];
+  expect(environment).toBeTruthy();
+  if (!environment) return;
+
+  bootstrap.sessions = [];
+  bootstrap.selectedEnvironmentId = environment.id;
+  bootstrap.selectedSessionId = "";
+  environment.status = "ready";
+  environment.codingAgent = {
+    ...environment.codingAgent,
+    status: "not-connected",
+  };
+
+  await page.route(
+    (url) => url.pathname === "/api/v1/bootstrap",
+    async (route) => {
+      await route.fulfill({ json: { data: bootstrap } });
+    },
+  );
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(
+    `/?environment=${encodeURIComponent(environment.id)}&new=1`,
+  );
+
+  const connectButton = page.getByRole("button", {
+    name: "Connect Codex",
+    exact: true,
+  });
+  await expect(connectButton).toBeVisible();
+  const notice = connectButton.locator("..");
+  const [noticeBox, buttonBox] = await Promise.all([
+    notice.boundingBox(),
+    connectButton.boundingBox(),
+  ]);
+  expect(noticeBox).not.toBeNull();
+  expect(buttonBox).not.toBeNull();
+  expect(buttonBox!.width / noticeBox!.width).toBeLessThan(0.45);
+  expect(buttonBox!.x).toBeGreaterThan(
+    noticeBox!.x + noticeBox!.width / 2,
+  );
+});
+
 test("shows live native context usage inside the Session composer", async ({
   page,
 }) => {

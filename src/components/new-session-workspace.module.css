@@ -429,16 +429,6 @@
     margin-top: 24px;
   }
 
-  .setupNotice {
-    align-items: flex-start;
-    flex-wrap: wrap;
-  }
-
-  .setupNotice > button {
-    width: calc(100% - 39px);
-    margin-left: 39px;
-  }
-
   .starters {
     grid-template-columns: 1fr;
   }
