@@ -1,6 +1,14 @@
 export const WORKSPACE_ROOT = "/workspace";
 export const WORKSPACE_INTERNAL_ROOT = `${WORKSPACE_ROOT}/.sandpi`;
-export const WORKSPACE_IGNORED_DIRECTORY_NAMES = ["node_modules"] as const;
+export const WORKSPACE_IGNORED_DIRECTORY_NAMES = [
+  "node_modules",
+  ".git",
+  ".next",
+  ".cache",
+  ".npm",
+  ".playwright",
+  ".playwright-cli",
+] as const;
 const WORKSPACE_IGNORED_DIRECTORY_NAME_SET = new Set<string>(
   WORKSPACE_IGNORED_DIRECTORY_NAMES,
 );
@@ -70,8 +78,9 @@ export function workspaceFileParentDirectories(candidate: string) {
 }
 
 /**
- * Shared file-tree visibility rule. Dot-files and dot-directories, including
- * Sandpi-managed state, remain visible; generated dependency trees are omitted.
+ * Shared file-tree visibility rule. User dot-files and Sandpi-managed state
+ * remain visible; generated dependency, build, VCS and browser caches are
+ * omitted from interactive trees and watches.
  */
 export function isWorkspaceIdePathHidden(
   candidate: string,

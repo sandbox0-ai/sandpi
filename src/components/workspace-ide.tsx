@@ -64,12 +64,14 @@ import type {
   WorkspaceDirectoryListing,
   WorkspaceFile,
   WorkspaceGitFileChange,
+  WorkspaceGitState,
   WorkspaceGitRepository,
   WorkspaceIdeCreateEntryRequest,
   WorkspaceIdeEvent,
   WorkspaceIdeFile,
   WorkspaceIdeRenameEntryRequest,
   WorkspaceIdeSnapshot,
+  WorkspaceIdeWatchSubscription,
   WorkspaceIdeWriteRequest,
 } from "@/lib/types";
 
@@ -109,14 +111,148 @@ interface DocumentState {
   error?: string;
 }
 
+interface WorkspaceClientCacheEntry {
+  accessedAt: number;
+  snapshot?: WorkspaceIdeSnapshot;
+  directoryListings: WorkspaceDirectoryListings;
+  documents: Record<string, DocumentState>;
+  openPaths: string[];
+  selectedPath: string;
+}
+
+interface SharedWorkspaceRequest {
+  controller: AbortController;
+  consumers: Set<symbol>;
+  settled: boolean;
+  abortTimer?: ReturnType<typeof setTimeout>;
+  promise: Promise<unknown>;
+}
+
+const WORKSPACE_CLIENT_CACHE_TTL_MS = 15 * 60 * 1_000;
+const WORKSPACE_CLIENT_CACHE_MAX_ENVIRONMENTS = 8;
+const workspaceClientCache = new Map<string, WorkspaceClientCacheEntry>();
+const sharedWorkspaceRequests = new Map<string, SharedWorkspaceRequest>();
+
+function workspaceClientCacheKey(environment: Environment) {
+  return [
+    environment.id,
+    environment.sandboxId,
+    environment.workspaceVolumeId,
+  ].join(":");
+}
+
+function readWorkspaceClientCache(key: string) {
+  const cached = workspaceClientCache.get(key);
+  if (!cached) return undefined;
+  if (cached.accessedAt + WORKSPACE_CLIENT_CACHE_TTL_MS < Date.now()) {
+    workspaceClientCache.delete(key);
+    return undefined;
+  }
+  cached.accessedAt = Date.now();
+  workspaceClientCache.delete(key);
+  workspaceClientCache.set(key, cached);
+  return cached;
+}
+
+function writeWorkspaceClientCache(
+  key: string,
+  value: Omit<WorkspaceClientCacheEntry, "accessedAt">,
+) {
+  workspaceClientCache.delete(key);
+  workspaceClientCache.set(key, { ...value, accessedAt: Date.now() });
+  while (workspaceClientCache.size > WORKSPACE_CLIENT_CACHE_MAX_ENVIRONMENTS) {
+    const disposable = [...workspaceClientCache].find(([, candidate]) =>
+      Object.values(candidate.documents).every((document) => !document.dirty),
+    );
+    if (!disposable) break;
+    workspaceClientCache.delete(disposable[0]);
+  }
+}
+
+function acquireSharedWorkspaceRequest<T>(
+  key: string,
+  load: (signal: AbortSignal) => Promise<T>,
+) {
+  let request = sharedWorkspaceRequests.get(key);
+  if (!request) {
+    const controller = new AbortController();
+    const created: SharedWorkspaceRequest = {
+      controller,
+      consumers: new Set(),
+      settled: false,
+      promise: Promise.resolve(),
+    };
+    created.promise = load(controller.signal).finally(() => {
+      created.settled = true;
+      if (sharedWorkspaceRequests.get(key) === created) {
+        sharedWorkspaceRequests.delete(key);
+      }
+    });
+    request = created;
+    sharedWorkspaceRequests.set(key, request);
+  }
+  if (request.abortTimer) {
+    clearTimeout(request.abortTimer);
+    request.abortTimer = undefined;
+  }
+  const consumer = Symbol(key);
+  request.consumers.add(consumer);
+  let released = false;
+  return {
+    promise: request.promise as Promise<T>,
+    release() {
+      if (released) return;
+      released = true;
+      request?.consumers.delete(consumer);
+      if (!request?.settled && request?.consumers.size === 0) {
+        const releasedRequest = request;
+        releasedRequest.abortTimer = setTimeout(() => {
+          releasedRequest.abortTimer = undefined;
+          if (
+            releasedRequest.settled ||
+            releasedRequest.consumers.size > 0
+          ) {
+            return;
+          }
+          releasedRequest.controller.abort();
+          if (sharedWorkspaceRequests.get(key) === releasedRequest) {
+            sharedWorkspaceRequests.delete(key);
+          }
+        }, 0);
+      }
+    },
+  };
+}
+
+async function trackedSharedWorkspaceRequest<T>(
+  releases: Set<() => void>,
+  key: string,
+  load: (signal: AbortSignal) => Promise<T>,
+) {
+  const request = acquireSharedWorkspaceRequest(key, load);
+  releases.add(request.release);
+  try {
+    return await request.promise;
+  } finally {
+    releases.delete(request.release);
+    request.release();
+  }
+}
+
+const loadWorkspaceCodeEditorModule = () => import("./workspace-code-editor");
+
 const WorkspaceCodeEditor = dynamic(
   () =>
-    import("./workspace-code-editor").then((module) => module.WorkspaceCodeEditor),
+    loadWorkspaceCodeEditorModule().then(
+      (module) => module.WorkspaceCodeEditor,
+    ),
   { ssr: false, loading: () => <span>Loading editor…</span> },
 );
 const WorkspaceConflictDiff = dynamic(
   () =>
-    import("./workspace-code-editor").then((module) => module.WorkspaceConflictDiff),
+    loadWorkspaceCodeEditorModule().then(
+      (module) => module.WorkspaceConflictDiff,
+    ),
   { ssr: false, loading: () => <span>Loading comparison…</span> },
 );
 
@@ -250,13 +386,6 @@ const copy = {
   },
 } as const;
 
-function flattenFiles(files: WorkspaceFile[]): WorkspaceFile[] {
-  return files.flatMap((file) => [
-    file,
-    ...(file.children ? flattenFiles(file.children) : []),
-  ]);
-}
-
 function workspacePathAtOrBelow(candidate: string, root: string) {
   return candidate === root || candidate.startsWith(`${root}/`);
 }
@@ -325,6 +454,34 @@ function shallowVisibleEntries(files: WorkspaceFile[]) {
 function rootEntries(snapshot?: WorkspaceIdeSnapshot) {
   const root = snapshot?.files.find((file) => file.path === "/workspace");
   return shallowVisibleEntries(root?.children ?? []);
+}
+
+function snapshotFromRootListing(
+  listing: WorkspaceDirectoryListing,
+  git: WorkspaceGitState,
+): WorkspaceIdeSnapshot {
+  return {
+    files: [
+      {
+        id: "workspace",
+        name: "workspace",
+        path: WORKSPACE_ROOT,
+        kind: "folder",
+        children: shallowVisibleEntries(listing.entries),
+      },
+    ],
+    git,
+    refreshedAt: listing.refreshedAt,
+  };
+}
+
+function isAbortError(cause: unknown) {
+  return (
+    typeof cause === "object" &&
+    cause !== null &&
+    "name" in cause &&
+    cause.name === "AbortError"
+  );
 }
 
 function workspaceTreeFromListings(
@@ -1209,59 +1366,114 @@ export function WorkspaceIde({
   onNavigationHandled,
 }: WorkspaceIdeProps) {
   const ui = copy[language];
+  const cacheKey = workspaceClientCacheKey(environment);
+  const initialCacheStateRef = useRef<{
+    key: string;
+    value: Omit<WorkspaceClientCacheEntry, "accessedAt">;
+  } | null>(null);
+  if (initialCacheStateRef.current === null) {
+    const cached = readWorkspaceClientCache(cacheKey);
+    const snapshot = initialSnapshot ?? cached?.snapshot;
+    initialCacheStateRef.current = {
+      key: cacheKey,
+      value: {
+        snapshot,
+        directoryListings: initialSnapshot
+          ? { [WORKSPACE_ROOT]: rootEntries(initialSnapshot) }
+          : (cached?.directoryListings ?? {}),
+        documents: cached?.documents ?? {},
+        openPaths: cached?.openPaths ?? [],
+        selectedPath: cached?.selectedPath ?? "",
+      },
+    };
+  }
+  const initialCacheState = initialCacheStateRef.current.value;
+  const stateCacheKeyRef = useRef(cacheKey);
   const [snapshot, setSnapshot] = useState<WorkspaceIdeSnapshot | undefined>(
-    initialSnapshot,
+    initialCacheState.snapshot,
   );
   const [directoryListings, setDirectoryListings] = useState<
     WorkspaceDirectoryListings
-  >(() =>
-    initialSnapshot
-      ? { "/workspace": rootEntries(initialSnapshot) }
-      : ({} as WorkspaceDirectoryListings),
-  );
+  >(initialCacheState.directoryListings);
   const [loadingDirectories, setLoadingDirectories] = useState<Set<string>>(
     new Set(),
   );
   const [directoryErrors, setDirectoryErrors] = useState<Record<string, string>>(
     {},
   );
-  const [documents, setDocuments] = useState<Record<string, DocumentState>>({});
-  const [openPaths, setOpenPaths] = useState<string[]>([]);
-  const [selectedPath, setSelectedPath] = useState("");
-  const [loading, setLoading] = useState(!initialSnapshot);
+  const [documents, setDocuments] = useState<Record<string, DocumentState>>(
+    initialCacheState.documents,
+  );
+  const [openPaths, setOpenPaths] = useState<string[]>(
+    initialCacheState.openPaths,
+  );
+  const [selectedPath, setSelectedPath] = useState(
+    initialCacheState.selectedPath,
+  );
+  const [loading, setLoading] = useState(!initialCacheState.snapshot);
   const [error, setError] = useState("");
   const [connection, setConnection] = useState<
     "connecting" | "live" | "reconnecting" | "polling" | "offline"
   >("connecting");
+  const snapshotRef = useRef(snapshot);
+  const gitStateRef = useRef<WorkspaceGitState>(
+    snapshot?.git ?? { repositories: [] },
+  );
   const documentsRef = useRef(documents);
   const environmentIdRef = useRef(environment.id);
   const directoryListingsRef = useRef(directoryListings);
   const directoryRequestsRef = useRef(
     new Map<string, { promise: Promise<void>; token: symbol }>(),
   );
+  const activeRequestReleasesRef = useRef(new Set<() => void>());
   const openPathsRef = useRef(openPaths);
+  const selectedPathRef = useRef(selectedPath);
   const pendingPathsRef = useRef(new Set<string>());
   const refreshTimerRef = useRef<number | null>(null);
+  const gitRefreshTimerRef = useRef<number | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
+  const workspaceSocketRef = useRef<WebSocket | undefined>(undefined);
+  const workspaceSocketReadyRef = useRef(false);
   const environmentGenerationRef = useRef(0);
+  const environmentIdentityRef = useRef(cacheKey);
   const selectedPathEnvironmentRef = useRef(environment.id);
   const handledNavigationRequestRef = useRef("");
   const initialNavigationGenerationRef = useRef(-1);
   const revealRequestIdRef = useRef(0);
   const resetIdentityRef = useRef<{
-    environmentId: string;
+    cacheKey: string;
     initialSnapshot: WorkspaceIdeSnapshot | undefined;
   } | null>(null);
   const [revealRequest, setRevealRequest] = useState<{
     path: string;
     requestId: number;
   }>();
+  const explicitNavigationPath =
+    navigationRequest?.environmentId === environment.id
+      ? userVisibleWorkspacePath(navigationRequest.path)
+      : typeof window === "undefined"
+        ? undefined
+        : userVisibleWorkspacePath(
+            new URLSearchParams(window.location.search).get("path") ?? "",
+          );
+  const prioritizeExplicitFileContent = Boolean(
+    !snapshot &&
+      explicitNavigationPath &&
+      explicitNavigationPath !== WORKSPACE_ROOT &&
+      !documents[explicitNavigationPath]?.data &&
+      !documents[explicitNavigationPath]?.error,
+  );
 
-  if (environmentIdRef.current !== environment.id) {
+  if (environmentIdentityRef.current !== cacheKey) {
+    environmentIdentityRef.current = cacheKey;
     environmentIdRef.current = environment.id;
     environmentGenerationRef.current += 1;
     selectedPathEnvironmentRef.current = "";
   }
+
+  useEffect(() => {
+    snapshotRef.current = snapshot;
+  }, [snapshot]);
 
   useEffect(() => {
     documentsRef.current = documents;
@@ -1272,8 +1484,39 @@ export function WorkspaceIde({
   }, [openPaths]);
 
   useEffect(() => {
+    selectedPathRef.current = selectedPath;
+  }, [selectedPath]);
+
+  useEffect(() => {
     directoryListingsRef.current = directoryListings;
   }, [directoryListings]);
+
+  useEffect(() => {
+    if (stateCacheKeyRef.current !== cacheKey) return;
+    writeWorkspaceClientCache(cacheKey, {
+      snapshot,
+      directoryListings,
+      documents,
+      openPaths,
+      selectedPath,
+    });
+  }, [
+    cacheKey,
+    directoryListings,
+    documents,
+    openPaths,
+    selectedPath,
+    snapshot,
+  ]);
+
+  useEffect(
+    () => () => {
+      for (const release of activeRequestReleasesRef.current) release();
+      activeRequestReleasesRef.current.clear();
+      directoryRequestsRef.current.clear();
+    },
+    [cacheKey],
+  );
 
   const loadDirectory = useCallback(
     (requestedPath: string, force = false) => {
@@ -1300,13 +1543,22 @@ export function WorkspaceIde({
       const environmentId = environment.id;
       const environmentGeneration = environmentGenerationRef.current;
       const requestToken = Symbol(directoryPath);
+      const hadListing = Object.hasOwn(
+        directoryListingsRef.current,
+        directoryPath,
+      );
       const task = (async () => {
         try {
           const query = new URLSearchParams({ path: directoryPath });
-          const response = await apiFetch<
+          const requestPath =
+            `/api/v1/environments/${encodeURIComponent(environmentId)}` +
+            `/files?${query.toString()}`;
+          const response = await trackedSharedWorkspaceRequest<
             ApiEnvelope<WorkspaceDirectoryListing>
           >(
-            `/api/v1/environments/${encodeURIComponent(environmentId)}/files?${query.toString()}`,
+            activeRequestReleasesRef.current,
+            `directory:${cacheKey}:${requestPath}`,
+            (signal) => apiFetch(requestPath, { signal }),
           );
           if (
             environmentIdRef.current !== environmentId ||
@@ -1326,38 +1578,56 @@ export function WorkspaceIde({
           };
           directoryListingsRef.current = next;
           setDirectoryListings(next);
+          if (directoryPath === WORKSPACE_ROOT) {
+            const nextSnapshot = snapshotFromRootListing(
+              response.data,
+              gitStateRef.current,
+            );
+            snapshotRef.current = nextSnapshot;
+            setSnapshot(nextSnapshot);
+            setError("");
+          }
         } catch (cause) {
+          if (isAbortError(cause)) return;
           if (
             environmentIdRef.current !== environmentId ||
             environmentGenerationRef.current !== environmentGeneration
           ) {
             return;
           }
-          const next = { ...directoryListingsRef.current };
-          delete next[directoryPath];
-          directoryListingsRef.current = next;
-          setDirectoryListings(next);
+          if (!hadListing) {
+            const next = { ...directoryListingsRef.current };
+            delete next[directoryPath];
+            directoryListingsRef.current = next;
+            setDirectoryListings(next);
+          }
           setDirectoryErrors((current) => ({
             ...current,
             [directoryPath]:
               cause instanceof Error ? cause.message : "Folder unavailable",
           }));
-        } finally {
-          if (
-            directoryRequestsRef.current.get(directoryPath)?.token ===
-            requestToken
-          ) {
-            directoryRequestsRef.current.delete(directoryPath);
+          if (directoryPath === WORKSPACE_ROOT && !snapshotRef.current) {
+            setError(
+              cause instanceof Error ? cause.message : "Workspace unavailable",
+            );
           }
-          if (
-            environmentIdRef.current === environmentId &&
-            environmentGenerationRef.current === environmentGeneration
-          ) {
-            setLoadingDirectories((current) => {
-              const next = new Set(current);
-              next.delete(directoryPath);
-              return next;
-            });
+        } finally {
+          const ownsRequest =
+            directoryRequestsRef.current.get(directoryPath)?.token ===
+            requestToken;
+          if (ownsRequest) {
+            directoryRequestsRef.current.delete(directoryPath);
+            if (
+              environmentIdRef.current === environmentId &&
+              environmentGenerationRef.current === environmentGeneration
+            ) {
+              setLoadingDirectories((current) => {
+                const next = new Set(current);
+                next.delete(directoryPath);
+                return next;
+              });
+              if (directoryPath === WORKSPACE_ROOT) setLoading(false);
+            }
           }
         }
       })();
@@ -1367,27 +1637,39 @@ export function WorkspaceIde({
       });
       return task;
     },
-    [environment.id],
+    [cacheKey, environment.id],
   );
 
   const loadDocument = useCallback(
     async (filePath: string, reason: "open" | "external" | "reload" = "open") => {
       const visiblePath = userVisibleWorkspacePath(filePath);
       if (!visiblePath) return;
+      void loadWorkspaceCodeEditorModule();
       const environmentId = environment.id;
       const environmentGeneration = environmentGenerationRef.current;
-      setDocuments((current) => ({
-        ...current,
-        [visiblePath]: {
-          ...current[visiblePath],
-          loading: reason !== "external" || !current[visiblePath]?.data,
-          error: undefined,
-        },
-      }));
+      setDocuments((current) => {
+        const next = {
+          ...current,
+          [visiblePath]: {
+            ...current[visiblePath],
+            loading: reason !== "external" || !current[visiblePath]?.data,
+            error: undefined,
+          },
+        };
+        documentsRef.current = next;
+        return next;
+      });
       try {
         const query = new URLSearchParams({ path: visiblePath });
-        const response = await apiFetch<ApiEnvelope<WorkspaceIdeFile>>(
-          `/api/v1/environments/${encodeURIComponent(environmentId)}/ide/file?${query.toString()}`,
+        const requestPath =
+          `/api/v1/environments/${encodeURIComponent(environmentId)}` +
+          `/ide/file?${query.toString()}`;
+        const response = await trackedSharedWorkspaceRequest<
+          ApiEnvelope<WorkspaceIdeFile>
+        >(
+          activeRequestReleasesRef.current,
+          `document:${cacheKey}:${requestPath}`,
+          (signal) => apiFetch(requestPath, { signal }),
         );
         if (
           environmentIdRef.current !== environmentId ||
@@ -1402,9 +1684,10 @@ export function WorkspaceIde({
           );
         }
         const responseData = { ...response.data, path: responsePath };
-        setDocuments((current) => ({
-          ...current,
-          [visiblePath]:
+        setDocuments((current) => {
+          const next = {
+            ...current,
+            [visiblePath]:
             reason === "external" && current[visiblePath]?.dirty
               ? {
                   ...current[visiblePath],
@@ -1423,112 +1706,146 @@ export function WorkspaceIde({
                   loading: false,
                   dirty: false,
                 },
-        }));
+          };
+          documentsRef.current = next;
+          return next;
+        });
       } catch (cause) {
+        if (isAbortError(cause)) return;
         if (
           environmentIdRef.current !== environmentId ||
           environmentGenerationRef.current !== environmentGeneration
         ) {
           return;
         }
-        setDocuments((current) => ({
-          ...current,
-          [visiblePath]: {
-            ...current[visiblePath],
-            loading: false,
-            error: cause instanceof Error ? cause.message : "File unavailable",
-          },
-        }));
+        setDocuments((current) => {
+          const next = {
+            ...current,
+            [visiblePath]: {
+              ...current[visiblePath],
+              loading: false,
+              error:
+                cause instanceof Error ? cause.message : "File unavailable",
+            },
+          };
+          documentsRef.current = next;
+          return next;
+        });
       }
     },
-    [environment.id],
+    [cacheKey, environment.id],
   );
+
+  const loadGitState = useCallback(async () => {
+    const environmentId = environment.id;
+    const environmentGeneration = environmentGenerationRef.current;
+    const requestPath =
+      `/api/v1/environments/${encodeURIComponent(environmentId)}/ide/git`;
+    try {
+      const response = await trackedSharedWorkspaceRequest<
+        ApiEnvelope<WorkspaceGitState>
+      >(
+        activeRequestReleasesRef.current,
+        `git:${cacheKey}:${requestPath}`,
+        (signal) => apiFetch(requestPath, { signal }),
+      );
+      if (
+        environmentIdRef.current !== environmentId ||
+        environmentGenerationRef.current !== environmentGeneration
+      ) {
+        return;
+      }
+      gitStateRef.current = response.data;
+      const current = snapshotRef.current;
+      if (!current) return;
+      const next = { ...current, git: response.data };
+      snapshotRef.current = next;
+      setSnapshot(next);
+    } catch (cause) {
+      if (!isAbortError(cause)) {
+        // The file tree remains useful while Git projection refresh retries.
+      }
+    }
+  }, [cacheKey, environment.id]);
 
   const refreshSnapshot = useCallback(
     async (silent = false, refreshLoadedDirectories = false) => {
       if (!silent) setLoading(true);
-      const environmentGeneration = environmentGenerationRef.current;
-      try {
-        const response = await apiFetch<ApiEnvelope<WorkspaceIdeSnapshot>>(
-          `/api/v1/environments/${encodeURIComponent(environment.id)}/ide`,
-        );
-        if (
-          environmentIdRef.current !== environment.id ||
-          environmentGenerationRef.current !== environmentGeneration
-        ) {
-          return;
-        }
-        const nextListings = {
-          ...directoryListingsRef.current,
-          "/workspace": rootEntries(response.data),
-        };
-        directoryListingsRef.current = nextListings;
-        setDirectoryListings(nextListings);
-        setSnapshot(response.data);
-        setError("");
-        if (refreshLoadedDirectories) {
-          await Promise.all(
-            Object.keys(nextListings)
-              .filter((directoryPath) => directoryPath !== "/workspace")
-              .map((directoryPath) => loadDirectory(directoryPath, true)),
-          );
-        }
-      } catch (cause) {
-        if (
-          !silent &&
-          environmentIdRef.current === environment.id &&
-          environmentGenerationRef.current === environmentGeneration
-        ) {
-          setError(
-            cause instanceof Error ? cause.message : "Workspace unavailable",
-          );
-        }
-      } finally {
-        if (
-          !silent &&
-          environmentIdRef.current === environment.id &&
-          environmentGenerationRef.current === environmentGeneration
-        ) {
-          setLoading(false);
-        }
+      const loadedDirectoryPaths = Object.keys(
+        directoryListingsRef.current,
+      ).filter((directoryPath) => directoryPath !== WORKSPACE_ROOT);
+      await Promise.all([
+        loadDirectory(WORKSPACE_ROOT, true),
+        loadGitState(),
+        ...(refreshLoadedDirectories
+          ? loadedDirectoryPaths.map((directoryPath) =>
+              loadDirectory(directoryPath, true),
+            )
+          : []),
+      ]);
+      if (!silent && environmentIdRef.current === environment.id) {
+        setLoading(false);
       }
     },
-    [environment.id, loadDirectory],
+    [environment.id, loadDirectory, loadGitState],
   );
 
   useEffect(() => {
     if (
-      resetIdentityRef.current?.environmentId === environment.id &&
+      resetIdentityRef.current?.cacheKey === cacheKey &&
       resetIdentityRef.current.initialSnapshot === initialSnapshot
     ) {
       return;
     }
     resetIdentityRef.current = {
-      environmentId: environment.id,
+      cacheKey,
       initialSnapshot,
     };
-    setSnapshot(initialSnapshot);
+    const cached = readWorkspaceClientCache(cacheKey);
+    const nextSnapshot = initialSnapshot ?? cached?.snapshot;
     const nextListings: WorkspaceDirectoryListings = initialSnapshot
-      ? { "/workspace": rootEntries(initialSnapshot) }
-      : {};
+      ? { [WORKSPACE_ROOT]: rootEntries(initialSnapshot) }
+      : (cached?.directoryListings ?? {});
+    stateCacheKeyRef.current = cacheKey;
+    snapshotRef.current = nextSnapshot;
+    gitStateRef.current = nextSnapshot?.git ?? { repositories: [] };
+    setSnapshot(nextSnapshot);
     directoryListingsRef.current = nextListings;
     setDirectoryListings(nextListings);
     directoryRequestsRef.current.clear();
     setLoadingDirectories(new Set());
     setDirectoryErrors({});
-    documentsRef.current = {};
-    setDocuments({});
-    openPathsRef.current = [];
-    setOpenPaths([]);
-    setSelectedPath("");
+    const nextDocuments = cached?.documents ?? {};
+    documentsRef.current = nextDocuments;
+    setDocuments(nextDocuments);
+    const nextOpenPaths = cached?.openPaths ?? [];
+    openPathsRef.current = nextOpenPaths;
+    setOpenPaths(nextOpenPaths);
+    const nextSelectedPath = cached?.selectedPath ?? "";
+    selectedPathRef.current = nextSelectedPath;
+    setSelectedPath(nextSelectedPath);
     selectedPathEnvironmentRef.current = environment.id;
     handledNavigationRequestRef.current = "";
     initialNavigationGenerationRef.current = -1;
     setRevealRequest(undefined);
     setError("");
-    if (initialSnapshot) setLoading(false);
-    else void refreshSnapshot();
-  }, [environment.id, initialSnapshot, refreshSnapshot]);
+    setLoading(!nextSnapshot);
+  }, [
+    cacheKey,
+    environment.id,
+    initialSnapshot,
+  ]);
+
+  useEffect(() => {
+    if (prioritizeExplicitFileContent) return;
+    void loadDirectory(WORKSPACE_ROOT, true);
+    void loadGitState();
+  }, [
+    cacheKey,
+    loadDirectory,
+    loadGitState,
+    prioritizeExplicitFileContent,
+  ]);
 
   const visibleGit = useMemo(
     () => userVisibleWorkspaceGitState(snapshot?.git),
@@ -1547,7 +1864,6 @@ export function WorkspaceIde({
     () => mergeWorkspaceGitFiles(nativeWorkspaceFiles, gitChanges),
     [gitChanges, nativeWorkspaceFiles],
   );
-  const allFiles = useMemo(() => flattenFiles(workspaceFiles), [workspaceFiles]);
   const changesByPath = useMemo(
     () => new Map(gitChanges.map((change) => [change.path, change])),
     [gitChanges],
@@ -1560,6 +1876,23 @@ export function WorkspaceIde({
     () => new Set(Object.keys(directoryListings)),
     [directoryListings],
   );
+  const watchedDirectoryPaths = useMemo(
+    () =>
+      [
+        ...new Set([
+          ...Object.keys(directoryListings).filter(
+            (directoryPath) => directoryPath !== WORKSPACE_ROOT,
+          ),
+          ...repositories.map((repository) => `${repository.root}/.git`),
+        ]),
+      ].slice(-64),
+    [directoryListings, repositories],
+  );
+  const watchedDirectorySignature = watchedDirectoryPaths.join("\n");
+  const watchedDirectoryPathsRef = useRef(watchedDirectoryPaths);
+  useEffect(() => {
+    watchedDirectoryPathsRef.current = watchedDirectoryPaths;
+  }, [watchedDirectoryPaths]);
 
   useEffect(() => {
     setOpenPaths((current) => {
@@ -1595,16 +1928,22 @@ export function WorkspaceIde({
   const openFile = useCallback(
     (filePath: string) => {
       const visiblePath = userVisibleWorkspacePath(filePath);
-      if (!visiblePath) return;
-      setOpenPaths((current) =>
-        current.includes(visiblePath) ? current : [...current, visiblePath],
-      );
+      if (!visiblePath) return Promise.resolve();
+      setOpenPaths((current) => {
+        const next = current.includes(visiblePath)
+          ? current
+          : [...current, visiblePath];
+        openPathsRef.current = next;
+        return next;
+      });
       selectedPathEnvironmentRef.current = environment.id;
+      selectedPathRef.current = visiblePath;
       setSelectedPath(visiblePath);
       const document = documentsRef.current[visiblePath];
-      if (!document?.data && !document?.loading) {
-        void loadDocument(visiblePath);
+      if (!document?.data) {
+        return loadDocument(visiblePath);
       }
+      return Promise.resolve();
     },
     [environment.id, loadDocument],
   );
@@ -2037,41 +2376,62 @@ export function WorkspaceIde({
   const revealWorkspaceFile = useCallback(
     (filePath: string) => {
       const visiblePath = userVisibleWorkspacePath(filePath);
-      if (!visiblePath) return;
+      if (!visiblePath) return Promise.resolve();
       revealRequestIdRef.current += 1;
       setRevealRequest({
         path: visiblePath,
         requestId: revealRequestIdRef.current,
       });
-      if (visiblePath !== WORKSPACE_ROOT) openFile(visiblePath);
-      void Promise.all(
-        workspaceFileParentDirectories(visiblePath).map((directoryPath) =>
-          loadDirectory(directoryPath),
-        ),
-      );
+      const fileTask =
+        visiblePath === WORKSPACE_ROOT
+          ? Promise.resolve()
+          : openFile(visiblePath);
+      return fileTask;
     },
-    [loadDirectory, openFile],
+    [openFile],
   );
 
   useEffect(() => {
-    if (!snapshot || !navigationRequest) return;
+    if (prioritizeExplicitFileContent || !revealRequest) return;
+    void Promise.all(
+      workspaceFileParentDirectories(revealRequest.path).map((directoryPath) =>
+        loadDirectory(directoryPath),
+      ),
+    );
+  }, [
+    loadDirectory,
+    prioritizeExplicitFileContent,
+    revealRequest,
+  ]);
+
+  useEffect(() => {
+    if (!navigationRequest) return;
     if (navigationRequest.environmentId !== environment.id) return;
     const requestKey = `${navigationRequest.environmentId}:${navigationRequest.requestId}:${navigationRequest.path}`;
     if (handledNavigationRequestRef.current === requestKey) return;
     handledNavigationRequestRef.current = requestKey;
     const requestedPath = userVisibleWorkspacePath(navigationRequest.path);
-    if (requestedPath) revealWorkspaceFile(requestedPath);
-    onNavigationHandled?.(navigationRequest);
+    let active = true;
+    const navigation = requestedPath
+      ? revealWorkspaceFile(requestedPath)
+      : Promise.resolve();
+    void navigation.finally(() => {
+      if (active) onNavigationHandled?.(navigationRequest);
+    });
+    return () => {
+      active = false;
+      if (handledNavigationRequestRef.current === requestKey) {
+        handledNavigationRequestRef.current = "";
+      }
+    };
   }, [
     environment.id,
     navigationRequest,
     onNavigationHandled,
     revealWorkspaceFile,
-    snapshot,
   ]);
 
   useEffect(() => {
-    if (!snapshot || selectedPath) return;
     if (navigationRequest?.environmentId === environment.id) return;
     const environmentGeneration = environmentGenerationRef.current;
     if (initialNavigationGenerationRef.current === environmentGeneration) {
@@ -2083,29 +2443,20 @@ export function WorkspaceIde({
         ? ""
         : new URLSearchParams(window.location.search).get("path") ?? "";
     const requestedPath = userVisibleWorkspacePath(requestedPathValue) ?? "";
-    const firstFile = allFiles.find((file) => file.kind === "file")?.path;
     if (requestedPath) {
-      revealWorkspaceFile(requestedPath);
-      return;
+      void revealWorkspaceFile(requestedPath);
     }
-    const initialPath =
-      gitChanges.find(
-        (change) =>
-          change.kind !== "deleted" && change.kind !== "untracked",
-      )?.path ??
-      gitChanges.find((change) => change.kind !== "deleted")?.path ??
-      gitChanges[0]?.path ??
-      firstFile;
-    if (initialPath) openFile(initialPath);
+    return () => {
+      if (
+        initialNavigationGenerationRef.current === environmentGeneration
+      ) {
+        initialNavigationGenerationRef.current = -1;
+      }
+    };
   }, [
-    allFiles,
     environment.id,
-    gitChanges,
     navigationRequest,
-    openFile,
     revealWorkspaceFile,
-    selectedPath,
-    snapshot,
   ]);
 
   useEffect(() => {
@@ -2127,15 +2478,34 @@ export function WorkspaceIde({
   }, [environment.id, selectedPath]);
 
   useEffect(() => {
+    if (prioritizeExplicitFileContent) {
+      setConnection("connecting");
+      return;
+    }
     let disposed = false;
     let socket: WebSocket | undefined;
     let retry = 0;
     let pollingFallback = false;
     let pollingTimer: number | undefined;
+    let handshakeTimer: number | undefined;
 
-    const scheduleRefresh = (filePath: string) => {
+    const scheduleGitRefresh = () => {
+      if (gitRefreshTimerRef.current !== null) {
+        window.clearTimeout(gitRefreshTimerRef.current);
+      }
+      gitRefreshTimerRef.current = window.setTimeout(() => {
+        gitRefreshTimerRef.current = null;
+        void loadGitState();
+      }, 450);
+    };
+
+    const scheduleRefresh = (filePath: string, event = "") => {
       const visiblePath = userVisibleWorkspacePath(filePath);
       if (!visiblePath) return;
+      if (event.startsWith("git:")) {
+        scheduleGitRefresh();
+        return;
+      }
       pendingPathsRef.current.add(visiblePath);
       if (refreshTimerRef.current !== null) {
         window.clearTimeout(refreshTimerRef.current);
@@ -2143,7 +2513,22 @@ export function WorkspaceIde({
       refreshTimerRef.current = window.setTimeout(() => {
         const changedPaths = [...pendingPathsRef.current];
         pendingPathsRef.current.clear();
-        void refreshSnapshot(true, true);
+        refreshTimerRef.current = null;
+        const changedDirectories = new Set(
+          changedPaths.map((changedPath) =>
+            changedPath === WORKSPACE_ROOT
+              ? WORKSPACE_ROOT
+              : workspaceParentPath(changedPath),
+          ),
+        );
+        for (const directoryPath of changedDirectories) {
+          if (
+            directoryPath === WORKSPACE_ROOT ||
+            Object.hasOwn(directoryListingsRef.current, directoryPath)
+          ) {
+            void loadDirectory(directoryPath, true);
+          }
+        }
         for (const openPath of openPathsRef.current) {
           if (
             changedPaths.some(
@@ -2154,6 +2539,7 @@ export function WorkspaceIde({
             void loadDocument(openPath, "external");
           }
         }
+        scheduleGitRefresh();
       }, 180);
     };
 
@@ -2165,11 +2551,10 @@ export function WorkspaceIde({
 
     const startPolling = () => {
       if (disposed || pollingTimer !== undefined) return;
-      scheduleRefresh("/workspace");
-      pollingTimer = window.setInterval(
-        () => scheduleRefresh("/workspace"),
-        3_000,
-      );
+      void refreshSnapshot(true, true);
+      pollingTimer = window.setInterval(() => {
+        void refreshSnapshot(true, true);
+      }, 15_000);
     };
 
     const connect = () => {
@@ -2186,17 +2571,35 @@ export function WorkspaceIde({
           `/api/v1/environments/${encodeURIComponent(environment.id)}/ide/events`,
         ),
       );
+      workspaceSocketRef.current = socket;
+      workspaceSocketReadyRef.current = false;
+      handshakeTimer = window.setTimeout(() => {
+        if (disposed || workspaceSocketReadyRef.current) return;
+        pollingFallback = true;
+        startPolling();
+        setConnection("polling");
+      }, 10_000);
       socket.addEventListener("message", (message) => {
         try {
           const event = JSON.parse(message.data as string) as WorkspaceIdeEvent;
           if (event.type === "ready") {
             retry = 0;
             pollingFallback = false;
+            workspaceSocketReadyRef.current = true;
+            if (handshakeTimer !== undefined) {
+              window.clearTimeout(handshakeTimer);
+              handshakeTimer = undefined;
+            }
             stopPolling();
             setError("");
             setConnection("live");
+            const subscription: WorkspaceIdeWatchSubscription = {
+              type: "subscribe",
+              paths: watchedDirectoryPathsRef.current,
+            };
+            socket?.send(JSON.stringify(subscription));
           } else if (event.type === "change") {
-            scheduleRefresh(event.path);
+            scheduleRefresh(event.path, event.event);
           } else if (event.type === "error") {
             if (event.code === "workspace_watch_unavailable") {
               pollingFallback = true;
@@ -2212,6 +2615,14 @@ export function WorkspaceIde({
       });
       socket.addEventListener("close", () => {
         if (disposed) return;
+        if (workspaceSocketRef.current === socket) {
+          workspaceSocketRef.current = undefined;
+          workspaceSocketReadyRef.current = false;
+        }
+        if (handshakeTimer !== undefined) {
+          window.clearTimeout(handshakeTimer);
+          handshakeTimer = undefined;
+        }
         retry += 1;
         // Keep editor state fresh only while the native watch is unavailable
         // or reconnecting. A subsequent `ready` event stops this fallback.
@@ -2234,25 +2645,50 @@ export function WorkspaceIde({
     };
 
     connect();
-    // Keep the shallow tree converging while the native volume watch is still
-    // negotiating. Some Sandbox0 storage backends cannot establish that watch
-    // promptly; waiting for its eventual timeout would hide files created by a
-    // running agent for many seconds. A `ready` frame stops this bounded
-    // fallback immediately, so a healthy native stream remains the steady
-    // state transport.
-    startPolling();
     return () => {
       disposed = true;
       stopPolling();
       socket?.close();
+      workspaceSocketRef.current = undefined;
+      workspaceSocketReadyRef.current = false;
+      if (handshakeTimer !== undefined) {
+        window.clearTimeout(handshakeTimer);
+      }
       if (refreshTimerRef.current !== null) {
         window.clearTimeout(refreshTimerRef.current);
+        refreshTimerRef.current = null;
+      }
+      if (gitRefreshTimerRef.current !== null) {
+        window.clearTimeout(gitRefreshTimerRef.current);
+        gitRefreshTimerRef.current = null;
       }
       if (reconnectTimerRef.current !== null) {
         window.clearTimeout(reconnectTimerRef.current);
       }
     };
-  }, [environment.id, loadDocument, refreshSnapshot]);
+  }, [
+    environment.id,
+    loadDirectory,
+    loadDocument,
+    loadGitState,
+    prioritizeExplicitFileContent,
+    refreshSnapshot,
+  ]);
+
+  useEffect(() => {
+    const socket = workspaceSocketRef.current;
+    if (
+      !workspaceSocketReadyRef.current ||
+      socket?.readyState !== WebSocket.OPEN
+    ) {
+      return;
+    }
+    const subscription: WorkspaceIdeWatchSubscription = {
+      type: "subscribe",
+      paths: watchedDirectoryPathsRef.current,
+    };
+    socket.send(JSON.stringify(subscription));
+  }, [watchedDirectorySignature]);
 
   useEffect(() => {
     const warnForUnsavedFiles = (event: BeforeUnloadEvent) => {
@@ -2499,6 +2935,8 @@ export function WorkspaceIde({
                 onRenameEntry={renameWorkspaceEntry}
                 onDeleteEntry={deleteWorkspaceEntry}
               />
+            ) : loading && !snapshot ? (
+              <p className={styles.sidebarEmpty}>{ui.loading}</p>
             ) : (
               <p className={styles.sidebarEmpty}>{ui.noFiles}</p>
             )}
@@ -2578,7 +3016,7 @@ export function WorkspaceIde({
             </div>
           ) : null}
 
-          {loading && !snapshot ? (
+          {loading && !snapshot && !selectedPath ? (
             <div className={styles.loading} role="status">
               <RefreshCw size={17} /> {ui.loading}
             </div>

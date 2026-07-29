@@ -11,6 +11,8 @@ import type * as Monaco from "monaco-editor";
 
 import type { WorkspaceLineChange } from "@/lib/types";
 
+import styles from "./workspace-code-editor.module.css";
+
 loader.config({ paths: { vs: "/monaco/vs" } });
 
 interface WorkspaceCodeEditorProps {
@@ -141,7 +143,24 @@ export function WorkspaceCodeEditor({
       value={value}
       language={language}
       theme={theme}
-      loading={<span>Loading editor…</span>}
+      loading={
+        <textarea
+          className={styles.fallback}
+          aria-label={`Plain text editor for ${
+            modelPath.split("/").at(-1) ?? "Workspace file"
+          }`}
+          value={value}
+          readOnly={readOnly}
+          spellCheck={false}
+          onChange={(event) => onChange(event.currentTarget.value)}
+          onKeyDown={(event) => {
+            if ((event.metaKey || event.ctrlKey) && event.key === "s") {
+              event.preventDefault();
+              onSave();
+            }
+          }}
+        />
+      }
       options={editorOptions(readOnly)}
       onChange={(next) => onChange(next ?? "")}
       onMount={handleMount}

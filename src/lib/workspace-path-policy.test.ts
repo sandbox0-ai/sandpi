@@ -30,10 +30,14 @@ test("identifies Git administrative paths without protecting ordinary dot-files"
   assert.equal(isWorkspaceGitMetadataPath("/etc/.git/config"), false);
 });
 
-test("keeps dot-paths visible while excluding dependency trees", () => {
+test("keeps user dot-paths visible while excluding generated trees", () => {
   assert.equal(isWorkspaceIdePathHidden("/workspace/.codex", true), false);
   assert.equal(isWorkspaceIdePathHidden("/workspace/.codex/state.sqlite"), false);
-  assert.equal(isWorkspaceIdePathHidden("/workspace/.git", true), false);
+  assert.equal(isWorkspaceIdePathHidden("/workspace/.git", true), true);
+  assert.equal(isWorkspaceIdePathHidden("/workspace/.git/config"), true);
+  assert.equal(isWorkspaceIdePathHidden("/workspace/.next", true), true);
+  assert.equal(isWorkspaceIdePathHidden("/workspace/.cache/tool/state"), true);
+  assert.equal(isWorkspaceIdePathHidden("/workspace/.playwright", true), true);
   assert.equal(isWorkspaceIdePathHidden("/workspace/project/.config", true), false);
   assert.equal(isWorkspaceIdePathHidden("/workspace/.sandpi", true), false);
   assert.equal(isWorkspaceIdePathHidden("/workspace/node_modules/pkg/index.js"), true);

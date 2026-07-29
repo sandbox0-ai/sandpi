@@ -18,7 +18,11 @@ import {
   type EnvironmentSettingsTab,
 } from "@/components/environment-settings";
 import type { EnvironmentBrowserNavigationRequest } from "@/components/environment-browser";
-import { Inspector, type InspectorTab } from "@/components/inspector";
+import {
+  Inspector,
+  INSPECTOR_KEEP_ALIVE_MS,
+  type InspectorTab,
+} from "@/components/inspector";
 import { NewEnvironmentDialog } from "@/components/new-environment-dialog";
 import { NewSessionWorkspace } from "@/components/new-session-workspace";
 import { Sidebar } from "@/components/sidebar";
@@ -248,6 +252,31 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
       ),
     [selectedEnvironmentId, selectedSessionId, sessions],
   );
+  const [
+    mountedNewSessionInspectorEnvironmentId,
+    setMountedNewSessionInspectorEnvironmentId,
+  ] = useState("");
+
+  useEffect(() => {
+    if (selectedSession) {
+      setMountedNewSessionInspectorEnvironmentId("");
+      return;
+    }
+    if (inspectorOpen) {
+      setMountedNewSessionInspectorEnvironmentId(selectedEnvironment.id);
+      return;
+    }
+    setMountedNewSessionInspectorEnvironmentId((current) =>
+      current === selectedEnvironment.id ? current : "",
+    );
+    const environmentId = selectedEnvironment.id;
+    const timeout = window.setTimeout(() => {
+      setMountedNewSessionInspectorEnvironmentId((current) =>
+        current === environmentId ? "" : current,
+      );
+    }, INSPECTOR_KEEP_ALIVE_MS);
+    return () => window.clearTimeout(timeout);
+  }, [inspectorOpen, selectedEnvironment.id, selectedSession]);
 
   const openWorkspacePath = useCallback(
     (requestedPath: string) => {
@@ -994,11 +1023,14 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
         />
       )}
 
-      {showInspector && !selectedSession ? (
+      {!selectedSession &&
+      (showInspector ||
+        mountedNewSessionInspectorEnvironmentId === selectedEnvironment.id) ? (
         <Inspector
           language={preferences.general.language}
           timeZone={preferences.general.timeZone}
           environment={selectedEnvironment}
+          hidden={!showInspector}
           workspaceNavigationRequest={workspaceNavigationRequest}
           onWorkspaceNavigationHandled={handleWorkspaceNavigationHandled}
           browserNavigationRequest={browserNavigationRequest}

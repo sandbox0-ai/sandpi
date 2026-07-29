@@ -2502,6 +2502,77 @@ components:
         - path
         - kind
       additionalProperties: false
+    WorkspaceGitState:
+      type: object
+      properties:
+        repositories:
+          type: array
+          items:
+            type: object
+            properties:
+              root:
+                type: string
+              branch:
+                type: string
+              head:
+                type: string
+              upstream:
+                type: string
+              ahead:
+                type: integer
+                minimum: -9007199254740991
+                maximum: 9007199254740991
+              behind:
+                type: integer
+                minimum: -9007199254740991
+                maximum: 9007199254740991
+              files:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    path:
+                      type: string
+                    relativePath:
+                      type: string
+                    originalPath:
+                      type: string
+                    kind:
+                      type: string
+                      enum:
+                        - added
+                        - modified
+                        - deleted
+                        - renamed
+                        - copied
+                        - untracked
+                        - conflicted
+                    indexStatus:
+                      type: string
+                    worktreeStatus:
+                      type: string
+                    staged:
+                      type: boolean
+                    unstaged:
+                      type: boolean
+                  required:
+                    - path
+                    - relativePath
+                    - kind
+                    - indexStatus
+                    - worktreeStatus
+                    - staged
+                    - unstaged
+                  additionalProperties: false
+            required:
+              - root
+              - ahead
+              - behind
+              - files
+            additionalProperties: false
+      required:
+        - repositories
+      additionalProperties: false
     WorkspaceIdeEvent:
       oneOf:
         - type: object
@@ -2697,76 +2768,7 @@ components:
           items:
             $ref: "#/components/schemas/WorkspaceFile"
         git:
-          type: object
-          properties:
-            repositories:
-              type: array
-              items:
-                type: object
-                properties:
-                  root:
-                    type: string
-                  branch:
-                    type: string
-                  head:
-                    type: string
-                  upstream:
-                    type: string
-                  ahead:
-                    type: integer
-                    minimum: -9007199254740991
-                    maximum: 9007199254740991
-                  behind:
-                    type: integer
-                    minimum: -9007199254740991
-                    maximum: 9007199254740991
-                  files:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        path:
-                          type: string
-                        relativePath:
-                          type: string
-                        originalPath:
-                          type: string
-                        kind:
-                          type: string
-                          enum:
-                            - added
-                            - modified
-                            - deleted
-                            - renamed
-                            - copied
-                            - untracked
-                            - conflicted
-                        indexStatus:
-                          type: string
-                        worktreeStatus:
-                          type: string
-                        staged:
-                          type: boolean
-                        unstaged:
-                          type: boolean
-                      required:
-                        - path
-                        - relativePath
-                        - kind
-                        - indexStatus
-                        - worktreeStatus
-                        - staged
-                        - unstaged
-                      additionalProperties: false
-                required:
-                  - root
-                  - ahead
-                  - behind
-                  - files
-                additionalProperties: false
-          required:
-            - repositories
-          additionalProperties: false
+          $ref: "#/components/schemas/WorkspaceGitState"
         refreshedAt:
           type: number
           description: Unix time in seconds; fractional values preserve milliseconds.
@@ -2774,6 +2776,24 @@ components:
         - files
         - git
         - refreshedAt
+      additionalProperties: false
+    WorkspaceIdeWatchSubscription:
+      type: object
+      properties:
+        type:
+          type: string
+          enum:
+            - subscribe
+        paths:
+          maxItems: 64
+          type: array
+          items:
+            type: string
+            minLength: 1
+            maxLength: 4096
+      required:
+        - type
+        - paths
       additionalProperties: false
 paths:
   /api/v1/auth/callback:
@@ -5481,6 +5501,8 @@ paths:
           name: environmentId
           required: true
       x-sandpi-websocket:
+        clientMessages:
+          $ref: "#/components/schemas/WorkspaceIdeWatchSubscription"
         serverMessages:
           $ref: "#/components/schemas/WorkspaceIdeEvent"
       responses:
@@ -5580,6 +5602,38 @@ paths:
                 properties:
                   data:
                     $ref: "#/components/schemas/WorkspaceIdeFile"
+                required:
+                  - data
+                additionalProperties: false
+        default:
+          description: Sandpi error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/environments/{environmentId}/ide/git:
+    get:
+      operationId: getEnvironmentIdeGitState
+      summary: Get the cached Workspace Git projection
+      tags:
+        - Workspace IDE
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+          in: path
+          name: environmentId
+          required: true
+      responses:
+        "200":
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/WorkspaceGitState"
                 required:
                   - data
                 additionalProperties: false

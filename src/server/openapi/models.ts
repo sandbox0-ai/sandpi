@@ -20,8 +20,10 @@ import type {
   WorkspaceDirectoryListing,
   WorkspaceFile,
   WorkspaceFileSearchResult,
+  WorkspaceGitState,
   WorkspaceIdeFile,
   WorkspaceIdeSnapshot,
+  WorkspaceIdeWatchSubscription,
 } from "@/lib/types";
 import type {
   CodexAccountRateLimits,
@@ -47,6 +49,7 @@ import { WORKSPACE_ROOT } from "@/lib/workspace-path-policy";
 import {
   preferencesSchema,
   terminalInputSchema,
+  workspaceIdeWatchSubscriptionSchema as workspaceIdeWatchSubscriptionInputSchema,
 } from "@/server/api-schemas";
 import type { PublicCodexDeviceAuthFlow } from "@/server/harnesses/codex/auth-store";
 
@@ -847,23 +850,28 @@ const gitFileChangeSchema = z.object({
   unstaged: z.boolean(),
 });
 
+export const workspaceGitStateSchema: z.ZodType<WorkspaceGitState> = component(
+  "WorkspaceGitState",
+  z.object({
+    repositories: z.array(
+      z.object({
+        root: z.string(),
+        branch: z.string().optional(),
+        head: z.string().optional(),
+        upstream: z.string().optional(),
+        ahead: z.number().int(),
+        behind: z.number().int(),
+        files: z.array(gitFileChangeSchema),
+      }),
+    ),
+  }),
+);
+
 export const workspaceIdeSnapshotSchema = component(
   "WorkspaceIdeSnapshot",
   z.object({
     files: z.array(workspaceFileSchema),
-    git: z.object({
-      repositories: z.array(
-        z.object({
-          root: z.string(),
-          branch: z.string().optional(),
-          head: z.string().optional(),
-          upstream: z.string().optional(),
-          ahead: z.number().int(),
-          behind: z.number().int(),
-          files: z.array(gitFileChangeSchema),
-        }),
-      ),
-    }),
+    git: workspaceGitStateSchema,
     refreshedAt: unixTimestampSchema,
   }),
 );
@@ -922,6 +930,12 @@ export const workspaceIdeEventSchema = component(
     }),
   ]),
 );
+
+export const workspaceIdeWatchSubscriptionSchema: z.ZodType<WorkspaceIdeWatchSubscription> =
+  component(
+    "WorkspaceIdeWatchSubscription",
+    workspaceIdeWatchSubscriptionInputSchema,
+  );
 
 const metricSeriesSchema = z.object({
   metric: z.enum([
@@ -1109,8 +1123,10 @@ const publicModelTypeChecks: {
   workspaceFile: z.ZodType<WorkspaceFile>;
   workspaceSearch: z.ZodType<WorkspaceFileSearchResult>;
   workspaceListing: z.ZodType<WorkspaceDirectoryListing>;
+  workspaceGit: z.ZodType<WorkspaceGitState>;
   workspaceIde: z.ZodType<WorkspaceIdeSnapshot>;
   workspaceIdeFile: z.ZodType<WorkspaceIdeFile>;
+  workspaceIdeWatch: z.ZodType<WorkspaceIdeWatchSubscription>;
   resourceMetrics: z.ZodType<EnvironmentResourceMetrics>;
   metrics: z.ZodType<EnvironmentMetrics>;
 } = {
@@ -1145,8 +1161,10 @@ const publicModelTypeChecks: {
   workspaceFile: workspaceFileSchema,
   workspaceSearch: workspaceSearchResultSchema,
   workspaceListing: workspaceDirectoryListingSchema,
+  workspaceGit: workspaceGitStateSchema,
   workspaceIde: workspaceIdeSnapshotSchema,
   workspaceIdeFile: workspaceIdeFileSchema,
+  workspaceIdeWatch: workspaceIdeWatchSubscriptionSchema,
   resourceMetrics: resourceMetricsSchema,
   metrics: environmentMetricsSchema,
 };

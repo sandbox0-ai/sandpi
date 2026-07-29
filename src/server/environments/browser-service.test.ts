@@ -346,7 +346,7 @@ test("caches only static Dashboard assets with bounded private freshness", () =>
       "assets/index-BY2S1tHT.css",
       "public, max-age=14400",
     ),
-    "private, max-age=14400, immutable",
+    "private, max-age=86400, immutable",
   );
   assert.equal(
     dashboardAssetCacheControl(

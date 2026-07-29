@@ -79,6 +79,7 @@ import {
   workspaceBackupSchema,
   workspaceDirectoryListingSchema,
   workspaceFileSchema,
+  workspaceGitStateSchema,
   workspaceIdeFileSchema,
   workspaceIdeSnapshotSchema,
   workspaceSearchResultSchema,
@@ -1116,6 +1117,16 @@ export const openApiRouteContracts: readonly OpenApiRouteContract[] = [
     },
   }),
   defineContract({
+    method: "GET",
+    url: "/api/v1/environments/:environmentId/ide/git",
+    schema: {
+      operationId: "getEnvironmentIdeGitState",
+      summary: "Get the cached Workspace Git projection",
+      tags: ["Workspace IDE"],
+      response: { 200: dataEnvelope(workspaceGitStateSchema) },
+    },
+  }),
+  defineContract({
     method: "POST",
     url: "/api/v1/environments/:environmentId/ide/entries",
     schema: {
@@ -1169,6 +1180,9 @@ export const openApiRouteContracts: readonly OpenApiRouteContract[] = [
       tags: ["Workspace IDE"],
       response: { 101: noContent },
       "x-sandpi-websocket": {
+        clientMessages: {
+          $ref: "#/components/schemas/WorkspaceIdeWatchSubscription",
+        },
         serverMessages: {
           $ref: "#/components/schemas/WorkspaceIdeEvent",
         },
