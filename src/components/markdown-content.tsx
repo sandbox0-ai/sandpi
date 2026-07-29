@@ -18,17 +18,22 @@ interface MarkdownContentProps {
 const remarkPlugins = [remarkGfm];
 // Intentionally omit rehypeRaw so pasted HTML stays visible as inert text.
 
-function workspacePathFromHref(href: string | undefined) {
+function posixAbsolutePathFromHref(href: string | undefined) {
   if (!href) return undefined;
   const path = href.split(/[?#]/, 1)[0];
-  if (path === "/workspace" || path.startsWith("/workspace/")) {
-    try {
-      return decodeURI(path);
-    } catch {
-      return path;
-    }
+  if (!path.startsWith("/") || path.startsWith("//")) return undefined;
+  try {
+    return decodeURI(path);
+  } catch {
+    return path;
   }
-  return undefined;
+}
+
+function workspacePathFromHref(href: string | undefined) {
+  const path = posixAbsolutePathFromHref(href);
+  return path === "/workspace" || path?.startsWith("/workspace/")
+    ? path
+    : undefined;
 }
 
 function isExternalHref(href: string | undefined) {
@@ -66,6 +71,18 @@ export function MarkdownContent({
           >
             {children}
           </button>
+        );
+      }
+      const absolutePath = posixAbsolutePathFromHref(href);
+      if (absolutePath) {
+        return (
+          <code
+            className="markdown-local-path"
+            title={title ?? absolutePath}
+            data-local-path={absolutePath}
+          >
+            {absolutePath}
+          </code>
         );
       }
       const browserUrl = sandboxLoopbackUrl(href);
