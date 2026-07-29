@@ -7,8 +7,8 @@ import {
   Gauge,
   Github,
   LogOut,
+  MonitorSmartphone,
   Settings,
-  Smartphone,
 } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
@@ -288,8 +288,8 @@ export function SidebarAccountFooter({
             <span>github.com/sandbox0-ai/sandpi</span>
           </a>
           <div className="sidebar-account-platforms" role="presentation">
-            <Smartphone size={14} aria-hidden="true" />
-            <span>{ui.mobileAppsComingSoon}</span>
+            <MonitorSmartphone size={14} aria-hidden="true" />
+            <span>{ui.nativeAppsComingSoon}</span>
           </div>
           <span className="sidebar-account-menu-divider" role="separator" />
           <button

@@ -57,7 +57,8 @@ const copy = {
       closeAccountMenu: "Close account menu",
       accountActions: "Account actions",
       githubRepository: "Sandpi GitHub repository",
-      mobileAppsComingSoon: "iOS · Android · HarmonyOS coming soon",
+      nativeAppsComingSoon:
+        "iOS · Android · HarmonyOS · Windows · macOS coming soon",
       billingUsage: "Billing & usage",
       sandboxRuntime: "Sandbox runtime",
       loadingUsage: "Loading usage…",
@@ -202,7 +203,8 @@ const copy = {
       closeAccountMenu: "关闭账户菜单",
       accountActions: "账户操作",
       githubRepository: "Sandpi GitHub 仓库",
-      mobileAppsComingSoon: "iOS · Android · HarmonyOS 即将发布",
+      nativeAppsComingSoon:
+        "iOS · Android · HarmonyOS · Windows · macOS 即将发布",
       billingUsage: "订阅与用量",
       sandboxRuntime: "Sandbox 运行用量",
       loadingUsage: "正在加载用量…",

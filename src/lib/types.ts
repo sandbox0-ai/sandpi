@@ -274,11 +274,12 @@ export interface WorkspaceGitState {
 }
 
 /**
- * Cross-client Web IDE contract. Web, iOS, Android and HarmonyOS clients consume
- * this snapshot and treat WorkspaceIdeEvent as an invalidation signal; clients
- * must not connect to a Sandbox0 file endpoint or infer Git state themselves.
- * `/workspace/.sandpi` is visible and readable but remains Sandpi-managed and
- * read-only. Clients apply the shared path policy again as defense in depth.
+ * Cross-client Web IDE contract. Web, iOS, Android, HarmonyOS, Windows and macOS
+ * clients consume this snapshot and treat WorkspaceIdeEvent as an invalidation
+ * signal; clients must not connect to a Sandbox0 file endpoint or infer Git
+ * state themselves. `/workspace/.sandpi` is visible and readable but remains
+ * Sandpi-managed and read-only. Clients apply the shared path policy again as
+ * defense in depth.
  */
 export interface WorkspaceIdeSnapshot {
   /** Initial shallow tree: `/workspace` and its direct children only. */

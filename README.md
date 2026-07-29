@@ -17,27 +17,36 @@
 </p>
 
 Sandpi is an open-source [Sandbox0](https://github.com/sandbox0-ai/sandbox0)
-side project. It lets you run a native coding agent in a remote Sandbox0
-Sandbox and control it from the Web.
+side project for running native coding agents in persistent cloud Sandboxes.
+It lets you continue the same coding session from any Sandpi client.
 
-Your browser is only the client. The coding-agent harness, terminal, files and
-shared Playwright browser live in the cloud, alongside a persistent Workspace
-Volume. You can close your laptop, switch devices or refresh the page without
-making the local browser the lifetime of your coding session.
+The Web app is available today. Native clients for iOS, Android, HarmonyOS,
+Windows and macOS are coming soon. Every client stays lightweight: the
+coding-agent harness, terminal, files and shared Playwright browser live in the
+cloud, alongside a persistent Workspace Volume. You can close your laptop,
+switch devices or disconnect a client without ending your coding session.
 
 Codex is the first supported coding agent.
 
-![Sandpi Web app showing multiple Environments and a Codex session](./docs/images/sandpi-web-app.png)
+![A Codex Session and Workspace file browser in Sandpi](./docs/images/sandpi-session-files.png)
 
-<p align="center">
-  <sub>The current Sandpi Web client, captured from the local application with public fixture data.</sub>
-</p>
+<p align="center"><sub>A Codex Session alongside its persistent Workspace files.</sub></p>
+
+![A Codex Session and shared Browser in Sandpi](./docs/images/sandpi-session-browser.png)
+
+<p align="center"><sub>A human and coding agent working with the same cloud Browser.</sub></p>
+
+![Environment Settings in Sandpi](./docs/images/sandpi-environment-settings.png)
+
+<p align="center"><sub>Environment-scoped runtime, Workspace, agent and security settings.</sub></p>
+
+<p align="center"><sub>Captured from the current Web app with public fixture data.</sub></p>
 
 ## Why run a coding agent in a cloud sandbox?
 
 | Need | What Sandpi gives you |
 | --- | --- |
-| Work from anywhere | Open the same cloud-hosted session from another browser or device. Your PC does not need to stay awake while the agent works. |
+| Work from anywhere | Open the same cloud-hosted session from another client or device. Your PC does not need to stay awake while the agent works. |
 | Durable sessions | Native session state and the Workspace live outside the browser. Refreshes, client disconnects and runtime recovery do not erase the session. |
 | Focused isolation | Create one Environment per project, task or concern. Each gets its own Sandbox, Workspace, coding-agent account, network policy and credentials. |
 | Multiple coding plans | Connect different Environments to different Codex/ChatGPT accounts, or keep work separated while using the same account. |
@@ -76,9 +85,10 @@ same files, tools and execution context.
 3. **Make the Environment the isolation boundary.** Workspace, provider
    identity, network and credentials move together. This makes an Environment
    useful both for account separation and for keeping one piece of work focused.
-4. **Keep clients thin.** The Web client today—and planned iOS, Android and
-   OpenHarmony clients—use the same Sandpi server. A client disconnect must not
-   become an instruction to stop the coding agent.
+4. **Keep clients thin and interchangeable.** The Web app and upcoming native
+   clients for iOS, Android, HarmonyOS, Windows and macOS use the same Sandpi
+   server. A client disconnect must not become an instruction to stop the
+   coding agent.
 5. **Recover native state; do not guess or replay mutations.** Sandpi reconnects
    to the persisted native Session and Workspace rather than maintaining a
    second chat transcript or silently resubmitting an interrupted request. A
@@ -109,9 +119,9 @@ same files, tools and execution context.
 - Optional Stripe subscriptions and product quota enforcement
 
 Sandpi is pre-1.0. Codex is currently the only implemented harness, and the Web
-client is the only client available today. Native clients for iOS, Android and
-OpenHarmony are planned for future releases. Additional harnesses and clients
-can be added as independent integrations.
+app is the first available client. Native clients for iOS, Android, HarmonyOS,
+Windows and macOS are coming soon. Additional harnesses and clients can be
+added as independent integrations.
 
 ## Quick start
 
@@ -226,7 +236,8 @@ starting the native harness.
 ## Architecture and trust boundaries
 
 ```text
-Web client
+Sandpi clients
+(Web today; native apps coming soon)
     │ HTTPS / SSE / WebSocket
     ▼
 Sandpi server ───────── PostgreSQL
@@ -242,12 +253,13 @@ Sandbox0
     └── Workspace snapshots
 ```
 
-- The browser talks only to Sandpi. It receives neither the Sandbox0 deployment
-  API key nor a direct Sandbox0 endpoint. Sandpi authenticates and proxies the
-  official Playwright Dashboard's HTTP and WebSocket traffic. The embedded tab
-  and the agent share one Playwright profile: a human can complete an
-  interactive login there and hand the authenticated browser back to the
-  agent. Loopback Browser URLs resolve inside the Environment sandbox.
+- Sandpi clients talk only to Sandpi. They receive neither the Sandbox0
+  deployment API key nor a direct Sandbox0 endpoint. For the Web app, Sandpi
+  authenticates and proxies the official Playwright Dashboard's HTTP and
+  WebSocket traffic. The embedded tab and the agent share one Playwright
+  profile: a human can complete an interactive login there and hand the
+  authenticated browser back to the agent. Loopback Browser URLs resolve inside
+  the Environment sandbox.
 - Sandpi uses Sandbox0 through the official JavaScript SDK; it does not read a
   Sandbox0 database, internal metering endpoint or ClickHouse credential.
 - Sandbox0 owns Sandbox lifecycle, Volumes, network enforcement, credential

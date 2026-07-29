@@ -17,26 +17,35 @@
 </p>
 
 Sandpi 是 [Sandbox0](https://github.com/sandbox0-ai/sandbox0) 的开源 side
-project。它让原生 coding agent 运行在远程 Sandbox0 Sandbox 中，并通过 Web
-进行操作。
+project，用于让原生 coding agent 运行在持久化云端 Sandbox 中，并让你通过任意
+Sandpi 客户端继续同一个 coding session。
 
-本地浏览器只是客户端。Coding-agent harness、终端、文件和共享 Playwright 浏览器都
-在云端运行，并挂载持久化 Workspace Volume。你可以关闭电脑、切换设备或刷新页面，
-而不必让本地浏览器决定 coding session 的生命周期。
+目前已经提供 Web 应用。iOS、Android、HarmonyOS、Windows 和 macOS 原生客户端即将
+推出。所有客户端都保持轻量：coding-agent harness、终端、文件和共享 Playwright
+浏览器都在云端运行，并挂载持久化 Workspace Volume。你可以关闭电脑、切换设备或
+断开客户端，而不会结束 coding session。
 
 目前第一个支持的 coding agent 是 Codex。
 
-![展示多个 Environment 和 Codex Session 的 Sandpi Web 应用](./docs/images/sandpi-web-app.png)
+![Sandpi 中的 Codex Session 和 Workspace 文件浏览器](./docs/images/sandpi-session-files.png)
 
-<p align="center">
-  <sub>当前 Sandpi Web 客户端；画面由本地应用和公开测试数据生成。</sub>
-</p>
+<p align="center"><sub>Codex Session 与持久化 Workspace 文件并排显示。</sub></p>
+
+![Sandpi 中的 Codex Session 和共享 Browser](./docs/images/sandpi-session-browser.png)
+
+<p align="center"><sub>Human 与 coding agent 使用同一个云端 Browser。</sub></p>
+
+![Sandpi Environment Settings](./docs/images/sandpi-environment-settings.png)
+
+<p align="center"><sub>Environment 级 runtime、Workspace、agent 和安全设置。</sub></p>
+
+<p align="center"><sub>画面由当前 Web 应用和公开测试数据生成。</sub></p>
 
 ## 为什么要在云端 Sandbox 中运行 coding agent？
 
 | 需求 | Sandpi 带来的能力 |
 | --- | --- |
-| 随时随地继续工作 | 从另一台设备或另一个浏览器打开同一个云端 Session。Agent 工作时不需要让 PC 一直开机。 |
+| 随时随地继续工作 | 从另一个客户端或设备打开同一个云端 Session。Agent 工作时不需要让 PC 一直开机。 |
 | 持久化 Session | 原生 Session 状态和 Workspace 不在浏览器里。页面刷新、客户端断线和 runtime 恢复都不会让 Session 消失。 |
 | 更专注的隔离 | 可以按项目、任务或关注点创建独立 Environment。每个 Environment 都有自己的 Sandbox、Workspace、coding-agent 账号、网络策略和凭证。 |
 | 多个 coding plan | 不同 Environment 可以连接不同的 Codex/ChatGPT 订阅账号；即使使用同一个账号，也可以把不同工作彼此隔离。 |
@@ -72,8 +81,9 @@ Environment。如果多个 Session 本来就应该共享文件、工具和执行
    压平成能力最小公分母式的聊天协议。
 3. **以 Environment 作为隔离边界。** Workspace、provider 身份、网络和凭证作为
    一个整体存在。因此 Environment 既能隔离账号，也能让一件具体工作保持专注。
-4. **客户端保持轻量。** 当前 Web 客户端以及规划中的 iOS、Android 和 OpenHarmony
-   客户端都使用同一个 Sandpi server。客户端断线不等于要求 coding agent 停止工作。
+4. **客户端保持轻量且可以自由切换。** Web 应用与即将推出的 iOS、Android、
+   HarmonyOS、Windows 和 macOS 原生客户端都使用同一个 Sandpi server。客户端断线
+   不等于要求 coding agent 停止工作。
 5. **恢复原生状态，不猜测或重放写操作。** Sandpi 会重新连接持久化的原生 Session
    和 Workspace，而不是维护第二份聊天记录，或在中断后静默重复提交请求。对于
    Sandbox 导致的中断，Sandpi 最多发起一次可见、保守的恢复 Turn，先检查持久化
@@ -99,8 +109,8 @@ Environment。如果多个 Session 本来就应该共享文件、工具和执行
 - 内置单用户身份模式或 OIDC
 - 可选 Stripe 订阅和产品 quota enforcement
 
-Sandpi 仍处于 pre-1.0 阶段。目前只实现了 Codex harness，本仓库也只提供 Web
-客户端。原生 iOS、Android 和 OpenHarmony 客户端计划在后续版本中发布；其他
+Sandpi 仍处于 pre-1.0 阶段。目前只实现了 Codex harness，Web 应用是首个已经提供的
+客户端。iOS、Android、HarmonyOS、Windows 和 macOS 原生客户端即将推出；其他
 harness 和客户端也可以作为独立集成逐步加入。
 
 ## 快速开始
@@ -208,7 +218,8 @@ materialize 到当前 Environment runtime 的内存文件系统中。
 ## 架构与信任边界
 
 ```text
-Web client
+Sandpi clients
+（当前为 Web；原生应用即将推出）
     │ HTTPS / SSE / WebSocket
     ▼
 Sandpi server ───────── PostgreSQL
@@ -224,9 +235,9 @@ Sandbox0
     └── Workspace snapshot
 ```
 
-- 本地浏览器只与 Sandpi 通信，不会收到 Sandbox0 deployment API key 或直接访问
-  Sandbox0 的 endpoint。Sandpi 对官方 Playwright Dashboard 的 HTTP 和
-  WebSocket 流量进行鉴权与代理。内置 tab 与 agent 共享同一个 Playwright
+- Sandpi 客户端只与 Sandpi 通信，不会收到 Sandbox0 deployment API key，也不会直接
+  访问 Sandbox0 endpoint。对于 Web 应用，Sandpi 会对官方 Playwright Dashboard 的
+  HTTP 和 WebSocket 流量进行鉴权与代理。内置 tab 与 agent 共享同一个 Playwright
   profile：human 可以在其中完成交互式登录，然后把同一份已登录 Browser 交还给
   agent 继续操作。Browser 中的 loopback URL 解析到 Environment sandbox 内部。
 - Sandpi 只通过官方 JavaScript SDK 使用 Sandbox0，不读取 Sandbox0 数据库、内部

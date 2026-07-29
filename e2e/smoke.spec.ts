@@ -878,7 +878,9 @@ test("offers Help & feedback without account-only links to anonymous visitors", 
     page.getByRole("link", { name: "Sandpi GitHub repository" }),
   ).toHaveCount(0);
   await expect(
-    page.getByText("iOS · Android · HarmonyOS coming soon"),
+    page.getByText(
+      "iOS · Android · HarmonyOS · Windows · macOS coming soon",
+    ),
   ).toHaveCount(0);
   await page.getByRole("button", { name: "Help & feedback" }).click();
 
@@ -2469,7 +2471,9 @@ test("shows account usage and submits only a server-owned plan id", async ({
     }),
   ).toHaveAttribute("href", "https://github.com/sandbox0-ai/sandpi");
   await expect(
-    accountMenu.getByText("iOS · Android · HarmonyOS coming soon"),
+    accountMenu.getByText(
+      "iOS · Android · HarmonyOS · Windows · macOS coming soon",
+    ),
   ).toBeVisible();
 
   await closeAccountMenuTrigger.click();
