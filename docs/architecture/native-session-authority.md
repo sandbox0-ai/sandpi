@@ -92,6 +92,14 @@ retains an Environment-runtime-scoped, bounded in-memory cache across Inspector
 remounts and revalidates it from native events; private file content is not
 written to browser-persistent storage.
 
+The embedded Files Inspector and standalone Web IDE share one file-browser
+shell. Its file tree can be resized with a pointer or keyboard and collapsed
+without unmounting the tree, so expanded directories and the selected file stay
+intact. Sandpi stores only the preferred sidebar width and collapsed state in
+the versioned browser-local UI preference record. The rendered width is clamped
+against the live workbench size to preserve usable file-tree and editor panes;
+the persisted preference is not Workspace or server state.
+
 The event socket first establishes one non-recursive root watch, then the
 client subscribes only the shallow directories it has expanded and the Git
 metadata roots it has discovered. This avoids Sandbox0 recursively walking
@@ -480,10 +488,11 @@ values fall back to the live native model defaults. Selecting a control updates
 only browser UI state until `thread/start` or `turn/start` submits it. The same
 versioned browser-only record contains device layout choices, including the
 sidebar and Inspector open/collapsed state, the resizable Inspector width
-ratio, as well as filter choices. The conversation and Inspector consume the
-remaining desktop width proportionally, so collapsing the sidebar or resizing
-the window preserves the user's split. It never contains prompts, attachments,
-credentials, native history or Workspace content.
+ratio, the file browser's width and collapsed state, as well as filter choices.
+The conversation and Inspector consume the remaining desktop width
+proportionally, so collapsing the sidebar or resizing the window preserves the
+user's split. It never contains prompts, attachments, credentials, native
+history or Workspace content.
 
 The two Codex composer surfaces share a harness-owned toolbar so model,
 reasoning, upload and `@` behavior cannot drift between New Session and an

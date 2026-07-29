@@ -15,6 +15,8 @@ test("normalizes browser-only UI preferences field by field", () => {
         inspectorOpen: true,
         inspectorTab: "metrics",
         inspectorWidthRatio: 0.625,
+        fileBrowserSidebarCollapsed: true,
+        fileBrowserSidebarWidth: 312.6,
         browserViewportMode: "responsive",
         metricsRangeSeconds: 86_400,
         terminalHeight: 487.6,
@@ -29,6 +31,8 @@ test("normalizes browser-only UI preferences field by field", () => {
         inspectorOpen: true,
         inspectorTab: "metrics",
         inspectorWidthRatio: 0.625,
+        fileBrowserSidebarCollapsed: true,
+        fileBrowserSidebarWidth: 313,
         browserViewportMode: "responsive",
         metricsRangeSeconds: 86_400,
         terminalHeight: 488,
@@ -49,6 +53,8 @@ test("falls back safely for malformed local UI preferences", () => {
         inspectorOpen: "sometimes",
         inspectorTab: "secrets",
         inspectorWidthRatio: Number.NaN,
+        fileBrowserSidebarCollapsed: "maybe",
+        fileBrowserSidebarWidth: Number.POSITIVE_INFINITY,
         metricsRangeSeconds: 42,
         terminalHeight: Number.NaN,
       },
@@ -86,6 +92,22 @@ test("defaults malformed browser viewport preferences to desktop fit", () => {
       workspace: { browserViewportMode: "mobile" },
     }).workspace.browserViewportMode,
     "mobile",
+  );
+});
+
+test("keeps file browser sidebar layout preferences bounded", () => {
+  assert.deepEqual(
+    normalizeLocalUiPreferences({
+      workspace: {
+        fileBrowserSidebarCollapsed: true,
+        fileBrowserSidebarWidth: 900,
+      },
+    }).workspace,
+    {
+      ...DEFAULT_LOCAL_UI_PREFERENCES.workspace,
+      fileBrowserSidebarCollapsed: true,
+      fileBrowserSidebarWidth: 480,
+    },
   );
 });
 
