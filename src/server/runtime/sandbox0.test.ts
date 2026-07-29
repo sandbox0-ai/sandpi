@@ -1226,10 +1226,10 @@ test("uses only official Playwright CLI commands for the shared browser", async 
                   : attachments.has(sessionName);
               return {
                 exitCode: open ? 0 : 1,
-                stdout: open
+                stdout: "",
+                stderr: open
                   ? ""
-                  : `The browser '${sessionName}' is not open, please run open first`,
-                stderr: "",
+                  : `Error: Browser '${sessionName}' is not open.`,
               };
             }
             if (operation === "open") browserOpen = true;

@@ -39,20 +39,10 @@ test("accepts only the default Playwright profile from an in-use error", () => {
   );
 });
 
-test("recognizes Playwright CLI failures from either output stream", () => {
+test("recognizes a stopped browser separately from missing dependencies", () => {
   assert.equal(
     isPlaywrightBrowserNotOpen({
       exitCode: 1,
-      stdout:
-        "The browser 'sandpi-aabbccdd' is not open, please run open first",
-      stderr: "",
-    }),
-    true,
-  );
-  assert.equal(
-    isPlaywrightBrowserNotOpen({
-      exitCode: 1,
-      stdout: "",
       stderr: "Error: Browser 'default' is not open.",
     }),
     true,
@@ -60,7 +50,6 @@ test("recognizes Playwright CLI failures from either output stream", () => {
   assert.equal(
     isPlaywrightBrowserDependencyUnavailable({
       exitCode: 127,
-      stdout: "",
       stderr: "playwright-cli: command not found",
     }),
     true,
@@ -68,16 +57,14 @@ test("recognizes Playwright CLI failures from either output stream", () => {
   assert.equal(
     isPlaywrightBrowserDependencyUnavailable({
       exitCode: 1,
-      stdout:
+      stderr:
         "Failed to launch chromium because executable doesn't exist at /opt/ms-playwright/chromium/chrome",
-      stderr: "",
     }),
     true,
   );
   assert.equal(
     isPlaywrightBrowserDependencyUnavailable({
       exitCode: 1,
-      stdout: "",
       stderr: "Browser is already in use for a profile",
     }),
     false,

@@ -5,7 +5,6 @@ const PLAYWRIGHT_PROFILE_IN_USE =
 
 export interface PlaywrightCliResult {
   exitCode?: number;
-  stdout: string;
   stderr: string;
 }
 
@@ -94,9 +93,7 @@ export function playwrightStaleProfileLockRecoveryCommand(
 }
 
 export function isPlaywrightBrowserNotOpen(result: PlaywrightCliResult) {
-  return /Browser ['"]?[A-Za-z0-9_-]+['"]? is not open/i.test(
-    playwrightCliOutput(result),
-  );
+  return /Browser ['"]?[A-Za-z0-9_-]+['"]? is not open/i.test(result.stderr);
 }
 
 export function isPlaywrightBrowserDependencyUnavailable(
@@ -105,11 +102,7 @@ export function isPlaywrightBrowserDependencyUnavailable(
   return (
     result.exitCode === 127 ||
     /(?:playwright-cli|spawn playwright-cli).*(?:command )?not found|spawn playwright-cli ENOENT|executable doesn't exist at|Executable doesn't exist/i.test(
-      playwrightCliOutput(result),
+      result.stderr,
     )
   );
-}
-
-function playwrightCliOutput(result: PlaywrightCliResult) {
-  return `${result.stdout}\n${result.stderr}`;
 }
