@@ -191,21 +191,14 @@ export interface RuntimeAdapter {
   ): Promise<RuntimeBrowserDashboard>;
   ensureEnvironmentBrowserSession(
     runtime: EnvironmentRuntimeRecord,
-    browserSessionName: string,
   ): Promise<boolean>;
   openEnvironmentBrowserUrl(
     runtime: EnvironmentRuntimeRecord,
-    browserSessionName: string,
     url: string,
   ): Promise<boolean>;
   resizeEnvironmentBrowserViewport(
     runtime: EnvironmentRuntimeRecord,
-    browserSessionName: string,
     viewport: BrowserDashboardViewport,
-  ): Promise<void>;
-  releaseEnvironmentBrowserSession(
-    runtime: EnvironmentRuntimeRecord,
-    browserSessionName: string,
   ): Promise<void>;
   createEnvironmentWorkspaceBackup(
     runtime: EnvironmentRuntimeRecord,

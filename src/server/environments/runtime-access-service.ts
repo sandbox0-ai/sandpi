@@ -178,36 +178,6 @@ export class EnvironmentRuntimeAccessService {
     );
     return locked.acquired && locked.value;
   }
-
-  /**
-   * Runs best-effort cleanup only while the Environment is already running.
-   * It neither waits for a lifecycle transition nor records user activity, so
-   * cleanup cannot wake a paused Sandbox or postpone its idle pause.
-   */
-  async tryWithRunningRuntimeAccess(
-    userId: string,
-    environmentId: string,
-    operation: (runtime: StoredEnvironmentRuntime) => Promise<void>,
-  ) {
-    await this.store.getEnvironment(userId, environmentId);
-    const locked = await this.store.withEnvironmentRuntimeAccessLock(
-      environmentId,
-      async (lockedStore) => {
-        const runtime = await (
-          lockedStore ?? this.store
-        ).getEnvironmentRuntime(userId, environmentId);
-        if (
-          runtime.desiredState !== "running" ||
-          runtime.observedState !== "running"
-        ) {
-          return false;
-        }
-        await operation(runtime);
-        return true;
-      },
-    );
-    return locked.acquired && locked.value;
-  }
 }
 
 function requireAccessibleEnvironment(runtime: StoredEnvironmentRuntime) {

@@ -16,8 +16,6 @@ import type {
   EnvironmentRuntimeRecord,
   RuntimeAdapter,
 } from "@/server/runtime/types";
-import type { SandpiStore } from "@/server/store";
-import { environmentBrowserSessionName } from "./browser-session";
 
 const runtimeRecord: EnvironmentRuntimeRecord = {
   id: "environment-browser",
@@ -30,18 +28,6 @@ const runtimeRecord: EnvironmentRuntimeRecord = {
     runtimeGeneration: 1,
   },
 };
-const productSessionId = "session-browser";
-const browserSessionName = environmentBrowserSessionName(productSessionId);
-const store = {
-  async getSessionRuntime(userId: string, sessionId: string) {
-    assert.equal(userId, "user-browser");
-    assert.equal(sessionId, productSessionId);
-    return {
-      sessionId,
-      environmentId: runtimeRecord.id,
-    };
-  },
-} as unknown as SandpiStore;
 
 test("reuses protected coordinates but admits every HTTP and WebSocket request", async () => {
   let admissions = 0;
@@ -73,7 +59,7 @@ test("reuses protected coordinates but admits every HTTP and WebSocket request",
       };
     },
   } as unknown as RuntimeAdapter;
-  const service = new EnvironmentBrowserService(store, runtimeAccess, runtime);
+  const service = new EnvironmentBrowserService(runtimeAccess, runtime);
 
   assert.deepEqual(
     await service.httpUpstream(
@@ -131,11 +117,7 @@ test("reuses the session probe and restarts the Dashboard only on forced recover
     },
   } as unknown as EnvironmentRuntimeAccessService;
   const runtime = {
-    async ensureEnvironmentBrowserSession(
-      _runtime: EnvironmentRuntimeRecord,
-      sessionName: string,
-    ) {
-      assert.equal(sessionName, browserSessionName);
+    async ensureEnvironmentBrowserSession() {
       operations.push("session");
       sessionEnsures += 1;
       return browserRestarted;
@@ -152,38 +134,20 @@ test("reuses the session probe and restarts the Dashboard only on forced recover
       };
     },
   } as unknown as RuntimeAdapter;
-  const service = new EnvironmentBrowserService(store, runtimeAccess, runtime);
+  const service = new EnvironmentBrowserService(runtimeAccess, runtime);
 
-  await service.ensureSession(
-    "user-browser",
-    runtimeRecord.id,
-    productSessionId,
-  );
+  await service.ensureSession("user-browser", runtimeRecord.id);
   await service.httpUpstream("user-browser", runtimeRecord.id, undefined);
   await service.httpUpstream("user-browser", runtimeRecord.id, "index.html");
 
   browserRestarted = false;
-  await service.ensureSession(
-    "user-browser",
-    runtimeRecord.id,
-    productSessionId,
-  );
+  await service.ensureSession("user-browser", runtimeRecord.id);
   await service.httpUpstream("user-browser", runtimeRecord.id, undefined);
-  await service.ensureSession(
-    "user-browser",
-    runtimeRecord.id,
-    productSessionId,
-    true,
-  );
+  await service.ensureSession("user-browser", runtimeRecord.id, true);
   await service.httpUpstream("user-browser", runtimeRecord.id, undefined);
 
   browserRestarted = true;
-  await service.ensureSession(
-    "user-browser",
-    runtimeRecord.id,
-    productSessionId,
-    true,
-  );
+  await service.ensureSession("user-browser", runtimeRecord.id, true);
   await service.httpUpstream("user-browser", runtimeRecord.id, undefined);
 
   assert.equal(sessionEnsures, 3);
@@ -196,44 +160,6 @@ test("reuses the session probe and restarts the Dashboard only on forced recover
     "dashboard",
     "session",
   ]);
-});
-
-test("releases the fixed page through running-only lifecycle admission", async () => {
-  let releases = 0;
-  const runtimeAccess = {
-    async withRuntimeAccess() {
-      assert.fail("Session cleanup must not use wake-capable admission.");
-    },
-    async tryWithRunningRuntimeAccess(
-      userId: string,
-      environmentId: string,
-      operation: (runtime: EnvironmentRuntimeRecord) => Promise<void>,
-    ) {
-      assert.equal(userId, "user-browser");
-      assert.equal(environmentId, runtimeRecord.id);
-      await operation(runtimeRecord);
-      return true;
-    },
-  } as unknown as EnvironmentRuntimeAccessService;
-  const runtime = {
-    async releaseEnvironmentBrowserSession(
-      received: EnvironmentRuntimeRecord,
-      sessionName: string,
-    ) {
-      assert.strictEqual(received, runtimeRecord);
-      assert.equal(sessionName, browserSessionName);
-      releases += 1;
-    },
-  } as unknown as RuntimeAdapter;
-  const service = new EnvironmentBrowserService(store, runtimeAccess, runtime);
-
-  await service.releaseSession(
-    "user-browser",
-    runtimeRecord.id,
-    productSessionId,
-  );
-
-  assert.equal(releases, 1);
 });
 
 test("refreshes invalidated coordinates without restarting the AppService", async () => {
@@ -259,7 +185,7 @@ test("refreshes invalidated coordinates without restarting the AppService", asyn
       };
     },
   } as unknown as RuntimeAdapter;
-  const service = new EnvironmentBrowserService(store, runtimeAccess, runtime);
+  const service = new EnvironmentBrowserService(runtimeAccess, runtime);
 
   await service.httpUpstream("user-browser", runtimeRecord.id, undefined);
   service.invalidate(runtimeRecord.id);
@@ -288,27 +214,21 @@ test("deduplicates viewport updates within one runtime generation", async () => 
   const runtime = {
     async resizeEnvironmentBrowserViewport(
       runtime: EnvironmentRuntimeRecord,
-      sessionName: string,
       viewport: { width: number; height: number },
     ) {
-      assert.equal(sessionName, browserSessionName);
       calls.push({ runtime, ...viewport });
     },
   } as unknown as RuntimeAdapter;
-  const service = new EnvironmentBrowserService(store, runtimeAccess, runtime);
+  const service = new EnvironmentBrowserService(runtimeAccess, runtime);
 
-  await service.resizeViewport(
-    "user-browser",
-    runtimeRecord.id,
-    productSessionId,
-    { width: 519, height: 759 },
-  );
-  await service.resizeViewport(
-    "user-browser",
-    runtimeRecord.id,
-    productSessionId,
-    { width: 519, height: 759 },
-  );
+  await service.resizeViewport("user-browser", runtimeRecord.id, {
+    width: 519,
+    height: 759,
+  });
+  await service.resizeViewport("user-browser", runtimeRecord.id, {
+    width: 519,
+    height: 759,
+  });
 
   assert.deepEqual(calls, [
     {
@@ -337,36 +257,27 @@ test("coalesces intermediate viewport updates while one resize is running", asyn
   const runtime = {
     async resizeEnvironmentBrowserViewport(
       _runtime: EnvironmentRuntimeRecord,
-      sessionName: string,
       viewport: BrowserDashboardViewport,
     ) {
-      assert.equal(sessionName, browserSessionName);
       calls.push(viewport);
       if (calls.length === 1) await firstResize;
     },
   } as unknown as RuntimeAdapter;
-  const service = new EnvironmentBrowserService(store, runtimeAccess, runtime);
+  const service = new EnvironmentBrowserService(runtimeAccess, runtime);
 
-  const first = service.resizeViewport(
-    "user-browser",
-    runtimeRecord.id,
-    productSessionId,
-    { width: 500, height: 700 },
-  );
-  const middle = service.resizeViewport(
-    "user-browser",
-    runtimeRecord.id,
-    productSessionId,
-    { width: 600, height: 700 },
-  );
-  const latest = service.resizeViewport(
-    "user-browser",
-    runtimeRecord.id,
-    productSessionId,
-    { width: 700, height: 700 },
-  );
+  const first = service.resizeViewport("user-browser", runtimeRecord.id, {
+    width: 500,
+    height: 700,
+  });
+  const middle = service.resizeViewport("user-browser", runtimeRecord.id, {
+    width: 600,
+    height: 700,
+  });
+  const latest = service.resizeViewport("user-browser", runtimeRecord.id, {
+    width: 700,
+    height: 700,
+  });
 
-  await new Promise<void>((resolve) => setImmediate(resolve));
   assert.deepEqual(calls, [{ width: 500, height: 700 }]);
   releaseFirst?.();
   await Promise.all([first, middle, latest]);
@@ -397,7 +308,7 @@ test("refreshes Dashboard coordinates after the runtime generation changes", asy
       };
     },
   } as unknown as RuntimeAdapter;
-  const service = new EnvironmentBrowserService(store, runtimeAccess, runtime);
+  const service = new EnvironmentBrowserService(runtimeAccess, runtime);
 
   await service.httpUpstream("user-browser", runtimeRecord.id, undefined);
   await service.httpUpstream("user-browser", runtimeRecord.id, undefined);
@@ -453,18 +364,13 @@ test("caches only static Dashboard assets with bounded private freshness", () =>
 test("rewrites the official Dashboard redirect and root-relative assets", () => {
   const prefix = dashboardProxyPrefix("environment one");
   assert.equal(
-    dashboardRedirectLocation(
-      "/index.html?ws=socket-guid",
-      prefix,
-      productSessionId,
-    ),
-    "/api/v1/environments/environment%20one/browser/index.html?ws=api%2Fv1%2Fenvironments%2Fenvironment%2520one%2Fbrowser%2Fws%2Fsocket-guid&sessionId=session-browser",
+    dashboardRedirectLocation("/index.html?ws=socket-guid", prefix),
+    "/api/v1/environments/environment%20one/browser/index.html?ws=api%2Fv1%2Fenvironments%2Fenvironment%2520one%2Fbrowser%2Fws%2Fsocket-guid",
   );
   assert.equal(
     rewriteDashboardHtml(
       '<script src="/assets/app.js"></script><link href="/playwright-logo.svg">',
       prefix,
-      browserSessionName,
     ),
     '<script src="/api/v1/environments/environment%20one/browser/assets/app.js"></script><link href="/api/v1/environments/environment%20one/browser/playwright-logo.svg">',
   );
@@ -488,7 +394,6 @@ test("embeds Sandpi layout and theme control into the official Dashboard", () =>
   <body><div id="root"></div></body>
 </html>`,
     "/api/v1/environments/environment/browser",
-    browserSessionName,
   );
 
   assert.match(rewritten, /data-sandpi-browser-dashboard/);
@@ -513,27 +418,15 @@ test("embeds Sandpi layout and theme control into the official Dashboard", () =>
 
 test("rejects redirects that are not Dashboard socket handoffs", () => {
   assert.equal(
-    dashboardRedirectLocation(
-      "https://example.com/index.html?ws=socket",
-      "/browser",
-      productSessionId,
-    ),
-    "/browser/index.html?ws=browser%2Fws%2Fsocket&sessionId=session-browser",
+    dashboardRedirectLocation("https://example.com/index.html?ws=socket", "/browser"),
+    "/browser/index.html?ws=browser%2Fws%2Fsocket",
   );
   assert.equal(
-    dashboardRedirectLocation(
-      "/elsewhere?ws=socket",
-      "/browser",
-      productSessionId,
-    ),
+    dashboardRedirectLocation("/elsewhere?ws=socket", "/browser"),
     undefined,
   );
   assert.equal(
-    dashboardRedirectLocation(
-      "/index.html?ws=../../socket",
-      "/browser",
-      productSessionId,
-    ),
+    dashboardRedirectLocation("/index.html?ws=../../socket", "/browser"),
     undefined,
   );
 });

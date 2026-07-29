@@ -1,9 +1,12 @@
 import {
+  BROWSER_DASHBOARD_COMMAND_MESSAGE,
   BROWSER_DASHBOARD_DESKTOP_MIN_WIDTH,
   BROWSER_DASHBOARD_LOADING_MESSAGE,
   BROWSER_DASHBOARD_MOBILE_VIEWPORT,
   BROWSER_DASHBOARD_READY_MESSAGE,
+  BROWSER_DASHBOARD_SESSION_NAME,
   BROWSER_DASHBOARD_SESSION_READY_MESSAGE,
+  BROWSER_DASHBOARD_TABS_MESSAGE,
   BROWSER_DASHBOARD_THEME_MESSAGE,
   BROWSER_DASHBOARD_THEME_TOKEN_MAP,
   BROWSER_DASHBOARD_VIEWPORT_APPLIED_MESSAGE,
@@ -12,7 +15,6 @@ import {
   BROWSER_DASHBOARD_VIEWPORT_MODE_MESSAGE,
   DEFAULT_BROWSER_DASHBOARD_VIEWPORT_MODE,
 } from "@/lib/environment-browser";
-import { isEnvironmentBrowserSessionName } from "./browser-session";
 
 export const BROWSER_DASHBOARD_EMBED_MARKER =
   "data-sandpi-browser-dashboard";
@@ -64,40 +66,39 @@ function scriptJson(value: unknown) {
   return JSON.stringify(value).replaceAll("<", "\\u003c");
 }
 
-function browserDashboardEmbedConfig(sessionName: string) {
-  return scriptJson({
-    defaultViewportMode: DEFAULT_BROWSER_DASHBOARD_VIEWPORT_MODE,
-    desktopMinimumWidth: BROWSER_DASHBOARD_DESKTOP_MIN_WIDTH,
-    loadingMessage: BROWSER_DASHBOARD_LOADING_MESSAGE,
-    mobileViewport: BROWSER_DASHBOARD_MOBILE_VIEWPORT,
-    readyMessage: BROWSER_DASHBOARD_READY_MESSAGE,
-    sessionName,
-    sessionReadyMessage: BROWSER_DASHBOARD_SESSION_READY_MESSAGE,
-    themeMessage: BROWSER_DASHBOARD_THEME_MESSAGE,
-    tokenMap: BROWSER_DASHBOARD_THEME_TOKEN_MAP,
-    viewportAppliedMessage: BROWSER_DASHBOARD_VIEWPORT_APPLIED_MESSAGE,
-    viewportLimits: BROWSER_DASHBOARD_VIEWPORT_LIMITS,
-    viewportMessage: BROWSER_DASHBOARD_VIEWPORT_MESSAGE,
-    viewportModeMessage: BROWSER_DASHBOARD_VIEWPORT_MODE_MESSAGE,
-  });
-}
+const browserDashboardEmbedConfig = scriptJson({
+  commandMessage: BROWSER_DASHBOARD_COMMAND_MESSAGE,
+  defaultViewportMode: DEFAULT_BROWSER_DASHBOARD_VIEWPORT_MODE,
+  desktopMinimumWidth: BROWSER_DASHBOARD_DESKTOP_MIN_WIDTH,
+  loadingMessage: BROWSER_DASHBOARD_LOADING_MESSAGE,
+  mobileViewport: BROWSER_DASHBOARD_MOBILE_VIEWPORT,
+  readyMessage: BROWSER_DASHBOARD_READY_MESSAGE,
+  sessionName: BROWSER_DASHBOARD_SESSION_NAME,
+  sessionReadyMessage: BROWSER_DASHBOARD_SESSION_READY_MESSAGE,
+  tabsMessage: BROWSER_DASHBOARD_TABS_MESSAGE,
+  themeMessage: BROWSER_DASHBOARD_THEME_MESSAGE,
+  tokenMap: BROWSER_DASHBOARD_THEME_TOKEN_MAP,
+  viewportAppliedMessage: BROWSER_DASHBOARD_VIEWPORT_APPLIED_MESSAGE,
+  viewportLimits: BROWSER_DASHBOARD_VIEWPORT_LIMITS,
+  viewportMessage: BROWSER_DASHBOARD_VIEWPORT_MESSAGE,
+  viewportModeMessage: BROWSER_DASHBOARD_VIEWPORT_MODE_MESSAGE,
+});
 
-export function browserDashboardEmbedScript(sessionName: string) {
-  if (!isEnvironmentBrowserSessionName(sessionName)) {
-    throw new Error("Invalid Sandpi Browser session name.");
-  }
-  return `
+export const BROWSER_DASHBOARD_EMBED_SCRIPT = `
 <script ${BROWSER_DASHBOARD_EMBED_MARKER}>
   (() => {
-    const config = ${browserDashboardEmbedConfig(sessionName)};
+    const config = ${browserDashboardEmbedConfig};
     const root = document.documentElement;
     root.classList.add("sandpi-browser-dashboard");
-    let selectedTargetTab;
+    let selectedDefaultTab;
     let observedScreen;
     let observedDisplay;
     let desiredViewport;
     let viewportMode = config.defaultViewportMode;
     let sessionReady = false;
+    let pendingCommand;
+    let lastTabsPayload = "";
+    let lastSelectedLocation;
     let loading = false;
     let loadingStartedAt = 0;
     let loadingFinishTimer;
@@ -130,7 +131,7 @@ export function browserDashboardEmbedScript(sessionName: string) {
       loadingFinishTimer = setTimeout(() => setLoading(false), remaining);
     };
 
-    const targetSession = () => {
+    const defaultSession = () => {
       const sessions = document.querySelectorAll(".sidebar-session");
       return Array.from(sessions).find(
         (candidate) =>
@@ -139,36 +140,124 @@ export function browserDashboardEmbedScript(sessionName: string) {
       );
     };
 
-    const selectTargetSession = () => {
-      const session = targetSession();
+    const cleanText = (value, maximumLength) =>
+      typeof value === "string"
+        ? value.trim().slice(0, maximumLength)
+        : "";
+
+    const collectTabs = () => {
+      const session = defaultSession();
       const options = session
         ? Array.from(session.querySelectorAll('[role="option"]'))
         : [];
-      const selectedTab = session?.querySelector(
-        '[role="option"][aria-selected="true"]',
+      const newTabButton = session?.querySelector(
+        '.sidebar-session-new-tab, button[aria-label="New tab"]',
       );
-      const firstTab = options[0];
-      const integrated = Boolean(session && firstTab);
+      const closeControlsAvailable = options.every((option) =>
+        option.querySelector(
+          '.sidebar-tab-close, button[aria-label^="Close"]',
+        ),
+      );
+      const integrated = Boolean(
+        session &&
+          newTabButton &&
+          options.length &&
+          closeControlsAvailable,
+      );
       root.classList.toggle(
         "sandpi-browser-dashboard-integrated",
         integrated,
       );
+      const tabs = options.slice(0, 100).map((option, index) => {
+        const title = cleanText(
+          option.querySelector(".sidebar-tab-title")?.textContent ||
+            option.getAttribute("aria-label") ||
+            option.getAttribute("title") ||
+            "",
+          2_000,
+        );
+        const url = cleanText(
+          option.querySelector(".sidebar-tab-url")?.textContent || "",
+          8_192,
+        );
+        return {
+          index,
+          title,
+          url,
+          selected: option.getAttribute("aria-selected") === "true",
+        };
+      });
+      const selected = tabs.find((tab) => tab.selected);
+      const selectedLocation = selected
+        ? selected.index + ":" + selected.url
+        : undefined;
+      if (
+        lastSelectedLocation !== undefined &&
+        selectedLocation !== undefined &&
+        selectedLocation !== lastSelectedLocation
+      ) {
+        setLoading(true);
+      }
+      lastSelectedLocation = selectedLocation;
+      const payload = JSON.stringify({ integrated, tabs });
+      if (payload !== lastTabsPayload) {
+        lastTabsPayload = payload;
+        post({ type: config.tabsMessage, integrated, tabs });
+      }
+      return { session, options, integrated };
+    };
+
+    const applyPendingCommand = () => {
+      if (!pendingCommand) return;
+      const { session, options, integrated } = collectTabs();
+      if (!integrated || !session) return;
+      let target;
+      if (pendingCommand.action === "new") {
+        target = session.querySelector(
+          '.sidebar-session-new-tab, button[aria-label="New tab"]',
+        );
+      } else if (
+        Number.isInteger(pendingCommand.index) &&
+        pendingCommand.index >= 0 &&
+        pendingCommand.index < options.length
+      ) {
+        const option = options[pendingCommand.index];
+        target =
+          pendingCommand.action === "select"
+            ? option
+            : option.querySelector(
+                '.sidebar-tab-close, button[aria-label^="Close"]',
+              );
+      }
+      if (!target || typeof target.click !== "function") return;
+      pendingCommand = undefined;
+      setLoading(true);
+      target.click();
+    };
+
+    const selectDefaultSession = () => {
+      const { session, options } = collectTabs();
+      const selectedTab = session?.querySelector(
+        '[role="option"][aria-selected="true"]',
+      );
+      const firstTab = options[0];
       if (
         !sessionReady &&
         !selectedTab &&
         firstTab &&
-        firstTab !== selectedTargetTab
+        firstTab !== selectedDefaultTab
       ) {
-        selectedTargetTab = firstTab;
+        selectedDefaultTab = firstTab;
         firstTab.click();
       }
-      // Each named Playwright attachment owns one current page pointer. The
-      // official Dashboard remains the renderer; Sandpi only selects that
-      // Session's assigned page and hides its global session/tab sidebar.
+      // Viewport reconciliation runs in the background. Reveal the official
+      // Dashboard as soon as its shared session exists instead of holding a
+      // fixed overlay until a resized screencast frame happens to arrive.
       if (!sessionReady && session && firstTab) {
         sessionReady = true;
         post({ type: config.sessionReadyMessage });
       }
+      applyPendingCommand();
     };
 
     const clampViewportDimension = (value, minimum, maximum) =>
@@ -229,7 +318,7 @@ export function browserDashboardEmbedScript(sessionName: string) {
       desiredViewport = viewport;
       setLoading(true);
       post({ type: config.viewportMessage, ...viewport });
-      selectTargetSession();
+      selectDefaultSession();
     };
 
     const viewportObserver = new ResizeObserver(reportViewport);
@@ -258,7 +347,7 @@ export function browserDashboardEmbedScript(sessionName: string) {
 
     const updateDashboardState = () => {
       observeScreen();
-      selectTargetSession();
+      selectDefaultSession();
     };
 
     const sessionObserver = new MutationObserver(updateDashboardState);
@@ -277,7 +366,7 @@ export function browserDashboardEmbedScript(sessionName: string) {
           event.target instanceof Element ? event.target : undefined;
         if (
           target?.closest(
-            ".nav-btn",
+            ".nav-btn, .sidebar-session-new-tab, .sidebar-tab-close",
           )
         ) {
           setLoading(true);
@@ -350,7 +439,7 @@ export function browserDashboardEmbedScript(sessionName: string) {
       ) {
         return;
       }
-      selectTargetSession();
+      selectDefaultSession();
     };
 
     window.addEventListener("message", (event) => {
@@ -365,23 +454,44 @@ export function browserDashboardEmbedScript(sessionName: string) {
         desiredViewport = undefined;
         reportViewport();
       }
+      if (
+        event.data?.type === config.commandMessage &&
+        ["new", "select", "close"].includes(event.data.action) &&
+        (event.data.index === undefined ||
+          (Number.isInteger(event.data.index) &&
+            event.data.index >= 0 &&
+            event.data.index < 100))
+      ) {
+        pendingCommand = {
+          action: event.data.action,
+          index: event.data.index,
+        };
+        applyPendingCommand();
+      }
     });
+    // Keep the official Dashboard usable if an upstream markup change makes
+    // Sandpi's optional session projection unavailable.
+    setTimeout(() => {
+      if (sessionReady) return;
+      sessionReady = true;
+      post({ type: config.sessionReadyMessage });
+    }, 5_000);
     post({ type: config.readyMessage });
   })();
 </script>`;
-}
 
-export function embedBrowserDashboard(html: string, sessionName: string) {
+export const BROWSER_DASHBOARD_EMBED_MARKUP =
+  BROWSER_DASHBOARD_EMBED_SCRIPT + BROWSER_DASHBOARD_EMBED_STYLE;
+
+export function embedBrowserDashboard(html: string) {
   if (
     html.includes(BROWSER_DASHBOARD_EMBED_MARKER) ||
     !/<\/head\s*>/i.test(html)
   ) {
     return html;
   }
-  const markup =
-    browserDashboardEmbedScript(sessionName) + BROWSER_DASHBOARD_EMBED_STYLE;
   return html.replace(
     /<\/head\s*>/i,
-    `${markup}\n</head>`,
+    `${BROWSER_DASHBOARD_EMBED_MARKUP}\n</head>`,
   );
 }

@@ -93,7 +93,7 @@ export function playwrightStaleProfileLockRecoveryCommand(
 }
 
 export function isPlaywrightBrowserNotOpen(result: PlaywrightCliResult) {
-  return /Browser ['"]?[A-Za-z0-9_-]+['"]? is not open/i.test(result.stderr);
+  return /Browser ['"]?default['"]? is not open/i.test(result.stderr);
 }
 
 export function isPlaywrightBrowserDependencyUnavailable(

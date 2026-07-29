@@ -11,7 +11,6 @@ import type { CodexThread } from "@/harnesses/codex/types";
 import type { CodingSession, Environment } from "@/lib/types";
 import type { RuntimeAdapter } from "@/server/runtime/types";
 import { HttpError } from "@/server/http-error";
-import { environmentBrowserSessionName } from "@/server/environments/browser-session";
 import {
   WORKSPACE_RESTORE_UNAVAILABLE_SESSION_ERROR,
   type CodexControlTransition,
@@ -1371,13 +1370,6 @@ function fixture(
 
   const runtime = {
     mode: "sandbox0",
-    async ensureEnvironmentBrowserSession(
-      _runtime: StoredEnvironmentRuntime,
-      browserSessionName: string,
-    ) {
-      assert.match(browserSessionName, /^sandpi-[a-f0-9]{32}$/);
-      return false;
-    },
     async ensureCodexEnvironmentRuntime(
       _runtime: StoredEnvironmentRuntime,
       _authJson: string,
@@ -2366,8 +2358,6 @@ test("starts the first Turn on a newly created loaded Thread without resume", as
     )?.message.params as Record<string, unknown> | undefined;
     assert.deepEqual(threadStart?.config, {
       "features.apply_patch_streaming_events": true,
-      "shell_environment_policy.set.PLAYWRIGHT_CLI_SESSION":
-        environmentBrowserSessionName(sessionId),
       model_reasoning_effort: "high",
     });
     assert.equal(threadStart?.sessionStartSource, "clear");
@@ -5892,8 +5882,6 @@ test("lazily attaches only the native Session that starts a Turn", async () => {
     assert.equal(resumeParams?.model, "gpt-next");
     assert.deepEqual(resumeParams?.config, {
       "features.apply_patch_streaming_events": true,
-      "shell_environment_policy.set.PLAYWRIGHT_CLI_SESSION":
-        environmentBrowserSessionName("session-one"),
       model_reasoning_effort: "high",
     });
     assert.equal("excludeTurns" in (resumeParams ?? {}), false);
@@ -7266,8 +7254,6 @@ test("forks a product Session only through Codex thread/fork", async () => {
     )?.message.params as Record<string, unknown> | undefined;
     assert.deepEqual(forkParams?.config, {
       "features.apply_patch_streaming_events": true,
-      "shell_environment_policy.set.PLAYWRIGHT_CLI_SESSION":
-        environmentBrowserSessionName(childId),
     });
     assert.equal(
       forkParams?.threadSource,

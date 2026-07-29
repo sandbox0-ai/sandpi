@@ -2,18 +2,23 @@
 
 import {
   LoaderCircle,
+  Plus,
   RefreshCw,
   TriangleAlert,
+  X,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { apiFetch, apiUrl } from "@/lib/api-client";
 import {
+  BROWSER_DASHBOARD_COMMAND_MESSAGE,
   BROWSER_DASHBOARD_VIEWPORT_MODE_MESSAGE,
   BROWSER_DASHBOARD_THEME_MESSAGE,
   BROWSER_DASHBOARD_THEME_TOKEN_MAP,
   BROWSER_DASHBOARD_VIEWPORT_APPLIED_MESSAGE,
+  type BrowserDashboardCommandMessage,
   type BrowserDashboardResolvedTheme,
+  type BrowserDashboardTab,
   type BrowserDashboardTheme,
   type BrowserDashboardThemeMessage,
   type BrowserDashboardViewport,
@@ -22,6 +27,7 @@ import {
   isBrowserDashboardLoadingMessage,
   isBrowserDashboardReadyMessage,
   isBrowserDashboardSessionReadyMessage,
+  isBrowserDashboardTabsMessage,
   isBrowserDashboardViewportMessage,
   isBrowserDashboardViewportMode,
 } from "@/lib/environment-browser";
@@ -34,13 +40,11 @@ const BROWSER_DASHBOARD_STARTUP_TIMEOUT_MS = 30_000;
 export interface EnvironmentBrowserNavigationRequest {
   id: number;
   environmentId: string;
-  sessionId: string;
   url: string;
 }
 
 interface EnvironmentBrowserProps {
   environmentId: string;
-  sessionId: string;
   navigationRequest?: EnvironmentBrowserNavigationRequest;
   onNavigationHandled?: (
     request: EnvironmentBrowserNavigationRequest,
@@ -50,6 +54,10 @@ interface EnvironmentBrowserProps {
     starting: string;
     unavailable: string;
     retry: string;
+    tabs: string;
+    newTab: string;
+    closeTab: (title: string) => string;
+    untitledTab: string;
     loading: string;
     viewport: string;
     viewportDesktop: string;
@@ -58,9 +66,19 @@ interface EnvironmentBrowserProps {
   };
 }
 
+function browserTabTitle(tab: BrowserDashboardTab, fallback: string) {
+  if (tab.title && tab.title !== "about:blank") return tab.title;
+  try {
+    const url = new URL(tab.url);
+    if (url.hostname) return url.hostname;
+  } catch {
+    // Browser-internal URLs intentionally fall back to a neutral tab name.
+  }
+  return fallback;
+}
+
 export function EnvironmentBrowser({
   environmentId,
-  sessionId,
   navigationRequest,
   onNavigationHandled,
   copy,
@@ -69,6 +87,8 @@ export function EnvironmentBrowser({
   // mounted immediately below while this flag prevents duplicate recovery.
   const [ready, setReady] = useState(false);
   const [dashboardReady, setDashboardReady] = useState(false);
+  const [dashboardIntegrated, setDashboardIntegrated] = useState(false);
+  const [tabs, setTabs] = useState<BrowserDashboardTab[]>([]);
   const [remoteLoading, setRemoteLoading] = useState(false);
   const [viewport, setViewport] = useState<BrowserDashboardViewport>();
   const [busy, setBusy] = useState(false);
@@ -76,14 +96,15 @@ export function EnvironmentBrowser({
   const [viewportError, setViewportError] = useState("");
   const [retry, setRetry] = useState(0);
   const dashboardFrame = useRef<HTMLIFrameElement>(null);
+  const tabsRef = useRef<BrowserDashboardTab[]>([]);
+  const pendingExternalTabBaseline = useRef<number | undefined>(undefined);
   const completedNavigationId = useRef<number | undefined>(undefined);
   const pendingRequest = useRef<{
     key: string;
     promise: Promise<void>;
   } | undefined>(undefined);
   const requestedNavigation =
-    navigationRequest?.environmentId === environmentId &&
-    navigationRequest.sessionId === sessionId
+    navigationRequest?.environmentId === environmentId
       ? navigationRequest
       : undefined;
   const viewportMode =
@@ -94,7 +115,8 @@ export function EnvironmentBrowser({
       message:
         | BrowserDashboardThemeMessage
         | BrowserDashboardViewportAppliedMessage
-        | BrowserDashboardViewportModeMessage,
+        | BrowserDashboardViewportModeMessage
+        | BrowserDashboardCommandMessage,
     ) => {
       const frame = dashboardFrame.current;
       if (!frame?.contentWindow) return;
@@ -134,6 +156,17 @@ export function EnvironmentBrowser({
     });
   }, [postDashboardMessage, viewportMode]);
 
+  const sendDashboardCommand = useCallback(
+    (action: BrowserDashboardCommandMessage["action"], index?: number) => {
+      postDashboardMessage({
+        type: BROWSER_DASHBOARD_COMMAND_MESSAGE,
+        action,
+        ...(index === undefined ? {} : { index }),
+      });
+    },
+    [postDashboardMessage],
+  );
+
   useEffect(() => {
     const root = document.documentElement;
     let active = true;
@@ -157,7 +190,7 @@ export function EnvironmentBrowser({
           `/api/v1/environments/${encodeURIComponent(environmentId)}/browser/viewport`,
           {
             method: "POST",
-            body: JSON.stringify({ sessionId, ...viewport }),
+            body: JSON.stringify(viewport),
           },
         );
         if (!active) return;
@@ -208,6 +241,16 @@ export function EnvironmentBrowser({
       if (isBrowserDashboardSessionReadyMessage(event.data)) {
         setDashboardReady(true);
       }
+      if (isBrowserDashboardTabsMessage(event.data)) {
+        tabsRef.current = event.data.tabs;
+        setTabs(event.data.tabs);
+        setDashboardIntegrated(event.data.integrated);
+        const baseline = pendingExternalTabBaseline.current;
+        if (baseline !== undefined && event.data.tabs.length > baseline) {
+          pendingExternalTabBaseline.current = undefined;
+          sendDashboardCommand("select", event.data.tabs.length - 1);
+        }
+      }
       if (isBrowserDashboardLoadingMessage(event.data)) {
         setRemoteLoading(event.data.loading);
       }
@@ -227,9 +270,9 @@ export function EnvironmentBrowser({
   }, [
     environmentId,
     postDashboardMessage,
+    sendDashboardCommand,
     sendDashboardTheme,
     sendDashboardViewportMode,
-    sessionId,
   ]);
 
   useEffect(() => {
@@ -245,7 +288,11 @@ export function EnvironmentBrowser({
   }, [copy.unavailable, dashboardReady, error, retry]);
 
   useEffect(() => {
-    if (requestedNavigation && ready && !dashboardReady) return;
+    // The Dashboard AppService starts the default persistent browser in its
+    // own Sandbox-native lifetime. Avoid a separate control API command on the
+    // normal mount; the session endpoint is reserved for explicit recovery.
+    if (!requestedNavigation && retry === 0) return;
+    if (requestedNavigation && !dashboardReady) return;
     if (!requestedNavigation && ready) return;
     if (
       requestedNavigation &&
@@ -255,31 +302,26 @@ export function EnvironmentBrowser({
     }
     const base = `/api/v1/environments/${encodeURIComponent(environmentId)}/browser`;
     const requestKey = requestedNavigation
-      ? ready
-        ? `open:${requestedNavigation.id}`
-        : `session:${environmentId}:${sessionId}:${retry}`
-      : `session:${environmentId}:${sessionId}:${retry}`;
+      ? `open:${requestedNavigation.id}`
+      : `session:${environmentId}:${retry}`;
     setBusy(true);
     setError("");
     setViewportError("");
+    if (requestedNavigation) {
+      pendingExternalTabBaseline.current = tabsRef.current.length;
+    }
     let request = pendingRequest.current;
     if (!request || request.key !== requestKey) {
       request = {
         key: requestKey,
-        promise: requestedNavigation && ready
+        promise: requestedNavigation
           ? apiFetch<void>(`${base}/open`, {
               method: "POST",
-              body: JSON.stringify({
-                sessionId,
-                url: requestedNavigation.url,
-              }),
+              body: JSON.stringify({ url: requestedNavigation.url }),
             })
           : apiFetch<void>(`${base}/session`, {
               method: "POST",
-              body: JSON.stringify({
-                sessionId,
-                force: retry > 0,
-              }),
+              body: JSON.stringify({ force: retry > 0 }),
             }),
       };
       pendingRequest.current = request;
@@ -296,12 +338,13 @@ export function EnvironmentBrowser({
       .then(() => {
         if (!active) return;
         setReady(true);
-        if (requestedNavigation && ready) {
+        if (requestedNavigation) {
           completedNavigationId.current = requestedNavigation.id;
           onNavigationHandled?.(requestedNavigation);
         }
       })
       .catch((cause) => {
+        pendingExternalTabBaseline.current = undefined;
         if (active) {
           setError(
             cause instanceof Error
@@ -323,7 +366,6 @@ export function EnvironmentBrowser({
     ready,
     requestedNavigation,
     retry,
-    sessionId,
   ]);
 
   const visibleError = error || viewportError;
@@ -334,9 +376,57 @@ export function EnvironmentBrowser({
       <div
         className={`environment-browser-toolbar ${loading ? "is-loading" : ""}`}
       >
-        <span className="environment-browser-toolbar-title">
-          {copy.title}
-        </span>
+        {dashboardIntegrated ? (
+          <div
+            className="environment-browser-tabs"
+            role="tablist"
+            aria-label={copy.tabs}
+          >
+            {tabs.map((tab) => {
+              const title = browserTabTitle(tab, copy.untitledTab);
+              return (
+                <div
+                  className={`environment-browser-tab ${tab.selected ? "is-selected" : ""}`}
+                  key={`${tab.index}:${tab.url}`}
+                >
+                  <button
+                    type="button"
+                    className="environment-browser-tab-select"
+                    role="tab"
+                    aria-selected={tab.selected}
+                    title={tab.url ? `${title}\n${tab.url}` : title}
+                    onClick={() => sendDashboardCommand("select", tab.index)}
+                  >
+                    <span>{title}</span>
+                  </button>
+                  {tabs.length > 1 ? (
+                    <button
+                      type="button"
+                      className="environment-browser-tab-close"
+                      aria-label={copy.closeTab(title)}
+                      onClick={() => sendDashboardCommand("close", tab.index)}
+                    >
+                      <X size={12} aria-hidden="true" />
+                    </button>
+                  ) : null}
+                </div>
+              );
+            })}
+            <button
+              type="button"
+              className="environment-browser-new-tab"
+              aria-label={copy.newTab}
+              title={copy.newTab}
+              onClick={() => sendDashboardCommand("new")}
+            >
+              <Plus size={14} aria-hidden="true" />
+            </button>
+          </div>
+        ) : (
+          <span className="environment-browser-toolbar-title">
+            {copy.title}
+          </span>
+        )}
         <span
           className={`environment-browser-loading ${loading ? "is-visible" : ""}`}
           role="status"
@@ -382,11 +472,11 @@ export function EnvironmentBrowser({
       <div className="environment-browser-stage">
         {retry === 0 || ready ? (
           <iframe
-            key={`${sessionId}:${retry}`}
+            key={retry}
             ref={dashboardFrame}
             className="environment-browser-frame"
             src={apiUrl(
-              `/api/v1/environments/${encodeURIComponent(environmentId)}/browser/?embed=1&sessionId=${encodeURIComponent(sessionId)}`,
+              `/api/v1/environments/${encodeURIComponent(environmentId)}/browser/?embed=1`,
             )}
             title={copy.title}
             referrerPolicy="no-referrer"
@@ -418,6 +508,9 @@ export function EnvironmentBrowser({
                 onClick={() => {
                   setReady(false);
                   setDashboardReady(false);
+                  setDashboardIntegrated(false);
+                  setTabs([]);
+                  tabsRef.current = [];
                   setRemoteLoading(false);
                   setError("");
                   setViewportError("");

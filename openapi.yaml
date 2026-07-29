@@ -3256,24 +3256,15 @@ paths:
   /api/v1/environments/{environmentId}/browser:
     get:
       operationId: getEnvironmentBrowserDashboard
-      summary: Load a Session's embedded Browser page
+      summary: Load the embedded shared Browser dashboard
       tags:
         - Browser
-      description: Sandpi runs one persistent Playwright browser instance and
-        authenticated profile per Environment. Each Sandpi Session receives one
-        fixed page through a lightweight Playwright attachment, so concurrent
-        Sessions do not compete for a current tab and do not launch separate
-        browser instances. The human and agent within one Session share that
-        page. Browser localhost and loopback URLs resolve inside the Environment
-        sandbox, not on the client device.
+      description: Sandpi's built-in Browser is one shared Playwright browser session
+        for the human and the agent. The human can take over the embedded tab to
+        complete an interactive sign-in, then hand the same authenticated
+        profile back to the agent. Browser localhost and loopback URLs resolve
+        inside the Environment sandbox, not on the client device.
       parameters:
-        - schema:
-            type: string
-            minLength: 1
-            maxLength: 200
-          in: query
-          name: sessionId
-          required: true
         - schema:
             type: string
             enum:
@@ -3309,16 +3300,14 @@ paths:
   /api/v1/environments/{environmentId}/browser/open:
     post:
       operationId: openEnvironmentBrowserUrl
-      summary: Open a loopback URL in a Session's Browser page
+      summary: Open a loopback URL in the shared Browser
       tags:
         - Browser
-      description: Sandpi runs one persistent Playwright browser instance and
-        authenticated profile per Environment. Each Sandpi Session receives one
-        fixed page through a lightweight Playwright attachment, so concurrent
-        Sessions do not compete for a current tab and do not launch separate
-        browser instances. The human and agent within one Session share that
-        page. Browser localhost and loopback URLs resolve inside the Environment
-        sandbox, not on the client device.
+      description: Sandpi's built-in Browser is one shared Playwright browser session
+        for the human and the agent. The human can take over the embedded tab to
+        complete an interactive sign-in, then hand the same authenticated
+        profile back to the agent. Browser localhost and loopback URLs resolve
+        inside the Environment sandbox, not on the client device.
       requestBody:
         required: true
         content:
@@ -3326,10 +3315,6 @@ paths:
             schema:
               type: object
               properties:
-                sessionId:
-                  type: string
-                  minLength: 1
-                  maxLength: 200
                 url:
                   type: string
                   minLength: 1
@@ -3337,7 +3322,6 @@ paths:
                   description: HTTP or HTTPS URL on localhost, 127.0.0.1, or ::1 inside the
                     Environment sandbox.
               required:
-                - sessionId
                 - url
               additionalProperties: false
       parameters:
@@ -3361,31 +3345,23 @@ paths:
   /api/v1/environments/{environmentId}/browser/session:
     post:
       operationId: ensureEnvironmentBrowserSession
-      summary: Ensure a Session's fixed Browser page
+      summary: Ensure the shared Environment Browser session
       tags:
         - Browser
-      description: Sandpi runs one persistent Playwright browser instance and
-        authenticated profile per Environment. Each Sandpi Session receives one
-        fixed page through a lightweight Playwright attachment, so concurrent
-        Sessions do not compete for a current tab and do not launch separate
-        browser instances. The human and agent within one Session share that
-        page. Browser localhost and loopback URLs resolve inside the Environment
-        sandbox, not on the client device.
+      description: Sandpi's built-in Browser is one shared Playwright browser session
+        for the human and the agent. The human can take over the embedded tab to
+        complete an interactive sign-in, then hand the same authenticated
+        profile back to the agent. Browser localhost and loopback URLs resolve
+        inside the Environment sandbox, not on the client device.
       requestBody:
-        required: true
+        required: false
         content:
           application/json:
             schema:
               type: object
               properties:
-                sessionId:
-                  type: string
-                  minLength: 1
-                  maxLength: 200
                 force:
                   type: boolean
-              required:
-                - sessionId
               additionalProperties: false
       parameters:
         - schema:
@@ -3394,6 +3370,7 @@ paths:
           in: path
           name: environmentId
           required: true
+      x-sandpi-optional-request-body: true
       x-sandpi-shared-browser: true
       responses:
         "204":
@@ -3407,16 +3384,14 @@ paths:
   /api/v1/environments/{environmentId}/browser/viewport:
     post:
       operationId: resizeEnvironmentBrowserViewport
-      summary: Resize a Session's Browser viewport
+      summary: Resize the shared Browser viewport
       tags:
         - Browser
-      description: Sandpi runs one persistent Playwright browser instance and
-        authenticated profile per Environment. Each Sandpi Session receives one
-        fixed page through a lightweight Playwright attachment, so concurrent
-        Sessions do not compete for a current tab and do not launch separate
-        browser instances. The human and agent within one Session share that
-        page. Browser localhost and loopback URLs resolve inside the Environment
-        sandbox, not on the client device.
+      description: Sandpi's built-in Browser is one shared Playwright browser session
+        for the human and the agent. The human can take over the embedded tab to
+        complete an interactive sign-in, then hand the same authenticated
+        profile back to the agent. Browser localhost and loopback URLs resolve
+        inside the Environment sandbox, not on the client device.
       requestBody:
         required: true
         content:
@@ -3424,10 +3399,6 @@ paths:
             schema:
               type: object
               properties:
-                sessionId:
-                  type: string
-                  minLength: 1
-                  maxLength: 200
                 width:
                   type: integer
                   minimum: 320
@@ -3437,7 +3408,6 @@ paths:
                   minimum: 240
                   maximum: 2160
               required:
-                - sessionId
                 - width
                 - height
               additionalProperties: false
@@ -3464,13 +3434,11 @@ paths:
       summary: Connect the embedded Browser dashboard WebSocket
       tags:
         - Browser
-      description: Sandpi runs one persistent Playwright browser instance and
-        authenticated profile per Environment. Each Sandpi Session receives one
-        fixed page through a lightweight Playwright attachment, so concurrent
-        Sessions do not compete for a current tab and do not launch separate
-        browser instances. The human and agent within one Session share that
-        page. Browser localhost and loopback URLs resolve inside the Environment
-        sandbox, not on the client device.
+      description: Sandpi's built-in Browser is one shared Playwright browser session
+        for the human and the agent. The human can take over the embedded tab to
+        complete an interactive sign-in, then hand the same authenticated
+        profile back to the agent. Browser localhost and loopback URLs resolve
+        inside the Environment sandbox, not on the client device.
       parameters:
         - schema:
             type: string
@@ -3501,11 +3469,9 @@ paths:
     get:
       operationId: getEnvironmentBrowserDashboardAsset
       summary: Load an embedded Browser dashboard asset
-      description: Transparent, authenticated proxy for the shared Environment
-        Playwright Dashboard. Session-bound HTML selects one fixed page;
-        fingerprinted static assets remain Environment-scoped. The asset
-        protocol is owned by the pinned dashboard and is not a JSON application
-        API.
+      description: Transparent, authenticated proxy for the built-in shared Playwright
+        Browser dashboard. The asset protocol is owned by the pinned dashboard
+        and is not a JSON application API.
       tags:
         - Browser
       parameters:
@@ -7756,8 +7722,7 @@ tags:
   - name: Workspace IDE
     description: Cross-client editor snapshots, mutations and invalidations.
   - name: Browser
-    description: One Environment Playwright process/profile with a fixed page shared
-      by the human and agent in each Sandpi Session.
+    description: The embedded, shared human-and-agent Playwright Browser session.
   - name: Metrics
     description: Environment runtime metrics.
   - name: Terminal

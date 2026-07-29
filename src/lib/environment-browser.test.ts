@@ -4,13 +4,16 @@ import test from "node:test";
 import {
   BROWSER_DASHBOARD_LOADING_MESSAGE,
   BROWSER_DASHBOARD_READY_MESSAGE,
+  BROWSER_DASHBOARD_SESSION_NAME,
   BROWSER_DASHBOARD_SESSION_READY_MESSAGE,
+  BROWSER_DASHBOARD_TABS_MESSAGE,
   BROWSER_DASHBOARD_THEME_TOKEN_MAP,
   BROWSER_DASHBOARD_VIEWPORT_LIMITS,
   BROWSER_DASHBOARD_VIEWPORT_MESSAGE,
   isBrowserDashboardLoadingMessage,
   isBrowserDashboardReadyMessage,
   isBrowserDashboardSessionReadyMessage,
+  isBrowserDashboardTabsMessage,
   isBrowserDashboardViewport,
   isBrowserDashboardViewportMessage,
   isBrowserDashboardViewportMode,
@@ -44,6 +47,7 @@ test("recognizes only the embedded Dashboard ready message", () => {
     }),
     false,
   );
+  assert.equal(BROWSER_DASHBOARD_SESSION_NAME, "default");
   assert.deepEqual(BROWSER_DASHBOARD_THEME_TOKEN_MAP["--canvas"], [
     "--color-canvas-default",
   ]);
@@ -135,7 +139,37 @@ test("resolves responsive, desktop-fit and mobile browser viewports", () => {
   );
 });
 
-test("accepts only bounded browser loading messages", () => {
+test("accepts only bounded browser tab and loading messages", () => {
+  assert.equal(
+    isBrowserDashboardTabsMessage({
+      type: BROWSER_DASHBOARD_TABS_MESSAGE,
+      integrated: true,
+      tabs: [
+        {
+          index: 0,
+          title: "Sandbox Docs",
+          url: "https://sandbox0.ai/docs/sandbox",
+          selected: true,
+        },
+      ],
+    }),
+    true,
+  );
+  assert.equal(
+    isBrowserDashboardTabsMessage({
+      type: BROWSER_DASHBOARD_TABS_MESSAGE,
+      integrated: true,
+      tabs: [
+        {
+          index: 3,
+          title: "Wrong index",
+          url: "about:blank",
+          selected: true,
+        },
+      ],
+    }),
+    false,
+  );
   assert.equal(
     isBrowserDashboardLoadingMessage({
       type: BROWSER_DASHBOARD_LOADING_MESSAGE,

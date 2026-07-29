@@ -58,7 +58,7 @@ const TAGS: OpenAPIV3.TagObject[] = [
   {
     name: "Browser",
     description:
-      "One Environment Playwright process/profile with a fixed page shared by the human and agent in each Sandpi Session.",
+      "The embedded, shared human-and-agent Playwright Browser session.",
   },
   { name: "Metrics", description: "Environment runtime metrics." },
   { name: "Terminal", description: "The shared Environment terminal." },
@@ -273,7 +273,7 @@ function addBrowserAssetProxy(document: OpenAPIV3.Document) {
     operationId: "getEnvironmentBrowserDashboardAsset",
     summary: "Load an embedded Browser dashboard asset",
     description:
-      "Transparent, authenticated proxy for the shared Environment Playwright Dashboard. Session-bound HTML selects one fixed page; fingerprinted static assets remain Environment-scoped. The asset protocol is owned by the pinned dashboard and is not a JSON application API.",
+      "Transparent, authenticated proxy for the built-in shared Playwright Browser dashboard. The asset protocol is owned by the pinned dashboard and is not a JSON application API.",
     tags: ["Browser"],
     parameters: [
       {

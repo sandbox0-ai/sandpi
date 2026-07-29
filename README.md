@@ -41,7 +41,7 @@ Codex is the first supported coding agent.
 | Durable sessions | Native session state and the Workspace live outside the browser. Refreshes, client disconnects and runtime recovery do not erase the session. |
 | Focused isolation | Create one Environment per project, task or concern. Each gets its own Sandbox, Workspace, coding-agent account, network policy and credentials. |
 | Multiple coding plans | Connect different Environments to different Codex/ChatGPT accounts, or keep work separated while using the same account. |
-| Shared browser debugging | One Chromium browser instance and login profile serve each Environment, while every Sandpi Session gets one fixed page shared by its human and agent. |
+| Shared browser debugging | A human and coding agent use the same official Playwright browser session, including its tabs and login profile. |
 | Controlled outbound access | Restrict sandbox egress by destination and inject supported credentials only into matching traffic, instead of placing service secrets in the repository or browser. |
 | Workspace protection | Create manual or scheduled Workspace backups with retention and restore them through Sandbox0 Volume snapshots. |
 | Encrypted persisted state | Sandbox0 encrypts persisted Environment rootfs checkpoint objects and default S0FS Workspace Volume objects at the application layer before object storage. |
@@ -54,7 +54,7 @@ Environment
 ├── Sandbox and persistent Workspace Volume
 ├── one native coding-agent harness and provider account
 ├── network policy and egress credentials
-├── runtime resources, terminal, shared Browser instance/profile and metrics
+├── runtime resources, terminal, shared Browser and metrics
 ├── durable Automation Schedules
 └── many native coding-agent Sessions
 ```
@@ -97,9 +97,8 @@ same files, tools and execution context.
   surfaces
 - Persistent multi-Environment and multi-Session Web UI
 - Live Workspace file browser, Monaco editor, media previews and Git changes
-- Shared official Playwright Browser with one fixed page per Sandpi Session,
-  loading feedback and persisted desktop-fit, responsive and mobile viewport
-  modes; Sessions do not launch separate Chromium browser instances
+- Shared official Playwright Browser with multi-tab controls, loading feedback
+  and persisted desktop-fit, responsive and mobile viewport modes
 - Environment terminal, runtime metrics and configurable idle pause
 - Environment Schedules with one-time or human-friendly recurring timing,
   Advanced cron, IANA time zones, upcoming-run previews, durable run history
@@ -237,7 +236,7 @@ Sandpi server ───────── PostgreSQL
 Sandbox0
     ├── Sandbox + native Codex app-server
     ├── persistent Workspace Volume
-    ├── one Chromium browser, official Playwright CLI/Dashboard and shared profile
+    ├── official Playwright CLI, Dashboard and shared profile
     ├── terminal and runtime metrics
     ├── network policy and credential injection
     └── Workspace snapshots
@@ -245,12 +244,10 @@ Sandbox0
 
 - The browser talks only to Sandpi. It receives neither the Sandbox0 deployment
   API key nor a direct Sandbox0 endpoint. Sandpi authenticates and proxies the
-  official Playwright Dashboard's HTTP and WebSocket traffic. Each product
-  Session receives one fixed page shared by its human and agent; those pages
-  attach to the Environment's single Chromium browser instance and authenticated
-  profile. A human can complete an interactive login there and hand the same
-  page back to the agent. Loopback Browser URLs resolve inside the Environment
-  sandbox.
+  official Playwright Dashboard's HTTP and WebSocket traffic. The embedded tab
+  and the agent share one Playwright profile: a human can complete an
+  interactive login there and hand the authenticated browser back to the
+  agent. Loopback Browser URLs resolve inside the Environment sandbox.
 - Sandpi uses Sandbox0 through the official JavaScript SDK; it does not read a
   Sandbox0 database, internal metering endpoint or ClickHouse credential.
 - Sandbox0 owns Sandbox lifecycle, Volumes, network enforcement, credential
@@ -286,9 +283,6 @@ Sandbox0
 - Sessions inside one Environment share one mutable Workspace and harness
   account. They are not isolated checkouts. Use separate Environments when work
   must not affect each other.
-- Browser pages have independent current-page pointers, but Sessions in one
-  Environment intentionally share cookies, storage and authenticated sites.
-  Use separate Environments when browser credentials must be isolated.
 - The Browser requires the current Sandbox0 `coding-agent` image. Recreate an
   older Environment to pick up the Playwright CLI and Chromium dependency.
 - Built-in administrator mode is for a trusted single-user deployment. Use OIDC

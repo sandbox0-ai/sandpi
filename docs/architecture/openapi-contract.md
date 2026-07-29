@@ -47,15 +47,12 @@ same paths for its non-JSON transports and adds explicit extensions:
 
 The Browser dashboard HTTP and WebSocket bodies are an opaque, authenticated
 proxy protocol. They are not normalized into a second Sandpi browser model.
-The built-in Browser uses one persistent Chromium browser instance and profile
-per Environment, plus one fixed page attachment per Sandpi Session that uses it.
-Browser request bodies and embedded HTML identify that product Session, and
-the server verifies its Environment membership. A human and agent within one
-Session share the assigned page; Sessions share cookies and login state
-without sharing a current-tab pointer or launching separate Chromium
-browser instances. URLs using `localhost`, `127.0.0.1`, or `::1` resolve
-inside the Environment sandbox, never on the client device. The contract marks
-these operations with `x-sandpi-shared-browser`.
+The built-in Browser is one Playwright session and profile shared by the human
+and the agent. A human can take over the embedded tab to complete an
+interactive login, then the agent continues in that same authenticated
+profile. URLs using `localhost`, `127.0.0.1`, or `::1` resolve inside the
+Environment sandbox, never on the client device. The contract marks these
+operations with `x-sandpi-shared-browser`.
 
 ## Authentication
 
