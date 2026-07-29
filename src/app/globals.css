@@ -7089,16 +7089,49 @@ code.codex-compact-activity-subject {
     width: 100%;
   }
 
+  .composer-toolbar {
+    gap: 6px;
+  }
+
+  .composer-tools {
+    flex: 1 1 auto;
+  }
+
+  .composer-agent-bound {
+    flex: 1 1 auto;
+    gap: 4px;
+    padding: 0 5px;
+  }
+
+  .composer-agent-bound .codex-glyph {
+    display: none;
+  }
+
+  .composer-model-picker {
+    flex: 1 1 0;
+  }
+
+  .composer-model-picker select,
+  .composer-reasoning-picker select {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .composer-reasoning-picker {
+    flex: 0 1 64px;
+  }
+
+  .composer-send-area {
+    gap: 0;
+  }
+
+  .composer-resource-metrics,
+  .composer-context-usage {
+    display: none;
+  }
+
   .composer-shell textarea {
     font-size: 16px;
-  }
-
-  .composer-model-picker select {
-    width: 100px;
-  }
-
-  .composer-reasoning-picker select {
-    width: 68px;
   }
 
   .connection-copy,
