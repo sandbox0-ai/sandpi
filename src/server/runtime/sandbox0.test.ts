@@ -3450,6 +3450,74 @@ test("lists one Workspace directory without recursively expanding folders", asyn
   );
 });
 
+test("coalesces Git scans and invalidates them from shallow Workspace watches", async () => {
+  let gitScans = 0;
+  let watcherClosed = 0;
+  const watchCalls: Array<{ path: string; recursive?: boolean }> = [];
+  const runtime = runtimeWithClient({
+    sandboxes: {
+      sandbox(sandboxId: string) {
+        assert.equal(sandboxId, environment.sandboxId);
+        return {
+          async cmd(name: string) {
+            assert.equal(name, "find-git-repositories");
+            gitScans += 1;
+            return { exitCode: 0, stderr: "", stdout: "" };
+          },
+          async statFile(filePath: string) {
+            assert.equal(filePath, "/workspace/src");
+            return { type: "dir", size: 0, isLink: false };
+          },
+          async watchFiles(path: string, recursive?: boolean) {
+            watchCalls.push({ path, recursive });
+            return {
+              async *events() {
+                yield {
+                  type: "event",
+                  event: "write",
+                  path: "/workspace/src/demo.ts",
+                };
+              },
+              close() {
+                watcherClosed += 1;
+              },
+            };
+          },
+        };
+      },
+    },
+  });
+  const coordinates = environmentRuntimeRecord();
+
+  const [first, second] = await Promise.all([
+    runtime.getWorkspaceGitState(coordinates),
+    runtime.getWorkspaceGitState(coordinates),
+  ]);
+  assert.deepEqual(first, { repositories: [] });
+  assert.strictEqual(second, first);
+  assert.equal(gitScans, 1);
+  assert.strictEqual(await runtime.getWorkspaceGitState(coordinates), first);
+  assert.equal(gitScans, 1);
+
+  const watcher = await runtime.watchWorkspaceFiles(
+    coordinates,
+    "/workspace/src",
+  );
+  const event = await watcher.messages[Symbol.asyncIterator]().next();
+  assert.deepEqual(event.value, {
+    event: "write",
+    path: "/workspace/src/demo.ts",
+  });
+  assert.deepEqual(watchCalls, [
+    { path: "/workspace/src", recursive: false },
+  ]);
+
+  await runtime.getWorkspaceGitState(coordinates);
+  assert.equal(gitScans, 2);
+  watcher.close();
+  assert.equal(watcherClosed, 1);
+});
+
 test("creates empty Workspace files and folders without replacing existing entries", async () => {
   const entries = new Map<
     string,
@@ -3986,6 +4054,7 @@ test("opens Sandpi-managed Workspace files as read-only", async () => {
 test("returns verified media metadata instead of treating ASCII containers as text", async () => {
   const filePath = "/workspace/demo.pdf";
   const content = Buffer.from("%PDF-1.7\n", "ascii");
+  let stats = 0;
   const runtime = runtimeWithClient({
     sandboxes: {
       sandbox(sandboxId: string) {
@@ -3997,6 +4066,7 @@ test("returns verified media metadata instead of treating ASCII containers as te
           },
           async statFile(candidatePath: string) {
             assert.equal(candidatePath, filePath);
+            stats += 1;
             return {
               type: "file",
               size: content.byteLength,
@@ -4029,6 +4099,7 @@ test("returns verified media metadata instead of treating ASCII containers as te
     kind: "pdf",
     mimeType: "application/pdf",
   });
+  assert.equal(stats, 1);
 });
 
 test("writes composer uploads only below the protected Workspace upload root", async () => {

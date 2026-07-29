@@ -318,13 +318,14 @@ export function dashboardAssetCacheControl(
   const upstreamMaxAge = /(?:^|,)\s*max-age=(\d+)/i.exec(
     upstreamCacheControl ?? "",
   )?.[1];
-  const maxAge = Math.min(
-    upstreamMaxAge ? Number(upstreamMaxAge) : 60 * 60,
-    DASHBOARD_MAX_BROWSER_CACHE_SECONDS,
-  );
-  const immutable = DASHBOARD_FINGERPRINTED_ASSET.test(normalized)
-    ? ", immutable"
-    : "";
+  const fingerprinted = DASHBOARD_FINGERPRINTED_ASSET.test(normalized);
+  const maxAge = fingerprinted
+    ? DASHBOARD_MAX_BROWSER_CACHE_SECONDS
+    : Math.min(
+        upstreamMaxAge ? Number(upstreamMaxAge) : 60 * 60,
+        DASHBOARD_MAX_BROWSER_CACHE_SECONDS,
+      );
+  const immutable = fingerprinted ? ", immutable" : "";
   return `private, max-age=${maxAge}${immutable}`;
 }
 

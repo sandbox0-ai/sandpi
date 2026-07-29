@@ -3381,6 +3381,10 @@ code.codex-compact-activity-subject {
   background: var(--panel);
 }
 
+.inspector[hidden] {
+  display: none;
+}
+
 .inspector-resize-handle {
   position: absolute;
   z-index: 8;
@@ -3666,6 +3670,10 @@ code.codex-compact-activity-subject {
 .browser-panel {
   overflow: hidden;
   background: var(--panel);
+}
+
+.inspector-panel[hidden] {
+  display: none;
 }
 
 .environment-browser {

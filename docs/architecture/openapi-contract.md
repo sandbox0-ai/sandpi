@@ -45,6 +45,12 @@ same paths for its non-JSON transports and adds explicit extensions:
 - `x-sandpi-native-schema` marks payloads whose extensible fields remain owned
   by the pinned native harness protocol.
 
+The Workspace IDE socket accepts a bounded `subscribe` message containing the
+currently expanded shallow directories. The server always watches
+`/workspace` and replaces only the additional non-recursive subscriptions;
+clients treat server change messages as invalidations, not as a durable
+file-event log.
+
 The Browser dashboard HTTP and WebSocket bodies are an opaque, authenticated
 proxy protocol. They are not normalized into a second Sandpi browser model.
 The built-in Browser is one Playwright session and profile shared by the human
@@ -53,6 +59,15 @@ interactive login, then the agent continues in that same authenticated
 profile. URLs using `localhost`, `127.0.0.1`, or `::1` resolve inside the
 Environment sandbox, never on the client device. The contract marks these
 operations with `x-sandpi-shared-browser`.
+
+Dashboard HTML, redirects and control responses remain `no-store`.
+Fingerprint-named Dashboard assets use a bounded private immutable cache, and
+Sandpi preserves their explicit cache policy through the final response hook.
+The embedded Browser remains mounted for a short grace period after the
+Inspector closes, while large unmodified assets stream through the proxy
+instead of being buffered in full. Sandpi's own content-addressed Next assets
+are public immutable resources; stable HTML and Monaco loader paths retain
+revalidation semantics.
 
 ## Authentication
 

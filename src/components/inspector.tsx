@@ -54,10 +54,10 @@ import type {
   Environment,
   EnvironmentMetrics,
   RuntimeMetricSeries,
-  WorkspaceIdeSnapshot,
 } from "@/lib/types";
 
 export type InspectorTab = "files" | "browser" | "activity" | "metrics";
+export const INSPECTOR_KEEP_ALIVE_MS = 30_000;
 
 export interface InspectorSessionActivity {
   /** Harness-owned navigation copy; the shared Inspector never names the DTO. */
@@ -84,6 +84,7 @@ interface InspectorProps {
   onTabChange: (tab: InspectorTab) => void;
   widthRatio: number;
   onWidthRatioChange: (ratio: number, persist: boolean) => void;
+  hidden?: boolean;
   onClose: () => void;
 }
 
@@ -331,6 +332,7 @@ export function Inspector({
   onTabChange,
   widthRatio,
   onWidthRatioChange,
+  hidden = false,
   onClose,
 }: InspectorProps) {
   const ui = getOperationUiCopy(language).inspector;
@@ -341,6 +343,9 @@ export function Inspector({
   const [resizing, setResizing] = useState(false);
   const [mountedBrowserEnvironmentId, setMountedBrowserEnvironmentId] =
     useState(activeTab === "browser" ? environment.id : "");
+  const [mountedFilesEnvironmentId, setMountedFilesEnvironmentId] = useState(
+    activeTab === "files" ? environment.id : "",
+  );
   const metricRangeOptions = [
     {
       seconds: 15 * 60,
@@ -368,13 +373,10 @@ export function Inspector({
     metricRangeOptions.find(
       (option) => option.seconds === metricsRangeSeconds,
     ) ?? metricRangeOptions[1];
-  const dataTab = activeTab === "files" || activeTab === "metrics";
+  const dataTab = activeTab === "metrics";
   const requestKey = dataTab
-    ? `${environment.id}:${activeTab}:${
-        activeTab === "metrics" ? metricsRangeSeconds : "default"
-      }`
+    ? `${environment.id}:${activeTab}:${metricsRangeSeconds}`
     : "";
-  const [ideSnapshot, setIdeSnapshot] = useState<WorkspaceIdeSnapshot>();
   const [metrics, setMetrics] = useState<EnvironmentMetrics>(
     emptyEnvironmentMetrics,
   );
@@ -405,7 +407,6 @@ export function Inspector({
   };
 
   useEffect(() => {
-    setIdeSnapshot(undefined);
     setMetrics(emptyEnvironmentMetrics());
     setLoadError(null);
   }, [environment.id]);
@@ -423,6 +424,12 @@ export function Inspector({
   }, [activeTab, environment.id]);
 
   useEffect(() => {
+    if (activeTab === "files") {
+      setMountedFilesEnvironmentId(environment.id);
+    }
+  }, [activeTab, environment.id]);
+
+  useEffect(() => {
     if (!dataTab) {
       setLoadError(null);
       return;
@@ -432,16 +439,10 @@ export function Inspector({
     setLoadError(null);
 
     const path = `/api/v1/environments/${encodeURIComponent(environment.id)}`;
-    const request =
-      activeTab === "files"
-        ? apiFetch<ApiEnvelope<WorkspaceIdeSnapshot>>(
-            `${path}/ide`,
-            { signal: controller.signal },
-          ).then((response) => setIdeSnapshot(response.data))
-        : apiFetch<ApiEnvelope<EnvironmentMetrics>>(
-            `${path}/metrics?rangeSeconds=${metricsRangeSeconds}`,
-            { signal: controller.signal },
-          ).then((response) => setMetrics(response.data));
+    const request = apiFetch<ApiEnvelope<EnvironmentMetrics>>(
+      `${path}/metrics?rangeSeconds=${metricsRangeSeconds}`,
+      { signal: controller.signal },
+    ).then((response) => setMetrics(response.data));
 
     void request
       .catch((error) => {
@@ -563,7 +564,7 @@ export function Inspector({
   }
 
   return (
-    <aside className="inspector" aria-label={ui.label}>
+    <aside className="inspector" aria-label={ui.label} hidden={hidden}>
       <div
         className={`inspector-resize-handle ${resizing ? "is-resizing" : ""}`}
         role="separator"
@@ -670,26 +671,29 @@ export function Inspector({
         </div>
       ) : null}
 
-      {loading ? (
-        <InspectorSkeleton
-          activeTab={activeTab === "files" ? "files" : "metrics"}
-          label={ui.loadingView(
-            activeTab === "files" ? ui.files : ui.metrics,
-          )}
-        />
-      ) : !currentLoadError && activeTab === "files" ? (
-        <div className="inspector-panel files-panel ide-panel">
+      {activeTab === "files" ||
+      mountedFilesEnvironmentId === environment.id ? (
+        <div
+          className="inspector-panel files-panel ide-panel"
+          hidden={activeTab !== "files"}
+        >
           <WorkspaceIde
             language={language}
             timeZone={timeZone}
             environment={environment}
             session={session}
             variant="embedded"
-            initialSnapshot={ideSnapshot}
             navigationRequest={workspaceNavigationRequest}
             onNavigationHandled={onWorkspaceNavigationHandled}
           />
         </div>
+      ) : null}
+
+      {loading ? (
+        <InspectorSkeleton
+          activeTab="metrics"
+          label={ui.loadingView(ui.metrics)}
+        />
       ) : null}
 
       {!loading && activeTab === "metrics" ? (

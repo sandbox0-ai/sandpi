@@ -24,7 +24,7 @@ test("OpenAPI publishes every supported operation with a unique id", async () =>
   const operations = allOperations(document);
   const operationIds = operations.map((operation) => operation.operationId);
 
-  assert.equal(operations.length, 97);
+  assert.equal(operations.length, 98);
   assert.ok(operationIds.every(Boolean));
   assert.equal(new Set(operationIds).size, operationIds.length);
   assert.ok(Object.keys(document.paths).every((path) => !path.includes(":")));
@@ -74,6 +74,26 @@ test("OpenAPI preserves the shared Browser and streaming semantics", async () =>
   ]) {
     assert.ok(operation(document, path, "get")["x-sandpi-websocket"]);
   }
+  const ideClientMessages = (
+    operation(
+      document,
+      "/api/v1/environments/{environmentId}/ide/events",
+      "get",
+    )["x-sandpi-websocket"] as {
+      clientMessages?: OpenAPIV3.SchemaObject;
+    }
+  ).clientMessages;
+  assert.ok(ideClientMessages);
+  assert.deepEqual(ideClientMessages.required, ["type", "paths"]);
+  assert.deepEqual(ideClientMessages.properties?.type, {
+    type: "string",
+    enum: ["subscribe"],
+  });
+  assert.equal(
+    (ideClientMessages.properties?.paths as OpenAPIV3.ArraySchemaObject)
+      .maxItems,
+    64,
+  );
 });
 
 function allOperations(document: OpenAPIV3.Document) {

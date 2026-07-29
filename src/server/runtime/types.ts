@@ -330,6 +330,7 @@ export interface RuntimeAdapter {
   ): Promise<WorkspaceFile>;
   watchWorkspaceFiles(
     runtime: EnvironmentRuntimeRecord,
+    path: string,
   ): Promise<RuntimeWorkspaceWatchHandle>;
   getMetrics(
     runtime: EnvironmentRuntimeRecord,

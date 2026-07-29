@@ -207,6 +207,8 @@ const MAX_CODEX_ROLLOUT_BYTES = 16 * 1024 * 1024;
 const CODEX_ROLLOUT_REPRESENTATION_RETRIES = 3;
 const CODEX_ROLLOUT_REPRESENTATION_RETRY_MS = 50;
 const GIT_STATUS_CONCURRENCY = 4;
+const WORKSPACE_GIT_CACHE_TTL_MS = 2_000;
+const WORKSPACE_GIT_CACHE_MAX_ENTRIES = 64;
 const SANDBOX_AUTO_RESUME_TIMEOUT_MS = 120_000;
 const SANDBOX_AUTO_RESUME_RETRY_DELAY_MS = 250;
 const SANDBOX_RESUME_FAILURE_MAX_RETRIES = 1;
@@ -240,6 +242,14 @@ export class Sandbox0Runtime implements RuntimeAdapter {
   readonly mode = "sandbox0" as const;
   private readonly client: Client;
   private readonly browserProxyKey: Buffer;
+  private readonly workspaceGitCache = new Map<
+    string,
+    {
+      expiresAt: number;
+      value?: WorkspaceGitState;
+      pending?: Promise<WorkspaceGitState>;
+    }
+  >();
 
   constructor(options: { apiHost: string; apiKey: string }) {
     this.browserProxyKey = createHash("sha256")
@@ -1607,8 +1617,14 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     try {
       const filePath = safeWorkspacePath(requestedPath);
       const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
-      await assertWorkspacePathHasNoSymlink(sandbox, filePath);
-      const file = await sandbox.statFile(filePath);
+      const file = await assertWorkspacePathHasNoSymlink(sandbox, filePath);
+      if (!file) {
+        throw new HttpError(
+          404,
+          "workspace_file_not_found",
+          "The Workspace file no longer exists.",
+        );
+      }
       if (file.type !== "file") {
         throw new HttpError(
           400,
@@ -1674,6 +1690,48 @@ export class Sandbox0Runtime implements RuntimeAdapter {
   }
 
   async getWorkspaceGitState(
+    runtime: EnvironmentRuntimeRecord,
+  ): Promise<WorkspaceGitState> {
+    const key = workspaceRuntimeCacheKey(runtime);
+    const cached = this.workspaceGitCache.get(key);
+    if (cached?.value && cached.expiresAt > Date.now()) {
+      this.workspaceGitCache.delete(key);
+      this.workspaceGitCache.set(key, cached);
+      return cached.value;
+    }
+    if (cached?.pending) return cached.pending;
+
+    const entry: {
+      expiresAt: number;
+      value?: WorkspaceGitState;
+      pending?: Promise<WorkspaceGitState>;
+    } = { expiresAt: 0 };
+    entry.pending = this.scanWorkspaceGitState(runtime).then(
+      (value) => {
+        if (this.workspaceGitCache.get(key) === entry) {
+          entry.value = value;
+          entry.expiresAt = Date.now() + WORKSPACE_GIT_CACHE_TTL_MS;
+          entry.pending = undefined;
+        }
+        return value;
+      },
+      (error) => {
+        if (this.workspaceGitCache.get(key) === entry) {
+          this.workspaceGitCache.delete(key);
+        }
+        throw error;
+      },
+    );
+    this.workspaceGitCache.set(key, entry);
+    while (this.workspaceGitCache.size > WORKSPACE_GIT_CACHE_MAX_ENTRIES) {
+      const oldest = this.workspaceGitCache.keys().next().value;
+      if (oldest === undefined) break;
+      this.workspaceGitCache.delete(oldest);
+    }
+    return entry.pending;
+  }
+
+  private async scanWorkspaceGitState(
     runtime: EnvironmentRuntimeRecord,
   ): Promise<WorkspaceGitState> {
     const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
@@ -1755,6 +1813,10 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     return userVisibleWorkspaceGitState({ repositories });
   }
 
+  private invalidateWorkspaceGitState(runtime: EnvironmentRuntimeRecord) {
+    this.workspaceGitCache.delete(workspaceRuntimeCacheKey(runtime));
+  }
+
   async readWorkspaceIdeFile(
     runtime: EnvironmentRuntimeRecord,
     requestedPath: string,
@@ -1762,7 +1824,11 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     const filePath = safeWorkspacePath(requestedPath);
     const sandpiManaged = isWorkspaceInternalPath(filePath);
     const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
-    await assertWorkspacePathHasNoSymlink(sandbox, filePath, true);
+    const verifiedFile = await assertWorkspacePathHasNoSymlink(
+      sandbox,
+      filePath,
+      true,
+    );
     const git = sandpiManaged
       ? { repositories: [] }
       : await this.getWorkspaceGitState(runtime);
@@ -1775,7 +1841,7 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     let modifiedAt: Date | undefined;
 
     try {
-      const file = await sandbox.statFile(filePath);
+      const file = verifiedFile ?? (await sandbox.statFile(filePath));
       if (file.type !== "file") {
         throw new HttpError(
           400,
@@ -1932,8 +1998,14 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     }
 
     const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
-    await assertWorkspacePathHasNoSymlink(sandbox, filePath);
-    const file = await sandbox.statFile(filePath);
+    const file = await assertWorkspacePathHasNoSymlink(sandbox, filePath);
+    if (!file) {
+      throw new HttpError(
+        404,
+        "workspace_file_not_found",
+        "The Workspace file no longer exists.",
+      );
+    }
     if (file.type !== "file") {
       throw new HttpError(
         400,
@@ -1961,6 +2033,7 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     // so a direct terminal write can still race between this check and writeFile.
     requireWorkspaceFileRevision(current, baseRevision);
     await sandbox.writeFile(filePath, content);
+    this.invalidateWorkspaceGitState(runtime);
     return {
       path: filePath,
       name: path.posix.basename(filePath),
@@ -1994,8 +2067,17 @@ export class Sandbox0Runtime implements RuntimeAdapter {
 
     const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
     try {
-      await assertWorkspacePathHasNoSymlink(sandbox, parentPath);
-      const parent = await sandbox.statFile(parentPath);
+      const parent =
+        parentPath === WORKSPACE_ROOT
+          ? await sandbox.statFile(parentPath)
+          : await assertWorkspacePathHasNoSymlink(sandbox, parentPath);
+      if (!parent) {
+        throw new HttpError(
+          404,
+          "workspace_entry_parent_not_found",
+          "The target Workspace folder no longer exists.",
+        );
+      }
       if (parent.type !== "dir") {
         throw new HttpError(
           400,
@@ -2033,6 +2115,7 @@ export class Sandbox0Runtime implements RuntimeAdapter {
       throw translateWorkspaceFileError(error);
     }
 
+    this.invalidateWorkspaceGitState(runtime);
     return {
       id: Buffer.from(entryPath).toString("base64url"),
       name,
@@ -2054,10 +2137,20 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
 
     try {
-      await assertWorkspacePathHasNoSymlink(sandbox, sourcePath);
+      const sourceFile = await assertWorkspacePathHasNoSymlink(
+        sandbox,
+        sourcePath,
+      );
+      if (!sourceFile) {
+        throw new HttpError(
+          404,
+          "workspace_entry_not_found",
+          "The Workspace entry no longer exists.",
+        );
+      }
       const source = mutableWorkspaceEntryFromStat(
         sourcePath,
-        await sandbox.statFile(sourcePath),
+        sourceFile,
       );
       if (
         isWorkspaceIdePathHidden(
@@ -2086,6 +2179,7 @@ export class Sandbox0Runtime implements RuntimeAdapter {
       }
 
       await sandbox.moveFile(sourcePath, destinationPath);
+      this.invalidateWorkspaceGitState(runtime);
       return {
         ...source,
         id: Buffer.from(destinationPath).toString("base64url"),
@@ -2113,12 +2207,23 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
 
     try {
-      await assertWorkspacePathHasNoSymlink(sandbox, entryPath);
+      const entryFile = await assertWorkspacePathHasNoSymlink(
+        sandbox,
+        entryPath,
+      );
+      if (!entryFile) {
+        throw new HttpError(
+          404,
+          "workspace_entry_not_found",
+          "The Workspace entry no longer exists.",
+        );
+      }
       const entry = mutableWorkspaceEntryFromStat(
         entryPath,
-        await sandbox.statFile(entryPath),
+        entryFile,
       );
       await sandbox.deleteFile(entryPath);
+      this.invalidateWorkspaceGitState(runtime);
       return entry;
     } catch (error) {
       if (error instanceof HttpError) throw error;
@@ -2128,10 +2233,13 @@ export class Sandbox0Runtime implements RuntimeAdapter {
 
   async watchWorkspaceFiles(
     runtime: EnvironmentRuntimeRecord,
+    requestedPath: string,
   ): Promise<RuntimeWorkspaceWatchHandle> {
-    const watcher = await this.client.sandboxes
-      .sandbox(runtime.sandboxId)
-      .watchFiles("/workspace", true);
+    const watchPath = safeWorkspacePath(requestedPath);
+    const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
+    await assertWorkspacePathHasNoSymlink(sandbox, watchPath);
+    const watcher = await sandbox.watchFiles(watchPath, false);
+    const invalidateGit = () => this.invalidateWorkspaceGitState(runtime);
     return {
       messages: {
         async *[Symbol.asyncIterator]() {
@@ -2141,6 +2249,7 @@ export class Sandbox0Runtime implements RuntimeAdapter {
             }
             const eventPath = userVisibleWorkspacePath(message.path);
             if (!eventPath) continue;
+            invalidateGit();
             if (
               eventPath === "/workspace/.git" ||
               eventPath.includes("/.git/")
@@ -3243,6 +3352,9 @@ async function assertWorkspacePathHasNoSymlink(
   const relative = path.posix.relative("/workspace", filePath);
   let current = "/workspace";
   const components = relative.split("/").filter(Boolean);
+  let leaf:
+    | Awaited<ReturnType<typeof sandbox.statFile>>
+    | undefined;
   for (const [index, component] of components.entries()) {
     current = path.posix.join(current, component);
     let file;
@@ -3265,7 +3377,13 @@ async function assertWorkspacePathHasNoSymlink(
         "Files reached through symbolic links cannot be edited in the Web IDE.",
       );
     }
+    leaf = file;
   }
+  return leaf;
+}
+
+function workspaceRuntimeCacheKey(runtime: EnvironmentRuntimeRecord) {
+  return `${runtime.sandboxId}:${runtime.runtimeGeneration}`;
 }
 
 function formatFileSize(bytes: number) {

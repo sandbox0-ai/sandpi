@@ -353,6 +353,12 @@ export type WorkspaceIdeEvent =
       at: UnixTimestamp;
     };
 
+/** Replaces the set of shallow directories watched by one IDE connection. */
+export interface WorkspaceIdeWatchSubscription {
+  type: "subscribe";
+  paths: string[];
+}
+
 export interface MetricPoint {
   at: UnixTimestamp;
   value: number;

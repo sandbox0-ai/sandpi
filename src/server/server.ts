@@ -1,7 +1,9 @@
 import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { Buffer, isUtf8 } from "node:buffer";
+import { Readable, Transform } from "node:stream";
 
+import fastifyCompress from "@fastify/compress";
 import fastifyCookie from "@fastify/cookie";
 import fastifyCors from "@fastify/cors";
 import fastifyStatic from "@fastify/static";
@@ -77,6 +79,10 @@ import {
 } from "@/server/harnesses/codex/input-files";
 import type { CodexRolloutActivityFeed } from "@/harnesses/codex/rollout-activity";
 import { HttpError } from "@/server/http-error";
+import {
+  shouldApplyApiNoStore,
+  staticWebCacheControl,
+} from "@/server/cache-policy";
 import { createRuntime } from "@/server/runtime";
 import type { RuntimeAdapter } from "@/server/runtime/types";
 import { RuntimeWebSocketHeartbeat } from "@/server/runtime-websocket-heartbeat";
@@ -117,6 +123,7 @@ import {
   workspaceFileSearchQuerySchema,
   workspaceIdeCreateEntrySchema,
   workspaceIdeRenameEntrySchema,
+  workspaceIdeWatchSubscriptionSchema,
   workspaceIdeWriteSchema,
 } from "@/server/api-schemas";
 
@@ -295,6 +302,11 @@ export async function createSandpiServer(
     encoding: false,
     runFirst: true,
   });
+  await app.register(fastifyCompress, {
+    global: true,
+    threshold: 1_024,
+    encodings: ["br", "gzip"],
+  });
 
   app.setErrorHandler((error, request, reply) => {
     const normalized = normalizeError(error);
@@ -353,6 +365,10 @@ export async function createSandpiServer(
       prefix: "/",
       wildcard: false,
       index: ["index.html"],
+      cacheControl: false,
+      setHeaders: (reply, filePath) => {
+        reply.header("Cache-Control", staticWebCacheControl(filePath));
+      },
     });
   } else {
     app.log.warn({ webDir: config.webDir }, "Static Web build was not found");
@@ -489,12 +505,10 @@ export function registerApiRoutes(
   const deployment = deploymentSummary(services.config, services.runtime);
   app.addHook("onSend", async (request, reply, payload) => {
     if (
-      request.url.includes("/harnesses/codex/mcp") ||
-      request.url.includes("/workspace-backups") ||
-      request.url.includes("/schedules") ||
-      request.url.includes("/egress-credentials") ||
-      request.url.includes("/browser") ||
-      request.url.includes("/billing")
+      shouldApplyApiNoStore(
+        request.url,
+        reply.hasHeader("Cache-Control"),
+      )
     ) {
       reply.header("Cache-Control", "no-store");
     }
@@ -1470,6 +1484,16 @@ export function registerApiRoutes(
       };
     },
   );
+  app.get<{ Params: { environmentId: string } }>(
+    "/api/v1/environments/:environmentId/ide/git",
+    async (request) => ({
+      data: await services.runtimeAccess.withRuntimeAccess(
+        request.principal.userId,
+        request.params.environmentId,
+        (runtime) => services.runtime.getWorkspaceGitState(runtime),
+      ),
+    }),
+  );
   app.post<{ Params: { environmentId: string }; Body: unknown }>(
     "/api/v1/environments/:environmentId/ide/entries",
     async (request) => {
@@ -1557,28 +1581,112 @@ export function registerApiRoutes(
     "/api/v1/environments/:environmentId/ide/events",
     { websocket: true },
     async (socket, request) => {
-      let watcher:
-        Awaited<ReturnType<RuntimeAdapter["watchWorkspaceFiles"]>> | undefined;
-      try {
-        watcher = await services.runtimeAccess.withRuntimeAccess(
+      type WorkspaceWatcher = Awaited<
+        ReturnType<RuntimeAdapter["watchWorkspaceFiles"]>
+      >;
+      const watchers = new Map<string, WorkspaceWatcher>();
+      let closed = false;
+      let subscriptionTask = Promise.resolve();
+      let resolveClosed: (() => void) | undefined;
+      const closedPromise = new Promise<void>((resolve) => {
+        resolveClosed = resolve;
+      });
+
+      const closeWatchers = () => {
+        if (closed) return;
+        closed = true;
+        for (const watcher of watchers.values()) watcher.close();
+        watchers.clear();
+        resolveClosed?.();
+      };
+      socket.on("close", closeWatchers);
+
+      const relayWatcher = async (
+        directoryPath: string,
+        watcher: WorkspaceWatcher,
+      ) => {
+        try {
+          for await (const message of watcher.messages) {
+            if (closed || socket.readyState !== WebSocket.OPEN) break;
+            socket.send(
+              JSON.stringify({
+                type: "change",
+                ...message,
+                at: toUnixTimestamp(new Date()),
+              }),
+            );
+          }
+        } catch {
+          if (!closed && socket.readyState === WebSocket.OPEN) {
+            socket.close(1011, "Workspace watch failed");
+          }
+        } finally {
+          if (watchers.get(directoryPath) === watcher) {
+            watchers.delete(directoryPath);
+          }
+          watcher.close();
+        }
+      };
+
+      const addWatcher = async (directoryPath: string) => {
+        if (closed || watchers.has(directoryPath)) return;
+        const watcher = await services.runtimeAccess.withRuntimeAccess(
           request.principal.userId,
           request.params.environmentId,
-          (runtime) => services.runtime.watchWorkspaceFiles(runtime),
+          (runtime) =>
+            services.runtime.watchWorkspaceFiles(runtime, directoryPath),
         );
+        if (closed) {
+          watcher.close();
+          return;
+        }
+        watchers.set(directoryPath, watcher);
+        void relayWatcher(directoryPath, watcher);
+      };
+
+      const replaceSubscriptions = async (requestedPaths: string[]) => {
+        const desired = new Set([WORKSPACE_ROOT, ...requestedPaths]);
+        for (const [directoryPath, watcher] of watchers) {
+          if (desired.has(directoryPath)) continue;
+          watchers.delete(directoryPath);
+          watcher.close();
+        }
+        await Promise.all(
+          [...desired]
+            .filter((directoryPath) => !watchers.has(directoryPath))
+            .map((directoryPath) => addWatcher(directoryPath)),
+        );
+      };
+
+      socket.on("message", (raw) => {
+        let message: unknown;
+        try {
+          message = JSON.parse(raw.toString());
+        } catch {
+          socket.close(1008, "Invalid Workspace subscription");
+          return;
+        }
+        const parsed =
+          workspaceIdeWatchSubscriptionSchema.safeParse(message);
+        if (!parsed.success) {
+          socket.close(1008, "Invalid Workspace subscription");
+          return;
+        }
+        subscriptionTask = subscriptionTask
+          .then(() => replaceSubscriptions(parsed.data.paths))
+          .catch(() => {
+            if (!closed && socket.readyState === WebSocket.OPEN) {
+              socket.close(1011, "Workspace watch failed");
+            }
+          });
+      });
+
+      try {
+        await addWatcher(WORKSPACE_ROOT);
         socket.send(
           JSON.stringify({ type: "ready", at: toUnixTimestamp(new Date()) }),
         );
-        socket.on("close", () => watcher?.close());
-        for await (const message of watcher.messages) {
-          if (socket.readyState !== socket.OPEN) break;
-          socket.send(
-            JSON.stringify({
-              type: "change",
-              ...message,
-              at: toUnixTimestamp(new Date()),
-            }),
-          );
-        }
+        await closedPromise;
       } catch {
         if (socket.readyState === socket.OPEN) {
           socket.send(
@@ -1592,7 +1700,7 @@ export function registerApiRoutes(
           socket.close(1011, "Workspace watch failed");
         }
       } finally {
-        watcher?.close();
+        closeWatchers();
       }
     },
   );
@@ -2221,15 +2329,6 @@ async function proxyEnvironmentBrowserAsset(
       "The Playwright Dashboard asset is too large.",
     );
   }
-  const body = Buffer.from(await response.arrayBuffer());
-  if (body.byteLength > BROWSER_DASHBOARD_MAX_ASSET_BYTES) {
-    throw new HttpError(
-      502,
-      "environment_browser_asset_too_large",
-      "The Playwright Dashboard asset is too large.",
-    );
-  }
-
   const contentType = response.headers.get("content-type");
   if (contentType) reply.header("Content-Type", contentType);
   reply.header(
@@ -2242,13 +2341,57 @@ async function proxyEnvironmentBrowserAsset(
       : "private, no-store",
   );
   const normalizedAssetPath = assetPath?.replace(/^\/+|\/+$/g, "");
-  const payload =
-    normalizedAssetPath === "index.html"
-      ? Buffer.from(rewriteDashboardHtml(body.toString("utf8"), prefix))
-      : normalizedAssetPath?.endsWith(".css")
-        ? Buffer.from(rewriteDashboardCss(body.toString("utf8"), prefix))
-      : body;
-  return reply.status(response.status).send(payload);
+  if (
+    normalizedAssetPath === "index.html" ||
+    normalizedAssetPath?.endsWith(".css")
+  ) {
+    const body = await readBrowserDashboardBody(response);
+    const payload =
+      normalizedAssetPath === "index.html"
+        ? rewriteDashboardHtml(body.toString("utf8"), prefix)
+        : rewriteDashboardCss(body.toString("utf8"), prefix);
+    return reply.status(response.status).send(payload);
+  }
+
+  if (!response.body) {
+    return reply.status(response.status).send();
+  }
+  let streamedBytes = 0;
+  const bounded = new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      streamedBytes += chunk.byteLength;
+      if (streamedBytes > BROWSER_DASHBOARD_MAX_ASSET_BYTES) {
+        callback(
+          new HttpError(
+            502,
+            "environment_browser_asset_too_large",
+            "The Playwright Dashboard asset is too large.",
+          ),
+        );
+        return;
+      }
+      callback(null, chunk);
+    },
+  });
+  return reply
+    .status(response.status)
+    .send(
+      Readable.fromWeb(
+        response.body as unknown as import("node:stream/web").ReadableStream,
+      ).pipe(bounded),
+    );
+}
+
+async function readBrowserDashboardBody(response: Response) {
+  const body = Buffer.from(await response.arrayBuffer());
+  if (body.byteLength > BROWSER_DASHBOARD_MAX_ASSET_BYTES) {
+    throw new HttpError(
+      502,
+      "environment_browser_asset_too_large",
+      "The Playwright Dashboard asset is too large.",
+    );
+  }
+  return body;
 }
 
 async function fetchBrowserDashboardAsset(upstream: {

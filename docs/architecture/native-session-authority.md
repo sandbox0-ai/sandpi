@@ -82,13 +82,25 @@ automatic continuation. The Web IDE and file APIs expose the reserved
 `/workspace/.sandpi` subtree as readable, Sandpi-managed state while keeping it
 read-only and outside the Git projection.
 
-Workspace directory transport is deliberately shallow. The initial IDE
-snapshot lists only `/workspace`; every folder expansion requests that
-folder's direct entries and clients cache the result. Recursive file watching
-invalidates loaded pages but never causes the server to eagerly enumerate the
-whole Workspace. While a native volume watch is connecting or unavailable, the
-client reconciles only the shallow pages it already loaded; this keeps live
-agent-created files visible without reverting to eager recursive traversal.
+Workspace directory transport is deliberately shallow. The file tree requests
+`/workspace` independently from the Git projection, so Git discovery cannot
+hold up the first paint. An explicit file navigation requests and renders that
+file before starting the root listing, Git projection and watch connection, so
+the file tree can fill asynchronously without blocking useful content. Every
+folder expansion requests only that folder's direct entries. The browser
+retains an Environment-runtime-scoped, bounded in-memory cache across Inspector
+remounts and revalidates it from native events; private file content is not
+written to browser-persistent storage.
+
+The event socket first establishes one non-recursive root watch, then the
+client subscribes only the shallow directories it has expanded and the Git
+metadata roots it has discovered. This avoids Sandbox0 recursively walking
+generated and dependency trees just to make the file browser live. A file
+event invalidates its parent page and affected open documents rather than the
+whole Workspace. Polling begins only when the native watch handshake times out
+or disconnects, runs at a bounded interval, and reconciles only pages already
+loaded. Git discovery is independently coalesced for a short period so the tree
+and a file opened immediately afterwards share one native scan.
 File-tree context actions create one direct child, rename an entry within its
 current parent, or delete a file or folder recursively through the Sandpi API.
 The server validates paths and leaf names, rejects protected, hidden, symlinked

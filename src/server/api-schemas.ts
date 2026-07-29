@@ -361,6 +361,13 @@ export const workspaceIdeRenameEntrySchema = z
   })
   .strict();
 
+export const workspaceIdeWatchSubscriptionSchema = z
+  .object({
+    type: z.literal("subscribe"),
+    paths: z.array(z.string().trim().min(1).max(4_096)).max(64),
+  })
+  .strict();
+
 export const terminalInputSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("input"),

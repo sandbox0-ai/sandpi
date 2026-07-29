@@ -30,7 +30,11 @@ import {
   type UIEvent,
 } from "react";
 
-import { Inspector, type InspectorTab } from "@/components/inspector";
+import {
+  Inspector,
+  INSPECTOR_KEEP_ALIVE_MS,
+  type InspectorTab,
+} from "@/components/inspector";
 import {
   SandpiMark,
   UserAvatar,
@@ -272,6 +276,8 @@ export function CodexConversation({
   onDerivedSessionCreated,
 }: ConversationProps) {
   const ui = getCodexUiCopy(language).conversation;
+  const [mountedInspectorEnvironmentId, setMountedInspectorEnvironmentId] =
+    useState(inspectorOpen ? environment.id : "");
   const [modelCatalog, setModelCatalog] = useState<CodexModelCatalog>(() => ({
     environmentId: environment.id,
     credentialRevision: environment.credentialRevision,
@@ -283,6 +289,19 @@ export function CodexConversation({
     modelCatalog.credentialRevision === environment.credentialRevision
       ? modelCatalog.options
       : EMPTY_CODEX_MODEL_OPTIONS;
+
+  useEffect(() => {
+    if (inspectorOpen) {
+      setMountedInspectorEnvironmentId(environment.id);
+      return;
+    }
+    const timeout = window.setTimeout(() => {
+      setMountedInspectorEnvironmentId((current) =>
+        current === environment.id ? "" : current,
+      );
+    }, INSPECTOR_KEEP_ALIVE_MS);
+    return () => window.clearTimeout(timeout);
+  }, [environment.id, inspectorOpen]);
   const modelCatalogUnavailable =
     modelCatalog.environmentId === environment.id &&
     modelCatalog.credentialRevision === environment.credentialRevision
@@ -2659,13 +2678,15 @@ export function CodexConversation({
           onClose={closeAgentThreads}
         />
       ) : null}
-      {inspectorOpen ? (
+      {inspectorOpen ||
+      mountedInspectorEnvironmentId === environment.id ? (
         <Inspector
           language={language}
           timeZone={timeZone}
           environment={environment}
           session={session}
           activeTab={inspectorTab}
+          hidden={!inspectorOpen}
           widthRatio={inspectorWidthRatio}
           workspaceNavigationRequest={workspaceNavigationRequest}
           onWorkspaceNavigationHandled={onWorkspaceNavigationHandled}

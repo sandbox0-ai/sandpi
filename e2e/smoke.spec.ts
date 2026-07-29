@@ -24,6 +24,7 @@ import type {
   CodexTurn,
 } from "../src/harnesses/codex/types";
 import { PENDING_GUEST_PROMPT_STORAGE_KEY } from "../src/lib/auth-navigation";
+import { BROWSER_DASHBOARD_SESSION_READY_MESSAGE } from "../src/lib/environment-browser";
 import {
   getMockBootstrap,
   mockEnvironmentMetrics,
@@ -1639,14 +1640,22 @@ test("keeps New Session header operations aligned with the conversation", async 
   const browserFrame = page.locator(
     'iframe[title="Shared Environment browser"]',
   );
+  const browserPanel = page.locator(".browser-panel");
+  const filesPanel = page.locator(".files-panel");
   await expect(browserFrame).toHaveCount(1);
+  await expect(browserPanel).toBeVisible();
+  await expect(filesPanel).toBeHidden();
   await inspectorViews
     .getByRole("button", { name: "Files", exact: true })
     .click();
   await expect(browserFrame).toHaveCount(1);
   await expect(browserFrame).toBeHidden();
+  await expect(browserPanel).toBeHidden();
+  await expect(filesPanel).toBeVisible();
   await browserView.click();
   await expect(browserFrame).toBeVisible();
+  await expect(browserPanel).toBeVisible();
+  await expect(filesPanel).toBeHidden();
   expect(browserSessionStarts).toBe(0);
 
   await page.getByRole("button", { name: "New tab", exact: true }).click();
@@ -1687,6 +1696,12 @@ test("keeps New Session header operations aligned with the conversation", async 
   await expect(
     header.getByRole("button", { name: "Open inspector" }),
   ).toHaveAttribute("aria-pressed", "false");
+  await expect(browserFrame).toHaveCount(1);
+  await expect(browserFrame).toBeHidden();
+
+  await header.getByRole("button", { name: "Open inspector" }).click();
+  await expect(browserFrame).toBeVisible();
+  expect(browserSessionStarts).toBe(0);
 });
 
 test("refreshes the Codex account and live limits after device login", async ({
@@ -4026,6 +4041,11 @@ test("opens Environment file and loopback links in their native inspectors", asy
   const pagePath = "/workspace/app/page.tsx";
   const directoryRequests: string[] = [];
   const fileRequests: string[] = [];
+  const watchSubscriptions: string[][] = [];
+  let releaseDirectoryListings: () => void = () => undefined;
+  const directoryListingsReleased = new Promise<void>((resolve) => {
+    releaseDirectoryListings = resolve;
+  });
   let browserOpenBody: unknown;
   const browserErrors: string[] = [];
   page.on("console", (message) => {
@@ -4192,6 +4212,19 @@ test("opens Environment file and loopback links in their native inspectors", asy
       "path",
     );
     if (directoryPath) directoryRequests.push(directoryPath);
+    await directoryListingsReleased;
+    if (directoryPath === "/workspace") {
+      await route.fulfill({
+        json: {
+          data: {
+            path: "/workspace",
+            refreshedAt: now,
+            entries: ideSnapshot.files[0]?.children ?? [],
+          },
+        },
+      });
+      return;
+    }
     const listing: WorkspaceDirectoryListing = {
       path: "/workspace/app",
       refreshedAt: now,
@@ -4206,6 +4239,9 @@ test("opens Environment file and loopback links in their native inspectors", asy
     };
     await route.fulfill({ json: { data: listing } });
   });
+  await page.route("**/api/v1/environments/**/ide/git", async (route) => {
+    await route.fulfill({ json: { data: ideSnapshot.git } });
+  });
   await page.route("**/api/v1/environments/**/ide", async (route) => {
     await route.fulfill({ json: { data: ideSnapshot } });
   });
@@ -4214,6 +4250,15 @@ test("opens Environment file and loopback links in their native inspectors", asy
       url.pathname ===
       `/api/v1/environments/${encodeURIComponent(environment.id)}/ide/events`,
     (socket) => {
+      socket.onMessage((raw) => {
+        const message = JSON.parse(String(raw)) as {
+          type?: string;
+          paths?: string[];
+        };
+        if (message.type === "subscribe" && message.paths) {
+          watchSubscriptions.push(message.paths);
+        }
+      });
       socket.send(JSON.stringify({ type: "ready", at: now }));
     },
   );
@@ -4231,7 +4276,9 @@ test("opens Environment file and loopback links in their native inspectors", asy
       await route.fulfill({
         status: 200,
         contentType: "text/html",
-        body: "<!doctype html><p>Shared Browser fixture</p>",
+        body: `<!doctype html><p>Shared Browser fixture</p><script>window.parent.postMessage({type:${JSON.stringify(
+          BROWSER_DASHBOARD_SESSION_READY_MESSAGE,
+        )}}, "*")</script>`,
       });
     },
   );
@@ -4242,6 +4289,13 @@ test("opens Environment file and loopback links in their native inspectors", asy
   await expect(page.getByText("Loading conversation…")).toBeHidden();
 
   await page.locator(`[data-workspace-path="${globalsPath}"]`).click();
+  await expect(
+    page.getByText("workspace / app/globals.css", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByLabel("globals.css", { exact: true })).toBeVisible();
+  await expect.poll(() => fileRequests).toContain(globalsPath);
+  releaseDirectoryListings();
+
   const inspectorViews = page.getByRole("navigation", {
     name: "Inspector views",
   });
@@ -4253,10 +4307,6 @@ test("opens Environment file and loopback links in their native inspectors", asy
   await expect(inspectorViews).toBeVisible();
   await expect(globalsTab).toHaveAttribute("aria-selected", "true");
   await expect(
-    page.getByText("workspace / app/globals.css", { exact: true }),
-  ).toBeVisible();
-  await expect(page.getByLabel("globals.css", { exact: true })).toBeVisible();
-  await expect(
     workspaceTree.locator(`button[title="${globalsPath}"]`),
   ).toHaveAttribute("aria-current", "page");
   await expect(
@@ -4266,7 +4316,11 @@ test("opens Environment file and loopback links in their native inspectors", asy
     .poll(() => new URL(page.url()).searchParams.get("path"))
     .toBe(globalsPath);
   await expect.poll(() => directoryRequests).toContain("/workspace/app");
-  await expect.poll(() => fileRequests).toContain(globalsPath);
+  await expect
+    .poll(() =>
+      watchSubscriptions.some((paths) => paths.includes("/workspace/app")),
+    )
+    .toBe(true);
 
   await page.locator(`[data-workspace-path="${pagePath}"]`).click();
   const pageTab = openFiles.getByRole("tab", { name: /page\.tsx/ });
@@ -4284,7 +4338,15 @@ test("opens Environment file and loopback links in their native inspectors", asy
     .poll(() => new URL(page.url()).searchParams.get("path"))
     .toBe(pagePath);
   await expect.poll(() => fileRequests).toContain(pagePath);
-  expect(new Set(directoryRequests)).toEqual(new Set(["/workspace/app"]));
+  expect(new Set(directoryRequests)).toEqual(
+    new Set(["/workspace", "/workspace/app"]),
+  );
+  expect(directoryRequests.filter((path) => path === "/workspace")).toHaveLength(
+    1,
+  );
+  expect(
+    directoryRequests.filter((path) => path === "/workspace/app"),
+  ).toHaveLength(1);
 
   await page
     .locator('[data-browser-url="http://localhost:3000/preview"]')
@@ -4301,6 +4363,7 @@ test("opens Environment file and loopback links in their native inspectors", asy
       .getByText("Shared Browser fixture"),
   ).toBeVisible();
 
+  const fileRequestsBeforeTabRoundTrip = fileRequests.length;
   await inspectorViews
     .getByRole("button", { name: "Activity", exact: true })
     .click();
@@ -4312,6 +4375,7 @@ test("opens Environment file and loopback links in their native inspectors", asy
       name: /page\.tsx/,
     }),
   ).toHaveAttribute("aria-selected", "true");
+  expect(fileRequests).toHaveLength(fileRequestsBeforeTabRoundTrip);
 
   await page.reload();
   await expect(page.getByText("Loading conversation…")).toBeHidden();
@@ -4360,7 +4424,7 @@ test("reconciles agent-created files while the native volume watch is unavailabl
   const now = Date.now() / 1_000;
   const livePath = "/workspace/live-agent-file.ts";
   let exposeLiveFile = false;
-  let snapshotReads = 0;
+  let rootReads = 0;
   const liveFile: WorkspaceIdeFile = {
     path: livePath,
     name: "live-agent-file.ts",
@@ -4379,17 +4443,14 @@ test("reconciles agent-created files while the native volume watch is unavailabl
   await page.route("**/api/v1/environments/**/ide/file?*", async (route) => {
     await route.fulfill({ json: { data: liveFile } });
   });
-  await page.route("**/api/v1/environments/**/ide", async (route) => {
-    snapshotReads += 1;
-    const snapshot: WorkspaceIdeSnapshot = {
-      refreshedAt: now,
-      files: [
-        {
-          id: "workspace",
-          name: "workspace",
+  await page.route("**/api/v1/environments/**/files?*", async (route) => {
+    rootReads += 1;
+    await route.fulfill({
+      json: {
+        data: {
           path: "/workspace",
-          kind: "folder",
-          children: exposeLiveFile
+          refreshedAt: now,
+          entries: exposeLiveFile
             ? [
                 {
                   id: "live-agent-file",
@@ -4403,10 +4464,11 @@ test("reconciles agent-created files while the native volume watch is unavailabl
               ]
             : [],
         },
-      ],
-      git: { repositories: [] },
-    };
-    await route.fulfill({ json: { data: snapshot } });
+      },
+    });
+  });
+  await page.route("**/api/v1/environments/**/ide/git", async (route) => {
+    await route.fulfill({ json: { data: { repositories: [] } } });
   });
   await page.routeWebSocket(
     (url) =>
@@ -4426,9 +4488,9 @@ test("reconciles agent-created files while the native volume watch is unavailabl
 
   exposeLiveFile = true;
   await expect(page.locator(`button[title="${livePath}"]`)).toBeVisible({
-    timeout: 7_000,
+    timeout: 13_000,
   });
-  expect(snapshotReads).toBeGreaterThan(1);
+  expect(rootReads).toBeGreaterThan(1);
 });
 
 test("opens the Environment terminal from New Session and replays only the last three commands", async ({
@@ -4686,7 +4748,7 @@ test("does not answer historical terminal queries on the live PTY", async ({
     .toBe(true);
 });
 
-test("shows a matching skeleton while each Inspector tab loads", async ({
+test("shows incremental Workspace loading and a matching Metrics skeleton", async ({
   page,
 }) => {
   const bootstrap = getMockBootstrap();
@@ -4701,6 +4763,19 @@ test("shows a matching skeleton while each Inspector tab loads", async ({
   bootstrap.selectedEnvironmentId = environment.id;
   bootstrap.selectedSessionId = session.id;
   const browserErrors: string[] = [];
+  let releaseFiles: () => void = () => undefined;
+  let releaseMetrics: () => void = () => undefined;
+  let releaseRangeMetrics: () => void = () => undefined;
+  let metricsRequestCount = 0;
+  const filesReleased = new Promise<void>((resolve) => {
+    releaseFiles = resolve;
+  });
+  const metricsReleased = new Promise<void>((resolve) => {
+    releaseMetrics = resolve;
+  });
+  const rangeMetricsReleased = new Promise<void>((resolve) => {
+    releaseRangeMetrics = resolve;
+  });
   page.on("console", (message) => {
     if (message.type() === "error") browserErrors.push(message.text());
   });
@@ -4724,22 +4799,28 @@ test("shows a matching skeleton while each Inspector tab loads", async ({
       });
       return;
     }
-    if (/\/(ide|metrics)$/.test(path)) {
-      await new Promise((resolve) => setTimeout(resolve, 700));
-    }
-    if (path.endsWith("/ide")) {
+    if (path.endsWith("/files")) {
+      await filesReleased;
       await route.fulfill({
         json: {
           data: {
-            files: [],
-            git: { repositories: [] },
+            path: "/workspace",
+            entries: [],
             refreshedAt: Date.now() / 1_000,
           },
         },
       });
       return;
     }
+    if (path.endsWith("/ide/git")) {
+      await route.fulfill({ json: { data: { repositories: [] } } });
+      return;
+    }
     if (path.endsWith("/metrics")) {
+      metricsRequestCount += 1;
+      await (metricsRequestCount === 1
+        ? metricsReleased
+        : rangeMetricsReleased);
       await route.fulfill({ json: { data: mockEnvironmentMetrics } });
       return;
     }
@@ -4780,17 +4861,17 @@ test("shows a matching skeleton while each Inspector tab loads", async ({
   await page.getByRole("button", { name: "Open inspector" }).click();
   const tabs = page.getByRole("navigation", { name: "Inspector views" });
 
-  for (const [tab, label] of [
-    ["files", "Files"],
-    ["metrics", "Metrics"],
-  ] as const) {
-    if (tab !== "files")
-      await tabs.getByRole("button", { name: label }).click();
-    const skeleton = page.locator(`.inspector-skeleton-${tab}`);
-    await expect(skeleton).toBeVisible();
-    await expect(skeleton).toContainText(`Loading ${label.toLowerCase()}…`);
-    await expect(skeleton).toBeHidden();
-  }
+  const workspace = page.getByRole("region", { name: "Sandpi Web IDE" });
+  await expect(workspace.getByText("Loading Workspace…")).toBeVisible();
+  releaseFiles();
+  await expect(workspace.getByText("Loading Workspace…")).toBeHidden();
+
+  await tabs.getByRole("button", { name: "Metrics" }).click();
+  const skeleton = page.locator(".inspector-skeleton-metrics");
+  await expect(skeleton).toBeVisible();
+  await expect(skeleton).toContainText("Loading metrics…");
+  releaseMetrics();
+  await expect(skeleton).toBeHidden();
 
   const rangeRequest = page.waitForRequest((candidate) => {
     const url = new URL(candidate.url());
@@ -4805,6 +4886,7 @@ test("shows a matching skeleton while each Inspector tab loads", async ({
   await metricsRange.selectOption("21600");
   await rangeRequest;
   await expect(page.locator(".inspector-skeleton-metrics")).toBeVisible();
+  releaseRangeMetrics();
   await expect(page.locator(".inspector-skeleton-metrics")).toBeHidden();
   await expect(page.getByText("Last 6 hours", { exact: true })).toBeVisible();
   await expect(page.locator(".metric-chart-pause-band")).toHaveCount(3);
@@ -4963,16 +5045,19 @@ test("resizes the Inspector proportionally and restores the local split", async 
       },
     });
   });
-  await page.route("**/api/v1/environments/**/ide", async (route) => {
+  await page.route("**/api/v1/environments/**/files?*", async (route) => {
     await route.fulfill({
       json: {
         data: {
-          files: [],
-          git: { repositories: [] },
+          path: "/workspace",
+          entries: [],
           refreshedAt: Date.now() / 1_000,
         },
       },
     });
+  });
+  await page.route("**/api/v1/environments/**/ide/git", async (route) => {
+    await route.fulfill({ json: { data: { repositories: [] } } });
   });
 
   await page.goto(
@@ -5165,6 +5250,7 @@ test("renders the dedicated live Web IDE with Git state and changed lines", asyn
   });
   page.on("pageerror", (error) => browserErrors.push(error.message));
   let savedContent = "";
+  let fileReads = 0;
   let directoryLoads = 0;
   let managedDirectoryLoads = 0;
   let remoteFile = file;
@@ -5191,6 +5277,18 @@ test("renders the dedicated live Web IDE with Git state and changed lines", asyn
     const directoryPath = new URL(route.request().url()).searchParams.get(
       "path",
     );
+    if (directoryPath === "/workspace") {
+      await route.fulfill({
+        json: {
+          data: {
+            path: "/workspace",
+            refreshedAt: now,
+            entries: snapshot.files[0]?.children ?? [],
+          },
+        },
+      });
+      return;
+    }
     if (directoryPath === "/workspace/.sandpi") {
       managedDirectoryLoads += 1;
       const listing: WorkspaceDirectoryListing = {
@@ -5342,10 +5440,14 @@ test("renders the dedicated live Web IDE with Git state and changed lines", asyn
       });
       return;
     }
+    fileReads += 1;
     await route.fulfill({ json: { data: remoteFile } });
   });
   await page.route("**/api/v1/environments/**/ide", async (route) => {
     await route.fulfill({ json: { data: snapshot } });
+  });
+  await page.route("**/api/v1/environments/**/ide/git", async (route) => {
+    await route.fulfill({ json: { data: snapshot.git } });
   });
   await page.routeWebSocket(
     (url) =>
@@ -5392,6 +5494,8 @@ test("renders the dedicated live Web IDE with Git state and changed lines", asyn
   await expect(
     page.locator('button[title="/workspace/src/demo.ts"]'),
   ).toHaveCount(0);
+  expect(fileReads).toBe(0);
+  await expect(page.locator(".monaco-editor")).toHaveCount(0);
   const sourceFolder = page.locator('button[title="/workspace/src"]');
   await sourceFolder.click();
   await expect(
@@ -5808,6 +5912,20 @@ test("renders verified image, audio, video and PDF Workspace previews", async ({
       return;
     }
     await route.fulfill({ json: { data: file } });
+  });
+  await page.route("**/api/v1/environments/**/files?*", async (route) => {
+    await route.fulfill({
+      json: {
+        data: {
+          path: "/workspace",
+          refreshedAt: now,
+          entries: snapshot.files[0]?.children ?? [],
+        },
+      },
+    });
+  });
+  await page.route("**/api/v1/environments/**/ide/git", async (route) => {
+    await route.fulfill({ json: { data: snapshot.git } });
   });
   await page.route("**/api/v1/environments/**/ide", async (route) => {
     await route.fulfill({ json: { data: snapshot } });
