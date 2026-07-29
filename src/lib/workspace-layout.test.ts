@@ -2,9 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  clampFileBrowserSidebarWidthForAvailableWidth,
   clampInspectorWidthRatioForAvailableWidth,
+  DEFAULT_FILE_BROWSER_SIDEBAR_WIDTH,
   DEFAULT_INSPECTOR_WIDTH_RATIO,
+  fileBrowserSidebarWidthFromPointer,
   inspectorWidthRatioFromPointer,
+  normalizeFileBrowserSidebarWidth,
   normalizeInspectorWidthRatio,
 } from "./workspace-layout";
 
@@ -51,5 +55,42 @@ test("keeps both workspace panes usable while dragging", () => {
   assert.equal(
     clampInspectorWidthRatioForAvailableWidth(0.2, 741),
     0.4858,
+  );
+});
+
+test("normalizes persisted file browser sidebar widths", () => {
+  assert.equal(
+    normalizeFileBrowserSidebarWidth(undefined),
+    DEFAULT_FILE_BROWSER_SIDEBAR_WIDTH,
+  );
+  assert.equal(
+    normalizeFileBrowserSidebarWidth(Number.NaN),
+    DEFAULT_FILE_BROWSER_SIDEBAR_WIDTH,
+  );
+  assert.equal(normalizeFileBrowserSidebarWidth(287.6), 288);
+  assert.equal(normalizeFileBrowserSidebarWidth(40), 160);
+  assert.equal(normalizeFileBrowserSidebarWidth(900), 480);
+});
+
+test("keeps the file browser and editor usable while dragging", () => {
+  assert.equal(
+    clampFileBrowserSidebarWidthForAvailableWidth(480, 594),
+    346,
+  );
+  assert.equal(
+    clampFileBrowserSidebarWidthForAvailableWidth(160, 360),
+    160,
+  );
+  assert.equal(
+    clampFileBrowserSidebarWidthForAvailableWidth(240, 300),
+    146,
+  );
+  assert.equal(
+    fileBrowserSidebarWidthFromPointer({
+      pointerX: 328,
+      workbenchLeft: 40,
+      workbenchWidth: 800,
+    }),
+    288,
   );
 });

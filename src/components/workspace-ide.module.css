@@ -88,21 +88,141 @@
   display: grid;
   min-width: 0;
   min-height: 0;
-  grid-template-columns: minmax(190px, 28%) minmax(0, 1fr);
+  grid-template-columns:
+    var(--workspace-file-sidebar-width, 240px)
+    8px
+    minmax(0, 1fr);
   overflow: hidden;
+  transition: grid-template-columns 160ms ease;
 }
 
-.standalone .workbench {
-  grid-template-columns: 268px minmax(0, 1fr);
+.workbench.sidebarCollapsed {
+  grid-template-columns: 0 0 minmax(0, 1fr);
+}
+
+.workbench.resizing {
+  transition: none;
 }
 
 .sidebar {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  grid-template-rows: 34px minmax(0, 1fr);
+  overflow: hidden;
+  border-right: 1px solid var(--line);
+  background: var(--sidebar);
+  opacity: 1;
+  transition:
+    border-color 120ms ease,
+    opacity 120ms ease,
+    visibility 0s linear;
+}
+
+.sidebarCollapsed .sidebar {
+  visibility: hidden;
+  border-right-color: transparent;
+  opacity: 0;
+  transition:
+    border-color 120ms ease,
+    opacity 100ms ease,
+    visibility 0s linear 160ms;
+}
+
+.sidebarHeader {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 0 5px 0 10px;
+  border-bottom: 1px solid var(--line-soft);
+  color: var(--ink-faint);
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.sidebarHeader > span {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebarHeader button,
+.sidebarExpandButton {
+  display: inline-flex;
+  width: 25px;
+  height: 25px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ink-faint);
+  cursor: pointer;
+}
+
+.sidebarHeader button:hover,
+.sidebarHeader button:focus-visible,
+.sidebarExpandButton:hover,
+.sidebarExpandButton:focus-visible {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+.sidebarHeader button:focus-visible,
+.sidebarExpandButton:focus-visible {
+  outline: 1px solid var(--blue);
+  outline-offset: -1px;
+}
+
+.treeViewport {
   min-width: 0;
   min-height: 0;
   overflow: auto;
-  border-right: 1px solid var(--line);
-  background: var(--sidebar);
   scrollbar-width: thin;
+}
+
+.sidebarResizeHandle {
+  position: relative;
+  z-index: 4;
+  min-width: 0;
+  min-height: 0;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.sidebarResizeHandle span {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 2px;
+  background: var(--blue);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.sidebarResizeHandle:hover span,
+.sidebarResizeHandle:focus-visible span,
+.resizing .sidebarResizeHandle span {
+  opacity: 1;
+}
+
+.sidebarResizeHandle:focus-visible {
+  outline: none;
+}
+
+.sidebarCollapsed .sidebarResizeHandle {
+  pointer-events: none;
+  opacity: 0;
 }
 
 .treeRoot {
@@ -332,6 +452,14 @@ button.directoryStatus:hover {
   color: var(--ink-faint);
   font-size: 9.5px;
   cursor: pointer;
+}
+
+.tabs > button.sidebarExpandButton {
+  width: 34px;
+  min-width: 34px;
+  max-width: 34px;
+  justify-content: center;
+  padding: 0;
 }
 
 .tabs > button > span:not(.closeTab) {
@@ -833,10 +961,6 @@ button.directoryStatus:hover {
 }
 
 @media (max-width: 760px) {
-  .standalone .workbench {
-    grid-template-columns: minmax(145px, 38vw) minmax(0, 1fr);
-  }
-
   .topbar {
     grid-template-columns: auto minmax(0, 1fr);
   }
@@ -851,6 +975,12 @@ button.directoryStatus:hover {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .workbench,
+  .sidebar,
+  .sidebarResizeHandle span {
+    transition: none;
+  }
+
   .loading svg,
   .documentRefreshing svg {
     animation: none;

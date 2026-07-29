@@ -4496,6 +4496,78 @@ test("opens Environment file and loopback links in their native inspectors", asy
     directoryRequests.filter((path) => path === "/workspace/app"),
   ).toHaveLength(1);
 
+  const fileBrowserResizeHandle = page.getByRole("separator", {
+    name: "Resize file browser",
+  });
+  const initialFileBrowserWidth = (await workspaceTree.boundingBox())!.width;
+  const fileBrowserResizeHandleBox =
+    await fileBrowserResizeHandle.boundingBox();
+  expect(fileBrowserResizeHandleBox).not.toBeNull();
+  await page.mouse.move(
+    fileBrowserResizeHandleBox!.x + fileBrowserResizeHandleBox!.width / 2,
+    fileBrowserResizeHandleBox!.y + 120,
+  );
+  await page.mouse.down();
+  await page.mouse.move(
+    fileBrowserResizeHandleBox!.x + 72,
+    fileBrowserResizeHandleBox!.y + 120,
+    { steps: 5 },
+  );
+  await page.mouse.up();
+  await expect
+    .poll(async () => (await workspaceTree.boundingBox())?.width ?? 0)
+    .toBeGreaterThan(initialFileBrowserWidth + 50);
+  const resizedFileBrowserWidth = (await workspaceTree.boundingBox())!.width;
+  await expect
+    .poll(() =>
+      page.evaluate((storageKey) => {
+        const raw = window.localStorage.getItem(storageKey);
+        return raw
+          ? (
+              JSON.parse(raw) as {
+                workspace?: { fileBrowserSidebarWidth?: number };
+              }
+            ).workspace?.fileBrowserSidebarWidth
+          : undefined;
+      }, LOCAL_UI_PREFERENCES_STORAGE_KEY),
+    )
+    .toBeCloseTo(resizedFileBrowserWidth, 0);
+
+  await page
+    .getByRole("button", { name: "Collapse file browser" })
+    .click();
+  await expect(workspaceTree).toBeHidden();
+  const expandFileBrowser = page.getByRole("button", {
+    name: "Expand file browser",
+  });
+  await expect(expandFileBrowser).toBeFocused();
+  await expect
+    .poll(() =>
+      page.evaluate((storageKey) => {
+        const raw = window.localStorage.getItem(storageKey);
+        return raw
+          ? (
+              JSON.parse(raw) as {
+                workspace?: { fileBrowserSidebarCollapsed?: boolean };
+              }
+            ).workspace?.fileBrowserSidebarCollapsed
+          : undefined;
+      }, LOCAL_UI_PREFERENCES_STORAGE_KEY),
+    )
+    .toBe(true);
+
+  await page.reload();
+  await expect(page.getByText("Loading conversation…")).toBeHidden();
+  await expect(expandFileBrowser).toBeVisible();
+  await expandFileBrowser.click();
+  await expect(workspaceTree).toBeVisible();
+  await expect
+    .poll(async () => (await workspaceTree.boundingBox())?.width ?? 0)
+    .toBeCloseTo(resizedFileBrowserWidth, 0);
+  await expect(
+    page.getByRole("button", { name: "Collapse file browser" }),
+  ).toBeFocused();
+
   await page
     .locator('[data-browser-url="http://localhost:3000/preview"]')
     .click();
