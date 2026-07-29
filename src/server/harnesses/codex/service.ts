@@ -57,6 +57,7 @@ import {
 import type { Environment } from "@/lib/types";
 import { toUnixTimestamp } from "@/lib/time";
 import { HttpError } from "@/server/http-error";
+import { environmentBrowserSessionName } from "@/server/environments/browser-session";
 import type {
   EnvironmentRuntimeRecord,
   RuntimeAdapter,
@@ -118,6 +119,8 @@ const MAX_CODEX_RATE_LIMIT_BUCKETS = 16;
 const MAX_CODEX_RATE_LIMIT_RESET_CREDITS = 1_000_000;
 const CODEX_APPLY_PATCH_STREAMING_CONFIG =
   "features.apply_patch_streaming_events";
+const CODEX_PLAYWRIGHT_SESSION_CONFIG =
+  "shell_environment_policy.set.PLAYWRIGHT_CLI_SESSION";
 const CODEX_AGENT_THREAD_PAGE_LIMIT = 100;
 const MAX_CODEX_AGENT_THREADS = 1_000;
 const CODEX_THREAD_CREATION_PAGE_LIMIT = 100;
@@ -473,6 +476,7 @@ export class CodexService {
       params: {
         ...threadConfiguration(
           {
+            sessionId,
             modelId: input.modelId,
             reasoningEffort: input.reasoningEffort,
             collaborationMode: input.collaborationMode,
@@ -1181,6 +1185,7 @@ export class CodexService {
             ? { lastTurnId: input.selectedNativeTurnId }
             : {}),
           ...threadConfiguration({
+            sessionId: childSessionId,
             modelId: sourceRuntime.modelId,
             reasoningEffort: sourceRuntime.reasoningEffort,
           }),
@@ -4441,6 +4446,7 @@ export class CodexService {
       params: {
         threadId: session.nativeSessionId,
         ...threadConfiguration({
+          sessionId: session.sessionId,
           modelId: session.modelId,
           reasoningEffort: session.reasoningEffort,
         }),
@@ -5372,6 +5378,7 @@ function nativeCollaborationMode(
 }
 
 function threadConfiguration(input: {
+  sessionId: string;
   modelId?: string;
   reasoningEffort?: string;
   collaborationMode?: "plan";
@@ -5381,6 +5388,9 @@ function threadConfiguration(input: {
     ...(input.modelId ? { model: input.modelId } : {}),
     config: {
       [CODEX_APPLY_PATCH_STREAMING_CONFIG]: true,
+      [CODEX_PLAYWRIGHT_SESSION_CONFIG]: environmentBrowserSessionName(
+        input.sessionId,
+      ),
       ...(input.reasoningEffort
         ? { model_reasoning_effort: input.reasoningEffort }
         : {}),

@@ -466,6 +466,92 @@ test("skips a live runtime touch when lifecycle transition owns the lock", async
   assert.equal(touches, 0);
 });
 
+test("runs cleanup only when the Environment is already running", async () => {
+  let sharedDepth = 0;
+  let cleanupCalls = 0;
+  let accessRecords = 0;
+  const store = runtimeAccessStore({
+    async withEnvironmentRuntimeAccessLock(_environmentId, operation) {
+      sharedDepth += 1;
+      try {
+        return { acquired: true as const, value: await operation() };
+      } finally {
+        sharedDepth -= 1;
+      }
+    },
+    async recordEnvironmentRuntimeAccess() {
+      accessRecords += 1;
+      return environmentRuntime;
+    },
+  });
+  const service = new EnvironmentRuntimeAccessService(
+    store,
+    {} as RuntimeAdapter,
+  );
+
+  assert.equal(
+    await service.tryWithRunningRuntimeAccess(
+      "user-test",
+      environmentRuntime.id,
+      async (runtime) => {
+        assert.equal(sharedDepth, 1);
+        assert.strictEqual(runtime, environmentRuntime);
+        cleanupCalls += 1;
+      },
+    ),
+    true,
+  );
+  assert.equal(cleanupCalls, 1);
+  assert.equal(accessRecords, 0);
+});
+
+test("skips cleanup instead of waking a paused or lifecycle-busy Environment", async () => {
+  let cleanupCalls = 0;
+  const pausedStore = runtimeAccessStore({
+    runtime: {
+      ...environmentRuntime,
+      desiredState: "paused",
+      observedState: "paused",
+    },
+  });
+  const pausedService = new EnvironmentRuntimeAccessService(
+    pausedStore,
+    {} as RuntimeAdapter,
+  );
+
+  assert.equal(
+    await pausedService.tryWithRunningRuntimeAccess(
+      "user-test",
+      environmentRuntime.id,
+      async () => {
+        cleanupCalls += 1;
+      },
+    ),
+    false,
+  );
+
+  const busyStore = runtimeAccessStore({
+    async withEnvironmentRuntimeAccessLock() {
+      return { acquired: false as const };
+    },
+  });
+  const busyService = new EnvironmentRuntimeAccessService(
+    busyStore,
+    {} as RuntimeAdapter,
+  );
+  assert.equal(
+    await busyService.tryWithRunningRuntimeAccess(
+      "user-test",
+      environmentRuntime.id,
+      async () => {
+        cleanupCalls += 1;
+      },
+    ),
+    false,
+  );
+  assert.equal(cleanupCalls, 0);
+});
+
 test("quota admission rejects a runtime operation while holding the shared lock", async () => {
   let operationCalls = 0;
   let quotaChecks = 0;

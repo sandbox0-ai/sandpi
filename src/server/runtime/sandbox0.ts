@@ -48,6 +48,7 @@ import {
 } from "@/lib/workspace-path-policy";
 import { detectWorkspaceFilePreview } from "@/lib/workspace-file-preview";
 import { HttpError } from "@/server/http-error";
+import { ENVIRONMENT_BROWSER_OWNER_SESSION_NAME } from "@/server/environments/browser-session";
 import {
   isCodexComposerUploadPath,
   MAX_CODEX_COMPOSER_UPLOAD_BYTES,
@@ -95,6 +96,7 @@ import {
   playwrightStaleProfileLockRecoveryCommand,
   type PlaywrightCliResult,
 } from "./playwright-browser-recovery";
+import { PLAYWRIGHT_SESSION_WRAPPER_SOURCE } from "./playwright-session-wrapper";
 import { reconcileTerminalReplayCursor } from "./terminal-replay";
 import {
   terminalEnvironmentUpdate,
@@ -126,6 +128,16 @@ const BROWSER_DASHBOARD_AUTH_HEADER = "X-Sandpi-Browser-Proxy";
 const PLAYWRIGHT_CLI_TIMEOUT_SECONDS = 120;
 const PLAYWRIGHT_AGENT_SKILL_VERSION_MARKER =
   `${WORKSPACE_INTERNAL_ROOT}/browser/playwright-cli-agent-skill-package-version`;
+const PLAYWRIGHT_SESSION_WRAPPER_DIRECTORY =
+  `${WORKSPACE_INTERNAL_ROOT}/browser/bin`;
+const PLAYWRIGHT_SESSION_WRAPPER_PATH =
+  `${PLAYWRIGHT_SESSION_WRAPPER_DIRECTORY}/playwright-cli`;
+const PLAYWRIGHT_SESSION_WRAPPER_SOURCE_BASE64 = Buffer.from(
+  PLAYWRIGHT_SESSION_WRAPPER_SOURCE,
+  "utf8",
+).toString("base64");
+const CODEX_SUPERVISOR_BROWSER_WRAPPER_MARKER =
+  "SANDPI_PLAYWRIGHT_CLI_REAL";
 const PLAYWRIGHT_DASHBOARD_READY_SCRIPT = String.raw`
 const net = require("node:net");
 
@@ -239,6 +251,7 @@ export class Sandbox0Runtime implements RuntimeAdapter {
   readonly mode = "sandbox0" as const;
   private readonly client: Client;
   private readonly browserProxyKey: Buffer;
+  private readonly browserSessionEnsures = new Map<string, Promise<boolean>>();
 
   constructor(options: { apiHost: string; apiKey: string }) {
     this.browserProxyKey = createHash("sha256")
@@ -642,38 +655,45 @@ export class Sandbox0Runtime implements RuntimeAdapter {
 
   async ensureEnvironmentBrowserSession(
     runtime: EnvironmentRuntimeRecord,
+    browserSessionName: string,
   ): Promise<boolean> {
+    const key = [
+      runtime.sandboxId,
+      runtime.runtimeGeneration,
+      browserSessionName,
+    ].join(":");
+    const active = this.browserSessionEnsures.get(key);
+    if (active) return active;
+
+    const pending = this.ensureEnvironmentBrowserSessionOnce(
+      runtime,
+      browserSessionName,
+    );
+    this.browserSessionEnsures.set(key, pending);
     try {
-      const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
-      const tabs = await runPlaywrightCli(sandbox, ["tab-list"]);
-      if (tabs.exitCode === 0) return false;
-      if (!isPlaywrightBrowserNotOpen(tabs)) {
-        requirePlaywrightCliSuccess(tabs);
+      return await pending;
+    } finally {
+      if (this.browserSessionEnsures.get(key) === pending) {
+        this.browserSessionEnsures.delete(key);
       }
-      await openPlaywrightBrowser(sandbox, "about:blank");
-      return true;
-    } catch (error) {
-      if (error instanceof HttpError) throw error;
-      throw translateSandbox0Error(error);
     }
   }
 
   async openEnvironmentBrowserUrl(
     runtime: EnvironmentRuntimeRecord,
+    browserSessionName: string,
     url: string,
   ): Promise<boolean> {
     try {
       const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
-      // The Dashboard AppService supervises the shared browser. Optimistically
-      // create the tab so the warm navigation path uses one Sandbox command
-      // instead of probing and then issuing a second command.
-      const openedTab = await runPlaywrightCli(sandbox, ["tab-new", url]);
-      if (openedTab.exitCode === 0) return false;
-      if (!isPlaywrightBrowserNotOpen(openedTab)) {
-        requirePlaywrightCliSuccess(openedTab);
-      }
-      await openPlaywrightBrowser(sandbox, url);
-      return true;
+      const browserRestarted = await this.ensureEnvironmentBrowserSession(
+        runtime,
+        browserSessionName,
+      );
+      requirePlaywrightCliSuccess(
+        await runPlaywrightCli(sandbox, ["goto", url], browserSessionName),
+      );
+      return browserRestarted;
     } catch (error) {
       if (error instanceof HttpError) throw error;
       throw translateSandbox0Error(error);
@@ -682,17 +702,105 @@ export class Sandbox0Runtime implements RuntimeAdapter {
 
   async resizeEnvironmentBrowserViewport(
     runtime: EnvironmentRuntimeRecord,
+    browserSessionName: string,
     viewport: BrowserDashboardViewport,
   ): Promise<void> {
     try {
       const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
+      await this.ensureEnvironmentBrowserSession(runtime, browserSessionName);
       requirePlaywrightCliSuccess(
         await runPlaywrightCli(sandbox, [
           "resize",
           String(viewport.width),
           String(viewport.height),
-        ]),
+        ], browserSessionName),
       );
+    } catch (error) {
+      if (error instanceof HttpError) throw error;
+      throw translateSandbox0Error(error);
+    }
+  }
+
+  async releaseEnvironmentBrowserSession(
+    runtime: EnvironmentRuntimeRecord,
+    browserSessionName: string,
+  ): Promise<void> {
+    try {
+      const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
+      const tabs = await runPlaywrightCli(
+        sandbox,
+        ["tab-list"],
+        browserSessionName,
+      );
+      if (tabs.exitCode !== 0) {
+        if (isPlaywrightBrowserNotOpen(tabs)) return;
+        requirePlaywrightCliSuccess(tabs);
+      }
+      requirePlaywrightCliSuccess(
+        await runPlaywrightCli(
+          sandbox,
+          ["tab-close"],
+          browserSessionName,
+        ),
+      );
+      requirePlaywrightCliSuccess(
+        await runPlaywrightCli(
+          sandbox,
+          ["detach"],
+          browserSessionName,
+        ),
+      );
+    } catch (error) {
+      if (error instanceof HttpError) throw error;
+      throw translateSandbox0Error(error);
+    }
+  }
+
+  private async ensureEnvironmentBrowserSessionOnce(
+    runtime: EnvironmentRuntimeRecord,
+    browserSessionName: string,
+  ) {
+    try {
+      const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
+      const attachedTabs = await runPlaywrightCli(
+        sandbox,
+        ["tab-list"],
+        browserSessionName,
+      );
+      if (attachedTabs.exitCode === 0) return false;
+      if (!isPlaywrightBrowserNotOpen(attachedTabs)) {
+        requirePlaywrightCliSuccess(attachedTabs);
+      }
+
+      const ownerTabs = await runPlaywrightCli(
+        sandbox,
+        ["tab-list"],
+        ENVIRONMENT_BROWSER_OWNER_SESSION_NAME,
+      );
+      let browserRestarted = false;
+      if (ownerTabs.exitCode !== 0) {
+        if (!isPlaywrightBrowserNotOpen(ownerTabs)) {
+          requirePlaywrightCliSuccess(ownerTabs);
+        }
+        await openPlaywrightBrowser(sandbox, "about:blank");
+        browserRestarted = true;
+      }
+
+      requirePlaywrightCliSuccess(
+        await runPlaywrightCli(
+          sandbox,
+          ["attach", ENVIRONMENT_BROWSER_OWNER_SESSION_NAME],
+          browserSessionName,
+        ),
+      );
+      requirePlaywrightCliSuccess(
+        await runPlaywrightCli(
+          sandbox,
+          ["tab-new", "about:blank"],
+          browserSessionName,
+        ),
+      );
+      return browserRestarted;
     } catch (error) {
       if (error instanceof HttpError) throw error;
       throw translateSandbox0Error(error);
@@ -808,30 +916,7 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     idempotencyKey: string,
   ) {
     return sandbox.createSession(
-      {
-        name: "codex-environment",
-        command: [
-          "/bin/sh",
-          "-lc",
-          `install -d -m 700 ${ENVIRONMENT_CODEX_HOME} && rm -rf ${ENVIRONMENT_CODEX_HOME}/auth.json && ln -s ${ENVIRONMENT_CODEX_AUTH_FILE} ${ENVIRONMENT_CODEX_HOME}/auth.json && while [ ! -s ${ENVIRONMENT_CODEX_AUTH_FILE} ]; do sleep 0.2; done && exec codex app-server --stdio -c 'cli_auth_credentials_store="file"' ${ENVIRONMENT_CODEX_DISABLED_FEATURES}`,
-        ],
-        cwd: "/workspace",
-        env: { HOME: "/workspace", CODEX_HOME: ENVIRONMENT_CODEX_HOME },
-        io: { mode: "pipes" },
-        lifecycle: {
-          restart: {
-            policy: "always",
-            initialBackoffMs: 500,
-            maxBackoffMs: 10_000,
-          },
-          runtimeRecovery: "restart",
-        },
-        readiness: { type: "process" },
-        eventRetention: {
-          maxBytes: EVENT_RETENTION_BYTES,
-          maxAgeSeconds: EVENT_RETENTION_SECONDS,
-        },
-      },
+      codexEnvironmentSupervisorSpec(),
       { idempotencyKey },
     );
   }
@@ -1082,6 +1167,18 @@ export class Sandbox0Runtime implements RuntimeAdapter {
       }
 
       await prepareEnvironmentCodexHome(sandbox);
+
+      if (
+        supervisor?.spec?.command &&
+        !supervisor.spec.command.some((value) =>
+          value.includes(CODEX_SUPERVISOR_BROWSER_WRAPPER_MARKER),
+        )
+      ) {
+        supervisor = await sandbox.updateSession(
+          supervisor.id,
+          codexEnvironmentSupervisorSpec(),
+        );
+      }
 
       supervisor ??= await this.createCodexSupervisor(
         sandbox,
@@ -2594,9 +2691,14 @@ function browserDashboardService(
 function runPlaywrightCli(
   sandbox: ReturnType<Client["sandboxes"]["sandbox"]>,
   args: string[],
+  sessionName?: string,
 ) {
   return sandbox.cmd("playwright-cli", {
-    command: ["playwright-cli", ...args],
+    command: [
+      "playwright-cli",
+      ...(sessionName ? [`-s=${sessionName}`] : []),
+      ...args,
+    ],
     cwd: "/workspace",
     envVars: { ...PLAYWRIGHT_CLI_ENVIRONMENT },
     wait: true,
@@ -2726,11 +2828,21 @@ harnesses=/workspace/.sandpi/harnesses
 home=${ENVIRONMENT_CODEX_HOME}
 marker=${WORKSPACE_CODEX_LAYOUT_MARKER}
 browser=/workspace/.sandpi/browser
+browser_bin=${PLAYWRIGHT_SESSION_WRAPPER_DIRECTORY}
+playwright_wrapper=${PLAYWRIGHT_SESSION_WRAPPER_PATH}
+playwright_wrapper_tmp=${PLAYWRIGHT_SESSION_WRAPPER_PATH}.tmp
 playwright_skill_marker=${PLAYWRIGHT_AGENT_SKILL_VERSION_MARKER}
 test ! -L "$internal"
 test ! -L "$harnesses"
 test ! -L "$browser"
 install -d -m 700 "$internal" "$harnesses" "$browser"
+test ! -L "$browser_bin"
+install -d -m 700 "$browser_bin"
+test ! -L "$playwright_wrapper"
+test ! -L "$playwright_wrapper_tmp"
+node -e 'process.stdout.write(Buffer.from(process.argv[1], "base64"))' '${PLAYWRIGHT_SESSION_WRAPPER_SOURCE_BASE64}' > "$playwright_wrapper_tmp"
+chmod 700 "$playwright_wrapper_tmp"
+mv -f "$playwright_wrapper_tmp" "$playwright_wrapper"
 test ! -L "$home"
 install -d -m 700 "$home"
 if [ -f "$marker" ]; then
@@ -2771,6 +2883,33 @@ sync -f /workspace 2>/dev/null || sync`;
       "Unable to prepare Codex native state in the Environment Workspace.",
     );
   }
+}
+
+function codexEnvironmentSupervisorSpec() {
+  return {
+    name: "codex-environment",
+    command: [
+      "/bin/sh",
+      "-lc",
+      `install -d -m 700 ${ENVIRONMENT_CODEX_HOME} && rm -rf ${ENVIRONMENT_CODEX_HOME}/auth.json && ln -s ${ENVIRONMENT_CODEX_AUTH_FILE} ${ENVIRONMENT_CODEX_HOME}/auth.json && while [ ! -s ${ENVIRONMENT_CODEX_AUTH_FILE} ]; do sleep 0.2; done && SANDPI_PLAYWRIGHT_CLI_REAL="$(readlink -f "$(command -v playwright-cli)")" && export SANDPI_PLAYWRIGHT_CLI_REAL && PATH=${PLAYWRIGHT_SESSION_WRAPPER_DIRECTORY}:$PATH && export PATH && exec codex app-server --stdio -c 'cli_auth_credentials_store="file"' ${ENVIRONMENT_CODEX_DISABLED_FEATURES}`,
+    ],
+    cwd: "/workspace",
+    env: { HOME: "/workspace", CODEX_HOME: ENVIRONMENT_CODEX_HOME },
+    io: { mode: "pipes" as const },
+    lifecycle: {
+      restart: {
+        policy: "always" as const,
+        initialBackoffMs: 500,
+        maxBackoffMs: 10_000,
+      },
+      runtimeRecovery: "restart" as const,
+    },
+    readiness: { type: "process" as const },
+    eventRetention: {
+      maxBytes: EVENT_RETENTION_BYTES,
+      maxAgeSeconds: EVENT_RETENTION_SECONDS,
+    },
+  };
 }
 
 async function installCodexCredential(
