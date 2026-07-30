@@ -5697,7 +5697,7 @@ test("shows incremental Workspace loading and a matching Metrics skeleton", asyn
   expect(browserErrors).toEqual([]);
 });
 
-test("resizes the Inspector proportionally and restores the local split", async ({
+test("resizes the Inspector proportionally, reflows the composer, and restores the local split", async ({
   page,
 }) => {
   const bootstrap = getMockBootstrap();
@@ -5784,11 +5784,13 @@ test("resizes the Inspector proportionally and restores the local split", async 
   const shell = page.locator(".app-shell");
   const sidebar = page.locator(".sidebar");
   const conversation = page.locator(".conversation-pane");
+  const composer = page.locator(".composer-shell");
   const inspector = page.locator(".inspector");
   const resizeHandle = page.getByRole("separator", {
     name: "Resize Inspector",
   });
   await expect(resizeHandle).toBeVisible();
+  await expect(composer).toBeVisible();
 
   const initialSidebarWidth = (await sidebar.boundingBox())!.width;
   const initialConversationWidth = (await conversation.boundingBox())!.width;
@@ -5796,6 +5798,50 @@ test("resizes the Inspector proportionally and restores the local split", async 
   expect(
     initialInspectorWidth / (initialConversationWidth + initialInspectorWidth),
   ).toBeCloseTo(0.5, 2);
+  const [
+    initialComposerBox,
+    initialComposerToolsBox,
+    initialComposerTelemetryBox,
+    initialComposerAgentBox,
+    initialComposerActionsBox,
+  ] = await Promise.all([
+    composer.boundingBox(),
+    composer.locator(".composer-tools").boundingBox(),
+    composer.locator(".composer-telemetry").boundingBox(),
+    composer.locator(".composer-agent-bound").boundingBox(),
+    composer.locator(".composer-actions").boundingBox(),
+  ]);
+  expect(initialComposerBox).not.toBeNull();
+  expect(initialComposerToolsBox).not.toBeNull();
+  expect(initialComposerTelemetryBox).not.toBeNull();
+  expect(initialComposerAgentBox).not.toBeNull();
+  expect(initialComposerActionsBox).not.toBeNull();
+  expect(initialComposerBox!.width).toBeCloseTo(
+    initialConversationWidth - 20,
+    0,
+  );
+  expect(
+    Math.max(
+      initialComposerToolsBox!.y + initialComposerToolsBox!.height,
+      initialComposerTelemetryBox!.y + initialComposerTelemetryBox!.height,
+    ),
+  ).toBeLessThanOrEqual(
+    Math.min(
+      initialComposerAgentBox!.y,
+      initialComposerActionsBox!.y,
+    ) + 1,
+  );
+  for (const controlBox of [
+    initialComposerToolsBox,
+    initialComposerTelemetryBox,
+    initialComposerAgentBox,
+    initialComposerActionsBox,
+  ]) {
+    expect(controlBox!.x).toBeGreaterThanOrEqual(initialComposerBox!.x);
+    expect(controlBox!.x + controlBox!.width).toBeLessThanOrEqual(
+      initialComposerBox!.x + initialComposerBox!.width,
+    );
+  }
 
   await page.getByRole("button", { name: "Collapse sidebar" }).click();
   await expect(sidebar).toBeHidden();

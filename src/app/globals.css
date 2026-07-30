@@ -1051,6 +1051,7 @@ pre {
   grid-column: 2;
   grid-row: 1;
   flex-direction: column;
+  container: conversation / inline-size;
   background: var(--canvas);
 }
 
@@ -7369,65 +7370,7 @@ code.codex-compact-activity-subject {
   }
 }
 
-@media (max-width: 680px) {
-  .inspector {
-    width: 100vw;
-    border-left: 0;
-    box-shadow: none;
-  }
-
-  .sandbox-lifecycle-heading {
-    gap: 10px;
-  }
-
-  .sandbox-lifecycle-confirmation {
-    grid-template-columns: auto minmax(0, 1fr);
-  }
-
-  .sandbox-lifecycle-confirmation > div {
-    grid-column: 2;
-    flex-wrap: wrap;
-    justify-content: flex-end;
-  }
-
-  .conversation-pane {
-    --conversation-column-inline-padding: 15px;
-    --conversation-message-rails: 72px;
-  }
-
-  .conversation-header {
-    gap: 6px;
-    padding-right: 8px;
-  }
-
-  .conversation-header-actions .header-action-button {
-    display: inline-flex;
-    width: 32px;
-    justify-content: center;
-    padding: 0;
-  }
-
-  .conversation-breadcrumb {
-    max-width: 58vw;
-  }
-
-  .conversation-context {
-    display: none;
-  }
-
-  .message-column {
-    padding: 27px 15px 100px;
-  }
-
-  .message {
-    grid-template-columns: 27px minmax(0, 1fr) 27px;
-    gap: 9px;
-  }
-
-  .message-actions {
-    opacity: 1;
-  }
-
+@container conversation (max-width: 680px) {
   .composer-region {
     padding: 0 10px max(8px, env(safe-area-inset-bottom));
   }
@@ -7502,6 +7445,66 @@ code.codex-compact-activity-subject {
   .connection-copy,
   .composer-footnote {
     display: none;
+  }
+}
+
+@media (max-width: 680px) {
+  .inspector {
+    width: 100vw;
+    border-left: 0;
+    box-shadow: none;
+  }
+
+  .sandbox-lifecycle-heading {
+    gap: 10px;
+  }
+
+  .sandbox-lifecycle-confirmation {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .sandbox-lifecycle-confirmation > div {
+    grid-column: 2;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .conversation-pane {
+    --conversation-column-inline-padding: 15px;
+    --conversation-message-rails: 72px;
+  }
+
+  .conversation-header {
+    gap: 6px;
+    padding-right: 8px;
+  }
+
+  .conversation-header-actions .header-action-button {
+    display: inline-flex;
+    width: 32px;
+    justify-content: center;
+    padding: 0;
+  }
+
+  .conversation-breadcrumb {
+    max-width: 58vw;
+  }
+
+  .conversation-context {
+    display: none;
+  }
+
+  .message-column {
+    padding: 27px 15px 100px;
+  }
+
+  .message {
+    grid-template-columns: 27px minmax(0, 1fr) 27px;
+    gap: 9px;
+  }
+
+  .message-actions {
+    opacity: 1;
   }
 
   .modal-layer {
