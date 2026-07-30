@@ -167,7 +167,13 @@ export async function buildOpenApi(): Promise<BuiltOpenApi> {
 function registerContractRoutes(app: FastifyInstance) {
   const placeholder = recursivePlaceholder() as never;
   registerHealthRoutes(app, placeholder, placeholder);
-  registerAuthRoutes(app, placeholder, placeholder, undefined);
+  registerAuthRoutes(
+    app,
+    placeholder,
+    placeholder,
+    placeholder,
+    undefined,
+  );
   registerApiRoutes(app, placeholder);
 }
 

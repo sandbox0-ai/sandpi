@@ -18,6 +18,7 @@ import { useEffect, useRef, useState } from "react";
 import { AppFrame, AppSidebar } from "@/components/app-frame";
 import { HelpFeedbackDialog } from "@/components/help-feedback-dialog";
 import {
+  navigateToAuthLogin,
   newSessionAuthLoginUrl,
   storePendingGuestPrompt,
 } from "@/lib/auth-navigation";
@@ -65,7 +66,7 @@ export function GuestSandpiApp({ loginUrl }: { loginUrl: string }) {
         // remains usable even when Sandpi cannot carry this draft across OIDC.
       }
     }
-    window.location.assign(
+    navigateToAuthLogin(
       hasPendingPrompt
         ? newSessionAuthLoginUrl(loginUrl, window.location.href)
         : loginUrl,

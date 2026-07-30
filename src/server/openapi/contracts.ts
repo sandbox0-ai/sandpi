@@ -245,6 +245,82 @@ export const openApiRouteContracts: readonly OpenApiRouteContract[] = [
     },
   }),
   defineContract({
+    method: "POST",
+    url: "/api/v1/auth/native/prepare",
+    public: true,
+    schema: {
+      operationId: "prepareNativeLogin",
+      summary: "Prepare system-browser sign-in for a native client",
+      description:
+        "Creates a short-lived PKCE handoff without retaining the client's verifier.",
+      tags: ["Authentication"],
+      body: z.object({
+        returnTo: z.string(),
+        verifier: z.string(),
+        state: z.string(),
+      }),
+      response: {
+        200: dataEnvelope(
+          z.object({
+            authorizationUrl: z.string(),
+            expiresAt: z.iso.datetime(),
+          }),
+        ),
+      },
+    },
+  }),
+  defineContract({
+    method: "GET",
+    url: "/api/v1/auth/native/login",
+    public: true,
+    schema: {
+      operationId: "startNativeLogin",
+      summary: "Start system-browser sign-in for a native client",
+      description:
+        "Creates a short-lived PKCE handoff and starts the deployment's browser-based sign-in flow.",
+      tags: ["Authentication"],
+      querystring: z.object({
+        attempt_id: z.string(),
+      }),
+      response: { 302: redirect },
+    },
+  }),
+  defineContract({
+    method: "GET",
+    url: "/api/v1/auth/native/finalize",
+    schema: {
+      operationId: "finalizeNativeLogin",
+      summary: "Return completed browser sign-in to a native client",
+      tags: ["Authentication"],
+      querystring: z.object({
+        attempt_id: z.string(),
+      }),
+      response: { 302: redirect },
+    },
+  }),
+  defineContract({
+    method: "POST",
+    url: "/api/v1/auth/native/complete",
+    public: true,
+    schema: {
+      operationId: "completeNativeLogin",
+      summary: "Exchange a native PKCE handoff for a WebView session",
+      tags: ["Authentication"],
+      body: z.object({
+        attemptId: z.string(),
+        code: z.string(),
+        verifier: z.string(),
+      }),
+      response: {
+        200: dataEnvelope(
+          z.object({
+            returnTo: z.string(),
+          }),
+        ),
+      },
+    },
+  }),
+  defineContract({
     method: "GET",
     url: "/api/v1/auth/me",
     schema: {

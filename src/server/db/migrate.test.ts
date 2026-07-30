@@ -79,6 +79,7 @@ test("migration history contains every durable Sandpi boundary", async () => {
       "0052_environment_schedules",
       "0053_disable_schedules_for_archived_sessions",
       "0054_use_sandbox0_lifecycle_truth",
+      "0055_native_auth_attempts",
     ],
   );
 
@@ -796,5 +797,15 @@ test("migration history contains every durable Sandpi boundary", async () => {
   assert.match(
     archivedScheduleTargetSql,
     /SET enabled = FALSE,[\s\S]+next_run_at = NULL/,
+  );
+
+  const nativeAuthSql = migrations[54]?.sql ?? "";
+  assert.match(nativeAuthSql, /CREATE TABLE native_auth_attempts\b/);
+  assert.match(nativeAuthSql, /code_challenge TEXT NOT NULL/);
+  assert.match(nativeAuthSql, /code_hash BYTEA UNIQUE/);
+  assert.match(nativeAuthSql, /consumed_at TIMESTAMPTZ/);
+  assert.doesNotMatch(
+    nativeAuthSql,
+    /\b(?:code|verifier|session_token)\s+(?:TEXT|BYTEA)\b/i,
   );
 });

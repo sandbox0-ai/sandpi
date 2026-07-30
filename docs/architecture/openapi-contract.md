@@ -76,3 +76,12 @@ callback operations model the OIDC redirect flow; built-in-admin deployments
 authenticate the local administrator implicitly until logout. OpenAPI's
 `cookieAuth` scheme documents this current behavior and does not claim a bearer
 token flow that Sandpi has not implemented.
+
+Native clients start account authentication in the system browser rather than
+inside their WebView. The client prepares a ten-minute handoff with a random
+state and PKCE verifier; Sandpi stores only its SHA-256 challenge. After the
+browser completes OIDC, Sandpi redirects a one-time code through the fixed
+`sandpi://auth/callback` application deep link. The originating WebView exchanges
+that code and verifier once for its own HttpOnly Sandpi session cookie. Return
+locations remain on the deployment origin, and the prepare and exchange
+operations require the deployment Origin.

@@ -3045,6 +3045,156 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /api/v1/auth/native/complete:
+    post:
+      operationId: completeNativeLogin
+      summary: Exchange a native PKCE handoff for a WebView session
+      tags:
+        - Authentication
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                attemptId:
+                  type: string
+                code:
+                  type: string
+                verifier:
+                  type: string
+              required:
+                - attemptId
+                - code
+                - verifier
+      security: []
+      responses:
+        "200":
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      returnTo:
+                        type: string
+                    required:
+                      - returnTo
+                    additionalProperties: false
+                required:
+                  - data
+                additionalProperties: false
+        default:
+          description: Sandpi error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/auth/native/finalize:
+    get:
+      operationId: finalizeNativeLogin
+      summary: Return completed browser sign-in to a native client
+      tags:
+        - Authentication
+      parameters:
+        - schema:
+            type: string
+          in: query
+          name: attempt_id
+          required: true
+      responses:
+        "302":
+          description: Redirect.
+        default:
+          description: Sandpi error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/auth/native/login:
+    get:
+      operationId: startNativeLogin
+      summary: Start system-browser sign-in for a native client
+      tags:
+        - Authentication
+      description: Creates a short-lived PKCE handoff and starts the deployment's
+        browser-based sign-in flow.
+      parameters:
+        - schema:
+            type: string
+          in: query
+          name: attempt_id
+          required: true
+      security: []
+      responses:
+        "302":
+          description: Redirect.
+        default:
+          description: Sandpi error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/auth/native/prepare:
+    post:
+      operationId: prepareNativeLogin
+      summary: Prepare system-browser sign-in for a native client
+      tags:
+        - Authentication
+      description: Creates a short-lived PKCE handoff without retaining the client's
+        verifier.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                returnTo:
+                  type: string
+                verifier:
+                  type: string
+                state:
+                  type: string
+              required:
+                - returnTo
+                - verifier
+                - state
+      security: []
+      responses:
+        "200":
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      authorizationUrl:
+                        type: string
+                      expiresAt:
+                        type: string
+                        format: date-time
+                        pattern: ^(?:(?:\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\d|30)|(?:02)-(?:0[1-9]|1\d|2[0-8])))T(?:(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z))$
+                    required:
+                      - authorizationUrl
+                      - expiresAt
+                    additionalProperties: false
+                required:
+                  - data
+                additionalProperties: false
+        default:
+          description: Sandpi error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /api/v1/billing/checkout:
     post:
       operationId: createBillingCheckout

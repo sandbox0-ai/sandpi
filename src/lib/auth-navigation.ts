@@ -2,6 +2,15 @@ import { apiUrl } from "./api-client";
 
 export const PENDING_GUEST_PROMPT_STORAGE_KEY =
   "sandpi.pending-guest-prompt.v1";
+export const NATIVE_AUTH_REQUEST_EVENT = "sandpi:native-auth-request";
+
+interface AuthNavigationWindow {
+  dispatchEvent(event: Event): boolean;
+  location: {
+    assign(url: string): void;
+    replace(url: string): void;
+  };
+}
 
 interface PromptStorage {
   getItem(key: string): string | null;
@@ -28,6 +37,26 @@ export function newSessionAuthLoginUrl(loginUrl: string, currentUrl: string) {
   const target = new URL(loginUrl, currentUrl);
   target.searchParams.set("return_to", returnTo.toString());
   return target.toString();
+}
+
+/**
+ * Gives a native shell one semantic opportunity to move authentication into
+ * the system browser while preserving ordinary browser navigation as fallback.
+ */
+export function navigateToAuthLogin(
+  loginUrl: string,
+  mode: "assign" | "replace" = "assign",
+  browser: AuthNavigationWindow = window,
+) {
+  const event = new CustomEvent(NATIVE_AUTH_REQUEST_EVENT, {
+    cancelable: true,
+    detail: { loginUrl },
+  });
+  if (!browser.dispatchEvent(event)) {
+    return "native" as const;
+  }
+  browser.location[mode](loginUrl);
+  return "web" as const;
 }
 
 /** Return to the public home surface without retaining private workspace coordinates. */

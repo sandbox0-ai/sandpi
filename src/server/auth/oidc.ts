@@ -279,6 +279,35 @@ async function createPersonalEnvironment(client: PoolClient, userId: string) {
   );
 }
 
+export async function createWebSessionForUser(
+  client: PoolClient,
+  userId: string,
+): Promise<WebSessionResult> {
+  const result = await client.query(
+    `
+      SELECT id, email, name, identity_provider, identity_subject
+      FROM users
+      WHERE id = $1 AND status = 'active'
+    `,
+    [userId],
+  );
+  const user = result.rows[0];
+  if (!user || user.identity_provider === "builtin") {
+    throw new HttpError(
+      400,
+      "native_auth_user_invalid",
+      "Native authentication user is unavailable.",
+    );
+  }
+  return createWebSession(client, {
+    userId: user.id,
+    email: user.email,
+    name: user.name,
+    subject: `${user.identity_provider}:${user.identity_subject}`,
+    kind: "oidc-session",
+  });
+}
+
 async function createWebSession(
   client: PoolClient,
   principal: Principal,

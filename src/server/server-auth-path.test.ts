@@ -9,9 +9,16 @@ import {
   validateBillingRuntime,
 } from "./server";
 
-test("only Stripe webhook and OIDC entry routes bypass user authentication", () => {
+test("only Stripe webhook and browser-auth entry routes bypass authentication", () => {
   assert.equal(publicAuthPath("/api/v1/auth/login"), true);
   assert.equal(publicAuthPath("/api/v1/auth/callback?code=example"), true);
+  assert.equal(publicAuthPath("/api/v1/auth/native/prepare"), true);
+  assert.equal(
+    publicAuthPath("/api/v1/auth/native/login?attempt_id=example"),
+    true,
+  );
+  assert.equal(publicAuthPath("/api/v1/auth/native/complete"), true);
+  assert.equal(publicAuthPath("/api/v1/auth/native/finalize"), false);
   assert.equal(publicAuthPath("/api/v1/billing/webhook"), true);
   assert.equal(publicAuthPath("/api/v1/billing/summary"), false);
   assert.equal(publicAuthPath("/api/v1/billing/checkout"), false);

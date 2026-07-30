@@ -31,6 +31,7 @@ import {
 } from "@/lib/environment-metrics";
 import { dateFromUnixTimestamp, toUnixTimestamp } from "@/lib/time";
 import { WORKSPACE_ROOT } from "@/lib/workspace-path-policy";
+import { NativeAuthService } from "@/server/auth/native";
 import { OidcIdentityService } from "@/server/auth/oidc";
 import type { Principal } from "@/server/auth/principal";
 import { loadConfig, type SandpiConfig } from "@/server/config";
@@ -282,6 +283,11 @@ export async function createSandpiServer(
     config.auth.mode === "oidc" && secretBox
       ? new OidcIdentityService(pool, config.auth, config.publicUrl, secretBox)
       : undefined;
+  const nativeAuth = new NativeAuthService(
+    pool,
+    config.publicUrl,
+    Boolean(oidcIdentity),
+  );
 
   app.decorateRequest("principal");
   await app.register(fastifyCookie, {
@@ -343,7 +349,7 @@ export async function createSandpiServer(
   });
 
   registerHealthRoutes(app, pool, runtime);
-  registerAuthRoutes(app, config, environments, oidcIdentity);
+  registerAuthRoutes(app, config, environments, nativeAuth, oidcIdentity);
   registerApiRoutes(app, {
     config,
     store,
@@ -436,6 +442,7 @@ export function registerAuthRoutes(
   app: FastifyInstance,
   config: SandpiConfig,
   environments: EnvironmentService,
+  nativeAuth: NativeAuthService,
   oidcIdentity?: OidcIdentityService,
 ) {
   app.get("/api/v1/auth/login", async (request, reply) => {
@@ -471,6 +478,93 @@ export function registerAuthRoutes(
     );
     clearAuthCookie(reply, BUILTIN_SIGNED_OUT_COOKIE);
     return reply.redirect(result.returnTo);
+  });
+
+  app.post("/api/v1/auth/native/prepare", async (request, reply) => {
+    reply.header("Cache-Control", "no-store");
+    validateNativeAuthOrigin(request, config);
+    const body = z
+      .object({
+        returnTo: z.string(),
+        verifier: z.string(),
+        state: z.string(),
+      })
+      .parse(request.body);
+    const attempt = await nativeAuth.startAttempt(
+      body.returnTo,
+      body.verifier,
+      body.state,
+    );
+    const authorizationUrl = new URL(
+      "/api/v1/auth/native/login",
+      config.publicUrl,
+    );
+    authorizationUrl.searchParams.set("attempt_id", attempt.id);
+    return {
+      data: {
+        authorizationUrl: authorizationUrl.toString(),
+        expiresAt: attempt.expiresAt.toISOString(),
+      },
+    };
+  });
+
+  app.get("/api/v1/auth/native/login", async (request, reply) => {
+    reply.header("Cache-Control", "no-store");
+    const attemptId = queryString(request, "attempt_id") ?? "";
+    await nativeAuth.assertAttemptStartable(attemptId);
+    if (!oidcIdentity) {
+      const callback = await nativeAuth.authorizeAttempt(
+        attemptId,
+        "user-admin",
+      );
+      return reply.redirect(callback.toString());
+    }
+
+    const finalize = new URL(
+      "/api/v1/auth/native/finalize",
+      config.publicUrl,
+    );
+    finalize.searchParams.set("attempt_id", attemptId);
+    const login = await oidcIdentity.startLogin(finalize.toString());
+    return reply.redirect(login.authorizationUrl.toString());
+  });
+
+  app.get("/api/v1/auth/native/finalize", async (request, reply) => {
+    reply.header("Cache-Control", "no-store");
+    const attemptId = queryString(request, "attempt_id") ?? "";
+    const callback = await nativeAuth.authorizeAttempt(
+      attemptId,
+      request.principal.userId,
+    );
+    return reply.redirect(callback.toString());
+  });
+
+  app.post("/api/v1/auth/native/complete", async (request, reply) => {
+    reply.header("Cache-Control", "no-store");
+    validateNativeAuthOrigin(request, config);
+    const body = z
+      .object({
+        attemptId: z.string(),
+        code: z.string(),
+        verifier: z.string(),
+      })
+      .parse(request.body);
+    const result = await nativeAuth.completeAttempt(
+      body.attemptId,
+      body.code,
+      body.verifier,
+    );
+    if (result.session) {
+      reply.setCookie(
+        SESSION_COOKIE,
+        result.session.token,
+        sessionCookie(config, result.session.expiresAt),
+      );
+      clearAuthCookie(reply, BUILTIN_SIGNED_OUT_COOKIE);
+    } else {
+      clearAuthCookie(reply, BUILTIN_SIGNED_OUT_COOKIE);
+    }
+    return { data: { returnTo: result.returnTo } };
   });
 
   app.get("/api/v1/auth/me", async (request) => ({ data: request.principal }));
@@ -2614,6 +2708,9 @@ export function publicAuthPath(url: string) {
   return (
     path === "/api/v1/auth/login" ||
     path === "/api/v1/auth/callback" ||
+    path === "/api/v1/auth/native/prepare" ||
+    path === "/api/v1/auth/native/login" ||
+    path === "/api/v1/auth/native/complete" ||
     path === "/api/v1/billing/webhook"
   );
 }
@@ -2686,6 +2783,20 @@ function builtinSignedOutCookie(config: SandpiConfig) {
     ...authCookieAttributes(config),
     expires: new Date(Date.now() + 365 * 24 * 60 * 60 * 1_000),
   };
+}
+
+function validateNativeAuthOrigin(
+  request: Pick<FastifyRequest, "headers">,
+  config: SandpiConfig,
+) {
+  const origin = request.headers.origin;
+  if (!origin || !allowedOrigins(config).has(origin)) {
+    throw new HttpError(
+      403,
+      "origin_invalid",
+      "Native authentication Origin is not allowed.",
+    );
+  }
 }
 
 function safeLocalRedirect(value: string, config: SandpiConfig) {

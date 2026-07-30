@@ -8,7 +8,10 @@ import { PreferencesPage } from "@/components/preferences-page";
 import { SandpiApp } from "@/components/sandpi-app";
 import { WorkspaceIdePage } from "@/components/workspace-ide-page";
 import { ApiError, type ApiEnvelope, apiFetch } from "@/lib/api-client";
-import { authLoginUrl } from "@/lib/auth-navigation";
+import {
+  authLoginUrl,
+  navigateToAuthLogin,
+} from "@/lib/auth-navigation";
 import type { SandpiBootstrap } from "@/lib/types";
 
 import styles from "./bootstrap-loader.module.css";
@@ -70,7 +73,7 @@ function useBootstrap(allowUnauthenticated: boolean) {
             return;
           }
           setState({ status: "redirecting" });
-          window.location.replace(target);
+          navigateToAuthLogin(target, "replace");
           return;
         }
         setState({

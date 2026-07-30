@@ -20,10 +20,10 @@ Sandpi 是 [Sandbox0](https://github.com/sandbox0-ai/sandbox0) 的开源 side
 project，用于让原生 coding agent 运行在持久化云端 Sandbox 中，并让你通过任意
 Sandpi 客户端继续同一个 coding session。
 
-目前已经提供 Web 应用。iOS、Android、HarmonyOS、Windows 和 macOS 原生客户端即将
-推出。所有客户端都保持轻量：coding-agent harness、终端、文件和共享 Playwright
-浏览器都在云端运行，并挂载持久化 Workspace Volume。你可以关闭电脑、切换设备或
-断开客户端，而不会结束 coding session。
+Web 应用与 iOS、iPadOS、Android、OpenHarmony、Windows 和 macOS 第一方原生客户端
+共用同一套 Sandpi 产品 UI 和 API。所有客户端都保持轻量：coding-agent harness、
+终端、文件和共享 Playwright 浏览器都在云端运行，并挂载持久化 Workspace Volume。
+你可以关闭电脑、切换设备或断开客户端，而不会结束 coding session。
 
 目前第一个支持的 coding agent 是 Codex。
 
@@ -81,9 +81,9 @@ Environment。如果多个 Session 本来就应该共享文件、工具和执行
    压平成能力最小公分母式的聊天协议。
 3. **以 Environment 作为隔离边界。** Workspace、provider 身份、网络和凭证作为
    一个整体存在。因此 Environment 既能隔离账号，也能让一件具体工作保持专注。
-4. **客户端保持轻量且可以自由切换。** Web 应用与即将推出的 iOS、Android、
-   HarmonyOS、Windows 和 macOS 原生客户端都使用同一个 Sandpi server。客户端断线
-   不等于要求 coding agent 停止工作。
+4. **客户端保持轻量且可以自由切换。** Web 应用与 iOS、iPadOS、Android、
+   OpenHarmony、Windows 和 macOS 原生客户端共用同一个 Sandpi server 和产品实现。
+   客户端断线不等于要求 coding agent 停止工作。
 5. **恢复原生状态，不猜测或重放写操作。** Sandpi 会重新连接持久化的原生 Session
    和 Workspace，而不是维护第二份聊天记录，或在中断后静默重复提交请求。对于
    Sandbox 导致的中断，Sandpi 最多发起一次可见、保守的恢复 Turn，先检查持久化
@@ -110,9 +110,8 @@ Environment。如果多个 Session 本来就应该共享文件、工具和执行
 - 内置单用户身份模式或 OIDC
 - 可选 Stripe 订阅和产品 quota enforcement
 
-Sandpi 仍处于 pre-1.0 阶段。目前只实现了 Codex harness，Web 应用是首个已经提供的
-客户端。iOS、Android、HarmonyOS、Windows 和 macOS 原生客户端即将推出；其他
-harness 和客户端也可以作为独立集成逐步加入。
+Sandpi 仍处于 pre-1.0 阶段，目前只实现了 Codex harness。Web 应用与第一方原生封装
+共用一套产品实现；其他 harness 和客户端也可以作为独立集成逐步加入。
 
 ## 快速开始
 
@@ -220,7 +219,7 @@ materialize 到当前 Environment runtime 的内存文件系统中。
 
 ```text
 Sandpi clients
-（当前为 Web；原生应用即将推出）
+（Web 与第一方原生封装）
     │ HTTPS / SSE / WebSocket
     ▼
 Sandpi server ───────── PostgreSQL

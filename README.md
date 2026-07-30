@@ -20,11 +20,12 @@ Sandpi is an open-source [Sandbox0](https://github.com/sandbox0-ai/sandbox0)
 side project for running native coding agents in persistent cloud Sandboxes.
 It lets you continue the same coding session from any Sandpi client.
 
-The Web app is available today. Native clients for iOS, Android, HarmonyOS,
-Windows and macOS are coming soon. Every client stays lightweight: the
-coding-agent harness, terminal, files and shared Playwright browser live in the
-cloud, alongside a persistent Workspace Volume. You can close your laptop,
-switch devices or disconnect a client without ending your coding session.
+The Web app and first-party native clients for iOS, iPadOS, Android,
+OpenHarmony, Windows and macOS use the same Sandpi product UI and API. Every
+client stays lightweight: the coding-agent harness, terminal, files and shared
+Playwright browser live in the cloud, alongside a persistent Workspace Volume.
+You can close your laptop, switch devices or disconnect a client without
+ending your coding session.
 
 Codex is the first supported coding agent.
 
@@ -85,10 +86,10 @@ same files, tools and execution context.
 3. **Make the Environment the isolation boundary.** Workspace, provider
    identity, network and credentials move together. This makes an Environment
    useful both for account separation and for keeping one piece of work focused.
-4. **Keep clients thin and interchangeable.** The Web app and upcoming native
-   clients for iOS, Android, HarmonyOS, Windows and macOS use the same Sandpi
-   server. A client disconnect must not become an instruction to stop the
-   coding agent.
+4. **Keep clients thin and interchangeable.** The Web app and native clients
+   for iOS, iPadOS, Android, OpenHarmony, Windows and macOS use the same Sandpi
+   server and product implementation. A client disconnect must not become an
+   instruction to stop the coding agent.
 5. **Recover native state; do not guess or replay mutations.** Sandpi reconnects
    to the persisted native Session and Workspace rather than maintaining a
    second chat transcript or silently resubmitting an interrupted request. A
@@ -119,10 +120,9 @@ same files, tools and execution context.
 - Built-in single-user identity or OIDC
 - Optional Stripe subscriptions and product quota enforcement
 
-Sandpi is pre-1.0. Codex is currently the only implemented harness, and the Web
-app is the first available client. Native clients for iOS, Android, HarmonyOS,
-Windows and macOS are coming soon. Additional harnesses and clients can be
-added as independent integrations.
+Sandpi is pre-1.0. Codex is currently the only implemented harness. The Web app
+and first-party native shells share one product implementation; additional
+harnesses and clients can be added as independent integrations.
 
 ## Quick start
 
@@ -238,7 +238,7 @@ starting the native harness.
 
 ```text
 Sandpi clients
-(Web today; native apps coming soon)
+(Web and first-party native shells)
     │ HTTPS / SSE / WebSocket
     ▼
 Sandpi server ───────── PostgreSQL
