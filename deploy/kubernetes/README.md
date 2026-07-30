@@ -62,6 +62,9 @@ Required repository secrets:
 
 Optional production Environment variables:
 
+- `NEXT_PUBLIC_CLARITY_PROJECT_ID` — a public Microsoft Clarity project ID
+  compiled into the browser bundle. Leave it unset to disable Clarity,
+  including for self-hosted deployments.
 - `NEXT_PUBLIC_GA_MEASUREMENT_ID` — a public Google Analytics 4 measurement
   ID compiled into the browser bundle. Leave it unset to disable analytics,
   including for self-hosted deployments.
