@@ -7102,7 +7102,10 @@ code.codex-compact-activity-subject {
   .app-shell.sidebar-is-collapsed [data-native-titlebar-leading-content] {
     padding-left: max(
       21px,
-      var(--sandpi-native-titlebar-leading-inset, 0px)
+      var(
+        --sandpi-native-titlebar-collapsed-leading-inset,
+        var(--sandpi-native-titlebar-leading-inset, 0px)
+      )
     );
   }
 
