@@ -725,6 +725,12 @@ does not implement the host-side plugin installation approval contract. This
 keeps `request_plugin_install` out of Turns instead of allowing an unhandled
 approval request to leave a Turn waiting indefinitely.
 
+Every Sandpi-owned Codex Thread also sets
+`tools.experimental_request_user_input.enabled=false` through the native
+`thread/start`, `thread/resume` and `thread/fork` configuration override.
+Sandpi does not expose the corresponding blocking host-input contract, and an
+Environment or project `config.toml` cannot re-enable it for a Sandpi Thread.
+
 Local STDIO definitions remain inside the native harness trust boundary. Codex
 launches those processes in the Environment Sandbox, where they can access the
 Workspace and any network destinations allowed by the Environment policy.

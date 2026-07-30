@@ -2476,6 +2476,7 @@ test("starts the first Turn on a newly created loaded Thread without resume", as
     )?.message.params as Record<string, unknown> | undefined;
     assert.deepEqual(threadStart?.config, {
       "features.apply_patch_streaming_events": true,
+      "tools.experimental_request_user_input.enabled": false,
       model_reasoning_effort: "high",
     });
     assert.equal(threadStart?.sessionStartSource, "clear");
@@ -6006,6 +6007,7 @@ test("lazily attaches only the native Session that starts a Turn", async () => {
     assert.equal(resumeParams?.model, "gpt-next");
     assert.deepEqual(resumeParams?.config, {
       "features.apply_patch_streaming_events": true,
+      "tools.experimental_request_user_input.enabled": false,
       model_reasoning_effort: "high",
     });
     assert.equal("excludeTurns" in (resumeParams ?? {}), false);
@@ -7390,6 +7392,7 @@ test("forks a product Session only through Codex thread/fork", async () => {
     )?.message.params as Record<string, unknown> | undefined;
     assert.deepEqual(forkParams?.config, {
       "features.apply_patch_streaming_events": true,
+      "tools.experimental_request_user_input.enabled": false,
     });
     assert.equal(
       forkParams?.threadSource,

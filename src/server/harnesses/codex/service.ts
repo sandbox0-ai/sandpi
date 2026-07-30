@@ -128,6 +128,8 @@ const MAX_CODEX_RATE_LIMIT_BUCKETS = 16;
 const MAX_CODEX_RATE_LIMIT_RESET_CREDITS = 1_000_000;
 const CODEX_APPLY_PATCH_STREAMING_CONFIG =
   "features.apply_patch_streaming_events";
+const CODEX_REQUEST_USER_INPUT_CONFIG =
+  "tools.experimental_request_user_input.enabled";
 const CODEX_AGENT_THREAD_PAGE_LIMIT = 100;
 const MAX_CODEX_AGENT_THREADS = 1_000;
 const CODEX_THREAD_CREATION_PAGE_LIMIT = 100;
@@ -5473,6 +5475,7 @@ function threadConfiguration(input: {
     ...(input.modelId ? { model: input.modelId } : {}),
     config: {
       [CODEX_APPLY_PATCH_STREAMING_CONFIG]: true,
+      [CODEX_REQUEST_USER_INPUT_CONFIG]: false,
       ...(input.reasoningEffort
         ? { model_reasoning_effort: input.reasoningEffort }
         : {}),
