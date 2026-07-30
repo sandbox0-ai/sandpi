@@ -46,18 +46,21 @@ source version as another material shape.
 ## Lifecycle
 
 All mutations run under the Environment lifecycle lock and require a ready
-shared Sandbox.
+Environment. Its shared Sandbox may be running or paused.
 
 1. Create persists a secret-free pending record, creates the generated
    Sandbox0 source, records its metadata and applies the complete Environment
    policy.
 2. Edit and enable/disable update desired configuration, then reapply that
    complete policy.
-3. Replace secret updates only the known source, records its new version and
-   reapplies the policy. A missing known source is recreated under the same
-   generated name.
+3. Replace secret updates only the known source and records its new version.
+   Sandbox0 advances existing bindings by source name, so a paused Sandbox does
+   not need a policy replay. A missing known source is recreated under the same
+   generated name and the policy is then reapplied to restore its binding.
 4. Delete marks the credential as deleting, reapplies the policy without its
-   rule and binding, deletes the source, then removes the Sandpi record.
+   rule and binding, deletes any retired Sandbox still mounting the
+   Environment's unique Workspace Volume, deletes the source, then removes the
+   Sandpi record.
 5. Environment deletion removes the Sandbox before deleting known sources, so
    no live binding can retain them.
 
@@ -65,6 +68,12 @@ Failed work retains a provisioning, error or deleting record. On server start,
 reconciliation reads only those known references, repairs the full policy and
 finishes pending deletion. Missing source material is never invented or copied
 from another source; the UI asks the owner to replace it.
+
+Environment provisioning takes the same cross-server lifecycle lock and
+rechecks the pending record after acquiring it. This prevents overlapping
+Sandpi rollouts from claiming two Sandboxes for one Workspace Volume. Deletion
+still discovers historical duplicates by that Volume identity so deployments
+can repair resources created before the lock was enforced.
 
 ## Complete policy composition
 

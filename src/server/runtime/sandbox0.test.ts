@@ -293,6 +293,48 @@ test("creates one Workspace Volume when provisioning a new Environment", async (
   ]);
 });
 
+test("deletes only retired Sandboxes that mount the Environment Workspace", async () => {
+  const inspected: string[] = [];
+  const deleted: string[] = [];
+  const runtime = runtimeWithClient({
+    sandboxes: {
+      async list() {
+        return {
+          sandboxes: [
+            { id: "sandbox-environment" },
+            { id: "sandbox-retired" },
+            { id: "sandbox-other" },
+          ],
+          hasMore: false,
+        };
+      },
+      async get(sandboxId: string) {
+        inspected.push(sandboxId);
+        return {
+          id: sandboxId,
+          mounts: [
+            {
+              sandboxvolumeId:
+                sandboxId === "sandbox-retired"
+                  ? "volume-environment"
+                  : "volume-other",
+              mountPoint: "/workspace",
+            },
+          ],
+        };
+      },
+      async delete(sandboxId: string) {
+        deleted.push(sandboxId);
+      },
+    },
+  });
+
+  await runtime.deleteRetiredEnvironmentSandboxes(environmentRuntimeRecord());
+
+  assert.deepEqual(inspected, ["sandbox-retired", "sandbox-other"]);
+  assert.deepEqual(deleted, ["sandbox-retired"]);
+});
+
 test("maps every supported Environment credential source without returning material", async () => {
   const requests: unknown[] = [];
   const runtime = runtimeWithClient({
@@ -487,6 +529,28 @@ test("looks up known Environment credential sources and treats missing sources i
     "update:known",
     "delete:missing",
   ]);
+});
+
+test("retries credential source deletion while retired bindings drain", async () => {
+  let attempts = 0;
+  const runtime = runtimeWithClient({
+    credentialSources: {
+      async delete() {
+        attempts += 1;
+        if (attempts === 1) {
+          throw new APIError({
+            statusCode: 409,
+            code: "conflict",
+            message: "credential source is still referenced",
+          });
+        }
+      },
+    },
+  });
+
+  await runtime.deleteEnvironmentCredentialSource("sandpi-source");
+
+  assert.equal(attempts, 2);
 });
 
 test("does not expose secret-bearing Sandbox0 credential write errors", async () => {

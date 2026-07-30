@@ -257,6 +257,201 @@ test("rejects credential creation after Environment deletion is published", asyn
   assert.equal(sourceCreated, false);
 });
 
+test("rotates an existing source without replaying the Sandbox policy", async () => {
+  let stored: StoredEnvironmentEgressCredential = {
+    id: "credential-one",
+    environmentId: environment.id,
+    sourceRef: "sandpi-credential-one",
+    ...configuration,
+    status: "active",
+    currentVersion: 1,
+    createdAt: 1,
+    updatedAt: 1,
+  };
+  const scopedStore = {
+    async getManageableEnvironment() {
+      return environment;
+    },
+    async getEnvironmentRuntime() {
+      return runtimeRecord;
+    },
+    async getEnvironmentEgressCredential() {
+      return stored;
+    },
+    async recordEnvironmentEgressCredentialStatus(
+      _environmentId: string,
+      _credentialId: string,
+      status: StoredEnvironmentEgressCredential["status"],
+      error?: string,
+    ) {
+      stored = { ...stored, status, error };
+    },
+    async recordEnvironmentEgressCredentialSource(
+      _environmentId: string,
+      _credentialId: string,
+      metadata: { currentVersion?: number; status?: string },
+    ) {
+      stored = {
+        ...stored,
+        currentVersion: metadata.currentVersion,
+        sourceStatus: metadata.status,
+      };
+    },
+    async getEnvironmentEgressCredentialById() {
+      return stored;
+    },
+  } as unknown as SandpiStore;
+  const store = {
+    async getManageableEnvironment() {
+      return environment;
+    },
+    async withEnvironmentLifecycleLock(
+      _environmentId: string,
+      operation: (store: SandpiStore) => Promise<unknown>,
+    ) {
+      return { acquired: true as const, value: await operation(scopedStore) };
+    },
+  } as unknown as SandpiStore;
+  const runtime = {
+    mode: "sandbox0",
+    async getEnvironmentCredentialSource() {
+      return {
+        name: stored.sourceRef,
+        resolverKind: stored.resolverKind,
+        currentVersion: 1,
+        status: "active",
+      };
+    },
+    async updateEnvironmentCredentialSource() {
+      return {
+        name: stored.sourceRef,
+        resolverKind: stored.resolverKind,
+        currentVersion: 2,
+        status: "active",
+      };
+    },
+    async updateEnvironmentNetworkPolicy() {
+      assert.fail("existing source rotation must not replay network policy");
+    },
+  } as unknown as RuntimeAdapter;
+  const service = new EnvironmentEgressCredentialService(
+    store,
+    runtime,
+    logger,
+  );
+
+  const result = await service.rotate("user-one", environment.id, stored.id, {
+    resolverKind: "static_headers",
+    material: {
+      type: "static_headers",
+      values: { secret: "rotated" },
+    },
+  });
+
+  assert.equal(result.currentVersion, 2);
+  assert.equal(result.status, "active");
+});
+
+test("recreates a missing source and restores its Sandbox policy binding", async () => {
+  const steps: string[] = [];
+  let stored: StoredEnvironmentEgressCredential = {
+    id: "credential-missing",
+    environmentId: environment.id,
+    sourceRef: "sandpi-credential-missing",
+    ...configuration,
+    status: "error",
+    createdAt: 1,
+    updatedAt: 1,
+  };
+  const scopedStore = {
+    async getManageableEnvironment() {
+      return environment;
+    },
+    async getEnvironmentRuntime() {
+      return runtimeRecord;
+    },
+    async getEnvironmentEgressCredential() {
+      return stored;
+    },
+    async recordEnvironmentEgressCredentialStatus(
+      _environmentId: string,
+      _credentialId: string,
+      status: StoredEnvironmentEgressCredential["status"],
+      error?: string,
+    ) {
+      stored = { ...stored, status, error };
+    },
+    async recordEnvironmentEgressCredentialSource(
+      _environmentId: string,
+      _credentialId: string,
+      metadata: { currentVersion?: number; status?: string },
+    ) {
+      stored = {
+        ...stored,
+        currentVersion: metadata.currentVersion,
+        sourceStatus: metadata.status,
+      };
+    },
+    async listEnvironmentEgressCredentialsByEnvironmentId() {
+      return [stored];
+    },
+    async getEnvironmentEgressCredentialById() {
+      return stored;
+    },
+  } as unknown as SandpiStore;
+  const store = {
+    async getManageableEnvironment() {
+      return environment;
+    },
+    async withEnvironmentLifecycleLock(
+      _environmentId: string,
+      operation: (store: SandpiStore) => Promise<unknown>,
+    ) {
+      return { acquired: true as const, value: await operation(scopedStore) };
+    },
+  } as unknown as SandpiStore;
+  const runtime = {
+    mode: "sandbox0",
+    async getEnvironmentCredentialSource() {
+      return undefined;
+    },
+    async createEnvironmentCredentialSource() {
+      steps.push("source");
+      return {
+        name: stored.sourceRef,
+        resolverKind: stored.resolverKind,
+        currentVersion: 1,
+        status: "active",
+      };
+    },
+    async updateEnvironmentNetworkPolicy(
+      _runtime: unknown,
+      _policy: unknown,
+      credentials: RuntimeEnvironmentEgressCredential[],
+    ) {
+      assert.equal(credentials[0]?.currentVersion, 1);
+      steps.push("policy");
+    },
+  } as unknown as RuntimeAdapter;
+  const service = new EnvironmentEgressCredentialService(
+    store,
+    runtime,
+    logger,
+  );
+
+  const result = await service.rotate("user-one", environment.id, stored.id, {
+    resolverKind: "static_headers",
+    material: {
+      type: "static_headers",
+      values: { secret: "replacement" },
+    },
+  });
+
+  assert.deepEqual(steps, ["source", "policy"]);
+  assert.equal(result.currentVersion, 1);
+  assert.equal(result.status, "active");
+});
+
 test("unbinds a credential before deleting its Sandbox0 source", async () => {
   const steps: string[] = [];
   let stored: StoredEnvironmentEgressCredential = {
@@ -320,6 +515,9 @@ test("unbinds a credential before deleting its Sandbox0 source", async () => {
       assert.equal(sourceRef, stored.sourceRef);
       steps.push("source");
     },
+    async deleteRetiredEnvironmentSandboxes() {
+      steps.push("retired-sandboxes");
+    },
   } as unknown as RuntimeAdapter;
   const service = new EnvironmentEgressCredentialService(
     store,
@@ -332,6 +530,7 @@ test("unbinds a credential before deleting its Sandbox0 source", async () => {
   assert.deepEqual(steps, [
     "status:deleting",
     "unbind",
+    "retired-sandboxes",
     "source",
     "metadata",
   ]);
@@ -440,6 +639,12 @@ test("removes Environment sources only after the caller deletes the Sandbox", as
     updatedAt: 1,
   } satisfies StoredEnvironmentEgressCredential;
   const store = {
+    async getEnvironmentById() {
+      return environment;
+    },
+    async getEnvironmentRuntime() {
+      return runtimeRecord;
+    },
     async listEnvironmentEgressCredentialsByEnvironmentId() {
       return [credential];
     },
@@ -449,6 +654,9 @@ test("removes Environment sources only after the caller deletes the Sandbox", as
   } as unknown as SandpiStore;
   const runtime = {
     mode: "sandbox0",
+    async deleteRetiredEnvironmentSandboxes() {
+      steps.push("retired-sandboxes");
+    },
     async deleteEnvironmentCredentialSource() {
       steps.push("source");
     },
@@ -462,7 +670,12 @@ test("removes Environment sources only after the caller deletes the Sandbox", as
   steps.push("sandbox");
   await service.cleanupEnvironmentSources(environment.id);
 
-  assert.deepEqual(steps, ["sandbox", "deleting", "source"]);
+  assert.deepEqual(steps, [
+    "sandbox",
+    "retired-sandboxes",
+    "deleting",
+    "source",
+  ]);
 });
 
 test("finishes source cleanup without reapplying policy for a terminated Environment", async () => {
@@ -504,6 +717,9 @@ test("finishes source cleanup without reapplying policy for a terminated Environ
   } as unknown as SandpiStore;
   const runtime = {
     mode: "sandbox0",
+    async deleteRetiredEnvironmentSandboxes() {
+      steps.push("retired-sandboxes");
+    },
     async deleteEnvironmentCredentialSource() {
       steps.push("source");
     },
@@ -519,5 +735,5 @@ test("finishes source cleanup without reapplying policy for a terminated Environ
 
   await service.reconcilePending();
 
-  assert.deepEqual(steps, ["source", "metadata"]);
+  assert.deepEqual(steps, ["retired-sandboxes", "source", "metadata"]);
 });

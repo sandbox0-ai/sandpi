@@ -109,6 +109,10 @@ import {
 
 const EVENT_RETENTION_BYTES = 256 * 1024 * 1024;
 const EVENT_RETENTION_SECONDS = 30 * 24 * 60 * 60;
+const CREDENTIAL_SOURCE_DELETE_RETRY_DELAYS_MS = [
+  25, 50, 100, 250, 500, 1_000, 2_000,
+] as const;
+const SANDBOX_LIST_PAGE_SIZE = 100;
 // Supervisor journals retain decoded event structures in procd memory as well
 // as JSON on disk. A terminal only needs enough tail to rebuild xterm's visible
 // history, so it must not inherit the much larger coding-agent event budget.
@@ -448,6 +452,50 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     }
   }
 
+  /**
+   * Deletes obsolete Sandboxes that still mount this Environment's unique
+   * Workspace Volume. A previous Sandpi server may have lost a provisioning
+   * race after Sandbox0 accepted its claim, leaving credential bindings behind.
+   */
+  async deleteRetiredEnvironmentSandboxes(runtime: EnvironmentRuntimeRecord) {
+    const candidates: Array<{ id: string }> = [];
+    const cleanupErrors: unknown[] = [];
+    for (let offset = 0; ; offset += SANDBOX_LIST_PAGE_SIZE) {
+      let page: Awaited<ReturnType<Client["sandboxes"]["list"]>>;
+      try {
+        page = await this.client.sandboxes.list({
+          limit: SANDBOX_LIST_PAGE_SIZE,
+          offset,
+        });
+      } catch (error) {
+        throw translateSandbox0Error(error);
+      }
+      candidates.push(...page.sandboxes);
+      if (!page.hasMore) break;
+    }
+    for (const candidate of candidates) {
+      if (candidate.id === runtime.sandboxId) continue;
+      try {
+        const sandbox = await this.client.sandboxes.get(candidate.id);
+        const ownsWorkspace = (sandbox.mounts ?? []).some(
+          (mount) =>
+            mount.sandboxvolumeId === runtime.workspaceVolumeId &&
+            mount.mountPoint === WORKSPACE_ROOT,
+        );
+        if (!ownsWorkspace) continue;
+        await this.client.sandboxes.delete(candidate.id);
+      } catch (error) {
+        if (!isMissingResource(error)) cleanupErrors.push(error);
+      }
+    }
+    if (cleanupErrors.length > 0) {
+      throw new AggregateError(
+        cleanupErrors.map(translateSandbox0Error),
+        "Retired Environment Sandbox cleanup failed",
+      );
+    }
+  }
+
   async updateEnvironmentNetworkPolicy(
     runtime: EnvironmentRuntimeRecord,
     policy: Environment["networkPolicy"],
@@ -506,11 +554,23 @@ export class Sandbox0Runtime implements RuntimeAdapter {
   }
 
   async deleteEnvironmentCredentialSource(sourceRef: string): Promise<void> {
-    try {
-      await this.client.credentialSources.delete(sourceRef);
-    } catch (error) {
-      if (isMissingResource(error)) return;
-      throw translateCredentialSourceControlError(error, "delete");
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        await this.client.credentialSources.delete(sourceRef);
+        return;
+      } catch (error) {
+        if (isMissingResource(error)) return;
+        const retryDelay = CREDENTIAL_SOURCE_DELETE_RETRY_DELAYS_MS[attempt];
+        if (
+          error instanceof APIError &&
+          error.statusCode === 409 &&
+          retryDelay !== undefined
+        ) {
+          await delay(retryDelay);
+          continue;
+        }
+        throw translateCredentialSourceControlError(error, "delete");
+      }
     }
   }
 
