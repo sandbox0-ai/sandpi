@@ -15,6 +15,7 @@ import {
   codexSkillConfigurationSchema,
   environmentBrowserViewportSchema,
   environmentCreateSchema,
+  environmentOrderSchema,
   environmentProvisioningSchema,
   environmentScheduleSchema as environmentScheduleInputSchema,
   environmentUpdateSchema,
@@ -443,6 +444,17 @@ export const openApiRouteContracts: readonly OpenApiRouteContract[] = [
       tags: ["Environments"],
       body: environmentCreateSchema,
       response: { 201: dataEnvelope(environmentSchema) },
+    },
+  }),
+  defineContract({
+    method: "PUT",
+    url: "/api/v1/environments/order",
+    schema: {
+      operationId: "reorderEnvironments",
+      summary: "Replace the Environment display order",
+      tags: ["Environments"],
+      body: environmentOrderSchema,
+      response: { 200: dataEnvelope(z.array(environmentSchema)) },
     },
   }),
   defineContract({

@@ -134,6 +134,17 @@ export const environmentCreateSchema = z.object({
   name: z.string().trim().min(1).max(80),
 });
 
+export const environmentOrderSchema = z
+  .object({
+    environmentIds: z
+      .array(z.string().trim().min(1).max(200))
+      .max(1_000)
+      .refine((ids) => new Set(ids).size === ids.length, {
+        message: "Environment IDs must be unique.",
+      }),
+  })
+  .strict();
+
 export const environmentUpdateSchema = z.object({
   name: z.string().trim().min(1).max(80),
   description: z.string().max(500),

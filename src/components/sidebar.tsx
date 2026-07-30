@@ -4,6 +4,7 @@ import { useState } from "react";
 import {
   ChevronDown,
   ChevronUp,
+  GripVertical,
   PanelLeftClose,
   Pin,
   Plus,
@@ -17,6 +18,10 @@ import { SessionActionsMenu } from "@/components/session-actions-menu";
 import { SessionSearchDialog } from "@/components/session-search-dialog";
 import { AppSidebar } from "@/components/app-frame";
 import { getOperationUiCopy, type OperationLanguage } from "@/lib/operation-ui";
+import {
+  moveEnvironment,
+  moveEnvironmentByOffset,
+} from "@/lib/environment-order";
 import { sessionStateMarker } from "@/lib/session-state-marker";
 import type {
   CodingSession,
@@ -42,6 +47,7 @@ interface SidebarProps {
   onNewEnvironment: () => void;
   onNewSession: (environmentId: string) => void;
   onEnvironmentSettings: (environmentId: string) => void;
+  onReorderEnvironments: (environments: Environment[]) => void;
   onRenameSession: (sessionId: string, title: string) => void;
   onForkSession: (sessionId: string) => void;
   onArchiveSession: (sessionId: string) => void;
@@ -93,6 +99,7 @@ export function Sidebar({
   onNewEnvironment,
   onNewSession,
   onEnvironmentSettings,
+  onReorderEnvironments,
   onRenameSession,
   onForkSession,
   onArchiveSession,
@@ -104,6 +111,7 @@ export function Sidebar({
   const unreadLabel = language === "zh-CN" ? "未读" : "Unread";
   const runningLabel = language === "zh-CN" ? "运行中" : "Running";
   const [sessionSearchOpen, setSessionSearchOpen] = useState(false);
+  const [draggedEnvironmentId, setDraggedEnvironmentId] = useState("");
   const [visibleSessionCounts, setVisibleSessionCounts] = useState<
     Record<string, number>
   >({});
@@ -124,6 +132,15 @@ export function Sidebar({
       delete next[environmentId];
       return next;
     });
+  }
+
+  function reorderByOffset(environmentId: string, offset: -1 | 1) {
+    const reordered = moveEnvironmentByOffset(
+      environments,
+      environmentId,
+      offset,
+    );
+    if (reordered !== environments) onReorderEnvironments(reordered);
   }
 
   return (
@@ -201,10 +218,65 @@ export function Sidebar({
               const canManage = environment.ownerId === viewer.id;
 
               return (
-                <section className="environment-group" key={environment.id}>
+                <section
+                  className={`environment-group ${
+                    draggedEnvironmentId === environment.id ? "is-dragging" : ""
+                  }`}
+                  key={environment.id}
+                  onDragOver={(event) => {
+                    if (draggedEnvironmentId) event.preventDefault();
+                  }}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    const reordered = moveEnvironment(
+                      environments,
+                      draggedEnvironmentId,
+                      environment.id,
+                    );
+                    setDraggedEnvironmentId("");
+                    if (reordered !== environments) {
+                      onReorderEnvironments(reordered);
+                    }
+                  }}
+                >
                   <div
                     className={`environment-row ${selected ? "is-selected" : ""}`}
                   >
+                    <button
+                      className="environment-drag-handle"
+                      type="button"
+                      draggable
+                      aria-label={
+                        language === "zh-CN"
+                          ? `移动 ${environment.name}`
+                          : `Move ${environment.name}`
+                      }
+                      title={
+                        language === "zh-CN"
+                          ? "拖拽或使用上下方向键调整顺序"
+                          : "Drag or use the arrow keys to reorder"
+                      }
+                      onDragStart={(event) => {
+                        setDraggedEnvironmentId(environment.id);
+                        event.dataTransfer.effectAllowed = "move";
+                        event.dataTransfer.setData(
+                          "text/plain",
+                          environment.id,
+                        );
+                      }}
+                      onDragEnd={() => setDraggedEnvironmentId("")}
+                      onKeyDown={(event) => {
+                        if (event.key === "ArrowUp") {
+                          event.preventDefault();
+                          reorderByOffset(environment.id, -1);
+                        } else if (event.key === "ArrowDown") {
+                          event.preventDefault();
+                          reorderByOffset(environment.id, 1);
+                        }
+                      }}
+                    >
+                      <GripVertical size={14} aria-hidden="true" />
+                    </button>
                     <button
                       className="environment-main-button"
                       type="button"

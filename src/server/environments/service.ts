@@ -89,6 +89,11 @@ export class EnvironmentService {
     );
   }
 
+  async reorder(userId: string, environmentIds: string[]) {
+    await this.store.reorderEnvironments(userId, environmentIds);
+    return this.list(userId);
+  }
+
   async get(userId: string, environmentId: string) {
     return this.authoritativeEnvironment(
       await this.store.getEnvironment(userId, environmentId),

@@ -392,8 +392,36 @@ pre {
   display: flex;
   height: 34px;
   align-items: center;
-  padding: 0 3px 0 6px;
+  padding: 0 3px 0 1px;
   border-radius: 7px;
+}
+
+.environment-group.is-dragging {
+  opacity: 0.45;
+}
+
+.environment-drag-handle {
+  display: inline-flex;
+  width: 18px;
+  height: 26px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink-faint);
+  cursor: grab;
+  opacity: 0;
+}
+
+.environment-row:hover .environment-drag-handle,
+.environment-row:focus-within .environment-drag-handle {
+  opacity: 0.8;
+}
+
+.environment-drag-handle:active {
+  cursor: grabbing;
 }
 
 .environment-row:hover {

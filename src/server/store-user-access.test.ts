@@ -116,6 +116,74 @@ test("scopes Environments and Sessions to the owning user", async () => {
   assert.doesNotMatch(queries[1] ?? "", /membership|visibility/i);
 });
 
+test("reorders every owned Environment in one transaction", async () => {
+  const queries: Array<{ sql: string; values?: readonly unknown[] }> = [];
+  const client = {
+    async query(sql: string, values?: readonly unknown[]) {
+      queries.push({ sql, values });
+      if (sql.includes("SELECT id") && sql.includes("FOR UPDATE")) {
+        return {
+          rowCount: 2,
+          rows: [{ id: "environment-first" }, { id: "environment-second" }],
+        };
+      }
+      return { rowCount: 2, rows: [] };
+    },
+    release() {},
+  };
+  const store = new SandpiStore({
+    async connect() {
+      return client;
+    },
+  } as unknown as Pool);
+
+  await store.reorderEnvironments("user-viewer", [
+    "environment-second",
+    "environment-first",
+  ]);
+
+  const update = queries.find(({ sql }) =>
+    sql.includes("WITH ORDINALITY"),
+  );
+  assert.ok(update);
+  assert.deepEqual(update.values, [
+    "user-viewer",
+    ["environment-second", "environment-first"],
+  ]);
+  assert.equal(queries.at(-1)?.sql, "COMMIT");
+});
+
+test("rejects an Environment order that omits an owned Environment", async () => {
+  const queries: string[] = [];
+  const client = {
+    async query(sql: string) {
+      queries.push(sql);
+      if (sql.includes("SELECT id") && sql.includes("FOR UPDATE")) {
+        return {
+          rowCount: 2,
+          rows: [{ id: "environment-first" }, { id: "environment-second" }],
+        };
+      }
+      return { rowCount: 0, rows: [] };
+    },
+    release() {},
+  };
+  const store = new SandpiStore({
+    async connect() {
+      return client;
+    },
+  } as unknown as Pool);
+
+  await assert.rejects(
+    store.reorderEnvironments("user-viewer", ["environment-first"]),
+    (error: unknown) =>
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "environment_order_mismatch",
+  );
+  assert.equal(queries.at(-1), "ROLLBACK");
+});
+
 test("stores a Session pin only for the acting user", async () => {
   const queries: Array<{ sql: string; values?: readonly unknown[] }> = [];
   const client = {
