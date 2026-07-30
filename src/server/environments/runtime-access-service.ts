@@ -164,15 +164,15 @@ export class EnvironmentRuntimeAccessService {
   }
 
   /**
-   * Best-effort keepalive for a live native connection. It never waits for a
-   * lifecycle transition and never wakes Sandbox0; losing the shared lock just
-   * skips this heartbeat.
+   * Best-effort activity record for a live native connection. It never waits
+   * for a lifecycle transition and never wakes Sandbox0; losing the shared
+   * lock just skips this activity sample.
    */
-  async touchRunningRuntime(environmentId: string) {
+  async touchRunningRuntimeActivity(environmentId: string) {
     const locked = await this.store.withEnvironmentRuntimeAccessLock(
       environmentId,
       (lockedStore) =>
-        (lockedStore ?? this.store).touchRunningEnvironmentRuntime(
+        (lockedStore ?? this.store).touchRunningEnvironmentActivity(
           environmentId,
         ),
     );

@@ -349,11 +349,11 @@ test("records successful runtime access without promoting the Codex epoch", asyn
   assert.deepEqual(update.values, ["environment-one"]);
 });
 
-test("a live connection heartbeat extends only an already-running Environment", async () => {
+test("live user activity extends only an already-running Environment", async () => {
   const fixture = transactionalStore(() => ({ rows: [], rowCount: 1 }));
 
   assert.equal(
-    await fixture.store.touchRunningEnvironmentRuntime("environment-one"),
+    await fixture.store.touchRunningEnvironmentActivity("environment-one"),
     true,
   );
 
@@ -425,7 +425,7 @@ test("a lock-scoped Store reuses the advisory-lock connection", async () => {
   const result = await store.withEnvironmentRuntimeAccessLock(
     "environment-one",
     (lockedStore) =>
-      lockedStore.touchRunningEnvironmentRuntime("environment-one"),
+      lockedStore.touchRunningEnvironmentActivity("environment-one"),
   );
 
   assert.deepEqual(result, { acquired: true, value: true });

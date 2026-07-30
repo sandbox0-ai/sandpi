@@ -1141,10 +1141,10 @@ export class SandpiStore {
 
   /**
    * Extends an Environment's idle window only while Sandpi still wants it
-   * running. This is used for live connection heartbeats and never changes
+   * running. This is used for throttled live user activity and never changes
    * Sandbox0 lifecycle state.
    */
-  async touchRunningEnvironmentRuntime(environmentId: string) {
+  async touchRunningEnvironmentActivity(environmentId: string) {
     const result = await this.pool.query(
       `UPDATE environment_runtime runtime
        SET idle_pause_due_at = CASE

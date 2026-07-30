@@ -1877,7 +1877,7 @@ export function registerApiRoutes(
         request,
         services.browser,
         () =>
-          services.runtimeAccess.touchRunningRuntime(
+          services.runtimeAccess.touchRunningRuntimeActivity(
             request.params.environmentId,
           ),
       );
@@ -2046,7 +2046,10 @@ export function registerApiRoutes(
             services.store.withTerminalAccess(
               request.principal.userId,
               request.params.environmentId,
-              () => forwardTerminalMessage(message),
+              () => {
+                forwardTerminalMessage(message);
+                heartbeat?.markActivity();
+              },
             ),
           requiresAuthorization: (message) => message.type !== "resize",
           forward: forwardTerminalMessage,
@@ -2075,17 +2078,17 @@ export function registerApiRoutes(
         heartbeat = new RuntimeWebSocketHeartbeat(
           socket,
           () =>
-            services.runtimeAccess.touchRunningRuntime(
+            services.runtimeAccess.touchRunningRuntimeActivity(
               request.params.environmentId,
             ),
           {
-            onTouchError: (error) => {
+            onActivityTouchError: (error) => {
               request.log.debug(
                 {
                   err: error,
                   environmentId: request.params.environmentId,
                 },
-                "Environment terminal heartbeat could not extend idle access",
+                "Environment terminal activity could not extend idle access",
               );
             },
           },
@@ -2570,14 +2573,12 @@ async function proxyEnvironmentBrowserWebSocket(
     },
   });
   const heartbeat = new RuntimeWebSocketHeartbeat(socket, touchRuntime, {
-    // The UI permits a one-minute idle timeout, so the live Browser must
-    // establish activity before that shortest configured window elapses.
     pingIntervalMs: 30_000,
-    touchIntervalMs: 30_000,
-    onTouchError: (error) => {
+    activityTouchIntervalMs: 30_000,
+    onActivityTouchError: (error) => {
       request.log.debug(
         { err: error, environmentId: request.params.environmentId },
-        "Environment browser heartbeat could not extend idle access",
+        "Environment browser activity could not extend idle access",
       );
     },
   });
@@ -2585,6 +2586,7 @@ async function proxyEnvironmentBrowserWebSocket(
 
   socket.on("message", (data, isBinary) => {
     if (upstream?.readyState === WebSocket.OPEN) {
+      heartbeat.markActivity();
       upstream.send(data, { binary: isBinary });
       return;
     }
@@ -2594,6 +2596,7 @@ async function proxyEnvironmentBrowserWebSocket(
       return;
     }
     queued.push({ data, isBinary });
+    heartbeat.markActivity();
   });
   socket.once("close", () => {
     downstreamClosed = true;

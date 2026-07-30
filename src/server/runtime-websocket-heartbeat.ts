@@ -1,5 +1,5 @@
 const DEFAULT_PING_INTERVAL_MS = 60_000;
-const DEFAULT_RUNTIME_TOUCH_INTERVAL_MS = 5 * 60_000;
+const DEFAULT_ACTIVITY_TOUCH_INTERVAL_MS = 30_000;
 
 interface RuntimeWebSocketHeartbeatSocket {
   ping(): void;
@@ -10,16 +10,17 @@ interface RuntimeWebSocketHeartbeatSocket {
 
 export interface RuntimeWebSocketHeartbeatOptions {
   pingIntervalMs?: number;
-  touchIntervalMs?: number;
+  activityTouchIntervalMs?: number;
   now?: () => number;
   setInterval?: typeof setInterval;
   clearInterval?: typeof clearInterval;
-  onTouchError?: (error: unknown) => void;
+  onActivityTouchError?: (error: unknown) => void;
 }
 
 /**
- * Keeps a client-owned live runtime connection honest and extends the idle
- * deadline only after a protocol-level pong proves that the client is alive.
+ * Keeps a client-owned live runtime connection honest. Protocol pongs only
+ * prove transport health; callers must explicitly report semantic activity
+ * before the Environment idle deadline is extended.
  */
 export class RuntimeWebSocketHeartbeat {
   private readonly now: () => number;
@@ -27,18 +28,17 @@ export class RuntimeWebSocketHeartbeat {
   private readonly cancel: typeof clearInterval;
   private timer?: ReturnType<typeof setInterval>;
   private alive = true;
-  private lastTouchAt: number;
-  private touchInFlight?: Promise<void>;
+  private lastActivityTouchAt?: number;
+  private activityTouchInFlight?: Promise<void>;
 
   constructor(
     private readonly socket: RuntimeWebSocketHeartbeatSocket,
-    private readonly touchRuntime: () => Promise<boolean>,
+    private readonly touchRuntimeActivity: () => Promise<boolean>,
     private readonly options: RuntimeWebSocketHeartbeatOptions = {},
   ) {
     this.now = options.now ?? Date.now;
     this.schedule = options.setInterval ?? setInterval;
     this.cancel = options.clearInterval ?? clearInterval;
-    this.lastTouchAt = this.now();
   }
 
   start() {
@@ -75,22 +75,29 @@ export class RuntimeWebSocketHeartbeat {
 
   private readonly handlePong = () => {
     this.alive = true;
+  };
+
+  markActivity() {
     const now = this.now();
     if (
-      this.touchInFlight ||
-      now - this.lastTouchAt <
-        (this.options.touchIntervalMs ?? DEFAULT_RUNTIME_TOUCH_INTERVAL_MS)
+      this.activityTouchInFlight ||
+      (this.lastActivityTouchAt !== undefined &&
+        now - this.lastActivityTouchAt <
+          (this.options.activityTouchIntervalMs ??
+            DEFAULT_ACTIVITY_TOUCH_INTERVAL_MS))
     ) {
       return;
     }
-    const touch = this.touchRuntime()
+    const touch = this.touchRuntimeActivity()
       .then((touched) => {
-        if (touched) this.lastTouchAt = this.now();
+        if (touched) this.lastActivityTouchAt = this.now();
       })
-      .catch((error) => this.options.onTouchError?.(error))
+      .catch((error) => this.options.onActivityTouchError?.(error))
       .finally(() => {
-        if (this.touchInFlight === touch) this.touchInFlight = undefined;
+        if (this.activityTouchInFlight === touch) {
+          this.activityTouchInFlight = undefined;
+        }
       });
-    this.touchInFlight = touch;
-  };
+    this.activityTouchInFlight = touch;
+  }
 }
