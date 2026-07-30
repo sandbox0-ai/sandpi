@@ -42,6 +42,7 @@ test("keeps Workspace and external links inside their intended boundaries", () =
   );
 
   assert.match(html, /data-workspace-path="\/workspace\/app\/page.tsx"/);
+  assert.match(html, /data-sandpi-external-link=""/);
   assert.match(html, /target="_blank"/);
   assert.match(html, /rel="noreferrer noopener"/);
 });
@@ -53,7 +54,16 @@ test("routes sandbox loopback links into the shared Environment browser", () => 
 
   assert.match(html, /data-browser-url="http:\/\/localhost:3000\/dashboard"/);
   assert.match(html, /data-browser-url="http:\/\/127\.0\.0\.1:8080\/health"/);
+  assert.doesNotMatch(html, /data-sandpi-external-link/);
   assert.doesNotMatch(html, /target="_blank"/);
+});
+
+test("marks external image destinations for native system browsers", () => {
+  const html = render("![Architecture](https://example.com/diagram.png)");
+
+  assert.match(html, /class="markdown-image-link"/);
+  assert.match(html, /data-sandpi-external-link=""/);
+  assert.match(html, /href="https:\/\/example\.com\/diagram\.png"/);
 });
 
 test("does not preserve scheme-less loopback targets without a Browser handler", () => {

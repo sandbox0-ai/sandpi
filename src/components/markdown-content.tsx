@@ -106,6 +106,7 @@ export function MarkdownContent({
           title={title}
           target={external ? "_blank" : undefined}
           rel={external ? "noreferrer noopener" : undefined}
+          data-sandpi-external-link={external ? "" : undefined}
         >
           {children}
         </a>
@@ -119,12 +120,15 @@ export function MarkdownContent({
       );
     },
     img({ alt, src }) {
+      const href = typeof src === "string" ? src : undefined;
+      const external = isExternalHref(href);
       return (
         <a
           className="markdown-image-link"
-          href={typeof src === "string" ? src : undefined}
+          href={href}
           target="_blank"
           rel="noreferrer noopener"
+          data-sandpi-external-link={external ? "" : undefined}
         >
           {alt || "Open image"}
         </a>
