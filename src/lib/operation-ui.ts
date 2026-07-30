@@ -40,6 +40,12 @@ const copy = {
       environmentSettings: "Environment settings",
       environmentSettingsFor: (name: string) => `${name} settings`,
       pinned: "Pinned",
+      showMoreSessions: (count: number) => `Show ${count} more`,
+      showMoreSessionsIn: (count: number, name: string) =>
+        `Show ${count} more sessions in ${name}`,
+      showFewerSessions: "Show fewer",
+      showFewerSessionsIn: (name: string) =>
+        `Show fewer sessions in ${name}`,
       renameSession: (title: string) => `Rename ${title}`,
       sessionActions: (title: string) => `Session actions for ${title}`,
       actionsFor: (title: string) => `Actions for ${title}`,
@@ -188,6 +194,11 @@ const copy = {
       environmentSettings: "环境设置",
       environmentSettingsFor: (name: string) => `${name} 设置`,
       pinned: "已置顶",
+      showMoreSessions: (count: number) => `再显示 ${count} 条`,
+      showMoreSessionsIn: (count: number, name: string) =>
+        `在 ${name} 中再显示 ${count} 条 Session`,
+      showFewerSessions: "收起",
+      showFewerSessionsIn: (name: string) => `收起 ${name} 的 Session 列表`,
       renameSession: (title: string) => `重命名 ${title}`,
       sessionActions: (title: string) => `${title} 的会话操作`,
       actionsFor: (title: string) => `${title} 的操作`,

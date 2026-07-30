@@ -8,6 +8,7 @@ import {
 
 import type { ApiEnvelope } from "../src/lib/api-client";
 import type {
+  CodingSession,
   Environment,
   SandpiBootstrap,
   SandpiCloudSnapshot,
@@ -6848,4 +6849,112 @@ test("keeps pinned Session markers compact and removes sidebar shortcuts", async
   await expect(
     page.getByRole("dialog", { name: "New Environment" }),
   ).toHaveCount(0);
+});
+
+test("paginates each Environment Session list from six in batches of ten", async ({
+  page,
+}) => {
+  const bootstrap = getMockBootstrap();
+  useEnglishUi(bootstrap);
+  const development = bootstrap.environments.find(
+    (environment) => environment.id === "env-default",
+  );
+  const release = bootstrap.environments.find(
+    (environment) => environment.id === "env-release",
+  );
+  const template = bootstrap.sessions[0];
+  expect(development).toBeTruthy();
+  expect(release).toBeTruthy();
+  expect(template).toBeTruthy();
+  if (!development || !release || !template) return;
+
+  function sessionsFor(
+    environment: Environment,
+    label: string,
+    count: number,
+  ): CodingSession[] {
+    return Array.from({ length: count }, (_, index) => ({
+      ...structuredClone(template),
+      id: `session-pagination-${environment.id}-${index + 1}`,
+      environmentId: environment.id,
+      environmentRevision: environment.revision,
+      title: `${label} session ${String(index + 1).padStart(2, "0")}`,
+      status: "waiting",
+      unread: false,
+      pinned: false,
+      archived: false,
+      updatedAt: template.updatedAt - index,
+    }));
+  }
+
+  bootstrap.sessions = [
+    ...sessionsFor(development, "Development", 29),
+    ...sessionsFor(release, "Release", 12),
+  ];
+  bootstrap.selectedEnvironmentId = development.id;
+  bootstrap.selectedSessionId = "";
+
+  await page.route(
+    (url) => url.pathname === "/api/v1/bootstrap",
+    async (route) => {
+      await route.fulfill({ json: { data: bootstrap } });
+    },
+  );
+
+  await page.goto(
+    `/?environment=${encodeURIComponent(development.id)}&new=1`,
+  );
+  const environmentGroup = (name: string) =>
+    page.locator(".environment-group").filter({
+      has: page.getByRole("button", { name, exact: true }),
+    });
+  const developmentGroup = environmentGroup(development.name);
+  const releaseGroup = environmentGroup(release.name);
+
+  await expect(developmentGroup.locator(".session-row")).toHaveCount(6);
+  await expect(releaseGroup.locator(".session-row")).toHaveCount(6);
+  await expect(
+    developmentGroup.getByText("Development session 07", { exact: true }),
+  ).toHaveCount(0);
+
+  await developmentGroup
+    .getByRole("button", {
+      name: `Show 10 more sessions in ${development.name}`,
+    })
+    .click();
+  await expect(developmentGroup.locator(".session-row")).toHaveCount(16);
+  await expect(releaseGroup.locator(".session-row")).toHaveCount(6);
+
+  await developmentGroup
+    .getByRole("button", {
+      name: `Show 10 more sessions in ${development.name}`,
+    })
+    .click();
+  await expect(developmentGroup.locator(".session-row")).toHaveCount(26);
+  await developmentGroup
+    .getByRole("button", {
+      name: `Show 3 more sessions in ${development.name}`,
+    })
+    .click();
+  await expect(developmentGroup.locator(".session-row")).toHaveCount(29);
+  await expect(
+    developmentGroup.getByRole("button", {
+      name: /Show \d+ more sessions/,
+    }),
+  ).toHaveCount(0);
+
+  await developmentGroup
+    .getByRole("button", {
+      name: `Show fewer sessions in ${development.name}`,
+    })
+    .click();
+  await expect(developmentGroup.locator(".session-row")).toHaveCount(6);
+
+  await page.getByRole("button", { name: "Search sessions" }).click();
+  await page
+    .getByRole("searchbox", { name: "Search sessions or environments" })
+    .fill("Development session 29");
+  await expect(
+    page.getByRole("option", { name: /Development session 29/ }),
+  ).toBeVisible();
 });

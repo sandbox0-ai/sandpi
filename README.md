@@ -106,7 +106,8 @@ same files, tools and execution context.
 - Live native context-window and Sandbox CPU/memory usage in the composer
 - Codex tools, Skills, MCP configuration, approvals and supported slash-command
   surfaces
-- Persistent multi-Environment and multi-Session Web UI
+- Persistent multi-Environment and multi-Session Web UI with compact,
+  progressively paginated Session lists
 - Live Workspace file browser with a resizable, collapsible file tree, Monaco
   editor, media previews and Git changes
 - Shared official Playwright Browser with multi-tab controls, loading feedback
