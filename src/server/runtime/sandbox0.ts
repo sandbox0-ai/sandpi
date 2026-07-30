@@ -57,6 +57,7 @@ import { toSandbox0NetworkPolicy } from "./network-policy";
 import {
   CODEX_ENVIRONMENT_CREDENTIAL_PATH,
   CODEX_MCP_OAUTH_CALLBACK_BASE_PATH,
+  SANDPI_ENVIRONMENT_SKILL_ROOT,
   type EnsureCodexEnvironmentRuntimeOptions,
   type CodexAuthRuntime,
   type EnvironmentRuntimeRecord,
@@ -77,6 +78,10 @@ import {
   type Sandbox0AppServiceView,
   type Sandbox0NetworkPolicy,
 } from "./types";
+import {
+  SANDPI_ENVIRONMENT_SKILL_ASSETS,
+  SANDPI_ENVIRONMENT_SKILL_NAME,
+} from "./sandpi-environment-skill";
 import {
   gitRepositoryRootsFromMarkers,
   lineChangesFromDiff,
@@ -2867,13 +2872,37 @@ harnesses=/workspace/.sandpi/harnesses
 home=${ENVIRONMENT_CODEX_HOME}
 marker=${WORKSPACE_CODEX_LAYOUT_MARKER}
 browser=/workspace/.sandpi/browser
+skills=${SANDPI_ENVIRONMENT_SKILL_ROOT}
+sandpi_skill="$skills/${SANDPI_ENVIRONMENT_SKILL_NAME}"
+sandpi_skill_agents="$sandpi_skill/agents"
 playwright_skill_marker=${PLAYWRIGHT_AGENT_SKILL_VERSION_MARKER}
 test ! -L "$internal"
 test ! -L "$harnesses"
 test ! -L "$browser"
-install -d -m 700 "$internal" "$harnesses" "$browser"
+test ! -L "$skills"
+test ! -L "$sandpi_skill"
+test ! -L "$sandpi_skill_agents"
+install -d -m 700 "$internal" "$harnesses" "$browser" "$skills" "$sandpi_skill" "$sandpi_skill_agents"
 test ! -L "$home"
 install -d -m 700 "$home"
+install_managed_file() {
+  target="$1"
+  encoded="$2"
+  temporary="$target.tmp"
+  test ! -L "$target"
+  test ! -L "$temporary"
+  if [ -e "$target" ]; then test -f "$target"; fi
+  if [ -e "$temporary" ]; then test -f "$temporary"; fi
+  printf '%s' "$encoded" | base64 -d > "$temporary"
+  chmod 600 "$temporary"
+  if [ -f "$target" ] && cmp -s "$target" "$temporary"; then
+    rm -f "$temporary"
+  else
+    mv -f "$temporary" "$target"
+  fi
+}
+install_managed_file "$sandpi_skill/SKILL.md" "$SANDPI_ENVIRONMENT_SKILL_MD_BASE64"
+install_managed_file "$sandpi_skill_agents/openai.yaml" "$SANDPI_ENVIRONMENT_SKILL_OPENAI_YAML_BASE64"
 if [ -f "$marker" ]; then
   test "$(cat "$marker")" = environment_v1
 else
@@ -2903,6 +2932,16 @@ sync -f /workspace 2>/dev/null || sync`;
   const result = await sandbox.cmd("prepare-environment-codex-home", {
     command: ["/bin/sh", "-lc", command],
     cwd: "/workspace",
+    envVars: {
+      SANDPI_ENVIRONMENT_SKILL_MD_BASE64: Buffer.from(
+        SANDPI_ENVIRONMENT_SKILL_ASSETS.skill,
+        "utf8",
+      ).toString("base64"),
+      SANDPI_ENVIRONMENT_SKILL_OPENAI_YAML_BASE64: Buffer.from(
+        SANDPI_ENVIRONMENT_SKILL_ASSETS.interfaceYaml,
+        "utf8",
+      ).toString("base64"),
+    },
     ttlSec: 60,
   });
   if (result.exitCode !== undefined && result.exitCode !== 0) {

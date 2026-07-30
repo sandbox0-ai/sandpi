@@ -271,6 +271,7 @@ Sandbox0
 
 ## 文档
 
+- [Coding agent Environment 指南（`/llms.txt`）](./public/llms.txt)
 - [OpenAPI 契约](./docs/architecture/openapi-contract.md)
 - [原生 Session authority 与恢复](./docs/architecture/native-session-authority.md)
 - [Environment 出站凭证](./docs/architecture/environment-egress-credentials.md)

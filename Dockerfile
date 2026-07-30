@@ -22,6 +22,7 @@ COPY --from=builder --chown=node:node /app/package.json ./
 COPY --from=builder --chown=node:node /app/db ./db
 COPY --from=builder --chown=node:node /app/dist ./dist
 COPY --from=builder --chown=node:node /app/out ./out
+COPY --from=builder --chown=node:node /app/skills ./skills
 
 USER node
 EXPOSE 3000

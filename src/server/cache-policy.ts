@@ -47,5 +47,8 @@ export function staticWebCacheControl(filePath: string) {
   if (normalized.endsWith(".html")) {
     return "private, no-cache";
   }
+  if (normalized.endsWith("/llms.txt")) {
+    return "public, no-cache";
+  }
   return `public, max-age=${ONE_HOUR_SECONDS}`;
 }

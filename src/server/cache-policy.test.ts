@@ -48,4 +48,8 @@ test("makes content-addressed Web assets immutable without pinning stable HTML o
     staticWebCacheControl("/srv/sandpi/out/index.html"),
     "private, no-cache",
   );
+  assert.equal(
+    staticWebCacheControl("/srv/sandpi/out/llms.txt"),
+    "public, no-cache",
+  );
 });

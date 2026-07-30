@@ -13,6 +13,7 @@
     "dist/",
     "out/",
     "db/migrations/",
+    "skills/",
     "openapi.yaml",
     "LICENSE",
     "README.md"

@@ -25,6 +25,7 @@ import type { Sandbox } from "sandbox0";
 
 export const CODEX_ENVIRONMENT_CREDENTIAL_PATH =
   "/dev/shm/sandpi-codex-auth.json";
+export const SANDPI_ENVIRONMENT_SKILL_ROOT = "/workspace/.sandpi/skills";
 export const CODEX_MCP_OAUTH_CALLBACK_PORT = 43_419;
 /** Codex appends a server-specific identifier below this callback base path. */
 export const CODEX_MCP_OAUTH_CALLBACK_BASE_PATH = "/callback";

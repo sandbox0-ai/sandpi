@@ -308,6 +308,7 @@ Sandbox0
 
 ## Documentation
 
+- [Coding-agent Environment guide (`/llms.txt`)](./public/llms.txt)
 - [OpenAPI contract](./docs/architecture/openapi-contract.md)
 - [Native Session authority and recovery](./docs/architecture/native-session-authority.md)
 - [Environment Schedules](./docs/architecture/environment-schedules.md)
