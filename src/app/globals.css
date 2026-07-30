@@ -7234,13 +7234,15 @@ code.codex-compact-activity-subject {
   }
 
   .codex-composer-toolbar > .composer-agent-bound {
-    width: 100%;
+    width: fit-content;
+    max-width: 100%;
     grid-area: agent;
+    justify-self: start;
     overflow: visible;
   }
 
   .codex-composer-toolbar .composer-model-picker {
-    flex: 1 1 80px;
+    flex: 0 1 120px;
   }
 
   .codex-composer-toolbar .composer-model-picker .composer-picker-trigger {

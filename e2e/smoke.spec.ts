@@ -584,6 +584,33 @@ test("shows live native context usage inside the Session composer", async ({
   expect(mobileEffortBox!.x + mobileEffortBox!.width).toBeLessThanOrEqual(
     mobileFastBox!.x + 1,
   );
+
+  for (const width of [320, 440, 680]) {
+    await page.setViewportSize({ width, height: 844 });
+    const [responsiveComposer, responsiveAgent, responsiveActions, responsiveModel] =
+      await Promise.all([
+        composer.boundingBox(),
+        composer.locator(".composer-agent-bound").boundingBox(),
+        composer.locator(".composer-actions").boundingBox(),
+        composer
+          .getByRole("combobox", { name: "Select Codex model" })
+          .boundingBox(),
+      ]);
+    expect(responsiveComposer).not.toBeNull();
+    expect(responsiveAgent).not.toBeNull();
+    expect(responsiveActions).not.toBeNull();
+    expect(responsiveModel).not.toBeNull();
+    expect(responsiveAgent!.x).toBeGreaterThanOrEqual(responsiveComposer!.x);
+    expect(
+      responsiveAgent!.x + responsiveAgent!.width,
+    ).toBeLessThanOrEqual(responsiveActions!.x + 1);
+    expect(responsiveModel!.width).toBeLessThanOrEqual(121);
+    expect(
+      responsiveActions!.x + responsiveActions!.width,
+    ).toBeLessThanOrEqual(responsiveComposer!.x + responsiveComposer!.width);
+  }
+
+  await page.setViewportSize({ width: 390, height: 844 });
   await composer
     .getByRole("button", { name: "Mention a Workspace file" })
     .click();
