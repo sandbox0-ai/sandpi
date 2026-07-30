@@ -116,6 +116,45 @@ pre,
   color: var(--ink);
 }
 
+.native-pull-refresh {
+  position: fixed;
+  z-index: 120;
+  top: 8px;
+  left: 50%;
+  display: flex;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--panel-strong);
+  box-shadow: 0 4px 14px rgb(24 24 20 / 14%);
+  color: var(--ink-soft);
+  opacity: var(--pull-refresh-progress);
+  pointer-events: none;
+  transform: translate(
+    -50%,
+    calc(-44px + var(--pull-refresh-distance))
+  );
+}
+
+.native-pull-refresh > svg {
+  transform: rotate(calc(var(--pull-refresh-progress) * 180deg));
+}
+
+.native-pull-refresh.is-refreshing {
+  opacity: 1;
+}
+
+.native-pull-refresh.is-refreshing > svg {
+  animation: spin 0.8s linear infinite;
+}
+
+.native-pull-refresh.has-failed {
+  color: var(--red);
+}
+
 .app-shell {
   display: grid;
   grid-template-columns: var(--sidebar-width) minmax(0, 1fr);

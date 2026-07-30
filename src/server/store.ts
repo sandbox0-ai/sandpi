@@ -9,6 +9,7 @@ import type {
   EnvironmentWorkspaceBackup,
   NetworkPolicy,
   SandpiBootstrap,
+  SandpiCloudSnapshot,
   SandpiDeploymentSummary,
   SandpiPreferences,
   SandpiUser,
@@ -362,6 +363,32 @@ export class SandpiStore {
       selectedEnvironmentId: selectedEnvironment?.id ?? "",
       selectedSessionId: selectedSession?.id ?? "",
     };
+  }
+
+  async getCloudSnapshot(userId: string): Promise<SandpiCloudSnapshot> {
+    const client = await this.pool.connect();
+    try {
+      await client.query(
+        "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
+      );
+      const store = this.onClient(client);
+      const environments = (await store.listEnvironments(userId)).map(
+        (environment) => {
+          const { sandboxState, ...cloudState } = environment;
+          void sandboxState;
+          return cloudState;
+        },
+      );
+      const sessions = await store.listSessions(userId);
+      const preferences = await store.getPreferences(userId);
+      await client.query("COMMIT");
+      return { environments, sessions, preferences };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async listEnvironments(userId: string): Promise<EnvironmentRecord[]> {
@@ -2124,7 +2151,8 @@ export class SandpiStore {
     const result = await this.pool.query<SessionRow>(
       `${SESSION_SELECT}
        WHERE environment.created_by_user_id = $1
-       ORDER BY (pin.user_id IS NOT NULL) DESC, session.updated_at DESC`,
+       ORDER BY (pin.user_id IS NOT NULL) DESC, session.updated_at DESC,
+                session.id`,
       [userId],
     );
     return result.rows.map(sessionFromRow);

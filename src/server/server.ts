@@ -83,6 +83,10 @@ import {
   shouldApplyApiNoStore,
   staticWebCacheControl,
 } from "@/server/cache-policy";
+import {
+  cloudSnapshotEtag,
+  requestEtagMatches,
+} from "@/server/cloud-sync";
 import { createRuntime } from "@/server/runtime";
 import type { RuntimeAdapter } from "@/server/runtime/types";
 import { RuntimeWebSocketHeartbeat } from "@/server/runtime-websocket-heartbeat";
@@ -526,6 +530,19 @@ export function registerApiRoutes(
     ),
     meta: { runtime: services.runtime.mode },
   }));
+
+  app.get("/api/v1/sync", async (request, reply) => {
+    const data = await services.store.getCloudSnapshot(
+      request.principal.userId,
+    );
+    const etag = cloudSnapshotEtag(data);
+    reply.header("Cache-Control", "private, no-cache");
+    reply.header("ETag", etag);
+    if (requestEtagMatches(request.headers["if-none-match"], etag)) {
+      return reply.status(304).send();
+    }
+    return reply.send({ data });
+  });
 
   app.get("/api/v1/billing/summary", async (request) => ({
     data: await services.billingQuota.summary(request.principal.userId),

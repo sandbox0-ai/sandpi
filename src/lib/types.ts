@@ -468,3 +468,16 @@ export interface SandpiBootstrap {
   selectedEnvironmentId: string;
   selectedSessionId: string;
 }
+
+/**
+ * Durable Environment fields used to reconcile clients. Runtime lifecycle
+ * remains separately authoritative in Sandbox0 and is not part of this
+ * lightweight snapshot.
+ */
+export type EnvironmentCloudState = Omit<Environment, "sandboxState">;
+
+export interface SandpiCloudSnapshot {
+  environments: EnvironmentCloudState[];
+  sessions: CodingSession[];
+  preferences: SandpiPreferences;
+}

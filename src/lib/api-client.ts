@@ -67,7 +67,7 @@ export function apiUrl(path: string) {
 }
 
 async function readResponseBody(response: Response): Promise<unknown> {
-  if (response.status === 204) {
+  if (response.status === 204 || response.status === 304) {
     return undefined;
   }
 
@@ -78,6 +78,29 @@ async function readResponseBody(response: Response): Promise<unknown> {
 
   const text = await response.text();
   return text || undefined;
+}
+
+function apiError(response: Response, body: unknown) {
+  const errorBody =
+    body && typeof body === "object" ? (body as ApiErrorBody) : undefined;
+  const nestedError = errorBody?.error;
+  const message =
+    nestedError?.message ??
+    errorBody?.message ??
+    (typeof body === "string" ? body : undefined) ??
+    `Sandpi API request failed with status ${response.status}.`;
+
+  return new ApiError(message, {
+    status: response.status,
+    code: nestedError?.code ?? errorBody?.code,
+    loginUrl:
+      nestedError?.loginUrl ??
+      errorBody?.loginUrl ??
+      response.headers.get("location") ??
+      undefined,
+    details: nestedError?.details,
+    body,
+  });
 }
 
 /**
@@ -109,29 +132,50 @@ export async function apiFetch<T>(
   const body = await readResponseBody(response);
 
   if (!response.ok) {
-    const errorBody =
-      body && typeof body === "object" ? (body as ApiErrorBody) : undefined;
-    const nestedError = errorBody?.error;
-    const message =
-      nestedError?.message ??
-      errorBody?.message ??
-      (typeof body === "string" ? body : undefined) ??
-      `Sandpi API request failed with status ${response.status}.`;
-
-    throw new ApiError(message, {
-      status: response.status,
-      code: nestedError?.code ?? errorBody?.code,
-      loginUrl:
-        nestedError?.loginUrl ??
-        errorBody?.loginUrl ??
-        response.headers.get("location") ??
-        undefined,
-      details: nestedError?.details,
-      body,
-    });
+    throw apiError(response, body);
   }
 
   return body as T;
+}
+
+export type ConditionalApiResult<T> =
+  | { notModified: true; etag?: string }
+  | { notModified: false; data: T; etag?: string };
+
+/** Perform a credentialed conditional GET without treating HTTP 304 as an error. */
+export async function apiFetchConditional<T>(
+  path: string,
+  etag?: string,
+  init: Omit<RequestInit, "body" | "method"> = {},
+): Promise<ConditionalApiResult<T>> {
+  const headers = new Headers(init.headers);
+  if (!headers.has("accept")) {
+    headers.set("accept", "application/json");
+  }
+  if (etag) {
+    headers.set("if-none-match", etag);
+  }
+
+  const response = await fetch(apiUrl(path), {
+    ...init,
+    method: "GET",
+    credentials: init.credentials ?? "include",
+    headers,
+  });
+  const responseEtag = response.headers.get("etag") ?? undefined;
+  if (response.status === 304) {
+    return { notModified: true, etag: responseEtag ?? etag };
+  }
+
+  const body = await readResponseBody(response);
+  if (!response.ok) {
+    throw apiError(response, body);
+  }
+  return {
+    notModified: false,
+    data: body as T,
+    etag: responseEtag,
+  };
 }
 
 /** Resolve a replayable Sandpi WebSocket endpoint using the same API base. */

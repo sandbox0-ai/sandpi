@@ -1118,6 +1118,146 @@ components:
         - codingAgent
         - networkPolicy
       additionalProperties: false
+    EnvironmentCloudState:
+      type: object
+      properties:
+        id:
+          type: string
+        ownerId:
+          type: string
+        idlePauseTimeoutSeconds:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+        sandboxMemoryMiB:
+          type: integer
+          minimum: 0
+          exclusiveMinimum: true
+          maximum: 9007199254740991
+        workspaceBackup:
+          type: object
+          properties:
+            intervalSeconds:
+              type: integer
+              minimum: 0
+              maximum: 9007199254740991
+            retentionCount:
+              type: integer
+              minimum: 0
+              maximum: 9007199254740991
+            nextBackupAt:
+              type: number
+              description: Unix time in seconds; fractional values preserve milliseconds.
+            lastBackupAt:
+              type: number
+              description: Unix time in seconds; fractional values preserve milliseconds.
+            lastError:
+              type: string
+          required:
+            - intervalSeconds
+            - retentionCount
+          additionalProperties: false
+        name:
+          type: string
+        description:
+          type: string
+        color:
+          type: string
+        status:
+          type: string
+          enum:
+            - ready
+            - updating
+            - error
+        revision:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+        templateId:
+          type: string
+        rootfsSnapshotId:
+          type: string
+        workspaceVolumeId:
+          type: string
+        sandboxId:
+          type: string
+        supervisorSessionId:
+          type: string
+        workspaceRoot:
+          type: string
+          enum:
+            - /workspace
+        provisioningError:
+          type: string
+        credentialRevision:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+        codingAgent:
+          type: object
+          properties:
+            harness:
+              type: string
+              enum:
+                - codex
+                - claude-code
+                - opencode
+                - pi
+            label:
+              type: string
+            status:
+              type: string
+              enum:
+                - connected
+                - not-connected
+                - coming-soon
+            account:
+              type: string
+            lastVerified:
+              type: number
+              description: Unix time in seconds; fractional values preserve milliseconds.
+          required:
+            - harness
+            - label
+            - status
+          additionalProperties: false
+        networkPolicy:
+          type: object
+          properties:
+            mode:
+              type: string
+              enum:
+                - allow-all
+                - block-all
+            domainExceptions:
+              type: array
+              items:
+                type: string
+          required:
+            - mode
+            - domainExceptions
+          additionalProperties: false
+      required:
+        - id
+        - ownerId
+        - idlePauseTimeoutSeconds
+        - sandboxMemoryMiB
+        - workspaceBackup
+        - name
+        - description
+        - color
+        - status
+        - revision
+        - templateId
+        - rootfsSnapshotId
+        - workspaceVolumeId
+        - sandboxId
+        - supervisorSessionId
+        - workspaceRoot
+        - credentialRevision
+        - codingAgent
+        - networkPolicy
+      additionalProperties: false
     EnvironmentEgressCredential:
       type: object
       properties:
@@ -2114,6 +2254,24 @@ components:
           format: uri
       required:
         - kind
+      additionalProperties: false
+    SandpiCloudSnapshot:
+      type: object
+      properties:
+        environments:
+          type: array
+          items:
+            $ref: "#/components/schemas/EnvironmentCloudState"
+        sessions:
+          type: array
+          items:
+            $ref: "#/components/schemas/CodingSession"
+        preferences:
+          $ref: "#/components/schemas/SandpiPreferences"
+      required:
+        - environments
+        - sessions
+        - preferences
       additionalProperties: false
     SandpiCustomerPortalResult:
       type: object
@@ -7647,6 +7805,49 @@ paths:
                 required:
                   - data
                 additionalProperties: false
+        default:
+          description: Sandpi error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/sync:
+    get:
+      operationId: syncCloudState
+      summary: Synchronize durable client state
+      tags:
+        - Bootstrap
+      description: Returns a database-only snapshot and supports conditional requests
+        without resolving external runtime lifecycle state.
+      parameters:
+        - schema:
+            type: string
+          in: header
+          name: if-none-match
+          required: false
+      responses:
+        "200":
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/SandpiCloudSnapshot"
+                required:
+                  - data
+                additionalProperties: false
+        "304":
+          description: No content.
+          content:
+            application/json:
+              schema:
+                type: string
+                nullable: true
+                enum:
+                  - null
+                description: No content.
         default:
           description: Sandpi error.
           content:

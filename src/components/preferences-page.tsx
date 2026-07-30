@@ -11,6 +11,7 @@ import {
 import {
   type ComponentType,
   type ReactNode,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -23,15 +24,20 @@ import {
   SidebarBackAction,
 } from "@/components/app-frame";
 import { BillingSettings } from "@/components/billing-settings";
+import { NativePullToRefresh } from "@/components/native-pull-to-refresh";
 import { SidebarAccountFooter } from "@/components/sidebar-account-footer";
 import {
   applyClientPreferences,
   buildAppearancePreviewPreferences,
-  loadClientPreferences,
   saveClientPreferences,
 } from "@/lib/client-preferences";
 import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
-import type { SandpiPreferences, SandpiUser } from "@/lib/types";
+import type {
+  SandpiCloudSnapshot,
+  SandpiPreferences,
+  SandpiUser,
+} from "@/lib/types";
+import { useCloudStateSync } from "@/lib/use-cloud-state-sync";
 import { useNativeChromeSurfaces } from "@/lib/use-native-chrome-surfaces";
 
 import styles from "./preferences-page.module.css";
@@ -66,6 +72,11 @@ export function PreferencesPage({
     { tone: "success" | "error"; message: string } | undefined
   >();
   const baselineRef = useRef(initialPreferences);
+  const hasChangesRef = useRef(false);
+  const pendingCloudPreferencesRef = useRef<
+    SandpiPreferences | undefined
+  >(undefined);
+  const preferenceStateVersionRef = useRef(0);
 
   useNativeChromeSurfaces(
     "sidebar",
@@ -76,16 +87,41 @@ export function PreferencesPage({
     () => JSON.stringify(draft) !== JSON.stringify(baseline),
     [baseline, draft],
   );
+  hasChangesRef.current = hasChanges;
+  useEffect(() => {
+    preferenceStateVersionRef.current += 1;
+  }, [baseline, draft]);
+  const applyCloudSnapshot = useCallback(
+    (snapshot: SandpiCloudSnapshot) => {
+      if (hasChangesRef.current) {
+        pendingCloudPreferencesRef.current = snapshot.preferences;
+        return;
+      }
+      pendingCloudPreferencesRef.current = undefined;
+      baselineRef.current = snapshot.preferences;
+      setBaseline(snapshot.preferences);
+      setDraft(snapshot.preferences);
+      saveClientPreferences(snapshot.preferences);
+    },
+    [],
+  );
+  const getPreferenceStateVersion = useCallback(
+    () => preferenceStateVersionRef.current,
+    [],
+  );
+  const cloudSync = useCloudStateSync({
+    applySnapshot: applyCloudSnapshot,
+    getLocalStateVersion: getPreferenceStateVersion,
+  });
   const isZh = baseline.general.language === "zh-CN";
   const text = (english: string, chinese: string) =>
     isZh ? chinese : english;
 
   useEffect(() => {
-    const stored = loadClientPreferences(initialPreferences);
-    baselineRef.current = stored;
-    setBaseline(stored);
-    setDraft(stored);
-    applyClientPreferences(stored);
+    baselineRef.current = initialPreferences;
+    setBaseline(initialPreferences);
+    setDraft(initialPreferences);
+    saveClientPreferences(initialPreferences);
     setHydrated(true);
 
     const restoreSavedPreferences = () =>
@@ -186,6 +222,7 @@ export function PreferencesPage({
         },
       );
       saveClientPreferences(response.data);
+      pendingCloudPreferencesRef.current = undefined;
       baselineRef.current = response.data;
       setBaseline(response.data);
       setDraft(response.data);
@@ -210,14 +247,22 @@ export function PreferencesPage({
   }
 
   function discardChanges() {
-    const saved = baselineRef.current;
+    const saved =
+      pendingCloudPreferencesRef.current ?? baselineRef.current;
+    pendingCloudPreferencesRef.current = undefined;
+    baselineRef.current = saved;
+    setBaseline(saved);
+    saveClientPreferences(saved);
     setDraft(saved);
-    applyClientPreferences(saved);
     setSaveState(undefined);
   }
 
   return (
     <AppFrame className={styles.page}>
+      <NativePullToRefresh
+        language={baseline.general.language}
+        onRefresh={() => cloudSync.refresh("pull", { force: true })}
+      />
       <a className={styles.skipLink} href="#preferences-content">
         {text("Skip to preferences", "跳到偏好设置")}
       </a>

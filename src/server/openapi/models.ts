@@ -8,12 +8,14 @@ import type { EnvironmentEgressCredential } from "@/lib/environment-credentials"
 import type {
   CodingSession,
   Environment,
+  EnvironmentCloudState,
   EnvironmentMetrics,
   EnvironmentResourceMetrics,
   EnvironmentSchedule,
   EnvironmentScheduleRun,
   EnvironmentWorkspaceBackup,
   SandpiBootstrap,
+  SandpiCloudSnapshot,
   SandpiDeploymentSummary,
   SandpiPreferences,
   SandpiUser,
@@ -174,6 +176,11 @@ export const environmentSchema = component(
   }),
 );
 
+export const environmentCloudStateSchema = component(
+  "EnvironmentCloudState",
+  environmentSchema.omit({ sandboxState: true }),
+);
+
 export const workspaceBackupSchema = component(
   "EnvironmentWorkspaceBackup",
   z.object({
@@ -297,6 +304,15 @@ export const codingSessionSchema = component(
 export const sandpiPreferencesSchema = component(
   "SandpiPreferences",
   preferencesSchema,
+);
+
+export const cloudSnapshotSchema = component(
+  "SandpiCloudSnapshot",
+  z.object({
+    environments: z.array(environmentCloudStateSchema),
+    sessions: z.array(codingSessionSchema),
+    preferences: sandpiPreferencesSchema,
+  }),
 );
 
 export const bootstrapSchema = component(
@@ -1096,12 +1112,14 @@ const publicModelTypeChecks: {
   user: z.ZodType<SandpiUser>;
   deployment: z.ZodType<SandpiDeploymentSummary>;
   environment: z.ZodType<Environment>;
+  environmentCloudState: z.ZodType<EnvironmentCloudState>;
   workspaceBackup: z.ZodType<EnvironmentWorkspaceBackup>;
   schedule: z.ZodType<EnvironmentSchedule>;
   scheduleRun: z.ZodType<EnvironmentScheduleRun>;
   session: z.ZodType<CodingSession>;
   preferences: z.ZodType<SandpiPreferences>;
   bootstrap: z.ZodType<SandpiBootstrap>;
+  cloudSnapshot: z.ZodType<SandpiCloudSnapshot>;
   billing: z.ZodType<SandpiBillingSummary>;
   checkout: z.ZodType<SandpiCheckoutResult>;
   credential: z.ZodType<EnvironmentEgressCredential>;
@@ -1134,12 +1152,14 @@ const publicModelTypeChecks: {
   user: sandpiUserSchema,
   deployment: deploymentSummarySchema,
   environment: environmentSchema,
+  environmentCloudState: environmentCloudStateSchema,
   workspaceBackup: workspaceBackupSchema,
   schedule: environmentScheduleSchema,
   scheduleRun: environmentScheduleRunSchema,
   session: codingSessionSchema,
   preferences: sandpiPreferencesSchema,
   bootstrap: bootstrapSchema,
+  cloudSnapshot: cloudSnapshotSchema,
   billing: billingSummarySchema,
   checkout: checkoutResultSchema,
   credential: egressCredentialSchema,

@@ -19,6 +19,7 @@ interface ConversationProps {
   viewer: SandpiUser;
   environment: Environment;
   session: CodingSession;
+  refreshEpoch: number;
   inspectorOpen: boolean;
   inspectorTab: InspectorTab;
   inspectorWidthRatio: number;

@@ -10,6 +10,7 @@ import type { ApiEnvelope } from "../src/lib/api-client";
 import type {
   Environment,
   SandpiBootstrap,
+  SandpiCloudSnapshot,
   WorkspaceDirectoryListing,
   WorkspaceIdeFile,
   WorkspaceIdeSnapshot,
@@ -46,6 +47,10 @@ function useEnglishUi(bootstrap: SandpiBootstrap) {
       ...bootstrap.preferences.general,
       language: "en",
     },
+    appearance: {
+      ...bootstrap.preferences.appearance,
+      theme: "light",
+    },
   };
 }
 
@@ -63,6 +68,20 @@ async function installDarkUiPreferences(page: Page) {
       }),
     );
   });
+  await page.route(
+    (url) => url.pathname === "/api/v1/bootstrap",
+    async (route) => {
+      const response = await route.fetch();
+      if (!response.ok()) {
+        await route.fulfill({ response });
+        return;
+      }
+      const body = (await response.json()) as ApiEnvelope<SandpiBootstrap>;
+      useEnglishUi(body.data);
+      body.data.preferences.appearance.theme = "dark";
+      await route.fulfill({ response, json: body });
+    },
+  );
 }
 
 test.beforeEach(async ({ page }) => {
@@ -151,6 +170,45 @@ async function pageBlocksUnload(page: Page) {
   return page.evaluate(() => {
     const event = new Event("beforeunload", { cancelable: true });
     return !window.dispatchEvent(event) && event.defaultPrevented;
+  });
+}
+
+async function pullNativeSurface(page: Page, selector: string) {
+  await page.locator(selector).evaluate((target) => {
+    const touch = (clientY: number) =>
+      new Touch({
+        identifier: 1,
+        target,
+        clientX: 180,
+        clientY,
+      });
+    target.dispatchEvent(
+      new TouchEvent("touchstart", {
+        bubbles: true,
+        cancelable: true,
+        touches: [touch(72)],
+        targetTouches: [touch(72)],
+        changedTouches: [touch(72)],
+      }),
+    );
+    target.dispatchEvent(
+      new TouchEvent("touchmove", {
+        bubbles: true,
+        cancelable: true,
+        touches: [touch(240)],
+        targetTouches: [touch(240)],
+        changedTouches: [touch(240)],
+      }),
+    );
+    target.dispatchEvent(
+      new TouchEvent("touchend", {
+        bubbles: true,
+        cancelable: true,
+        touches: [],
+        targetTouches: [],
+        changedTouches: [touch(240)],
+      }),
+    );
   });
 }
 
@@ -317,6 +375,104 @@ test("keeps the disconnected Codex action compact on mobile", async ({
   expect(buttonBox!.x).toBeGreaterThan(
     noticeBox!.x + noticeBox!.width / 2,
   );
+});
+
+test("pulls durable cloud state without reloading or losing a draft", async ({
+  page,
+}) => {
+  const bootstrap = getMockBootstrap();
+  useEnglishUi(bootstrap);
+  const environment = bootstrap.environments[0]!;
+  bootstrap.selectedEnvironmentId = environment.id;
+  bootstrap.selectedSessionId = "";
+  const cloudEnvironment = { ...environment };
+  delete (cloudEnvironment as Partial<Environment>).sandboxState;
+  const snapshot = {
+    environments: [
+      {
+        ...cloudEnvironment,
+        name: "Synced Environment",
+        revision: environment.revision + 1,
+      },
+    ],
+    sessions: bootstrap.sessions,
+    preferences: bootstrap.preferences,
+  } satisfies SandpiCloudSnapshot;
+  const etag = '"e2e-cloud-state-v1"';
+  let syncRequests = 0;
+  const conditionalHeaders: Array<string | undefined> = [];
+
+  await page.addInitScript(() => {
+    (
+      window as Window & {
+        __sandpiNativeShellInstalled?: boolean;
+      }
+    ).__sandpiNativeShellInstalled = true;
+  });
+  await page.route(
+    (url) => url.pathname === "/api/v1/bootstrap",
+    async (route) => {
+      await route.fulfill({ json: { data: bootstrap } });
+    },
+  );
+  await page.route(
+    (url) => url.pathname === "/api/v1/sync",
+    async (route) => {
+      syncRequests += 1;
+      conditionalHeaders.push(
+        route.request().headers()["if-none-match"],
+      );
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      if (route.request().headers()["if-none-match"] === etag) {
+        await route.fulfill({ status: 304, headers: { etag } });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        headers: { etag },
+        json: { data: snapshot },
+      });
+    },
+  );
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(
+    `/?environment=${encodeURIComponent(environment.id)}&new=1`,
+  );
+  const composer = page.locator("textarea").first();
+  await composer.fill("Keep this draft");
+  await expect(page.getByTestId("native-pull-refresh")).toBeAttached();
+
+  await pullNativeSurface(
+    page,
+    '#conversation > header[data-tauri-drag-region="deep"]',
+  );
+  await expect
+    .poll(() => syncRequests)
+    .toBe(1);
+  await expect(composer).toHaveValue("Keep this draft");
+  await expect(page).toHaveURL(/new=1/);
+  await page.getByRole("button", { name: "Open navigation" }).click();
+  await expect(
+    page.getByRole("button", {
+      name: "Synced Environment",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await page
+    .getByRole("complementary", { name: "Sandpi navigation" })
+    .getByRole("button", { name: "Close navigation" })
+    .click();
+
+  await pullNativeSurface(
+    page,
+    '#conversation > header[data-tauri-drag-region="deep"]',
+  );
+  await expect
+    .poll(() => syncRequests)
+    .toBe(2);
+  expect(conditionalHeaders).toEqual([undefined, etag]);
+  await expect(composer).toHaveValue("Keep this draft");
 });
 
 test("shows live native context usage inside the Session composer", async ({

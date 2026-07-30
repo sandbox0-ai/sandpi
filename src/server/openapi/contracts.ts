@@ -44,6 +44,7 @@ import {
   billingSummarySchema,
   bootstrapSchema,
   checkoutResultSchema,
+  cloudSnapshotSchema,
   codexAccountSchema,
   codexAgentThreadsSchema,
   codexRateLimitsSchema,
@@ -277,6 +278,24 @@ export const openApiRouteContracts: readonly OpenApiRouteContract[] = [
       }),
       response: {
         200: dataMetaEnvelope(bootstrapSchema, runtimeMeta),
+      },
+    },
+  }),
+  defineContract({
+    method: "GET",
+    url: "/api/v1/sync",
+    schema: {
+      operationId: "syncCloudState",
+      summary: "Synchronize durable client state",
+      description:
+        "Returns a database-only snapshot and supports conditional requests without resolving external runtime lifecycle state.",
+      tags: ["Bootstrap"],
+      headers: z.looseObject({
+        "if-none-match": z.string().optional(),
+      }),
+      response: {
+        200: dataEnvelope(cloudSnapshotSchema),
+        304: noContent,
       },
     },
   }),

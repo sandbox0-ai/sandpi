@@ -24,7 +24,7 @@ test("OpenAPI publishes every supported operation with a unique id", async () =>
   const operations = allOperations(document);
   const operationIds = operations.map((operation) => operation.operationId);
 
-  assert.equal(operations.length, 98);
+  assert.equal(operations.length, 99);
   assert.ok(operationIds.every(Boolean));
   assert.equal(new Set(operationIds).size, operationIds.length);
   assert.ok(Object.keys(document.paths).every((path) => !path.includes(":")));
@@ -33,6 +33,10 @@ test("OpenAPI publishes every supported operation with a unique id", async () =>
 
 test("OpenAPI preserves the shared Browser and streaming semantics", async () => {
   const { document } = await builtOpenApi;
+  const cloudSync = operation(document, "/api/v1/sync", "get");
+  assert.equal(cloudSync.responses["304"] !== undefined, true);
+  assert.match(cloudSync.description ?? "", /database-only/i);
+
   const browserOpen = operation(
     document,
     "/api/v1/environments/{environmentId}/browser/open",

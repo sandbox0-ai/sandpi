@@ -129,6 +129,7 @@ import {
 } from "@/lib/api-client";
 import { BoundedLruCache } from "@/lib/bounded-lru-cache";
 import { copyTextToClipboard } from "@/lib/clipboard";
+import { NATIVE_APP_RESUME_EVENT } from "@/lib/cloud-state-sync";
 import { createId } from "@/lib/id";
 import {
   codingAgentComposerPreference,
@@ -154,6 +155,7 @@ interface ConversationProps {
   viewer: SandpiUser;
   environment: Environment;
   session: CodexSession;
+  refreshEpoch: number;
   inspectorOpen: boolean;
   inspectorTab: InspectorTab;
   inspectorWidthRatio: number;
@@ -254,6 +256,7 @@ export function CodexConversation({
   viewer,
   environment,
   session,
+  refreshEpoch,
   inspectorOpen,
   inspectorTab,
   inspectorWidthRatio,
@@ -366,6 +369,9 @@ export function CodexConversation({
   >([]);
   const [nativeStreamEpoch, setNativeStreamEpoch] = useState(0);
   const [nativeStreamReady, setNativeStreamReady] = useState(false);
+  const [streamForeground, setStreamForeground] = useState(
+    () => document.visibilityState !== "hidden",
+  );
   const [nativeHistoryError, setNativeHistoryError] = useState("");
   const [nativeHistoryWaitLong, setNativeHistoryWaitLong] = useState(false);
   const [activityClock, setActivityClock] = useState(() => Date.now());
@@ -440,6 +446,37 @@ export function CodexConversation({
     },
     [nativeSnapshotCache],
   );
+  const refreshEpochRef = useRef(refreshEpoch);
+
+  useEffect(() => {
+    if (refreshEpochRef.current === refreshEpoch) return;
+    refreshEpochRef.current = refreshEpoch;
+    requestNativeSnapshotRefresh();
+  }, [refreshEpoch, requestNativeSnapshotRefresh]);
+
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      const visible = document.visibilityState !== "hidden";
+      setStreamForeground(visible);
+      if (visible) requestNativeSnapshotRefresh();
+    };
+    const handleNativeResume = () => {
+      setStreamForeground(true);
+      requestNativeSnapshotRefresh();
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener(NATIVE_APP_RESUME_EVENT, handleNativeResume);
+    return () => {
+      document.removeEventListener(
+        "visibilitychange",
+        handleVisibilityChange,
+      );
+      window.removeEventListener(
+        NATIVE_APP_RESUME_EVENT,
+        handleNativeResume,
+      );
+    };
+  }, [requestNativeSnapshotRefresh]);
   const visibleTimeline = useMemo(() => {
     return projectCodexTimeline(nativeSnapshot?.thread, liveNotifications);
   }, [liveNotifications, nativeSnapshot?.thread]);
@@ -913,6 +950,7 @@ export function CodexConversation({
   ]);
 
   useEffect(() => {
+    if (!streamForeground) return;
     const source = new EventSource(
       apiUrl(`/api/v1/sessions/${encodeURIComponent(session.id)}/events`),
       { withCredentials: true },
@@ -1202,6 +1240,7 @@ export function CodexConversation({
     onSessionChange,
     requestNativeSnapshotRefresh,
     session.id,
+    streamForeground,
     ui.nativeRolloutUnavailableBody,
     ui.nativeStreamUnavailableBody,
   ]);

@@ -23,6 +23,7 @@ import {
   INSPECTOR_KEEP_ALIVE_MS,
   type InspectorTab,
 } from "@/components/inspector";
+import { NativePullToRefresh } from "@/components/native-pull-to-refresh";
 import { NewEnvironmentDialog } from "@/components/new-environment-dialog";
 import { NewSessionWorkspace } from "@/components/new-session-workspace";
 import { Sidebar } from "@/components/sidebar";
@@ -33,7 +34,13 @@ import {
   CLIENT_PREFERENCES_CHANGED_EVENT,
   CLIENT_PREFERENCES_STORAGE_KEY,
   loadClientPreferences,
+  saveClientPreferences,
 } from "@/lib/client-preferences";
+import {
+  mergeCloudEnvironments,
+  mergeCloudSessions,
+  reconcileCloudWorkspaceState,
+} from "@/lib/cloud-state-sync";
 import {
   loadLocalUiPreferences,
   updateLocalUiPreferences,
@@ -41,6 +48,7 @@ import {
 import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
 import { visibleSessionsForEnvironment } from "@/lib/session-list";
 import { useLocalUiPreferences } from "@/lib/use-local-ui-preferences";
+import { useCloudStateSync } from "@/lib/use-cloud-state-sync";
 import { useNativeChromeSurfaces } from "@/lib/use-native-chrome-surfaces";
 import { userVisibleWorkspacePath } from "@/lib/workspace-path-policy";
 import { normalizeInspectorWidthRatio } from "@/lib/workspace-layout";
@@ -48,6 +56,7 @@ import type {
   CodingSession,
   Environment,
   SandpiBootstrap,
+  SandpiCloudSnapshot,
 } from "@/lib/types";
 
 interface SandpiAppProps {
@@ -145,6 +154,102 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
     ),
   );
   const sessionHydrationsRef = useRef(new Map<string, Promise<void>>());
+  const environmentsRef = useRef(environments);
+  const sessionsRef = useRef(sessions);
+  const selectedEnvironmentIdRef = useRef(selectedEnvironmentId);
+  const selectedSessionIdRef = useRef(selectedSessionId);
+  const cloudStateVersionRef = useRef(0);
+  const [cloudRefreshEpoch, setCloudRefreshEpoch] = useState(0);
+  environmentsRef.current = environments;
+  sessionsRef.current = sessions;
+  selectedEnvironmentIdRef.current = selectedEnvironmentId;
+  selectedSessionIdRef.current = selectedSessionId;
+
+  useEffect(() => {
+    cloudStateVersionRef.current += 1;
+  }, [environments, preferences, sessions]);
+
+  const applyCloudSnapshot = useCallback(
+    (snapshot: SandpiCloudSnapshot) => {
+      const nextEnvironments = mergeCloudEnvironments(
+        environmentsRef.current,
+        snapshot.environments,
+      );
+      const nextSessions = mergeCloudSessions(
+        sessionsRef.current,
+        snapshot.sessions,
+      );
+      const next = reconcileCloudWorkspaceState(
+        {
+          environments: environmentsRef.current,
+          sessions: sessionsRef.current,
+          selectedEnvironmentId: selectedEnvironmentIdRef.current,
+          selectedSessionId: selectedSessionIdRef.current,
+        },
+        {
+          environments: nextEnvironments,
+          sessions: nextSessions,
+        },
+      );
+      const environmentChanged =
+        next.selectedEnvironmentId !== selectedEnvironmentIdRef.current;
+      const selectionChanged =
+        environmentChanged ||
+        next.selectedSessionId !== selectedSessionIdRef.current;
+
+      environmentsRef.current = next.environments;
+      sessionsRef.current = next.sessions;
+      selectedEnvironmentIdRef.current = next.selectedEnvironmentId;
+      selectedSessionIdRef.current = next.selectedSessionId;
+      setEnvironments(next.environments);
+      setSessions(next.sessions);
+      setSelectedEnvironmentId(next.selectedEnvironmentId);
+      setSelectedSessionId(next.selectedSessionId);
+      setPreferences(snapshot.preferences);
+      saveClientPreferences(snapshot.preferences);
+      const hydratedAt = Date.now();
+      sessionHydratedAtRef.current = new Map(
+        next.sessions.map((session) => [session.id, hydratedAt] as const),
+      );
+
+      setSettingsTarget((current) =>
+        current &&
+        next.environments.some(
+          (environment) => environment.id === current.environmentId,
+        )
+          ? current
+          : null,
+      );
+      if (environmentChanged) setTerminalOpen(false);
+      if (selectionChanged) {
+        setNewSessionPreset(null);
+        const environment = next.environments.find(
+          (candidate) => candidate.id === next.selectedEnvironmentId,
+        );
+        if (environment) {
+          replaceWorkspaceUrl(
+            environment.id,
+            next.selectedSessionId || undefined,
+          );
+        } else {
+          replaceEmptyWorkspaceUrl();
+        }
+      }
+    },
+    [],
+  );
+  const getCloudStateVersion = useCallback(
+    () => cloudStateVersionRef.current,
+    [],
+  );
+  const handleCloudSynchronized = useCallback(() => {
+    setCloudRefreshEpoch((current) => current + 1);
+  }, []);
+  const cloudSync = useCloudStateSync({
+    applySnapshot: applyCloudSnapshot,
+    getLocalStateVersion: getCloudStateVersion,
+    onSynchronized: handleCloudSynchronized,
+  });
 
   const hydrateSession = useCallback((sessionId: string) => {
     const now = Date.now();
@@ -192,12 +297,13 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
       }
     };
 
-    synchronizePreferences();
     window.addEventListener(
       CLIENT_PREFERENCES_CHANGED_EVENT,
       synchronizePreferences,
     );
     window.addEventListener("storage", handleStorage);
+    setPreferences(initialData.preferences);
+    saveClientPreferences(initialData.preferences);
     return () => {
       window.removeEventListener(
         CLIENT_PREFERENCES_CHANGED_EVENT,
@@ -284,6 +390,10 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
   ] = useState("");
 
   useEffect(() => {
+    if (!selectedEnvironment) {
+      setMountedNewSessionInspectorEnvironmentId("");
+      return;
+    }
     if (selectedSession) {
       setMountedNewSessionInspectorEnvironmentId("");
       return;
@@ -302,7 +412,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
       );
     }, INSPECTOR_KEEP_ALIVE_MS);
     return () => window.clearTimeout(timeout);
-  }, [inspectorOpen, selectedEnvironment.id, selectedSession]);
+  }, [inspectorOpen, selectedEnvironment, selectedSession]);
 
   const openWorkspacePath = useCallback(
     (requestedPath: string) => {
@@ -421,43 +531,6 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
       window.clearTimeout(timer);
     };
   }, [environments]);
-
-  const hasRunningSessions = sessions.some(
-    (session) => session.status === "running",
-  );
-
-  useEffect(() => {
-    if (!hasRunningSessions) return;
-
-    const controller = new AbortController();
-    let timer: number | undefined;
-    const refreshRunningSessions = async () => {
-      try {
-        const response = await apiFetch<ApiEnvelope<CodingSession[]>>(
-          "/api/v1/sessions",
-          { signal: controller.signal },
-        );
-        setSessions(response.data);
-      } catch (error) {
-        if (!controller.signal.aborted) {
-          console.error("Unable to refresh running Sessions", error);
-        }
-      } finally {
-        if (!controller.signal.aborted) {
-          timer = window.setTimeout(refreshRunningSessions, 2_000);
-        }
-      }
-    };
-
-    // Conversation SSE is harness-owned and only exists for the selected
-    // Session. Poll the lightweight metadata projection while any Turn runs so
-    // background Session markers converge without opening every transcript.
-    timer = window.setTimeout(refreshRunningSessions, 2_000);
-    return () => {
-      controller.abort();
-      if (timer !== undefined) window.clearTimeout(timer);
-    };
-  }, [hasRunningSessions]);
 
   useEffect(() => {
     if (!selectedSession?.unread) return;
@@ -906,6 +979,10 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
           sidebarOpen ? "sidebar-is-open" : ""
         } ${sidebarCollapsed ? "sidebar-is-collapsed" : ""}`}
       >
+        <NativePullToRefresh
+          language={preferences.general.language}
+          onRefresh={() => cloudSync.refresh("pull", { force: true })}
+        />
         {sidebar}
         {sidebarOpen ? (
           <button
@@ -974,6 +1051,10 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
       }`}
       style={workspaceStyle}
     >
+      <NativePullToRefresh
+        language={preferences.general.language}
+        onRefresh={() => cloudSync.refresh("pull", { force: true })}
+      />
       <a className="skip-link" href="#conversation">
         Skip to conversation
       </a>
@@ -996,6 +1077,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
           viewer={initialData.viewer}
           environment={selectedEnvironment}
           session={selectedSession}
+          refreshEpoch={cloudRefreshEpoch}
           inspectorOpen={showInspector}
           inspectorTab={inspectorTab}
           inspectorWidthRatio={inspectorWidthRatio}
