@@ -1041,6 +1041,42 @@ test("keeps anonymous visitors on the app home until they send a message", async
   ).toBe("Inspect this repository before changing anything");
 });
 
+test("synchronizes the anonymous mobile sidebar with native chrome", async ({
+  page,
+}) => {
+  await serveAnonymousBootstrap(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+
+  const colors = await page.evaluate(() => {
+    const style = getComputedStyle(document.documentElement);
+    return {
+      canvas: style.getPropertyValue("--canvas").trim(),
+      sidebar: style.getPropertyValue("--sidebar").trim(),
+    };
+  });
+  const topColor = page.locator(
+    'meta[name="sandpi-native-top-color"]',
+  );
+  const bottomColor = page.locator(
+    'meta[name="sandpi-native-bottom-color"]',
+  );
+  await expect(topColor).toHaveAttribute("content", colors.canvas);
+  await expect(bottomColor).toHaveAttribute("content", colors.canvas);
+
+  await page.getByRole("button", { name: "Open navigation" }).click();
+  await expect(page.locator(".sidebar")).toHaveCSS("left", "0px");
+  await expect(topColor).toHaveAttribute("content", colors.sidebar);
+  await expect(bottomColor).toHaveAttribute("content", colors.sidebar);
+
+  await page
+    .getByRole("complementary", { name: "Sandpi navigation" })
+    .getByRole("button", { name: "Close navigation" })
+    .click();
+  await expect(topColor).toHaveAttribute("content", colors.canvas);
+  await expect(bottomColor).toHaveAttribute("content", colors.canvas);
+});
+
 test("starts login from the anonymous account action", async ({ page }) => {
   await serveAnonymousBootstrap(page);
   const loginRequestUrl = await captureLoginNavigation(page);

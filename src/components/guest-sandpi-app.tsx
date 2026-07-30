@@ -29,6 +29,7 @@ import {
   getOperationUiCopy,
   shouldSubmitComposer,
 } from "@/lib/operation-ui";
+import { useNativeChromeSurfaces } from "@/lib/use-native-chrome-surfaces";
 
 import workspaceStyles from "@/components/new-session-workspace.module.css";
 import styles from "./guest-sandpi-app.module.css";
@@ -41,6 +42,10 @@ export function GuestSandpiApp({ loginUrl }: { loginUrl: string }) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [helpFeedbackOpen, setHelpFeedbackOpen] = useState(false);
   const promptRef = useRef<HTMLTextAreaElement>(null);
+  useNativeChromeSurfaces(
+    sidebarOpen ? "sidebar" : "canvas",
+    sidebarOpen ? "sidebar" : "canvas",
+  );
 
   useEffect(() => {
     if (!window.matchMedia("(min-width: 641px)").matches) return;
