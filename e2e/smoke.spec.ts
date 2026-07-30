@@ -232,6 +232,25 @@ test("reserves declared native titlebar space in the desktop sidebar", async ({
   expect(brandBox!.x + brandBox!.width).toBeLessThanOrEqual(actionBox!.x);
 });
 
+test("separates anonymous New Session facts from the composer", async ({
+  page,
+}) => {
+  await serveAnonymousBootstrap(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/");
+
+  const gap = await page.locator(".composer-shell").evaluate((composer) => {
+    const intro = composer.previousElementSibling;
+    if (!(intro instanceof HTMLElement)) return null;
+    return (
+      composer.getBoundingClientRect().top -
+      intro.getBoundingClientRect().bottom
+    );
+  });
+  expect(gap).not.toBeNull();
+  expect(gap!).toBeGreaterThanOrEqual(12);
+});
+
 async function captureLoginNavigation(page: Page) {
   let requestUrl: string | undefined;
   await page.route(

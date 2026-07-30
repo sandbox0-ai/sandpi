@@ -216,6 +216,10 @@
   margin: 0 auto;
 }
 
+.intro + .composer {
+  margin-top: 12px;
+}
+
 .imagePreviews {
   display: flex;
   gap: 7px;
