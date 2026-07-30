@@ -17,6 +17,7 @@ export class UnconfiguredRuntime implements RuntimeAdapter {
   listUsageWindows = unavailable;
   provisionEnvironment = unavailable;
   deleteEnvironmentResources = async () => undefined;
+  deleteRetiredEnvironmentSandboxes = async () => undefined;
   updateEnvironmentNetworkPolicy = unavailable;
   getEnvironmentCredentialSource = unavailable;
   createEnvironmentCredentialSource = unavailable;

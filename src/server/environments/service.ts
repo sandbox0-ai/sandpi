@@ -361,15 +361,30 @@ export class EnvironmentService {
     );
   }
 
-  private async provision(environmentId: string) {
+  private provision(environmentId: string) {
+    return this.waitForLifecycleLock(environmentId, (scopedStore) =>
+      this.provisionWhileLocked(scopedStore, environmentId),
+    );
+  }
+
+  private async provisionWhileLocked(
+    store: SandpiStore,
+    environmentId: string,
+  ) {
     let resources: Parameters<RuntimeAdapter["deleteEnvironmentResources"]>[0] = {};
     try {
-      const environment = await this.store.getEnvironmentById(environmentId);
+      const environment = await store.getEnvironmentById(environmentId);
+      if (
+        !["updating", "error"].includes(environment.status) ||
+        (environment.workspaceVolumeId && environment.sandboxId)
+      ) {
+        return environment;
+      }
       await this.runtimeQuotaGate?.assertEnvironmentRuntimeAllowed(
         environmentId,
       );
       const credentials =
-        await this.store.listEnvironmentEgressCredentialsByEnvironmentId(
+        await store.listEnvironmentEgressCredentialsByEnvironmentId(
           environmentId,
         );
       const provisioned = await this.runtime.provisionEnvironment({
@@ -377,12 +392,12 @@ export class EnvironmentService {
         credentials,
         onResourcesAllocated: async (allocated) => {
           resources = { ...resources, ...allocated };
-          await this.store.recordEnvironmentAllocation(environmentId, allocated);
+          await store.recordEnvironmentAllocation(environmentId, allocated);
         },
       });
       resources = provisioned;
       try {
-        const ready = await this.store.markEnvironmentReady(
+        const ready = await store.markEnvironmentReady(
           environmentId,
           provisioned,
         );
@@ -397,12 +412,12 @@ export class EnvironmentService {
         await this.runtime.deleteEnvironmentResources({
           sandboxId: resources.sandboxId,
         }).catch(() => undefined);
-        await this.store.clearEnvironmentSandboxAllocation(
+        await store.clearEnvironmentSandboxAllocation(
           environmentId,
           resources.sandboxId,
         );
       }
-      await this.store.markEnvironmentFailed(environmentId, errorMessage(error));
+      await store.markEnvironmentFailed(environmentId, errorMessage(error));
       throw error;
     }
   }

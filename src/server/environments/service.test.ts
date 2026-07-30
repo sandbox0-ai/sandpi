@@ -70,13 +70,21 @@ test("pending Environment reconciliation is coalesced within one server", async 
   let listCalls = 0;
   let provisionCalls = 0;
   let readyCalls = 0;
+  const pendingEnvironment = {
+    ...environment,
+    status: "updating" as const,
+    sandboxId: "",
+    workspaceVolumeId: "",
+  };
   const store = {
     async environmentsNeedingProvisioning() {
       listCalls += 1;
-      return listCalls === 1 ? [environment] : [{ ...environment, id: "env-second" }];
+      return listCalls === 1
+        ? [pendingEnvironment]
+        : [{ ...pendingEnvironment, id: "env-second" }];
     },
     async getEnvironmentById(environmentId: string) {
-      return { ...environment, id: environmentId };
+      return { ...pendingEnvironment, id: environmentId };
     },
     async listEnvironmentEgressCredentialsByEnvironmentId() {
       return [];
@@ -85,6 +93,15 @@ test("pending Environment reconciliation is coalesced within one server", async 
     async markEnvironmentReady() {
       readyCalls += 1;
       return environment;
+    },
+    async withEnvironmentLifecycleLock(
+      _environmentId: string,
+      operation: (store: SandpiStore) => Promise<unknown>,
+    ) {
+      return {
+        acquired: true as const,
+        value: await operation(store as unknown as SandpiStore),
+      };
     },
   } as unknown as SandpiStore;
   const runtime = {
@@ -113,6 +130,46 @@ test("pending Environment reconciliation is coalesced within one server", async 
   assert.equal(listCalls, 2);
   assert.equal(provisionCalls, 2);
   assert.equal(readyCalls, 2);
+});
+
+test("rechecks a stale provisioning candidate after taking the lifecycle lock", async () => {
+  let provisionCalls = 0;
+  const store = {
+    async environmentsNeedingProvisioning() {
+      return [{ ...environment, status: "updating" }];
+    },
+    async getEnvironmentById() {
+      return {
+        ...environment,
+        status: "ready",
+        sandboxId: "sandbox-winner",
+        workspaceVolumeId: "volume-winner",
+      };
+    },
+    async withEnvironmentLifecycleLock(
+      _environmentId: string,
+      operation: (store: SandpiStore) => Promise<unknown>,
+    ) {
+      return {
+        acquired: true as const,
+        value: await operation(store as unknown as SandpiStore),
+      };
+    },
+  } as unknown as SandpiStore;
+  const runtime = {
+    async provisionEnvironment() {
+      provisionCalls += 1;
+      throw new Error("must not provision a stale candidate");
+    },
+  } as unknown as RuntimeAdapter;
+  const service = new EnvironmentService(store, runtime, {
+    info() {},
+    error() {},
+  });
+
+  await service.reconcilePending();
+
+  assert.equal(provisionCalls, 0);
 });
 
 test("applies a changed network policy to the shared Environment Sandbox", async () => {
@@ -680,15 +737,30 @@ test("keeps Environment metadata retryable when resource deletion fails", async 
 
 test("checks runtime quota before provisioning Sandbox0 resources", async () => {
   const failures: string[] = [];
+  const pendingEnvironment = {
+    ...environment,
+    status: "updating" as const,
+    sandboxId: "",
+    workspaceVolumeId: "",
+  };
   const store = {
     async environmentsNeedingProvisioning() {
-      return [environment];
+      return [pendingEnvironment];
     },
     async getEnvironmentById() {
-      return environment;
+      return pendingEnvironment;
     },
     async markEnvironmentFailed(_environmentId: string, error: string) {
       failures.push(error);
+    },
+    async withEnvironmentLifecycleLock(
+      _environmentId: string,
+      operation: (store: SandpiStore) => Promise<unknown>,
+    ) {
+      return {
+        acquired: true as const,
+        value: await operation(store as unknown as SandpiStore),
+      };
     },
   } as unknown as SandpiStore;
   const runtime = {

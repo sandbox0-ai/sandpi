@@ -163,6 +163,9 @@ export interface RuntimeAdapter {
   deleteEnvironmentResources(
     resources: Partial<ProvisionedEnvironment>,
   ): Promise<void>;
+  deleteRetiredEnvironmentSandboxes(
+    runtime: EnvironmentRuntimeRecord,
+  ): Promise<void>;
   updateEnvironmentNetworkPolicy(
     runtime: EnvironmentRuntimeRecord,
     policy: NetworkPolicy,
