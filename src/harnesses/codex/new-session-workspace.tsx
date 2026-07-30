@@ -590,7 +590,7 @@ export function CodexNewSessionWorkspace({
           title={ui.expandSidebar}
           onClick={onToggleSidebar}
         >
-          <PanelLeftOpen size={19} aria-hidden="true" />
+          <PanelLeftOpen size={17} aria-hidden="true" />
         </button>
         <button
           type="button"

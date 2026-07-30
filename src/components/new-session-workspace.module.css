@@ -402,6 +402,8 @@
 @media (min-width: 961px) {
   :global(.sidebar-is-collapsed) .desktopExpandButton {
     display: inline-flex;
+    width: 30px;
+    height: 30px;
   }
 }
 

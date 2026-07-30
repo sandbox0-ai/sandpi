@@ -7116,8 +7116,8 @@ code.codex-compact-activity-subject {
   .app-shell.sidebar-is-collapsed .sidebar-expand-button {
     position: static;
     display: inline-flex;
-    width: 32px;
-    height: 32px;
+    width: 30px;
+    height: 30px;
     padding: 0;
     margin: 0;
     overflow: visible;

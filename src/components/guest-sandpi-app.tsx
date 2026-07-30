@@ -197,7 +197,7 @@ export function GuestSandpiApp({ loginUrl }: { loginUrl: string }) {
             title={ui.guest.expandSidebar}
             onClick={() => setSidebarCollapsed(false)}
           >
-            <PanelLeftOpen size={19} aria-hidden="true" />
+            <PanelLeftOpen size={17} aria-hidden="true" />
           </button>
           <button
             type="button"
