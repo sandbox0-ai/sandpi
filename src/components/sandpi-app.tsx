@@ -110,9 +110,17 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
   const [terminalMaximized, setTerminalMaximized] = useState(false);
   const [terminalRestoreHeight, setTerminalRestoreHeight] = useState(320);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [inspectorCoversViewport, setInspectorCoversViewport] = useState(false);
+  const fullWidthInspectorOpen = inspectorOpen && inspectorCoversViewport;
   useNativeChromeSurfaces(
-    sidebarOpen ? "sidebar" : "canvas",
-    sidebarOpen ? "sidebar" : terminalOpen ? "terminal" : "canvas",
+    sidebarOpen ? "sidebar" : fullWidthInspectorOpen ? "panel" : "canvas",
+    sidebarOpen
+      ? "sidebar"
+      : fullWidthInspectorOpen
+        ? "panel"
+        : terminalOpen
+          ? "terminal"
+          : "canvas",
   );
   const [workspaceNavigationRequest, setWorkspaceNavigationRequest] =
     useState<WorkspaceFileNavigationRequest>();
@@ -215,6 +223,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
 
   useEffect(() => {
     const narrowViewport = window.matchMedia("(max-width: 960px)");
+    const fullWidthInspector = window.matchMedia("(max-width: 680px)");
     const closeInspectorOnNarrowViewport = (
       event: MediaQueryListEvent | MediaQueryList,
     ) => {
@@ -224,13 +233,25 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
         setInspectorOpen(loadLocalUiPreferences().workspace.inspectorOpen);
       }
     };
+    const synchronizeInspectorCoverage = (
+      event: MediaQueryListEvent | MediaQueryList,
+    ) => setInspectorCoversViewport(event.matches);
 
     closeInspectorOnNarrowViewport(narrowViewport);
+    synchronizeInspectorCoverage(fullWidthInspector);
     narrowViewport.addEventListener("change", closeInspectorOnNarrowViewport);
+    fullWidthInspector.addEventListener(
+      "change",
+      synchronizeInspectorCoverage,
+    );
     return () => {
       narrowViewport.removeEventListener(
         "change",
         closeInspectorOnNarrowViewport,
+      );
+      fullWidthInspector.removeEventListener(
+        "change",
+        synchronizeInspectorCoverage,
       );
     };
   }, []);

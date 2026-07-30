@@ -1918,6 +1918,38 @@ test("keeps New Session header operations aligned with the conversation", async 
   await header.getByRole("button", { name: "Open inspector" }).click();
   await expect(browserFrame).toBeVisible();
   expect(browserSessionStarts).toBe(0);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(inspectorViews).toBeHidden();
+  await header.getByRole("button", { name: "Open inspector" }).click();
+  await expect(inspectorViews).toBeVisible();
+  const panelColor = await page.evaluate(() =>
+    getComputedStyle(document.documentElement)
+      .getPropertyValue("--panel")
+      .trim(),
+  );
+  await expect(
+    page.locator('meta[name="sandpi-native-top-color"]'),
+  ).toHaveAttribute("content", panelColor);
+  await expect(
+    page.locator('meta[name="sandpi-native-bottom-color"]'),
+  ).toHaveAttribute("content", panelColor);
+
+  await page
+    .getByRole("complementary", { name: "Inspector" })
+    .getByRole("button", { name: "Close inspector" })
+    .click();
+  const canvasColor = await page.evaluate(() =>
+    getComputedStyle(document.documentElement)
+      .getPropertyValue("--canvas")
+      .trim(),
+  );
+  await expect(
+    page.locator('meta[name="sandpi-native-top-color"]'),
+  ).toHaveAttribute("content", canvasColor);
+  await expect(
+    page.locator('meta[name="sandpi-native-bottom-color"]'),
+  ).toHaveAttribute("content", canvasColor);
 });
 
 test("refreshes the Codex account and live limits after device login", async ({
