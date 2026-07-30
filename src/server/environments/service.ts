@@ -89,6 +89,12 @@ export class EnvironmentService {
     );
   }
 
+  async get(userId: string, environmentId: string) {
+    return this.authoritativeEnvironment(
+      await this.store.getEnvironment(userId, environmentId),
+    );
+  }
+
   /**
    * Resolves the public lifecycle field from Sandbox0 at read time. Sandpi
    * owns provisioning metadata before a Sandbox exists, but never caches a

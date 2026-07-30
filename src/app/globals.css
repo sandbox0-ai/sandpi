@@ -69,8 +69,7 @@ button:disabled {
 }
 
 code,
-pre,
-.keyboard-hint {
+pre {
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
 }
 
@@ -337,12 +336,6 @@ pre,
 .new-session-button:hover {
   border-color: #b9b7af;
   background: #fdfdfb;
-}
-
-.keyboard-hint {
-  margin-left: auto;
-  color: var(--ink-faint);
-  font-size: 10px;
 }
 
 .sidebar-search {
@@ -3593,8 +3586,15 @@ code.codex-compact-activity-subject {
 
 .inspector-header nav {
   display: flex;
+  min-width: 0;
   align-items: center;
   gap: 2px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.inspector-header nav::-webkit-scrollbar {
+  display: none;
 }
 
 .inspector-header nav button {
@@ -3609,6 +3609,7 @@ code.codex-compact-activity-subject {
   color: var(--ink-faint);
   font-size: 10.5px;
   cursor: pointer;
+  white-space: nowrap;
 }
 
 .inspector-header nav button:hover,
@@ -3624,6 +3625,15 @@ code.codex-compact-activity-subject {
   height: 2px;
   background: var(--ink);
   content: "";
+}
+
+.inspector-header .inspector-action-tab {
+  gap: 4px;
+}
+
+.inspector-external-icon {
+  margin-left: -1px;
+  opacity: 0.72;
 }
 
 .inspector-panel {
@@ -4947,6 +4957,126 @@ code.codex-compact-activity-subject {
   border: 1px solid var(--line);
   border-radius: 9px;
   background: var(--panel-strong);
+}
+
+.sandbox-lifecycle-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+}
+
+.sandbox-lifecycle-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.sandbox-lifecycle-heading > div {
+  min-width: 0;
+}
+
+.sandbox-lifecycle-heading strong {
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.sandbox-lifecycle-state {
+  display: inline-flex;
+  height: 24px;
+  flex: 0 0 auto;
+  align-items: center;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--sidebar);
+  color: var(--ink-soft);
+  font-size: 9.5px;
+  font-weight: 650;
+}
+
+.sandbox-lifecycle-state[data-state="running"] {
+  border-color: color-mix(in srgb, var(--green) 42%, var(--line));
+  background: var(--green-soft);
+  color: var(--green);
+}
+
+.sandbox-lifecycle-state[data-state="paused"] {
+  border-color: color-mix(in srgb, var(--amber) 42%, var(--line));
+  color: var(--amber);
+}
+
+.sandbox-lifecycle-state[data-state="failed"],
+.sandbox-lifecycle-state[data-state="terminated"] {
+  border-color: color-mix(in srgb, var(--red) 42%, var(--line));
+  background: var(--red-soft);
+  color: var(--red);
+}
+
+.sandbox-lifecycle-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.sandbox-lifecycle-confirmation {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 11px;
+  border: 1px solid color-mix(in srgb, var(--amber) 50%, var(--line));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--amber) 8%, var(--panel));
+}
+
+.sandbox-lifecycle-confirmation > svg {
+  margin-top: 1px;
+  color: var(--amber);
+}
+
+.sandbox-lifecycle-confirmation > span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sandbox-lifecycle-confirmation strong {
+  font-size: 10.5px;
+}
+
+.sandbox-lifecycle-confirmation small {
+  color: var(--ink-soft);
+  font-size: 9.5px;
+  line-height: 1.45;
+}
+
+.sandbox-lifecycle-confirmation > div {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.sandbox-lifecycle-confirm-button {
+  display: inline-flex;
+  height: 34px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 11px;
+  border: 1px solid var(--amber);
+  border-radius: 7px;
+  background: var(--amber);
+  color: white;
+  font-size: 11px;
+  font-weight: 620;
+  cursor: pointer;
+}
+
+.sandbox-lifecycle-confirm-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .workspace-backup-card {
@@ -7214,6 +7344,20 @@ code.codex-compact-activity-subject {
     width: 100vw;
     border-left: 0;
     box-shadow: none;
+  }
+
+  .sandbox-lifecycle-heading {
+    gap: 10px;
+  }
+
+  .sandbox-lifecycle-confirmation {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .sandbox-lifecycle-confirmation > div {
+    grid-column: 2;
+    flex-wrap: wrap;
+    justify-content: flex-end;
   }
 
   .conversation-pane {

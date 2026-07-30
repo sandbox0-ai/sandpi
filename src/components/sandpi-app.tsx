@@ -1150,6 +1150,9 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
           onTabChange={handleInspectorTabChange}
           widthRatio={inspectorWidthRatio}
           onWidthRatioChange={handleInspectorWidthRatioChange}
+          onOpenEnvironmentSettings={() =>
+            openEnvironmentSettings(selectedEnvironment.id)
+          }
           onClose={() => handleInspectorOpenChange(false)}
         />
       ) : null}

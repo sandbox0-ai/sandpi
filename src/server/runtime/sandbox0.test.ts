@@ -636,9 +636,10 @@ test("does not expose server-only credential source refs in control errors", asy
   );
 });
 
-test("disables Environment TTLs and executes Sandpi-owned pause", async () => {
+test("disables Environment TTLs and executes Sandpi-owned pause and resume", async () => {
   const updates: unknown[] = [];
   let paused = false;
+  let resumes = 0;
   const runtime = runtimeWithClient({
     sandboxes: {
       async update(sandboxId: string, request: unknown) {
@@ -654,6 +655,11 @@ test("disables Environment TTLs and executes Sandpi-owned pause", async () => {
       async pauseAndWait() {
         paused = true;
         return { status: "paused", paused: true };
+      },
+      async resumeAndWait() {
+        resumes += 1;
+        paused = false;
+        return { status: "running", paused: false, runtimeGeneration: 2 };
       },
     },
   });
@@ -675,6 +681,11 @@ test("disables Environment TTLs and executes Sandpi-owned pause", async () => {
   ]);
   await runtime.pauseEnvironment(coordinates);
   assert.equal(paused, true);
+  await runtime.resumeEnvironment(coordinates);
+  assert.equal(paused, false);
+  assert.equal(resumes, 1);
+  await runtime.resumeEnvironment(coordinates);
+  assert.equal(resumes, 1);
 });
 
 test("updates the existing Environment Sandbox memory", async () => {

@@ -996,7 +996,7 @@ export const environmentMetricsSchema = component(
       z.object({
         startedAt: unixTimestampSchema,
         endedAt: unixTimestampSchema.optional(),
-        reason: z.literal("idle"),
+        reason: z.enum(["idle", "quota", "manual"]),
       }),
     ),
   }),

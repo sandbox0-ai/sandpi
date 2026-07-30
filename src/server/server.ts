@@ -254,6 +254,7 @@ export async function createSandpiServer(
   lifecycle.setBeforePause(async (environmentId) => {
     await codex.flushEnvironmentCredentials(environmentId);
     codex.suspendEnvironmentWorker(environmentId);
+    browser.invalidate(environmentId);
   });
   sandboxUsage?.setPauseForQuota((environmentId) =>
     lifecycle.pauseForQuota(environmentId),
@@ -359,6 +360,7 @@ export async function createSandpiServer(
     codex,
     codexAuth,
     environments,
+    lifecycle,
     billingQuota,
     stripeBilling,
     egressCredentials,
@@ -594,6 +596,7 @@ export function registerApiRoutes(
     codex: CodexService;
     codexAuth: CodexEnvironmentAuthService;
     environments: EnvironmentService;
+    lifecycle: EnvironmentLifecycleService;
     billingQuota: BillingQuotaService;
     stripeBilling: StripeBillingService;
     egressCredentials: EnvironmentEgressCredentialService;
@@ -721,6 +724,36 @@ export function registerApiRoutes(
         request.params.environmentId,
       ),
     }),
+  );
+  app.put<{ Params: { environmentId: string } }>(
+    "/api/v1/environments/:environmentId/sandbox/pause",
+    async (request) => {
+      await services.lifecycle.pauseManually(
+        request.principal.userId,
+        request.params.environmentId,
+      );
+      return {
+        data: await services.environments.get(
+          request.principal.userId,
+          request.params.environmentId,
+        ),
+      };
+    },
+  );
+  app.put<{ Params: { environmentId: string } }>(
+    "/api/v1/environments/:environmentId/sandbox/restart",
+    async (request) => {
+      await services.lifecycle.restartManually(
+        request.principal.userId,
+        request.params.environmentId,
+      );
+      return {
+        data: await services.environments.get(
+          request.principal.userId,
+          request.params.environmentId,
+        ),
+      };
+    },
   );
   app.post<{ Params: { environmentId: string } }>(
     "/api/v1/environments/:environmentId/egress-credentials",

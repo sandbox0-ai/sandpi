@@ -12,6 +12,7 @@ import {
   KeyRound,
   LockKeyhole,
   Network,
+  Pause,
   Plus,
   RefreshCw,
   RotateCcw,
@@ -164,6 +165,23 @@ function formatWorkspaceBackupSize(sizeBytes: number) {
   return `${(sizeBytes / (1024 * 1024 * 1024)).toFixed(2)} GiB`;
 }
 
+function formatSandboxState(state: Environment["sandboxState"]) {
+  switch (state) {
+    case "pending":
+      return "Pending";
+    case "provisioning":
+      return "Provisioning";
+    case "running":
+      return "Running";
+    case "paused":
+      return "Paused";
+    case "terminated":
+      return "Terminated";
+    case "failed":
+      return "Failed";
+  }
+}
+
 function formatCodexPlan(planType: CodexAccountPlanType | undefined) {
   switch (planType) {
     case "free":
@@ -258,6 +276,14 @@ export function EnvironmentSettings({
   const [workspaceRestoreName, setWorkspaceRestoreName] = useState("");
   const [workspaceRestoreBusy, setWorkspaceRestoreBusy] = useState(false);
   const [workspaceRestoreSuccess, setWorkspaceRestoreSuccess] = useState("");
+  const [sandboxLifecycleAction, setSandboxLifecycleAction] = useState<
+    "pause" | "restart" | null
+  >(null);
+  const [sandboxLifecycleConfirming, setSandboxLifecycleConfirming] = useState<
+    "pause" | "restart" | null
+  >(null);
+  const [sandboxLifecycleError, setSandboxLifecycleError] = useState("");
+  const [sandboxLifecycleMessage, setSandboxLifecycleMessage] = useState("");
   const [deleteConfirming, setDeleteConfirming] = useState(false);
   const [deleteName, setDeleteName] = useState("");
   const [deleting, setDeleting] = useState(false);
@@ -317,6 +343,10 @@ export function EnvironmentSettings({
     setWorkspaceRestoreBackup(null);
     setWorkspaceRestoreName("");
     setWorkspaceRestoreSuccess("");
+    setSandboxLifecycleAction(null);
+    setSandboxLifecycleConfirming(null);
+    setSandboxLifecycleError("");
+    setSandboxLifecycleMessage("");
   }, [environment.id, initialTab]);
 
   useEffect(() => {
@@ -773,6 +803,39 @@ export function EnvironmentSettings({
     }
   }
 
+  async function updateSandboxLifecycle(action: "pause" | "restart") {
+    if (sandboxLifecycleAction) return;
+    setSandboxLifecycleAction(action);
+    setSandboxLifecycleError("");
+    setSandboxLifecycleMessage("");
+    try {
+      const response = await apiFetch<ApiEnvelope<Environment>>(
+        `/api/v1/environments/${encodeURIComponent(environment.id)}/sandbox/${action}`,
+        { method: "PUT" },
+      );
+      setDraft((current) => ({
+        ...current,
+        sandboxState: response.data.sandboxState,
+        supervisorSessionId: response.data.supervisorSessionId,
+      }));
+      onChange(response.data);
+      setSandboxLifecycleConfirming(null);
+      setSandboxLifecycleMessage(
+        action === "pause"
+          ? "Sandbox paused. Workspace and Browser profile data remain durable; supported access can wake it again."
+          : "Sandbox restarted. Live processes and connections will reconnect on demand.",
+      );
+    } catch (error) {
+      setSandboxLifecycleError(
+        error instanceof Error
+          ? error.message
+          : `The Sandbox could not ${action}.`,
+      );
+    } finally {
+      setSandboxLifecycleAction(null);
+    }
+  }
+
   async function restoreWorkspaceBackup() {
     if (
       !workspaceRestoreBackup ||
@@ -1158,6 +1221,144 @@ export function EnvironmentSettings({
                 title="Sandbox"
                 description="Configure lifecycle and resources for the shared Sandbox used by every Session in this Environment."
               >
+                <div className="settings-card sandbox-lifecycle-card">
+                  <div className="sandbox-lifecycle-heading">
+                    <div>
+                      <strong>Sandbox lifecycle</strong>
+                      <p>
+                        Pause the Sandbox when it is not needed, or restart it
+                        to recover from broken processes, terminals, Browser
+                        connections, or Workspace portals.
+                      </p>
+                    </div>
+                    <span
+                      className="sandbox-lifecycle-state"
+                      data-state={draft.sandboxState}
+                    >
+                      {formatSandboxState(draft.sandboxState)}
+                    </span>
+                  </div>
+                  <div className="sandbox-lifecycle-actions">
+                    <button
+                      type="button"
+                      className="secondary-action-button"
+                      disabled={
+                        Boolean(sandboxLifecycleAction) ||
+                        workspaceBackupBusy ||
+                        workspaceRestoreBusy ||
+                        draft.status !== "ready" ||
+                        draft.sandboxState !== "running"
+                      }
+                      onClick={() => {
+                        setSandboxLifecycleConfirming("pause");
+                        setSandboxLifecycleError("");
+                        setSandboxLifecycleMessage("");
+                      }}
+                    >
+                      {sandboxLifecycleAction === "pause" ? (
+                        <RefreshCw
+                          className="is-spinning"
+                          size={13}
+                          aria-hidden="true"
+                        />
+                      ) : (
+                        <Pause size={13} aria-hidden="true" />
+                      )}
+                      {sandboxLifecycleAction === "pause"
+                        ? "Pausing…"
+                        : "Pause Sandbox"}
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary-action-button"
+                      disabled={
+                        Boolean(sandboxLifecycleAction) ||
+                        workspaceBackupBusy ||
+                        workspaceRestoreBusy ||
+                        draft.status !== "ready" ||
+                        !["running", "paused", "failed"].includes(
+                          draft.sandboxState,
+                        )
+                      }
+                      onClick={() => {
+                        setSandboxLifecycleConfirming("restart");
+                        setSandboxLifecycleError("");
+                        setSandboxLifecycleMessage("");
+                      }}
+                    >
+                      <RotateCcw
+                        className={
+                          sandboxLifecycleAction === "restart"
+                            ? "is-spinning"
+                            : undefined
+                        }
+                        size={13}
+                        aria-hidden="true"
+                      />
+                      {sandboxLifecycleAction === "restart"
+                        ? "Restarting…"
+                        : "Restart Sandbox"}
+                    </button>
+                  </div>
+                  {sandboxLifecycleConfirming ? (
+                    <div
+                      className="sandbox-lifecycle-confirmation"
+                      role="group"
+                      aria-label={`Confirm Sandbox ${sandboxLifecycleConfirming}`}
+                    >
+                      <TriangleAlert size={16} aria-hidden="true" />
+                      <span>
+                        <strong>
+                          {sandboxLifecycleConfirming === "pause"
+                            ? "Pause the shared Sandbox?"
+                            : "Restart the shared Sandbox?"}
+                        </strong>
+                        <small>
+                          Running Turns, terminals, Browser pages, and live
+                          connections may be interrupted. Workspace files,
+                          native Session history, and the Browser profile remain
+                          durable.
+                        </small>
+                      </span>
+                      <div>
+                        <button
+                          type="button"
+                          className="secondary-action-button"
+                          disabled={Boolean(sandboxLifecycleAction)}
+                          onClick={() =>
+                            setSandboxLifecycleConfirming(null)
+                          }
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          className="sandbox-lifecycle-confirm-button"
+                          disabled={Boolean(sandboxLifecycleAction)}
+                          onClick={() =>
+                            void updateSandboxLifecycle(
+                              sandboxLifecycleConfirming,
+                            )
+                          }
+                        >
+                          {sandboxLifecycleConfirming === "pause"
+                            ? "Confirm pause"
+                            : "Confirm restart"}
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+                  {sandboxLifecycleError ? (
+                    <p className="settings-inline-error" role="alert">
+                      {sandboxLifecycleError}
+                    </p>
+                  ) : null}
+                  {sandboxLifecycleMessage ? (
+                    <p className="settings-inline-success" role="status">
+                      {sandboxLifecycleMessage}
+                    </p>
+                  ) : null}
+                </div>
                 <label className="full-field">
                   Auto-pause after idle (minutes)
                   <input

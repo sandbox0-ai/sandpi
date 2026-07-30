@@ -1799,18 +1799,80 @@ export class SandpiStore {
     return this.environmentRuntime(environmentId);
   }
 
+  async prepareEnvironmentManualPause(
+    userId: string,
+    environmentId: string,
+  ) {
+    const environment = await this.getManageableEnvironment(
+      userId,
+      environmentId,
+    );
+    if (
+      environment.status !== "ready" ||
+      !environment.sandboxId ||
+      !environment.workspaceVolumeId
+    ) {
+      throw conflict(
+        "environment_runtime_not_ready",
+        "Wait for the Environment Sandbox to become ready.",
+      );
+    }
+    const result = await this.pool.query<{ environment_id: string }>(
+      `UPDATE environment_runtime
+       SET desired_state = 'paused', lifecycle_error = NULL,
+           version = version + 1
+       WHERE environment_id = $1
+         AND sandbox_id IS NOT NULL
+         AND desired_state <> 'terminated'
+       RETURNING environment_id`,
+      [environmentId],
+    );
+    if (!result.rowCount) {
+      throw conflict(
+        "environment_terminated",
+        "The Environment is being deleted.",
+      );
+    }
+    return this.environmentRuntime(environmentId);
+  }
+
   async recordEnvironmentPaused(
     environmentId: string,
     sandboxId: string,
-    reason: "idle" | "quota" = "idle",
+    reason: "idle" | "quota" | "manual" = "idle",
   ) {
     await this.pool.query(
       `UPDATE environment_runtime
        SET desired_state = 'paused',
            idle_pause_due_at = NULL, lifecycle_error = NULL,
-           pause_reason = $3, paused_at = NOW(), version = version + 1
+           pause_reason = CASE
+             WHEN paused_at IS NULL THEN $3
+             ELSE pause_reason
+           END,
+           paused_at = COALESCE(paused_at, NOW()),
+           version = version + 1
        WHERE environment_id = $1 AND sandbox_id = $2`,
       [environmentId, sandboxId, reason],
+    );
+  }
+
+  async recordEnvironmentManualLifecycleFailure(
+    environmentId: string,
+    sandboxId: string,
+    error: string,
+  ) {
+    await this.pool.query(
+      `UPDATE environment_runtime
+       SET desired_state = CASE
+             WHEN paused_at IS NULL THEN 'running'
+             ELSE 'paused'
+           END,
+           lifecycle_error = $3,
+           version = version + 1
+       WHERE environment_id = $1
+         AND sandbox_id = $2
+         AND desired_state <> 'terminated'`,
+      [environmentId, sandboxId, error],
     );
   }
 

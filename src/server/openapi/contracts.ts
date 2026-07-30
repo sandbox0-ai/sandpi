@@ -468,6 +468,30 @@ export const openApiRouteContracts: readonly OpenApiRouteContract[] = [
   }),
   defineContract({
     method: "PUT",
+    url: "/api/v1/environments/:environmentId/sandbox/pause",
+    schema: {
+      operationId: "pauseEnvironmentSandbox",
+      summary: "Pause an Environment Sandbox",
+      description:
+        "Explicitly pauses the shared Sandbox under the Environment lifecycle lock. Workspace and browser profile data remain durable, while live processes and connections stop.",
+      tags: ["Environments"],
+      response: { 200: dataEnvelope(environmentSchema) },
+    },
+  }),
+  defineContract({
+    method: "PUT",
+    url: "/api/v1/environments/:environmentId/sandbox/restart",
+    schema: {
+      operationId: "restartEnvironmentSandbox",
+      summary: "Restart an Environment Sandbox",
+      description:
+        "Performs one committed pause and resume under the Environment lifecycle lock so Sandbox0 advances the runtime generation. Persistent Workspace and browser profile data are retained.",
+      tags: ["Environments"],
+      response: { 200: dataEnvelope(environmentSchema) },
+    },
+  }),
+  defineContract({
+    method: "PUT",
     url: "/api/v1/environments/:environmentId/provisioning",
     schema: {
       operationId: "retryEnvironmentProvisioning",

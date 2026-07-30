@@ -227,6 +227,10 @@ export interface RuntimeAdapter {
     runtime: EnvironmentRuntimeRecord,
     signal?: AbortSignal,
   ): Promise<void>;
+  resumeEnvironment(
+    runtime: EnvironmentRuntimeRecord,
+    signal?: AbortSignal,
+  ): Promise<void>;
   /**
    * Restores the harness-neutral Environment runtime surface after a
    * Workspace or Terminal operation proves that native access is unavailable.

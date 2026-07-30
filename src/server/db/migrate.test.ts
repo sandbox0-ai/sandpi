@@ -80,6 +80,7 @@ test("migration history contains every durable Sandpi boundary", async () => {
       "0053_disable_schedules_for_archived_sessions",
       "0054_use_sandbox0_lifecycle_truth",
       "0055_native_auth_attempts",
+      "0056_manual_environment_lifecycle",
     ],
   );
 
@@ -217,6 +218,16 @@ test("migration history contains every durable Sandpi boundary", async () => {
   assert.doesNotMatch(
     sandbox0LifecycleTruthSql,
     /UPDATE OF sandbox_id,\s*observed_state/,
+  );
+
+  const manualEnvironmentLifecycleSql = migrations[55]?.sql ?? "";
+  assert.match(
+    manualEnvironmentLifecycleSql,
+    /reason IN \('idle', 'quota', 'manual'\)/,
+  );
+  assert.match(
+    manualEnvironmentLifecycleSql,
+    /pause_reason IN \('idle', 'quota', 'manual'\)/,
   );
 
   const environmentResourceDefaultsSql = migrations[48]?.sql ?? "";
