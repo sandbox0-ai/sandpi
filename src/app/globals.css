@@ -193,7 +193,8 @@ pre,
   flex: 0 0 auto;
   align-items: center;
   justify-content: space-between;
-  padding: 0 13px 0 17px;
+  padding: 0 13px 0
+    max(17px, var(--sandpi-native-titlebar-leading-inset, 0px));
 }
 
 .sidebar-collapse-button {

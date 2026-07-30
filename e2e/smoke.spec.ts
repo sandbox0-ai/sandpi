@@ -206,6 +206,32 @@ async function serveAnonymousBootstrap(page: Page) {
   );
 }
 
+test("reserves declared native titlebar space in the desktop sidebar", async ({
+  page,
+}) => {
+  await serveAnonymousBootstrap(page);
+  await page.setViewportSize({ width: 1200, height: 800 });
+  await page.goto("/");
+
+  const brandRow = page.locator(".sidebar-brand-row");
+  await expect(brandRow).toHaveCSS("padding-left", "17px");
+  await page.evaluate(() => {
+    document.documentElement.style.setProperty(
+      "--sandpi-native-titlebar-leading-inset",
+      "88px",
+    );
+  });
+  await expect(brandRow).toHaveCSS("padding-left", "88px");
+
+  const [brandBox, actionBox] = await Promise.all([
+    brandRow.locator(".brand-lockup").boundingBox(),
+    brandRow.locator(".sidebar-collapse-button").boundingBox(),
+  ]);
+  expect(brandBox).not.toBeNull();
+  expect(actionBox).not.toBeNull();
+  expect(brandBox!.x + brandBox!.width).toBeLessThanOrEqual(actionBox!.x);
+});
+
 async function captureLoginNavigation(page: Page) {
   let requestUrl: string | undefined;
   await page.route(
