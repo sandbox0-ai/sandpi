@@ -66,6 +66,24 @@ currently start at `/workspace`; product support for nested `AGENTS.md` scopes
 therefore requires a future native working-directory selection passed to
 `thread/start`, rather than a Sandpi-owned discovery algorithm.
 
+## Sandpi Environment Skill
+
+Sandpi materializes a product-owned `sandpi-environment` Skill under the
+reserved `/workspace/.sandpi/skills` root before Codex app-server startup and
+registers that root through native `skills/extraRoots/set`. The Skill is visible
+in Codex's native inventory and can be disabled through the same native
+configuration as any other discovered Skill. Sandpi does not copy it into
+PostgreSQL, inject it as hidden Turn input or place it in the user-owned
+`/workspace/.agents/skills` tree.
+
+The Skill contains only stable navigation and trust-boundary instructions. It
+loads current product behavior from the public, application-owned
+`https://sandpi.ai/llms.txt`, delegates exact Browser commands to the locally
+installed Playwright Skill, and never bypasses Environment network policy when
+that guide is unavailable. Sandpi reconciles the small Skill asset with the
+server release, while ordinary product guidance changes at the public URL
+without requiring a coding-agent image or Environment replacement.
+
 ## Persistent native state and credentials
 
 Codex uses `/workspace/.sandpi/harnesses/codex` as its persistent `CODEX_HOME`.
@@ -714,12 +732,12 @@ Workspace and any network destinations allowed by the Environment policy.
 
 ## Environment lifecycle
 
-Every Environment Sandbox is claimed with a 30-day Sandbox0 hard TTL,
-`auto_resume=true`, and soft `ttl=0`. The hard TTL is an absolute destruction
-bound; pause preserves the rootfs checkpoint but does not extend that deadline.
-Sandpi disables Sandbox0 soft TTL because its native Turn projection owns the
-idle-pause decision. The Workspace Volume and native harness home have their
-independent durable lifecycle.
+Every Environment Sandbox is claimed with `auto_resume=true`, soft `ttl=0` and
+`hard_ttl=0`. Sandpi disables both Sandbox0 TTLs so deployment or template
+defaults cannot terminate a durable Environment. Its native Turn projection
+owns the configurable idle-pause decision, while permanent deletion remains an
+explicit Environment operation. The Workspace Volume and native harness home
+have their independent durable lifecycle.
 
 Each native `turn/completed` transition stores `last_turn_completed_at` and the
 configured `idle_pause_due_at` in PostgreSQL in the same transaction as the
@@ -758,11 +776,6 @@ runtime chart so intentional checkpoint gaps remain distinguishable from
 collector failures. Sandbox0 aggregation points retain their effective bucket
 step; the chart extends only adjacent segment endpoints within one step to the
 exact pause boundary, without joining longer collection or reset gaps.
-
-The lifecycle policy migration stores one absolute hard-expiry target before
-updating an older Sandbox. A retry sends only the seconds remaining to that
-target, so a crash between the Sandbox0 update and the database commit cannot
-silently reset the Sandbox to another full month.
 
 Permanent Environment deletion uses the same advisory-lock namespace as pause
 and Turn admission. It first marks the desired runtime state terminated,

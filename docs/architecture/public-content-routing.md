@@ -14,6 +14,7 @@ The Sandpi deployment owns the application and API surfaces:
 - `/api/*`
 - `/health/*`
 - `/_next/*`
+- `/llms.txt`
 
 An independently deployed content service may own more-specific routes on the
 same host:
@@ -30,6 +31,12 @@ The production ingress keeps Sandpi's `/` route as the fallback and routes the
 content prefixes to their separate service. The content build uses the
 `/_site-assets` namespace so its Next.js assets cannot collide with Sandpi's
 `/_next` assets.
+
+`/llms.txt` is an operational coding-agent guide shipped with the Sandpi
+application rather than editorial content. The product-owned
+`sandpi-environment` Skill links to that stable URL, while the guide changes
+with the application release. It remains public and contains no deployment,
+Environment, identity or credential data.
 
 `robots.txt` is host-scoped, so the production content deployment owns the
 single root file and the aggregate sitemap. Application-only pages such as the

@@ -13,6 +13,7 @@ import type {
 import type { Environment } from "@/lib/types";
 import { HttpError } from "@/server/http-error";
 import { createSandbox0FetchWithRetry, Sandbox0Runtime } from "./sandbox0";
+import { SANDPI_ENVIRONMENT_SKILL_ASSETS } from "./sandpi-environment-skill";
 import {
   CODEX_MCP_OAUTH_CALLBACK_BASE_PATH,
   CODEX_MCP_OAUTH_CALLBACK_PORT,
@@ -2358,7 +2359,11 @@ test("repairs a disconnected Workspace portal for harness-neutral access", async
 
 test("starts one Environment-scoped Codex app-server without unsupported plugin discovery", async () => {
   const writes: Array<{ path: string; content: string }> = [];
-  const commands: Array<{ name: string; command?: string[] }> = [];
+  const commands: Array<{
+    name: string;
+    command?: string[];
+    envVars?: Record<string, string>;
+  }> = [];
   const sessions: Array<{
     spec: Record<string, unknown>;
     idempotencyKey?: string;
@@ -2375,8 +2380,15 @@ test("starts one Environment-scoped Codex app-server without unsupported plugin 
     async deleteFile() {
       return { message: "deleted" };
     },
-    async cmd(name: string, options: { command?: string[] }) {
-      commands.push({ name, command: options.command });
+    async cmd(
+      name: string,
+      options: { command?: string[]; envVars?: Record<string, string> },
+    ) {
+      commands.push({
+        name,
+        command: options.command,
+        envVars: options.envVars,
+      });
       return { exitCode: 0 };
     },
     async createSession(
@@ -2460,11 +2472,39 @@ test("starts one Environment-scoped Codex app-server without unsupported plugin 
     String((sessions[0]?.spec.command as string[] | undefined)?.at(-1)),
     /codex app-server --stdio[\s\S]+--disable apps[\s\S]+--disable plugins[\s\S]+--disable remote_plugin[\s\S]+--disable tool_suggest/,
   );
+  const preparation = commands.find(
+    (command) => command.name === "prepare-environment-codex-home",
+  );
+  assert.equal(
+    Buffer.from(
+      preparation?.envVars?.SANDPI_ENVIRONMENT_SKILL_MD_BASE64 ?? "",
+      "base64",
+    ).toString("utf8"),
+    SANDPI_ENVIRONMENT_SKILL_ASSETS.skill,
+  );
+  assert.equal(
+    Buffer.from(
+      preparation?.envVars?.SANDPI_ENVIRONMENT_SKILL_OPENAI_YAML_BASE64 ?? "",
+      "base64",
+    ).toString("utf8"),
+    SANDPI_ENVIRONMENT_SKILL_ASSETS.interfaceYaml,
+  );
   assert.ok(
     commands.some(
       (command) =>
         command.name === "prepare-environment-codex-home" &&
         command.command?.at(-1)?.includes("environment_v1") &&
+        command.command
+          ?.at(-1)
+          ?.includes("skills=/workspace/.sandpi/skills") &&
+        command.command
+          ?.at(-1)
+          ?.includes('sandpi_skill="$skills/sandpi-environment"') &&
+        command.command
+          ?.at(-1)
+          ?.includes(
+            'install_managed_file "$sandpi_skill/SKILL.md"',
+          ) &&
         command.command
           ?.at(-1)
           ?.includes("playwright-cli install --skills=agents") &&

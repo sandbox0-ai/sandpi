@@ -1682,7 +1682,11 @@ test("uses one Environment app-server and model catalog for multiple native Sess
         .map((write) => write.message.params),
       [
         {
-          extraRoots: ["/root/.codex/skills", "/root/.agents/skills"],
+          extraRoots: [
+            "/workspace/.sandpi/skills",
+            "/root/.codex/skills",
+            "/root/.agents/skills",
+          ],
         },
       ],
     );
@@ -7351,7 +7355,11 @@ test("recovers when the Supervisor journal restarts behind the committed cursor"
         ({ message }) => message.method === "skills/extraRoots/set",
       )?.message.params,
       {
-        extraRoots: ["/root/.codex/skills", "/root/.agents/skills"],
+        extraRoots: [
+          "/workspace/.sandpi/skills",
+          "/root/.codex/skills",
+          "/root/.agents/skills",
+        ],
       },
     );
   } finally {
