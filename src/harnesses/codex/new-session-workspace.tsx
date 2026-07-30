@@ -578,7 +578,11 @@ export function CodexNewSessionWorkspace({
 
   return (
     <section id="conversation" className={styles.workspace} tabIndex={-1}>
-      <header className={styles.header} data-tauri-drag-region="deep">
+      <header
+        className={styles.header}
+        data-native-titlebar-leading-content
+        data-tauri-drag-region="deep"
+      >
         <button
           type="button"
           className={styles.desktopExpandButton}

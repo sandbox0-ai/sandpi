@@ -185,7 +185,10 @@ export function GuestSandpiApp({ loginUrl }: { loginUrl: string }) {
         className={workspaceStyles.workspace}
         tabIndex={-1}
       >
-        <header className={workspaceStyles.header}>
+        <header
+          className={workspaceStyles.header}
+          data-native-titlebar-leading-content
+        >
           <button
             type="button"
             className={workspaceStyles.desktopExpandButton}

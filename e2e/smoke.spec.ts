@@ -288,6 +288,15 @@ test("reserves declared native titlebar space in the desktop sidebar", async ({
   expect(brandBox).not.toBeNull();
   expect(actionBox).not.toBeNull();
   expect(brandBox!.x + brandBox!.width).toBeLessThanOrEqual(actionBox!.x);
+
+  await brandRow.locator(".sidebar-collapse-button").click();
+  const contentHeader = page.locator(
+    "[data-native-titlebar-leading-content]",
+  );
+  await expect(contentHeader).toHaveCSS("padding-left", "88px");
+  const expandBox = await contentHeader.locator("button").first().boundingBox();
+  expect(expandBox).not.toBeNull();
+  expect(expandBox!.x).toBeGreaterThanOrEqual(88);
 });
 
 test("separates anonymous New Session facts from the composer", async ({

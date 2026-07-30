@@ -7099,6 +7099,13 @@ code.codex-compact-activity-subject {
     --sidebar-width: 0px;
   }
 
+  .app-shell.sidebar-is-collapsed [data-native-titlebar-leading-content] {
+    padding-left: max(
+      21px,
+      var(--sandpi-native-titlebar-leading-inset, 0px)
+    );
+  }
+
   .app-shell.sidebar-is-collapsed > .sidebar {
     display: none;
   }

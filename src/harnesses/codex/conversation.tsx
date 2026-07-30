@@ -2256,6 +2256,7 @@ export function CodexConversation({
       >
         <header
           className="conversation-header"
+          data-native-titlebar-leading-content
           data-tauri-drag-region="deep"
         >
           <div className="conversation-title-area">
