@@ -2737,6 +2737,9 @@ export function CodexConversation({
           onBrowserNavigationHandled={onBrowserNavigationHandled}
           onTabChange={onInspectorTabChange}
           onWidthRatioChange={onInspectorWidthRatioChange}
+          onOpenEnvironmentSettings={() =>
+            onOpenEnvironmentSettings("general")
+          }
           onClose={onToggleInspector}
           sessionActivity={{
             label: ui.activity,

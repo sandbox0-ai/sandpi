@@ -760,30 +760,36 @@ Turn admission takes the same advisory lock and persists pending delivery
 before touching the native harness. Therefore either pause completes first and
 the following supported runtime access is serialized and auto-resumed by
 Sandbox0, or admission completes first and the pause recheck observes work.
-Failed pause requests retain a durable retry deadline. Sandpi records the new
-runtime generation after auto-resume and grants a fresh configured idle window
-to avoid an immediately repeated pause, but the next native completion remains
-the authoritative deadline source. Sandbox0 may return `sandbox is waking up`
-while that transition commits; Sandpi waits for the native running generation
-and retries the same supported runtime access. A definitive
+Failed idle-pause requests retain a durable retry deadline. Sandpi records the
+new runtime generation after auto-resume and grants a fresh configured idle
+window to avoid an immediately repeated pause, but the next native completion
+remains the authoritative deadline source. Sandbox0 may return `sandbox is
+waking up` while that transition commits; Sandpi waits for the native running
+generation and retries the same supported runtime access. A definitive
 `sandbox_resume_failed` response skips lifecycle polling and receives exactly
 one immediate supported-access retry. If that retry also fails, Sandpi surfaces
-the error without entering its longer runtime-recovery retry loop. No Sandpi
-worker calls an explicit resume API. Runtime recovery and pause share the
-Environment advisory lock, so their database projections cannot commit out of
-order.
+the error without entering its longer runtime-recovery retry loop. Ordinary
+runtime access never calls an explicit resume API. The user-facing
+**Environment Settings → Sandbox → Restart Sandbox** recovery action is the
+only exception: under the same advisory lock, it flushes and suspends retained
+workers, commits a pause, calls `resumeAndWait`, and records the resulting
+running intent. Runtime recovery, idle/quota/manual pause, and restart therefore
+cannot commit their database projections out of order.
 
 `environment_runtime.paused_at` remains the current Sandpi lifecycle
 projection. Its transitions automatically append and close
 `environment_pause_intervals` rows, preserving the history after auto-resume
-clears the current field. Only the lifecycle worker's completed idle pause sets
-this projection; temporary Sandbox0 pauses used for Workspace or Supervisor
-repair are not mislabeled. The Metrics endpoint queries intervals overlapping
-the exact Sandbox0 metrics window, and the Inspector shades them across every
-runtime chart so intentional checkpoint gaps remain distinguishable from
-collector failures. Sandbox0 aggregation points retain their effective bucket
-step; the chart extends only adjacent segment endpoints within one step to the
-exact pause boundary, without joining longer collection or reset gaps.
+clears the current field. Completed idle, quota, and explicit manual pauses set
+this projection with distinct reasons; temporary Sandbox0 pauses used for
+Workspace or Supervisor repair are not mislabeled. Manual Pause and Restart
+both use the same lifecycle lock and suspend retained harness and Browser
+coordinates before changing Sandbox0 state. The Metrics endpoint queries
+intervals overlapping the exact Sandbox0 metrics window, and the Inspector
+shades them across every runtime chart so intentional checkpoint gaps remain
+distinguishable from collector failures. Sandbox0 aggregation points retain
+their effective bucket step; the chart extends only adjacent segment endpoints
+within one step to the exact pause boundary, without joining longer collection
+or reset gaps.
 
 Permanent Environment deletion uses the same advisory-lock namespace as pause
 and Turn admission. It first marks the desired runtime state terminated,

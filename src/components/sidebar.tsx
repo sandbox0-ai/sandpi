@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   PanelLeftClose,
   Pin,
@@ -53,6 +53,7 @@ function SessionStateIndicator({
   runningLabel: "Running" | "运行中";
 }) {
   const marker = sessionStateMarker(session);
+  if (!marker) return null;
 
   return (
     <span className="session-state-indicator">
@@ -62,13 +63,13 @@ function SessionStateIndicator({
           role="img"
           aria-label={runningLabel}
         />
-      ) : marker === "unread" ? (
+      ) : (
         <span
           className="session-unread-dot"
           role="img"
           aria-label={unreadLabel}
         />
-      ) : null}
+      )}
     </span>
   );
 }
@@ -96,21 +97,6 @@ export function Sidebar({
   const unreadLabel = language === "zh-CN" ? "未读" : "Unread";
   const runningLabel = language === "zh-CN" ? "运行中" : "Running";
   const [sessionSearchOpen, setSessionSearchOpen] = useState(false);
-
-  useEffect(() => {
-    const handleSearchShortcut = (event: KeyboardEvent) => {
-      if (
-        (event.metaKey || event.ctrlKey) &&
-        event.key.toLocaleLowerCase() === "k"
-      ) {
-        event.preventDefault();
-        setSessionSearchOpen(true);
-      }
-    };
-
-    document.addEventListener("keydown", handleSearchShortcut);
-    return () => document.removeEventListener("keydown", handleSearchShortcut);
-  }, []);
 
   return (
     <>
@@ -152,7 +138,6 @@ export function Sidebar({
         >
           <Plus size={17} strokeWidth={2.2} aria-hidden="true" />
           {ui.newEnvironment}
-          <span className="keyboard-hint">⌘ ⇧ N</span>
         </button>
 
         <button
@@ -164,7 +149,6 @@ export function Sidebar({
         >
           <Search size={16} aria-hidden="true" />
           <span>{ui.searchSessions}</span>
-          <span className="keyboard-hint">⌘ K</span>
         </button>
 
         <div className="sidebar-scroll-region">

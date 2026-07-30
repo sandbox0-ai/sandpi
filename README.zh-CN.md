@@ -102,7 +102,8 @@ Environment。如果多个 Session 本来就应该共享文件、工具和执行
   编辑器、媒体预览和 Git 变更
 - Human 与 coding agent 共用的官方 Playwright Browser，支持多 Tab、加载反馈以及
   本地持久化的桌面自适应、响应式和移动端 viewport 模式
-- Environment 终端、runtime 指标和可配置 idle pause
+- Environment 终端、runtime 指标、可配置 idle pause，以及用于故障恢复的
+  Sandbox 手动 pause/restart 控制
 - Environment Schedules，支持一次性或易读的周期设置、高级 Cron、IANA
   时区、后续运行预览、持久化运行历史和重叠跳过
 - 每个 Environment 独立的网络策略和 Sandbox0 出站凭证注入

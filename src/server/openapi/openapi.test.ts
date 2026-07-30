@@ -24,11 +24,24 @@ test("OpenAPI publishes every supported operation with a unique id", async () =>
   const operations = allOperations(document);
   const operationIds = operations.map((operation) => operation.operationId);
 
-  assert.equal(operations.length, 103);
+  assert.equal(operations.length, 105);
   assert.ok(operationIds.every(Boolean));
   assert.equal(new Set(operationIds).size, operationIds.length);
   assert.ok(Object.keys(document.paths).every((path) => !path.includes(":")));
   assert.ok(Object.keys(document.paths).every((path) => !path.includes("*")));
+
+  for (const [path, operationId] of [
+    [
+      "/api/v1/environments/{environmentId}/sandbox/pause",
+      "pauseEnvironmentSandbox",
+    ],
+    [
+      "/api/v1/environments/{environmentId}/sandbox/restart",
+      "restartEnvironmentSandbox",
+    ],
+  ] as const) {
+    assert.equal(operation(document, path, "put").operationId, operationId);
+  }
 });
 
 test("OpenAPI preserves the shared Browser and streaming semantics", async () => {

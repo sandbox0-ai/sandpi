@@ -907,6 +907,22 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     }
   }
 
+  async resumeEnvironment(
+    runtime: EnvironmentRuntimeRecord,
+    signal?: AbortSignal,
+  ) {
+    try {
+      const current = await this.client.sandboxes.get(runtime.sandboxId);
+      if (current.status === "running" && !current.paused) return;
+      await this.client.sandboxes.resumeAndWait(runtime.sandboxId, {
+        timeoutMs: 120_000,
+        signal,
+      });
+    } catch (error) {
+      throw translateSandbox0Error(error);
+    }
+  }
+
   private createCodexSupervisor(
     sandbox: ReturnType<Client["sandboxes"]["sandbox"]>,
     idempotencyKey: string,

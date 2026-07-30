@@ -111,7 +111,8 @@ same files, tools and execution context.
   editor, media previews and Git changes
 - Shared official Playwright Browser with multi-tab controls, loading feedback
   and persisted desktop-fit, responsive and mobile viewport modes
-- Environment terminal, runtime metrics and configurable idle pause
+- Environment terminal, runtime metrics, configurable idle pause, and manual
+  Sandbox pause/restart recovery controls
 - Environment Schedules with one-time or human-friendly recurring timing,
   Advanced cron, IANA time zones, upcoming-run previews, durable run history
   and overlap skipping

@@ -1679,6 +1679,122 @@ test("replaces the Environment idle timeout after clearing the number input", as
   await expect.poll(() => updateBody?.idlePauseTimeoutSeconds).toBe(15 * 60);
 });
 
+test("opens Environment settings from the Inspector and controls Sandbox recovery", async ({
+  page,
+}) => {
+  const bootstrap = getMockBootstrap();
+  useEnglishUi(bootstrap);
+  const environment = bootstrap.environments[0];
+  expect(environment).toBeTruthy();
+  if (!environment) return;
+  bootstrap.sessions = [];
+  bootstrap.selectedEnvironmentId = environment.id;
+  bootstrap.selectedSessionId = "";
+  environment.sandboxState = "running";
+
+  await page.route(
+    (url) => url.pathname === "/api/v1/bootstrap",
+    async (route) => {
+      await route.fulfill({ json: { data: bootstrap } });
+    },
+  );
+  await page.route(
+    (url) => url.pathname === "/api/v1/billing/summary",
+    async (route) => {
+      await route.fulfill({
+        json: {
+          data: {
+            plan: {
+              id: "deployment",
+              name: "Deployment",
+              memoryConfigurable: true,
+            },
+          },
+        },
+      });
+    },
+  );
+  await page.route(
+    (url) =>
+      url.pathname ===
+      `/api/v1/environments/${encodeURIComponent(environment.id)}/workspace-backups`,
+    async (route) => {
+      await route.fulfill({ json: { data: [] } });
+    },
+  );
+  const lifecycleRequests: string[] = [];
+  for (const action of ["pause", "restart"] as const) {
+    await page.route(
+      (url) =>
+        url.pathname ===
+        `/api/v1/environments/${encodeURIComponent(environment.id)}/sandbox/${action}`,
+      async (route) => {
+        lifecycleRequests.push(`${route.request().method()} ${action}`);
+        await route.fulfill({
+          json: {
+            data: {
+              ...environment,
+              sandboxState: action === "pause" ? "paused" : "running",
+            },
+          },
+        });
+      },
+    );
+  }
+
+  await page.goto(
+    `/?environment=${encodeURIComponent(environment.id)}&new=1`,
+  );
+  await page.getByRole("button", { name: "Open inspector" }).click();
+  const inspectorViews = page.getByRole("navigation", {
+    name: "Inspector views",
+  });
+  const filesTab = inspectorViews.getByRole("button", {
+    name: "Files",
+    exact: true,
+  });
+  const settingsAction = inspectorViews.getByRole("button", {
+    name: "Open Environment settings",
+  });
+  await expect(filesTab).toHaveClass(/is-active/);
+  await expect(settingsAction).not.toHaveClass(/is-active/);
+
+  await settingsAction.click();
+  await expect(
+    page.getByRole("dialog", { name: `${environment.name} settings` }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Sandbox", exact: true }).click();
+
+  const sandboxState = page.locator(".sandbox-lifecycle-state");
+  await expect(sandboxState).toHaveText("Running");
+  await page.getByRole("button", { name: "Pause Sandbox" }).click();
+  await expect(
+    page.getByRole("group", { name: "Confirm Sandbox pause" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Confirm pause" }).click();
+  await expect(sandboxState).toHaveText("Paused");
+  await expect(
+    page.getByText("Sandbox paused.", { exact: false }),
+  ).toBeVisible();
+
+  await page.getByRole("button", { name: "Restart Sandbox" }).click();
+  await expect(
+    page.getByRole("group", { name: "Confirm Sandbox restart" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Confirm restart" }).click();
+  await expect(sandboxState).toHaveText("Running");
+  await expect(
+    page.getByText("Sandbox restarted.", { exact: false }),
+  ).toBeVisible();
+  expect(lifecycleRequests).toEqual(["PUT pause", "PUT restart"]);
+
+  await page
+    .getByRole("button", { name: "Close Environment settings" })
+    .click();
+  await expect(filesTab).toHaveClass(/is-active/);
+  await expect(settingsAction).not.toHaveClass(/is-active/);
+});
+
 test("waits for native New Session models and scopes reasoning effort by model", async ({
   page,
   request,
@@ -6662,4 +6778,74 @@ test("restores a new-Session deep link and keeps overlays usable in dark mode", 
     page.getByRole("dialog", { name: "Development settings" }),
   ).toBeVisible();
   expect(browserErrors).toEqual([]);
+});
+
+test("keeps pinned Session markers compact and removes sidebar shortcuts", async ({
+  page,
+}) => {
+  const bootstrap = getMockBootstrap();
+  useEnglishUi(bootstrap);
+  const environment = bootstrap.environments[0];
+  const session = bootstrap.sessions.find(
+    (candidate) =>
+      candidate.environmentId === environment?.id &&
+      candidate.status === "waiting",
+  );
+  expect(environment).toBeTruthy();
+  expect(session).toBeTruthy();
+  if (!environment || !session) return;
+  session.pinned = true;
+  session.unread = false;
+  bootstrap.selectedEnvironmentId = environment.id;
+  bootstrap.selectedSessionId = "";
+
+  await page.route(
+    (url) => url.pathname === "/api/v1/bootstrap",
+    async (route) => {
+      await route.fulfill({ json: { data: bootstrap } });
+    },
+  );
+
+  await page.goto(
+    `/?environment=${encodeURIComponent(environment.id)}&new=1`,
+  );
+  const sessionRow = page
+    .locator(".session-row")
+    .filter({ hasText: session.title });
+  await expect(sessionRow.locator(".session-pinned-icon")).toBeVisible();
+  await expect(sessionRow.locator(".session-state-indicator")).toHaveCount(0);
+  const markerGap = await sessionRow.evaluate((row) => {
+    const pin = row.querySelector<SVGElement>(".session-pinned-icon");
+    const title = row.querySelector<HTMLElement>(".session-title");
+    if (!pin || !title) throw new Error("Pinned Session layout is missing");
+    return title.getBoundingClientRect().left - pin.getBoundingClientRect().right;
+  });
+  expect(markerGap).toBeLessThanOrEqual(10);
+
+  await expect(page.locator(".keyboard-hint")).toHaveCount(0);
+  await page.evaluate(() => {
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "k",
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "n",
+        ctrlKey: true,
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+  });
+  await expect(
+    page.getByRole("dialog", { name: "Search sessions" }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("dialog", { name: "New Environment" }),
+  ).toHaveCount(0);
 });

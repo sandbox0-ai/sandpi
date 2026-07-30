@@ -409,11 +409,11 @@ export interface EnvironmentMetricWindow {
   endedAt: UnixTimestamp;
 }
 
-/** Historical Sandpi-owned idle pause; an absent end means it is still active. */
+/** Historical Sandpi-owned pause; an absent end means it is still active. */
 export interface EnvironmentPauseInterval {
   startedAt: UnixTimestamp;
   endedAt?: UnixTimestamp;
-  reason: "idle";
+  reason: "idle" | "quota" | "manual";
 }
 
 export interface EnvironmentMetrics extends RuntimeMetrics {

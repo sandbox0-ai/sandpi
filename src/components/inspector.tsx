@@ -10,6 +10,8 @@ import {
   Globe2,
   ListTree,
   Network,
+  Settings2,
+  SquareArrowOutUpRight,
   X,
 } from "lucide-react";
 import {
@@ -85,6 +87,7 @@ interface InspectorProps {
   widthRatio: number;
   onWidthRatioChange: (ratio: number, persist: boolean) => void;
   hidden?: boolean;
+  onOpenEnvironmentSettings: () => void;
   onClose: () => void;
 }
 
@@ -333,6 +336,7 @@ export function Inspector({
   widthRatio,
   onWidthRatioChange,
   hidden = false,
+  onOpenEnvironmentSettings,
   onClose,
 }: InspectorProps) {
   const ui = getOperationUiCopy(language).inspector;
@@ -618,6 +622,21 @@ export function Inspector({
             onClick={() => onTabChange("metrics")}
           >
             <Activity size={14} /> {ui.metrics}
+          </button>
+          <button
+            type="button"
+            className="inspector-action-tab"
+            aria-label={ui.openEnvironmentSettings}
+            title={ui.openEnvironmentSettings}
+            onClick={onOpenEnvironmentSettings}
+          >
+            <Settings2 size={14} aria-hidden="true" />
+            {ui.settings}
+            <SquareArrowOutUpRight
+              className="inspector-external-icon"
+              size={10}
+              aria-hidden="true"
+            />
           </button>
         </nav>
         <button

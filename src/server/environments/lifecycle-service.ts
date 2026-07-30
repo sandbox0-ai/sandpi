@@ -1,3 +1,6 @@
+import { setTimeout as delay } from "node:timers/promises";
+
+import { HttpError } from "@/server/http-error";
 import type { RuntimeAdapter } from "@/server/runtime/types";
 import type { SandpiStore } from "@/server/store";
 import type { RuntimeQuotaGate } from "@/server/billing/quota-service";
@@ -11,9 +14,13 @@ interface LifecycleLogger {
   warn(fields: object, message: string): void;
 }
 
+const MANUAL_LIFECYCLE_LOCK_TIMEOUT_MS = 130_000;
+const MANUAL_LIFECYCLE_LOCK_RETRY_MS = 250;
+
 /**
- * Executes durable Environment policy and idle-pause timers. Runtime access is
- * resumed natively by Sandbox0; this service never owns a wake-up state machine.
+ * Executes durable Environment policy and idle-pause timers. Ordinary runtime
+ * access is resumed natively by Sandbox0; the explicit user restart below is a
+ * bounded recovery operation rather than a separate wake-up state machine.
  * PostgreSQL stores deadlines so any Sandpi replica can take over after a crash.
  */
 export class EnvironmentLifecycleService {
@@ -119,6 +126,124 @@ export class EnvironmentLifecycleService {
           throw error;
         }
       },
+    );
+  }
+
+  async pauseManually(userId: string, environmentId: string) {
+    this.requireManualLifecycle();
+    await this.withManualLifecycleLock(
+      environmentId,
+      async (scopedStore) => {
+        const runtime = await scopedStore.prepareEnvironmentManualPause(
+          userId,
+          environmentId,
+        );
+        try {
+          await this.beforePause?.(environmentId, scopedStore);
+          await this.runtime.pauseEnvironment(
+            runtime,
+            this.controller.signal,
+          );
+          await scopedStore.recordEnvironmentPaused(
+            environmentId,
+            runtime.sandboxId,
+            "manual",
+          );
+          this.logger.info(
+            { environmentId },
+            "Environment Sandbox paused by user",
+          );
+        } catch (error) {
+          await scopedStore.recordEnvironmentManualLifecycleFailure(
+            environmentId,
+            runtime.sandboxId,
+            errorMessage(error),
+          );
+          throw error;
+        }
+      },
+    );
+  }
+
+  async restartManually(userId: string, environmentId: string) {
+    this.requireManualLifecycle();
+    await this.withManualLifecycleLock(
+      environmentId,
+      async (scopedStore) => {
+        await scopedStore.getManageableEnvironment(userId, environmentId);
+        await this.options.quotaGate?.assertEnvironmentRuntimeAllowed(
+          environmentId,
+        );
+        const runtime = await scopedStore.prepareEnvironmentManualPause(
+          userId,
+          environmentId,
+        );
+        try {
+          await this.beforePause?.(environmentId, scopedStore);
+          await this.runtime.pauseEnvironment(
+            runtime,
+            this.controller.signal,
+          );
+          await scopedStore.recordEnvironmentPaused(
+            environmentId,
+            runtime.sandboxId,
+            "manual",
+          );
+          await this.runtime.resumeEnvironment(
+            runtime,
+            this.controller.signal,
+          );
+          await scopedStore.recordEnvironmentRuntimeAccess(environmentId);
+          this.logger.info(
+            { environmentId },
+            "Environment Sandbox restarted by user",
+          );
+        } catch (error) {
+          await scopedStore.recordEnvironmentManualLifecycleFailure(
+            environmentId,
+            runtime.sandboxId,
+            errorMessage(error),
+          );
+          throw error;
+        }
+      },
+    );
+  }
+
+  private requireManualLifecycle() {
+    if (this.runtime.mode === "unconfigured") {
+      throw new HttpError(
+        503,
+        "sandbox0_not_configured",
+        "This Sandpi deployment has not configured Sandbox0.",
+      );
+    }
+    if (this.closed) {
+      throw new HttpError(
+        503,
+        "environment_lifecycle_unavailable",
+        "The Environment lifecycle service is shutting down.",
+      );
+    }
+  }
+
+  private async withManualLifecycleLock<T>(
+    environmentId: string,
+    operation: (store: SandpiStore) => Promise<T>,
+  ): Promise<T> {
+    const deadline = Date.now() + MANUAL_LIFECYCLE_LOCK_TIMEOUT_MS;
+    while (!this.closed && Date.now() < deadline) {
+      const locked = await this.store.withEnvironmentLifecycleLock(
+        environmentId,
+        (lockedStore) => operation(lockedStore ?? this.store),
+      );
+      if (locked.acquired) return locked.value;
+      await delay(MANUAL_LIFECYCLE_LOCK_RETRY_MS);
+    }
+    throw new HttpError(
+      503,
+      "environment_lifecycle_busy",
+      "The Environment lifecycle is still changing. Try again shortly.",
     );
   }
 
