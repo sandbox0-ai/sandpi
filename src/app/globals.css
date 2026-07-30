@@ -498,6 +498,36 @@ pre {
   padding: 2px 0 0 12px;
 }
 
+.session-pagination-controls {
+  display: flex;
+  min-height: 26px;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 3px;
+  padding: 2px 3px 0 10px;
+}
+
+.session-pagination-button {
+  display: inline-flex;
+  min-height: 23px;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ink-faint);
+  font-size: 10.5px;
+  font-weight: 620;
+  cursor: pointer;
+}
+
+.session-pagination-button:hover {
+  background: var(--hover);
+  color: var(--ink-soft);
+}
+
 .session-row {
   position: relative;
   min-height: 31px;
@@ -7621,6 +7651,15 @@ html[data-density="compact"] .environment-row {
 
 html[data-density="compact"] .session-row {
   min-height: 28px;
+}
+
+html[data-density="compact"] .session-pagination-controls {
+  min-height: 23px;
+}
+
+html[data-density="compact"] .session-pagination-button {
+  min-height: 21px;
+  font-size: 10px;
 }
 
 html[data-density="compact"] .sidebar-footer {

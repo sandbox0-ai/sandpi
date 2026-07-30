@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import {
+  ChevronDown,
+  ChevronUp,
   PanelLeftClose,
   Pin,
   Plus,
@@ -21,7 +23,12 @@ import type {
   Environment,
   SandpiUser,
 } from "@/lib/types";
-import { visibleSessionsForEnvironment } from "@/lib/session-list";
+import {
+  SIDEBAR_INITIAL_SESSION_COUNT,
+  SIDEBAR_SESSION_PAGE_SIZE,
+  sidebarSessionPage,
+  visibleSessionsForEnvironment,
+} from "@/lib/session-list";
 
 interface SidebarProps {
   language: OperationLanguage;
@@ -97,6 +104,27 @@ export function Sidebar({
   const unreadLabel = language === "zh-CN" ? "未读" : "Unread";
   const runningLabel = language === "zh-CN" ? "运行中" : "Running";
   const [sessionSearchOpen, setSessionSearchOpen] = useState(false);
+  const [visibleSessionCounts, setVisibleSessionCounts] = useState<
+    Record<string, number>
+  >({});
+
+  function showMoreSessions(environmentId: string) {
+    setVisibleSessionCounts((current) => ({
+      ...current,
+      [environmentId]:
+        (current[environmentId] ?? SIDEBAR_INITIAL_SESSION_COUNT) +
+        SIDEBAR_SESSION_PAGE_SIZE,
+    }));
+  }
+
+  function showFewerSessions(environmentId: string) {
+    setVisibleSessionCounts((current) => {
+      if (current[environmentId] === undefined) return current;
+      const next = { ...current };
+      delete next[environmentId];
+      return next;
+    });
+  }
 
   return (
     <>
@@ -162,6 +190,13 @@ export function Sidebar({
                 sessions,
                 environment.id,
               );
+              const sessionPage = sidebarSessionPage(
+                environmentSessions,
+                visibleSessionCounts[environment.id] ??
+                  SIDEBAR_INITIAL_SESSION_COUNT,
+                selectedSessionId,
+              );
+              const sessionListId = `environment-${environment.id}-sessions`;
               const selected = environment.id === selectedEnvironmentId;
               const canManage = environment.ownerId === viewer.id;
 
@@ -209,8 +244,8 @@ export function Sidebar({
                     </span>
                   </div>
 
-                  <div className="session-list">
-                    {environmentSessions.map((session) => (
+                  <div className="session-list" id={sessionListId}>
+                    {sessionPage.sessions.map((session) => (
                       <div
                         className={`session-row ${
                           session.id === selectedSessionId ? "is-selected" : ""
@@ -258,6 +293,37 @@ export function Sidebar({
                         />
                       </div>
                     ))}
+                    {sessionPage.hiddenCount > 0 || sessionPage.expanded ? (
+                      <div className="session-pagination-controls">
+                        {sessionPage.expanded ? (
+                          <button
+                            type="button"
+                            className="session-pagination-button"
+                            aria-controls={sessionListId}
+                            aria-label={ui.showFewerSessionsIn(environment.name)}
+                            onClick={() => showFewerSessions(environment.id)}
+                          >
+                            <ChevronUp size={11} aria-hidden="true" />
+                            {ui.showFewerSessions}
+                          </button>
+                        ) : null}
+                        {sessionPage.hiddenCount > 0 ? (
+                          <button
+                            type="button"
+                            className="session-pagination-button"
+                            aria-controls={sessionListId}
+                            aria-label={ui.showMoreSessionsIn(
+                              sessionPage.nextCount,
+                              environment.name,
+                            )}
+                            onClick={() => showMoreSessions(environment.id)}
+                          >
+                            {ui.showMoreSessions(sessionPage.nextCount)}
+                            <ChevronDown size={11} aria-hidden="true" />
+                          </button>
+                        ) : null}
+                      </div>
+                    ) : null}
                   </div>
                 </section>
               );
