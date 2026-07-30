@@ -212,11 +212,13 @@ exclusive lifecycle lock because rebuilding FUSE can pause the Sandbox.
 Successful access records a fresh idle window but never changes the
 credential-hydrated Codex epoch. It therefore cannot start a Supervisor or wait
 for app-server initialization. Live Terminal and Browser WebSockets use
-protocol ping/pong and throttled shared-lock heartbeats to extend only an
-already-running Environment; neither can project a paused Sandbox back to
-running. The UI also changes its long-running
-conversation status after two seconds to explain that an idle checkpoint may
-be restoring and that Files and Terminal remain independently available.
+protocol ping/pong only to verify transport health. Throttled shared-lock
+touches extend an already-running Environment only after Terminal input or
+Browser client control traffic; a passive open connection does not defer idle
+pause. Neither path can project a paused Sandbox back to running. The UI also
+changes its long-running conversation status after two seconds to explain that
+an idle checkpoint may be restoring and that Files and Terminal remain
+independently available.
 
 ## Shared Environment browser
 

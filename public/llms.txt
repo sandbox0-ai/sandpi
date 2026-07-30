@@ -50,8 +50,9 @@ coding-agent harness remain authoritative within their respective boundaries.
   Sandboxes. Sandpi's configurable idle-pause policy is separate from resource
   expiry and owns intentional pauses.
 - Sandpi does not idle-pause an Environment while a product Session is starting
-  or running, or a native Turn is active or pending. Live Browser and Terminal
-  connections keep an already-running Environment active.
+  or running, or a native Turn is active or pending. Terminal input and Browser
+  client control traffic keep an already-running Environment active; passive
+  open connections do not.
 - A supported Workspace, Browser, Terminal, or coding-agent access can trigger
   Sandbox0 auto-resume. A wake-up may take time; wait for the native transition
   instead of creating replacement resources or calling an independent resume

@@ -411,7 +411,7 @@ test("reports a busy lifecycle when the shared lock deadline expires", async () 
   );
 });
 
-test("touches a live runtime only while holding the shared lifecycle lock", async () => {
+test("records live runtime activity only while holding the shared lifecycle lock", async () => {
   let sharedDepth = 0;
   let touches = 0;
   const store = runtimeAccessStore({
@@ -423,7 +423,7 @@ test("touches a live runtime only while holding the shared lifecycle lock", asyn
         sharedDepth -= 1;
       }
     },
-    async touchRunningEnvironmentRuntime() {
+    async touchRunningEnvironmentActivity() {
       assert.equal(sharedDepth, 1);
       touches += 1;
       return true;
@@ -435,19 +435,19 @@ test("touches a live runtime only while holding the shared lifecycle lock", asyn
   );
 
   assert.equal(
-    await service.touchRunningRuntime(environmentRuntime.id),
+    await service.touchRunningRuntimeActivity(environmentRuntime.id),
     true,
   );
   assert.equal(touches, 1);
 });
 
-test("skips a live runtime touch when lifecycle transition owns the lock", async () => {
+test("skips live runtime activity when lifecycle transition owns the lock", async () => {
   let touches = 0;
   const store = runtimeAccessStore({
     async withEnvironmentRuntimeAccessLock() {
       return { acquired: false as const };
     },
-    async touchRunningEnvironmentRuntime() {
+    async touchRunningEnvironmentActivity() {
       touches += 1;
       return true;
     },
@@ -458,7 +458,7 @@ test("skips a live runtime touch when lifecycle transition owns the lock", async
   );
 
   assert.equal(
-    await service.touchRunningRuntime(environmentRuntime.id),
+    await service.touchRunningRuntimeActivity(environmentRuntime.id),
     false,
   );
   assert.equal(touches, 0);
@@ -521,7 +521,7 @@ function runtimeAccessStore(
     recordEnvironmentRuntimeAccess?: (
       environmentId: string,
     ) => Promise<StoredEnvironmentRuntime>;
-    touchRunningEnvironmentRuntime?: (
+    touchRunningEnvironmentActivity?: (
       environmentId: string,
     ) => Promise<boolean>;
   } = {},
@@ -563,9 +563,9 @@ function runtimeAccessStore(
         ? overrides.recordEnvironmentRuntimeAccess(environmentId)
         : current;
     },
-    async touchRunningEnvironmentRuntime(environmentId: string) {
-      return overrides.touchRunningEnvironmentRuntime
-        ? overrides.touchRunningEnvironmentRuntime(environmentId)
+    async touchRunningEnvironmentActivity(environmentId: string) {
+      return overrides.touchRunningEnvironmentActivity
+        ? overrides.touchRunningEnvironmentActivity(environmentId)
         : true;
     },
   } as unknown as SandpiStore;

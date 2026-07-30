@@ -57,7 +57,7 @@ function fixture() {
   };
 }
 
-test("touches a running Environment from live client pongs at a bounded rate", async () => {
+test("keeps protocol pongs lifecycle-neutral and records explicit activity at a bounded rate", async () => {
   const context = fixture();
   let touches = 0;
   const heartbeat = new RuntimeWebSocketHeartbeat(
@@ -69,7 +69,7 @@ test("touches a running Environment from live client pongs at a bounded rate", a
     {
       ...context.options,
       pingIntervalMs: 1_000,
-      touchIntervalMs: 5_000,
+      activityTouchIntervalMs: 5_000,
     },
   );
 
@@ -79,21 +79,33 @@ test("touches a running Environment from live client pongs at a bounded rate", a
   context.pong();
   assert.equal(touches, 0);
 
-  context.tick();
-  context.advance(1_000);
-  context.pong();
-  await Promise.resolve();
+  heartbeat.markActivity();
+  await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal(touches, 1);
 
   context.tick();
   context.advance(1_000);
   context.pong();
+  heartbeat.markActivity();
   assert.equal(touches, 1);
+
+  context.tick();
+  context.advance(4_000);
+  context.pong();
+  heartbeat.markActivity();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(touches, 2);
+
+  context.tick();
+  context.advance(1_000);
+  context.pong();
+  heartbeat.markActivity();
+  assert.equal(touches, 2);
 
   heartbeat.stop();
   assert.deepEqual(context.counts(), {
     cleared: 1,
-    pings: 3,
+    pings: 4,
     terminations: 0,
   });
   assert.equal(context.hasPongListener(), false);
@@ -119,7 +131,7 @@ test("terminates a connection that misses its protocol pong", () => {
   assert.equal(context.hasPongListener(), false);
 });
 
-test("keeps one runtime touch in flight and retries a skipped touch", async () => {
+test("keeps one activity touch in flight and retries a skipped touch", async () => {
   const context = fixture();
   let resolveTouch: ((value: boolean) => void) | undefined;
   let touches = 0;
@@ -133,19 +145,19 @@ test("keeps one runtime touch in flight and retries a skipped touch", async () =
     },
     {
       ...context.options,
-      touchIntervalMs: 1,
+      activityTouchIntervalMs: 1,
     },
   );
 
   heartbeat.start();
   context.advance(1);
-  context.pong();
-  context.pong();
+  heartbeat.markActivity();
+  heartbeat.markActivity();
   assert.equal(touches, 1);
 
   resolveTouch?.(false);
   await new Promise<void>((resolve) => setImmediate(resolve));
-  context.pong();
+  heartbeat.markActivity();
   assert.equal(touches, 2);
   heartbeat.stop();
 });
