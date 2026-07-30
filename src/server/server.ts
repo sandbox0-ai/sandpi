@@ -185,6 +185,7 @@ export async function createSandpiServer(
   const billingQuota = new BillingQuotaService(
     billingRepository,
     config.billing,
+    runtime,
   );
   const stripeBilling = new StripeBillingService(
     billingRepository,
@@ -516,7 +517,7 @@ export function registerApiRoutes(
   });
 
   app.get("/api/v1/bootstrap", async (request) => ({
-    data: await services.store.getBootstrap(
+    data: await services.environments.getBootstrap(
       request.principal.userId,
       deployment,
       queryString(request, "environment"),
@@ -578,7 +579,7 @@ export function registerApiRoutes(
   );
 
   app.get("/api/v1/environments", async (request) => ({
-    data: await services.store.listEnvironments(request.principal.userId),
+    data: await services.environments.list(request.principal.userId),
   }));
   app.post("/api/v1/environments", async (request, reply) => {
     const body = environmentCreateSchema.parse(request.body);
@@ -679,13 +680,19 @@ export function registerApiRoutes(
     "/api/v1/environments/:environmentId/workspace-backups/:snapshotId/restore",
     async (request) => {
       const body = workspaceBackupRestoreSchema.parse(request.body);
+      const restored = await services.workspaceBackups.restore(
+        request.principal.userId,
+        request.params.environmentId,
+        request.params.snapshotId,
+        body.confirmation,
+      );
       return {
-        data: await services.workspaceBackups.restore(
-          request.principal.userId,
-          request.params.environmentId,
-          request.params.snapshotId,
-          body.confirmation,
-        ),
+        data: {
+          ...restored,
+          environment: await services.environments.authoritativeEnvironment(
+            restored.environment,
+          ),
+        },
       };
     },
   );

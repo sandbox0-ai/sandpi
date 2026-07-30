@@ -31,7 +31,6 @@ test(
         decoder_attempt_id TEXT,
         decoder_runtime_generation BIGINT NOT NULL,
         desired_state TEXT NOT NULL,
-        observed_state TEXT NOT NULL,
         last_event_at TIMESTAMPTZ,
         version BIGINT NOT NULL
       );
@@ -70,8 +69,8 @@ test(
          environment_id, supervisor_session_id, attempt_id,
          runtime_generation, supervisor_cursor, stdout_tail,
          decoder_attempt_id, decoder_runtime_generation,
-         desired_state, observed_state, version
-       ) VALUES ($1, $2, $3, $4, 0, '', $3, $4, 'running', 'running', 1)`,
+         desired_state, version
+       ) VALUES ($1, $2, $3, $4, 0, '', $3, $4, 'running', 1)`,
       ["environment-one", "supervisor-one", "attempt-one", 1],
     );
     await client.query(

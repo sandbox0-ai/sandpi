@@ -181,10 +181,7 @@ export class EnvironmentRuntimeAccessService {
 }
 
 function requireAccessibleEnvironment(runtime: StoredEnvironmentRuntime) {
-  if (
-    runtime.desiredState === "terminated" ||
-    runtime.observedState === "terminated"
-  ) {
+  if (runtime.desiredState === "terminated") {
     throw new HttpError(
       409,
       "environment_terminated",

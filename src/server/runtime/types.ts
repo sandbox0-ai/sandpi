@@ -1,6 +1,7 @@
 import type {
   Environment,
   EnvironmentResourceMetrics,
+  EnvironmentSandboxState,
   NetworkPolicy,
   RuntimeMetrics,
   WorkspaceDirectoryListing,
@@ -146,6 +147,9 @@ export interface CodexAuthRuntime {
 
 export interface RuntimeAdapter {
   readonly mode: "sandbox0" | "unconfigured";
+  getEnvironmentSandboxState(
+    sandboxId: string,
+  ): Promise<EnvironmentSandboxState>;
   supportsUsageWindows(): boolean;
   listUsageWindows(options?: {
     cursor?: string;

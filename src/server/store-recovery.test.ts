@@ -119,7 +119,7 @@ test("commits one shared decoder cursor and routes scalar turn state by native t
   assert.match(decoderUpdate.sql, /attempt_id IS NOT DISTINCT FROM \$3/);
   assert.match(decoderUpdate.sql, /runtime_generation = \$4/);
   assert.match(decoderUpdate.sql, /desired_state = 'running'/);
-  assert.match(decoderUpdate.sql, /observed_state = 'running'/);
+  assert.doesNotMatch(decoderUpdate.sql, /observed_state/);
   assert.doesNotMatch(decoderUpdate.sql, /\bSET attempt_id =/);
   assert.doesNotMatch(decoderUpdate.sql, /\bSET runtime_generation =/);
   assert.deepEqual(decoderUpdate.values?.slice(0, 5), [
@@ -221,7 +221,7 @@ test("does not apply Session transitions after the Environment epoch CAS loses",
   );
 });
 
-test("projects Sandbox and Supervisor coordinates from Environment runtime", async () => {
+test("maps Sandbox and Supervisor coordinates from Environment runtime", async () => {
   const fixture = transactionalStore((sql) => {
     if (!sql.includes("FROM environment_runtime runtime")) {
       return { rows: [], rowCount: 0 };
@@ -245,7 +245,6 @@ test("projects Sandbox and Supervisor coordinates from Environment runtime", asy
           bound_credential_revision: "1",
           credential_binding_status: "stale",
           desired_state: "running",
-          observed_state: "running",
           provisioning_error: null,
           lifecycle_policy_version: "1",
           last_turn_completed_at: new Date("2026-07-16T00:01:00.000Z"),
@@ -276,7 +275,6 @@ test("projects Sandbox and Supervisor coordinates from Environment runtime", asy
     },
     version: 5,
     desiredState: "running",
-    observedState: "running",
     provisioningError: undefined,
     lifecyclePolicyVersion: 1,
     lastTurnCompletedAt: new Date("2026-07-16T00:01:00.000Z"),
@@ -328,7 +326,6 @@ test("records successful runtime access without promoting the Codex epoch", asyn
           decoder_attempt_id: "attempt-one",
           decoder_runtime_generation: "3",
           desired_state: "running",
-          observed_state: "running",
           provisioning_error: null,
           lifecycle_policy_version: "1",
           lifecycle_error: null,
@@ -344,7 +341,7 @@ test("records successful runtime access without promoting the Codex epoch", asyn
   const update = fixture.calls.find((call) => call.sql.includes("NOW() + ("));
   assert.ok(update);
   assert.match(update.sql, /desired_state = 'running'/);
-  assert.match(update.sql, /observed_state = 'running'/);
+  assert.doesNotMatch(update.sql, /observed_state/);
   assert.match(update.sql, /desired_state <> 'terminated'/);
   assert.match(update.sql, /environment\.idle_pause_timeout_seconds/);
   assert.match(update.sql, /idle_pause_timeout_seconds = 0 THEN NULL/);
@@ -365,11 +362,11 @@ test("a live connection heartbeat extends only an already-running Environment", 
   );
   assert.ok(update);
   assert.match(update.sql, /desired_state = 'running'/);
-  assert.match(update.sql, /observed_state = 'running'/);
+  assert.doesNotMatch(update.sql, /observed_state/);
   const setClause = update.sql.split("WHERE", 1)[0] ?? "";
   assert.doesNotMatch(
     setClause,
-    /desired_state|observed_state|attempt_id|runtime_generation/,
+    /desired_state|attempt_id|runtime_generation/,
   );
   assert.match(update.sql, /environment\.idle_pause_timeout_seconds/);
   assert.deepEqual(update.values, ["environment-one"]);
@@ -473,7 +470,6 @@ test("grants a fresh idle window after Sandbox0 auto-resumes an Environment", as
           attempt_id: "attempt-two",
           runtime_generation: "2",
           desired_state: "running",
-          observed_state: "running",
           provisioning_error: null,
           lifecycle_policy_version: "3",
           last_turn_completed_at: new Date("2026-07-16T00:01:00.000Z"),
@@ -499,7 +495,7 @@ test("grants a fresh idle window after Sandbox0 auto-resumes an Environment", as
   assert.ok(update);
   assert.match(
     update.sql,
-    /runtime\.observed_state <> 'running' OR \$5::BOOLEAN/,
+    /runtime\.paused_at IS NOT NULL OR \$5::BOOLEAN/,
   );
   assert.match(update.sql, /GREATEST\(/);
   assert.match(update.sql, /idle_pause_timeout_seconds = 0 THEN NULL/);
@@ -634,7 +630,7 @@ test("native snapshot reconciliation uses a runtime-version compare-and-swap", a
   assert.match(environmentRead.sql, /attempt_id/);
   assert.match(environmentRead.sql, /runtime_generation = \$4/);
   assert.match(environmentRead.sql, /desired_state = 'running'/);
-  assert.match(environmentRead.sql, /observed_state = 'running'/);
+  assert.doesNotMatch(environmentRead.sql, /observed_state/);
   assert.match(environmentRead.sql, /FOR SHARE/);
   assert.deepEqual(environmentRead.values, [
     "environment-one",

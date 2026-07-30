@@ -18,7 +18,6 @@ const environmentRuntime: StoredEnvironmentRuntime = {
   },
   version: 1,
   desiredState: "running",
-  observedState: "running",
   lifecyclePolicyVersion: 1,
 };
 
@@ -330,7 +329,6 @@ test("rejects a terminated Environment before native access", async () => {
     runtime: {
       ...environmentRuntime,
       desiredState: "terminated",
-      observedState: "terminated",
     },
   });
   const runtime = {

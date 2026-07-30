@@ -80,6 +80,34 @@ function sandbox0FetchTimeout() {
   return error;
 }
 
+test("maps public Environment lifecycle state from Sandbox0", async () => {
+  let sandbox = { status: "running", paused: false };
+  const runtime = runtimeWithClient({
+    sandboxes: {
+      async get(sandboxId: string) {
+        assert.equal(sandboxId, "sandbox-one");
+        return sandbox;
+      },
+    },
+  });
+  const cases = [
+    ["starting", false, "provisioning"],
+    ["running", false, "running"],
+    ["running", true, "paused"],
+    ["paused", true, "paused"],
+    ["terminating", false, "terminated"],
+    ["failed", false, "failed"],
+  ] as const;
+
+  for (const [status, paused, expected] of cases) {
+    sandbox = { status, paused };
+    assert.equal(
+      await runtime.getEnvironmentSandboxState("sandbox-one"),
+      expected,
+    );
+  }
+});
+
 test("reads Sandbox0 usage only through the official SDK resource", async () => {
   const calls: unknown[] = [];
   const expected = {
