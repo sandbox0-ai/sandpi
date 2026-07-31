@@ -1,6 +1,5 @@
 "use client";
 
-import Image from "next/image";
 import {
   ArrowUp,
   BookOpenText,
@@ -13,7 +12,6 @@ import {
   PanelRight,
   Sparkles,
   SquareTerminal,
-  X,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
@@ -22,8 +20,7 @@ import type {
   EnvironmentSettingsTab,
 } from "@/components/environment-settings";
 import {
-  CodexComposerLocalImages,
-  CodexComposerToolbar,
+  CodexComposer,
   encodeCodexComposerLocalImages,
 } from "@/harnesses/codex/composer";
 import { insertCodexFileMentions } from "@/harnesses/codex/file-mentions";
@@ -773,111 +770,34 @@ export function CodexNewSessionWorkspace({
         </div>
       </div>
       <div className={styles.composerRegion}>
-        <div className={`composer-shell ${styles.composer}`}>
-          <CodexSlashCommandMenu
-            id={slashMenu.id}
-            language={language}
-            commands={slashMenu.commands}
-            activeIndex={slashMenu.activeIndex}
-            onActiveIndexChange={slashMenu.setActiveIndex}
-            onSelect={slashMenu.select}
-          />
-          {images.length > 0 ? (
-            <div className={styles.imagePreviews} aria-label="Attached images">
-              {images.map((image) => (
-                <div className={styles.imagePreview} key={image.id}>
-                  <Image
-                    src={image.previewUrl}
-                    alt={image.name}
-                    width={60}
-                    height={60}
-                    unoptimized
-                  />
-                  <button
-                    type="button"
-                    aria-label={`Remove ${image.name}`}
-                    onClick={() => {
-                      setImages((current) =>
-                        current.filter((candidate) => candidate.id !== image.id),
-                      );
-                      setError("");
-                    }}
-                  >
-                    <X size={11} aria-hidden="true" />
-                  </button>
-                </div>
-              ))}
-            </div>
-          ) : null}
-          <CodexComposerLocalImages
-            language={language}
-            localImages={localImages}
-            onRemove={(id) => {
-              setLocalImages((current) =>
-                current.filter((localImage) => localImage.id !== id),
-              );
-              setError("");
-            }}
-          />
-          {commandNotice ? (
-            <div
-              className="codex-composer-notice"
-              data-tone={commandNotice.tone}
-              role={commandNotice.tone === "error" ? "alert" : "status"}
-            >
-              <span>{commandNotice.message}</span>
-            </div>
-          ) : null}
-          {planMode ? (
-            <div className="codex-composer-mode" role="status">
-              <span>
-                <strong>{language === "zh-CN" ? "计划模式" : "Plan mode"}</strong>
-                {" · "}
-                {language === "zh-CN"
-                  ? "新 Session 使用 Codex 计划协作模式"
-                  : "The new Session uses Codex Plan collaboration mode"}
-              </span>
-              <button
-                type="button"
-                aria-label={
-                  language === "zh-CN" ? "退出计划模式" : "Exit Plan mode"
-                }
-                onClick={() => {
-                  setPlanMode(false);
-                  setCommandNotice(null);
-                }}
-              >
-                <X size={12} aria-hidden="true" />
-              </button>
-            </div>
-          ) : null}
-          {/*
-            Codex slash-command completion belongs in this Codex composer. Future harnesses
-            provide their own composer instead of registering commands in a shared catalog.
-          */}
-          <textarea
-            ref={promptRef}
-            name="new-session-instruction"
-            autoComplete="off"
-            rows={3}
-            value={prompt}
-            placeholder={ui.placeholder(environment.codingAgent.label)}
-            onChange={(event) => {
+        {/*
+          Codex slash-command completion belongs in this Codex composer. Future harnesses
+          provide their own composer instead of registering commands in a shared catalog.
+        */}
+        <CodexComposer
+          className={styles.composer}
+          language={language}
+          inputRef={promptRef}
+          inputProps={{
+            name: "new-session-instruction",
+            value: prompt,
+            placeholder: ui.placeholder(environment.codingAgent.label),
+            onChange: (event) => {
               setPrompt(event.target.value);
               slashMenu.show();
               setCommandNotice(null);
               if (error && event.target.value.trim()) {
                 setError("");
               }
-            }}
-            onPaste={(event) => {
+            },
+            onPaste: (event) => {
               const pasted = clipboardCodexImageFiles(event.clipboardData);
               if (pasted.length === 0) return;
               // Preserve accompanying clipboard text while the image is added
               // as its own native Codex input.
               void addImages(pasted);
-            }}
-            onKeyDown={(event) => {
+            },
+            onKeyDown: (event) => {
               if (slashMenu.handleKeyDown(event)) return;
               if (
                 shouldSubmitComposer(
@@ -894,54 +814,88 @@ export function CodexNewSessionWorkspace({
                 event.preventDefault();
                 void createSession();
               }
-            }}
-            aria-controls={
-              slashMenu.commands.length > 0 ? slashMenu.id : undefined
-            }
-            aria-activedescendant={
-              slashMenu.activeCommand
-                ? `${slashMenu.id}-${slashMenu.activeCommand.name}`
-                : undefined
-            }
-          />
-          <CodexComposerToolbar
-            language={language}
-            environmentId={environment.id}
-            agentLabel={environment.codingAgent.label}
-            localImages={localImages}
-            onLocalImagesChange={setLocalImages}
-            onInsertFileMentions={insertFileMentions}
-            onAttachmentError={setError}
-            attachmentDisabled={
+            },
+            "aria-controls":
+              slashMenu.commands.length > 0 ? slashMenu.id : undefined,
+            "aria-activedescendant": slashMenu.activeCommand
+              ? `${slashMenu.id}-${slashMenu.activeCommand.name}`
+              : undefined,
+          }}
+          slashCommandMenu={
+            <CodexSlashCommandMenu
+              id={slashMenu.id}
+              language={language}
+              commands={slashMenu.commands}
+              activeIndex={slashMenu.activeIndex}
+              onActiveIndexChange={slashMenu.setActiveIndex}
+              onSelect={slashMenu.select}
+            />
+          }
+          images={images}
+          onRemoveImage={(id) => {
+            setImages((current) =>
+              current.filter((candidate) => candidate.id !== id),
+            );
+            setError("");
+          }}
+          localImages={localImages}
+          onRemoveLocalImage={(id) => {
+            setLocalImages((current) =>
+              current.filter((localImage) => localImage.id !== id),
+            );
+            setError("");
+          }}
+          notice={commandNotice}
+          mode={
+            planMode
+              ? {
+                  label: language === "zh-CN" ? "计划模式" : "Plan mode",
+                  description:
+                    language === "zh-CN"
+                      ? "新 Session 使用 Codex 计划协作模式"
+                      : "The new Session uses Codex Plan collaboration mode",
+                  exitLabel:
+                    language === "zh-CN" ? "退出计划模式" : "Exit Plan mode",
+                  onExit: () => {
+                    setPlanMode(false);
+                    setCommandNotice(null);
+                  },
+                }
+              : null
+          }
+          toolbar={{
+            environmentId: environment.id,
+            agentLabel: environment.codingAgent.label,
+            onLocalImagesChange: setLocalImages,
+            onInsertFileMentions: insertFileMentions,
+            onAttachmentError: setError,
+            attachmentDisabled:
               creating ||
               environment.status !== "ready" ||
-              environment.codingAgent.status !== "connected"
-            }
-            modelOptions={modelOptions}
-            selectedModel={selectedModel}
-            modelPlaceholder={
+              environment.codingAgent.status !== "connected",
+            modelOptions,
+            selectedModel,
+            modelPlaceholder:
               modelCatalogState === "loading"
                 ? ui.startingAgent(environment.codingAgent.label)
-                : ui.modelsUnavailable
-            }
-            modelTitle={modelCatalogError || undefined}
-            modelDisabled={
+                : ui.modelsUnavailable,
+            modelTitle: modelCatalogError || undefined,
+            modelDisabled:
               creating ||
               modelCatalogState !== "ready" ||
-              modelOptions.length === 0
-            }
-            reasoningDisabled={creating}
-            selectedReasoningEffort={selectedReasoningEffort}
-            onModelChange={selectModel}
-            onReasoningEffortChange={selectReasoningEffort}
-            fastEnabled={fastMode}
-            fastDisabled={creating}
-            onFastEnabledChange={(enabled) => {
+              modelOptions.length === 0,
+            reasoningDisabled: creating,
+            selectedReasoningEffort,
+            onModelChange: selectModel,
+            onReasoningEffortChange: selectReasoningEffort,
+            fastEnabled: fastMode,
+            fastDisabled: creating,
+            onFastEnabledChange: (enabled) => {
               setFastMode(enabled);
               setCommandNotice(null);
-            }}
-            mentionOpenRequest={mentionOpenRequest}
-            status={{
+            },
+            mentionOpenRequest,
+            status: {
               state:
                 environment.codingAgent.status !== "connected" ||
                 modelCatalogState === "error"
@@ -957,8 +911,8 @@ export function CodexNewSessionWorkspace({
                   : modelCatalogState === "ready"
                     ? ui.environmentReady(environment.revision)
                     : ui.startingAgent(environment.codingAgent.label),
-            }}
-            action={
+            },
+            action: (
               <button
                 type="button"
                 className="send-button"
@@ -981,9 +935,9 @@ export function CodexNewSessionWorkspace({
                   <ArrowUp size={17} strokeWidth={2.5} aria-hidden="true" />
                 )}
               </button>
-            }
-          />
-        </div>
+            ),
+          }}
+        />
       </div>
       {nativeDialog ? (
         <CodexNativeCommandDialog

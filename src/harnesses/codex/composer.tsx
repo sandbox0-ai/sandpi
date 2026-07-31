@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import {
   AtSign,
   ChevronDown,
@@ -14,9 +15,12 @@ import {
 import {
   useEffect,
   useId,
+  useLayoutEffect,
   useRef,
   useState,
+  type ComponentProps,
   type Dispatch,
+  type RefObject,
   type ReactNode,
   type SetStateAction,
 } from "react";
@@ -27,6 +31,7 @@ import {
 } from "@/harnesses/codex/models";
 import { workspaceRelativePath } from "@/harnesses/codex/file-mentions";
 import type {
+  CodexComposerImage,
   CodexComposerLocalImage,
   CodexComposerUpload,
 } from "@/harnesses/codex/types";
@@ -69,6 +74,35 @@ interface CodexComposerToolbarProps {
   contextUsedPercent?: number | null;
   status: CodexComposerStatus;
   action: ReactNode;
+}
+
+interface CodexComposerProps {
+  className?: string;
+  language: OperationLanguage;
+  inputRef: RefObject<HTMLTextAreaElement | null>;
+  inputProps: Omit<
+    ComponentProps<"textarea">,
+    "autoComplete" | "ref" | "rows" | "value"
+  > & {
+    value: string;
+  };
+  slashCommandMenu: ReactNode;
+  images: readonly CodexComposerImage[];
+  onRemoveImage: (id: string) => void;
+  localImages: CodexComposerLocalImage[];
+  onRemoveLocalImage: (id: string) => void;
+  attachmentError?: string;
+  notice?: {
+    tone: "info" | "error";
+    message: string;
+  } | null;
+  mode?: {
+    label: string;
+    description: string;
+    exitLabel: string;
+    onExit: () => void;
+  } | null;
+  toolbar: Omit<CodexComposerToolbarProps, "language" | "localImages">;
 }
 
 const composerCopy = {
@@ -365,7 +399,110 @@ export function CodexComposerLocalImages({
   );
 }
 
-export function CodexComposerToolbar({
+function resizeComposerInput(textarea: HTMLTextAreaElement) {
+  textarea.style.height = "auto";
+  textarea.style.height = `${textarea.scrollHeight}px`;
+}
+
+/** The shared Codex prompt surface used before and after Session creation. */
+export function CodexComposer({
+  className,
+  language,
+  inputRef,
+  inputProps,
+  slashCommandMenu,
+  images,
+  onRemoveImage,
+  localImages,
+  onRemoveLocalImage,
+  attachmentError,
+  notice,
+  mode,
+  toolbar,
+}: CodexComposerProps) {
+  const copy = composerCopy[language];
+
+  useLayoutEffect(() => {
+    if (inputRef.current) resizeComposerInput(inputRef.current);
+  }, [inputProps.value, inputRef]);
+
+  return (
+    <div className={`composer-shell${className ? ` ${className}` : ""}`}>
+      {slashCommandMenu}
+      {images.length > 0 ? (
+        <div className="composer-image-previews" aria-label={copy.attachedImages}>
+          {images.map((image) => (
+            <div className="composer-image-preview" key={image.id}>
+              <Image
+                src={image.previewUrl}
+                alt={image.name}
+                width={64}
+                height={64}
+                unoptimized
+              />
+              <button
+                type="button"
+                aria-label={copy.removeReference(image.name)}
+                title={copy.removeReference(image.name)}
+                onClick={() => onRemoveImage(image.id)}
+              >
+                <X size={12} aria-hidden="true" />
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {attachmentError ? (
+        <div className="composer-attachment-error" role="status">
+          {attachmentError}
+        </div>
+      ) : null}
+      {notice ? (
+        <div
+          className="codex-composer-notice"
+          data-tone={notice.tone}
+          role={notice.tone === "error" ? "alert" : "status"}
+        >
+          <span>{notice.message}</span>
+        </div>
+      ) : null}
+      {mode ? (
+        <div className="codex-composer-mode" role="status">
+          <span>
+            <strong>{mode.label}</strong>
+            {" · "}
+            {mode.description}
+          </span>
+          <button
+            type="button"
+            aria-label={mode.exitLabel}
+            onClick={mode.onExit}
+          >
+            <X size={12} aria-hidden="true" />
+          </button>
+        </div>
+      ) : null}
+      <CodexComposerLocalImages
+        language={language}
+        localImages={localImages}
+        onRemove={onRemoveLocalImage}
+      />
+      <textarea
+        {...inputProps}
+        ref={inputRef}
+        autoComplete="off"
+        rows={1}
+      />
+      <CodexComposerToolbar
+        {...toolbar}
+        language={language}
+        localImages={localImages}
+      />
+    </div>
+  );
+}
+
+function CodexComposerToolbar({
   language,
   environmentId,
   agentLabel,

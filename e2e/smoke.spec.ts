@@ -485,6 +485,128 @@ test("pulls durable cloud state without reloading or losing a draft", async ({
   await expect(composer).toHaveValue("Keep this draft");
 });
 
+test("uses the shared responsive composer on the New Session page", async ({
+  page,
+}) => {
+  const bootstrap = getMockBootstrap();
+  useEnglishUi(bootstrap);
+  const environment = bootstrap.environments.find(
+    (candidate) =>
+      candidate.status === "ready" &&
+      candidate.codingAgent.status === "connected",
+  );
+  expect(environment).toBeTruthy();
+  if (!environment) return;
+  bootstrap.sessions = [];
+  bootstrap.selectedEnvironmentId = environment.id;
+  bootstrap.selectedSessionId = "";
+
+  await page.route(
+    (url) => url.pathname === "/api/v1/bootstrap",
+    async (route) => {
+      await route.fulfill({ json: { data: bootstrap } });
+    },
+  );
+  await page.route(
+    `**/api/v1/environments/${encodeURIComponent(environment.id)}/harnesses/codex/models`,
+    async (route) => {
+      await route.fulfill({
+        json: {
+          data: {
+            data: [
+              {
+                id: "e2e-new-session-responsive-model",
+                displayName: "E2E New Session Responsive Model",
+                isDefault: true,
+                defaultReasoningEffort: "high",
+                supportedReasoningEfforts: [
+                  {
+                    reasoningEffort: "medium",
+                    description: "Balanced reasoning",
+                  },
+                  {
+                    reasoningEffort: "high",
+                    description: "Deeper reasoning",
+                  },
+                ],
+                additionalSpeedTiers: ["fast"],
+                serviceTiers: [
+                  {
+                    id: "e2e-native-priority",
+                    name: "Fast",
+                    description: "Fast native processing",
+                  },
+                ],
+              },
+            ],
+          },
+          meta: { availability: "available", source: "codex" },
+        },
+      });
+    },
+  );
+  await page.route(
+    (url) =>
+      url.pathname ===
+      `/api/v1/environments/${environment.id}/metrics/current`,
+    async (route) => {
+      await route.fulfill({
+        json: {
+          data: { cpuUtilization: 0.075, memoryUtilization: 0.42 },
+        },
+      });
+    },
+  );
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(
+    `/?environment=${encodeURIComponent(environment.id)}&new=1`,
+  );
+  const composer = page.locator(".composer-shell");
+  const input = composer.locator('textarea[name="new-session-instruction"]');
+  const modelPicker = composer.getByRole("combobox", {
+    name: "Select Codex model",
+  });
+  await expect(modelPicker).toBeEnabled();
+  await expect(input).toHaveAttribute("rows", "1");
+  await expect(input).toHaveCSS("font-size", "16px");
+  await expect(composer).toHaveCSS("box-shadow", "none");
+
+  const initialInputBox = await input.boundingBox();
+  expect(initialInputBox).not.toBeNull();
+  await input.fill("First line\nSecond line\nThird line");
+  await expect
+    .poll(async () => (await input.boundingBox())?.height ?? 0)
+    .toBeGreaterThan(initialInputBox!.height);
+  await input.fill("");
+  await expect
+    .poll(async () => (await input.boundingBox())?.height ?? 0)
+    .toBeLessThanOrEqual(initialInputBox!.height + 1);
+
+  const [toolsBox, telemetryBox, agentBox, actionsBox] = await Promise.all([
+    composer.locator(".composer-tools").boundingBox(),
+    composer.locator(".composer-telemetry").boundingBox(),
+    composer.locator(".composer-agent-bound").boundingBox(),
+    composer.locator(".composer-actions").boundingBox(),
+  ]);
+  expect(toolsBox).not.toBeNull();
+  expect(telemetryBox).not.toBeNull();
+  expect(agentBox).not.toBeNull();
+  expect(actionsBox).not.toBeNull();
+  expect(
+    Math.max(
+      toolsBox!.y + toolsBox!.height,
+      telemetryBox!.y + telemetryBox!.height,
+    ),
+  ).toBeLessThanOrEqual(Math.min(agentBox!.y, actionsBox!.y) + 1);
+
+  await page.setViewportSize({ width: 440, height: 844 });
+  const modelBox = await modelPicker.boundingBox();
+  expect(modelBox).not.toBeNull();
+  expect(modelBox!.width).toBeGreaterThan(120);
+  expect(modelBox!.width).toBeLessThanOrEqual(145);
+});
+
 test("shows live native context usage inside the Session composer", async ({
   page,
 }) => {
@@ -770,7 +892,10 @@ test("shows live native context usage inside the Session composer", async ({
     expect(
       responsiveAgent!.x + responsiveAgent!.width,
     ).toBeLessThanOrEqual(responsiveActions!.x + 1);
-    expect(responsiveModel!.width).toBeLessThanOrEqual(121);
+    expect(responsiveModel!.width).toBeLessThanOrEqual(145);
+    if (width >= 440) {
+      expect(responsiveModel!.width).toBeGreaterThan(120);
+    }
     expect(
       responsiveActions!.x + responsiveActions!.width,
     ).toBeLessThanOrEqual(responsiveComposer!.x + responsiveComposer!.width);
