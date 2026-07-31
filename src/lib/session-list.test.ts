@@ -14,8 +14,9 @@ function session(
   environmentId: string,
   pinned = false,
   archived = false,
+  status: CodingSession["status"] = "waiting",
 ): CodingSession {
-  return { id, environmentId, pinned, archived } as CodingSession;
+  return { id, environmentId, pinned, archived, status } as CodingSession;
 }
 
 test("orders the viewer's personal pins within each Environment", () => {
@@ -103,12 +104,64 @@ test("keeps a selected Session visible outside the Sidebar window", () => {
     ],
   );
   assert.equal(page.hiddenCount, 13);
-  assert.equal(page.nextCount, 9);
+  assert.equal(page.nextCount, 10);
 
   const expanded = sidebarSessionPage(sessions, 16, "session-12");
   assert.equal(
     expanded.sessions.filter(({ id }) => id === "session-12").length,
     1,
   );
-  assert.equal(expanded.sessions.length, 16);
+  assert.equal(expanded.sessions.length, 17);
+});
+
+test("keeps every running Session visible outside the Sidebar window", () => {
+  const runningIds = new Set([
+    "session-8",
+    "session-10",
+    "session-12",
+    "session-14",
+    "session-16",
+    "session-18",
+    "session-20",
+    "session-22",
+  ]);
+  const sessions = Array.from({ length: 30 }, (_, index) => {
+    const id = `session-${index + 1}`;
+    return session(
+      id,
+      "env-a",
+      false,
+      false,
+      runningIds.has(id) ? "running" : "waiting",
+    );
+  });
+
+  const page = sidebarSessionPage(
+    sessions,
+    SIDEBAR_INITIAL_SESSION_COUNT,
+  );
+  assert.deepEqual(
+    page.sessions.map(({ id }) => id),
+    [
+      ...sessions.slice(0, SIDEBAR_INITIAL_SESSION_COUNT).map(({ id }) => id),
+      ...runningIds,
+    ],
+  );
+  assert.equal(page.hiddenCount, 16);
+  assert.equal(page.nextCount, SIDEBAR_SESSION_PAGE_SIZE);
+  assert.equal(page.expanded, false);
+
+  const expanded = sidebarSessionPage(
+    sessions,
+    SIDEBAR_INITIAL_SESSION_COUNT + SIDEBAR_SESSION_PAGE_SIZE,
+  );
+  assert.equal(expanded.sessions.length, 24);
+  assert.deepEqual(
+    expanded.sessions
+      .filter(({ status }) => status === "running")
+      .map(({ id }) => id),
+    [...runningIds],
+  );
+  assert.equal(expanded.hiddenCount, 6);
+  assert.equal(expanded.nextCount, 6);
 });

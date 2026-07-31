@@ -32,8 +32,10 @@ export interface SidebarSessionPage {
 }
 
 /**
- * Returns one client-side Sidebar window without hiding an explicitly selected
- * Session. The source array remains authoritative for search and navigation.
+ * Returns one client-side Sidebar window without hiding running or explicitly
+ * selected Sessions. The source array remains authoritative for search and
+ * navigation. Those always-visible Sessions do not consume incremental page
+ * slots.
  */
 export function sidebarSessionPage(
   sessions: CodingSession[],
@@ -43,28 +45,36 @@ export function sidebarSessionPage(
   const normalizedCount = Number.isFinite(requestedCount)
     ? Math.trunc(requestedCount)
     : SIDEBAR_INITIAL_SESSION_COUNT;
-  const windowSize = Math.min(
-    sessions.length,
-    Math.max(SIDEBAR_INITIAL_SESSION_COUNT, normalizedCount),
+  const additionalCount = Math.max(
+    0,
+    normalizedCount - SIDEBAR_INITIAL_SESSION_COUNT,
   );
-  const windowSessions = sessions.slice(0, windowSize);
-  const selectedOutsideWindow = selectedSessionId
-    ? sessions
-        .slice(windowSize)
-        .find((session) => session.id === selectedSessionId)
-    : undefined;
-  const visibleSessions = selectedOutsideWindow
-    ? [...windowSessions, selectedOutsideWindow]
-    : windowSessions;
-  const visibleIds = new Set(visibleSessions.map((session) => session.id));
-  const nextCount = sessions
-    .slice(windowSize, windowSize + SIDEBAR_SESSION_PAGE_SIZE)
-    .filter((session) => !visibleIds.has(session.id)).length;
+  const visibleIds = new Set(
+    sessions
+      .slice(0, SIDEBAR_INITIAL_SESSION_COUNT)
+      .map((session) => session.id),
+  );
+  for (const session of sessions) {
+    if (session.status === "running" || session.id === selectedSessionId) {
+      visibleIds.add(session.id);
+    }
+  }
+  let revealedCount = 0;
+  for (const session of sessions) {
+    if (revealedCount >= additionalCount) break;
+    if (visibleIds.has(session.id)) continue;
+    visibleIds.add(session.id);
+    revealedCount += 1;
+  }
+  const visibleSessions = sessions.filter((session) =>
+    visibleIds.has(session.id),
+  );
+  const hiddenCount = sessions.length - visibleSessions.length;
 
   return {
     sessions: visibleSessions,
-    hiddenCount: sessions.length - visibleSessions.length,
-    nextCount,
-    expanded: windowSize > SIDEBAR_INITIAL_SESSION_COUNT,
+    hiddenCount,
+    nextCount: Math.min(SIDEBAR_SESSION_PAGE_SIZE, hiddenCount),
+    expanded: revealedCount > 0,
   };
 }

@@ -7372,7 +7372,7 @@ test("keeps the New Environment summary on one mobile line", async ({ page }) =>
   expect(metrics.height).toBeLessThanOrEqual(metrics.lineHeight + 1);
 });
 
-test("paginates each Environment Session list from six in batches of ten", async ({
+test("paginates Session lists while keeping every running Session visible", async ({
   page,
 }) => {
   const bootstrap = getMockBootstrap();
@@ -7393,6 +7393,7 @@ test("paginates each Environment Session list from six in batches of ten", async
     environment: Environment,
     label: string,
     count: number,
+    status: CodingSession["status"] = "waiting",
   ): CodingSession[] {
     return Array.from({ length: count }, (_, index) => ({
       ...structuredClone(template),
@@ -7400,7 +7401,7 @@ test("paginates each Environment Session list from six in batches of ten", async
       environmentId: environment.id,
       environmentRevision: environment.revision,
       title: `${label} session ${String(index + 1).padStart(2, "0")}`,
-      status: "waiting",
+      status,
       unread: false,
       pinned: false,
       archived: false,
@@ -7410,7 +7411,7 @@ test("paginates each Environment Session list from six in batches of ten", async
 
   bootstrap.sessions = [
     ...sessionsFor(development, "Development", 29),
-    ...sessionsFor(release, "Release", 12),
+    ...sessionsFor(release, "Release", 12, "running"),
   ];
   bootstrap.selectedEnvironmentId = development.id;
   bootstrap.selectedSessionId = "";
@@ -7433,7 +7434,10 @@ test("paginates each Environment Session list from six in batches of ten", async
   const releaseGroup = environmentGroup(release.name);
 
   await expect(developmentGroup.locator(".session-row")).toHaveCount(6);
-  await expect(releaseGroup.locator(".session-row")).toHaveCount(6);
+  await expect(releaseGroup.locator(".session-row")).toHaveCount(12);
+  await expect(
+    releaseGroup.locator(".session-running-indicator"),
+  ).toHaveCount(12);
   await expect(
     developmentGroup.getByText("Development session 07", { exact: true }),
   ).toHaveCount(0);
@@ -7444,7 +7448,7 @@ test("paginates each Environment Session list from six in batches of ten", async
     })
     .click();
   await expect(developmentGroup.locator(".session-row")).toHaveCount(16);
-  await expect(releaseGroup.locator(".session-row")).toHaveCount(6);
+  await expect(releaseGroup.locator(".session-row")).toHaveCount(12);
 
   await developmentGroup
     .getByRole("button", {
