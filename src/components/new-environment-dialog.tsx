@@ -186,8 +186,7 @@ export function NewEnvironmentDialog({
               <span className={styles.kicker}>Create a reusable workspace</span>
               <h1 id={titleId}>New Environment</h1>
               <p id={descriptionId}>
-                Create a reusable workspace for your coding sessions. Every new
-                Session inherits its agent harness and runtime.
+                A shared workspace for all your Sessions.
               </p>
             </div>
             <button
@@ -273,9 +272,7 @@ export function NewEnvironmentDialog({
               <p id={agentHelpId} className={styles.agentHelp}>
                 <LockKeyhole size={15} aria-hidden="true" />
                 <span>
-                  The agent harness is bound when this Environment is created. Every Session
-                  inherits Codex and cannot switch to another agent harness later. Future
-                  harnesses will be selected by creating a separate Environment.
+                  Every Session in this Environment uses Codex. This cannot be changed later.
                 </span>
               </p>
             </fieldset>

@@ -49,6 +49,7 @@ interface ConversationProps {
     request: EnvironmentBrowserNavigationRequest,
   ) => void;
   onSessionChange: (session: CodingSession) => void;
+  onToggleSessionCompleted: (sessionId: string) => void;
   onDerivedSessionCreated: (session: CodingSession) => void;
 }
 

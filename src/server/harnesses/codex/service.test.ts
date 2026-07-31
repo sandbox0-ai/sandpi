@@ -84,6 +84,7 @@ function session(
     status,
     unread: false,
     pinned: false,
+    completed: false,
     archived,
     harness: "codex",
     harnessLabel: "Codex",

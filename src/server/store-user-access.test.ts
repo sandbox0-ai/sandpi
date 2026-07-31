@@ -216,6 +216,40 @@ test("stores a Session pin only for the acting user", async () => {
   assert.deepEqual(personalPin.values, ["session-user", "user-viewer"]);
 });
 
+test("stores Session completion independently from archive state", async () => {
+  const queries: Array<{ sql: string; values?: readonly unknown[] }> = [];
+  const client = {
+    async query(sql: string, values?: readonly unknown[]) {
+      queries.push({ sql, values });
+      return { rowCount: 1, rows: [{ id: "session-user" }] };
+    },
+    release() {},
+  };
+  const store = new SandpiStore({
+    async connect() {
+      return client;
+    },
+  } as unknown as Pool);
+  Object.defineProperty(store, "getSession", {
+    value: async () => ({ id: "session-user", completed: true }),
+  });
+
+  await store.setSessionMetadata("user-viewer", "session-user", {
+    completed: true,
+  });
+
+  const metadataUpdate = queries.find(({ sql }) => sql.includes("UPDATE sessions"));
+  assert.ok(metadataUpdate);
+  assert.match(metadataUpdate.sql, /completed = COALESCE/);
+  assert.deepEqual(metadataUpdate.values, [
+    "session-user",
+    null,
+    null,
+    null,
+    true,
+  ]);
+});
+
 test("clears the idle deadline when automatic Environment pause is disabled", async () => {
   const queries: Array<{ sql: string; values?: readonly unknown[] }> = [];
   const client = {

@@ -186,6 +186,7 @@ interface SessionRow extends QueryResultRow {
   status: string;
   unread: boolean;
   pinned: boolean;
+  completed: boolean;
   archived: boolean;
   harness: "codex";
   harness_state: Partial<CodexHarnessState>;
@@ -3294,6 +3295,7 @@ export class SandpiStore {
     changes: {
       title?: string;
       pinned?: boolean;
+      completed?: boolean;
       archived?: boolean;
       unread?: boolean;
     },
@@ -3310,13 +3312,15 @@ export class SandpiStore {
         `UPDATE sessions
          SET title = COALESCE($2, title),
              archived = COALESCE($3, archived),
-             unread = COALESCE($4, unread)
+             unread = COALESCE($4, unread),
+             completed = COALESCE($5, completed)
          WHERE id = $1 RETURNING id`,
         [
           sessionId,
           changes.title ?? null,
           changes.archived ?? null,
           changes.unread ?? null,
+          changes.completed ?? null,
         ],
       );
       if (!result.rowCount) {
@@ -3339,6 +3343,7 @@ export class SandpiStore {
     changes: {
       title?: string;
       pinned?: boolean;
+      completed?: boolean;
       unread?: boolean;
     },
   ) {
@@ -3390,9 +3395,15 @@ export class SandpiStore {
       await client.query(
         `UPDATE sessions
          SET title = COALESCE($2, title), archived = TRUE,
-             unread = COALESCE($3, unread)
+             unread = COALESCE($3, unread),
+             completed = COALESCE($4, completed)
          WHERE id = $1`,
-        [sessionId, changes.title ?? null, changes.unread ?? null],
+        [
+          sessionId,
+          changes.title ?? null,
+          changes.unread ?? null,
+          changes.completed ?? null,
+        ],
       );
       await this.setSessionPin(client, userId, sessionId, changes.pinned);
       await client.query("COMMIT");
@@ -3704,6 +3715,7 @@ function sessionFromRow(row: SessionRow): CodingSession {
     status: publicSessionStatus(row.status),
     unread: row.unread,
     pinned: row.pinned,
+    completed: row.completed,
     archived: row.archived,
     harness: "codex",
     harnessLabel: "Codex",

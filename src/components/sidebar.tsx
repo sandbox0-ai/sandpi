@@ -321,7 +321,7 @@ export function Sidebar({
                       <div
                         className={`session-row ${
                           session.id === selectedSessionId ? "is-selected" : ""
-                        }`}
+                        } ${session.completed ? "is-completed" : ""}`}
                         key={session.id}
                       >
                         <button
