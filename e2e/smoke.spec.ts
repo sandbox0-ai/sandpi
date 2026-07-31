@@ -3294,7 +3294,7 @@ test("shows account usage and submits only a server-owned plan id", async ({
             plan: {
               id: "free",
               name: "Free",
-              monthlyPriceUsd: 0,
+              annualPriceUsd: 0,
               environmentLimit: 1,
               memoryConfigurable: false,
               runtimeQuotaGiBHours: 1,
@@ -3304,7 +3304,7 @@ test("shows account usage and submits only a server-owned plan id", async ({
               {
                 id: "free",
                 name: "Free",
-                monthlyPriceUsd: 0,
+                annualPriceUsd: 0,
                 environmentLimit: 1,
                 memoryConfigurable: false,
                 runtimeQuotaGiBHours: 1,
@@ -3313,19 +3313,28 @@ test("shows account usage and submits only a server-owned plan id", async ({
               {
                 id: "plus",
                 name: "Plus",
-                monthlyPriceUsd: 10,
+                annualPriceUsd: 99,
                 environmentLimit: 3,
                 memoryConfigurable: true,
-                runtimeQuotaGiBHours: 168,
+                runtimeQuotaGiBHours: 125,
                 quotaPeriod: "fixed-week",
               },
               {
                 id: "pro",
                 name: "Pro",
-                monthlyPriceUsd: 25,
+                annualPriceUsd: 199,
                 environmentLimit: 10,
                 memoryConfigurable: true,
-                runtimeQuotaGiBHours: 500,
+                runtimeQuotaGiBHours: 250,
+                quotaPeriod: "fixed-week",
+              },
+              {
+                id: "ultra",
+                name: "Ultra",
+                annualPriceUsd: 499,
+                environmentLimit: 25,
+                memoryConfigurable: true,
+                runtimeQuotaGiBHours: 625,
                 quotaPeriod: "fixed-week",
               },
             ],
@@ -3406,6 +3415,10 @@ test("shows account usage and submits only a server-owned plan id", async ({
   ).toBeVisible();
   await expect(page.getByText("0.5 / 1 GiB-hours")).toBeVisible();
   await expect(page.getByText("Sandbox0 SDK", { exact: true })).toBeVisible();
+  await expect(page.getByText("$499", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("USD per year · billed annually").first(),
+  ).toBeVisible();
   const plusPlan = page
     .getByRole("article")
     .filter({ hasText: "Plus" });

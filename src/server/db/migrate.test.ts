@@ -83,6 +83,7 @@ test("migration history contains every durable Sandpi boundary", async () => {
       "0056_manual_environment_lifecycle",
       "0057_environment_display_order",
       "0058_session_completion",
+      "0059_add_ultra_subscription_plan",
     ],
   );
 
@@ -198,6 +199,16 @@ test("migration history contains every durable Sandpi boundary", async () => {
   assert.match(
     billingUsageSql,
     /public Sandbox0 SDK; Sandbox0 remains usage truth/,
+  );
+
+  const ultraSubscriptionPlanSql = migrations[58]?.sql ?? "";
+  assert.match(
+    ultraSubscriptionPlanSql,
+    /plan_id IN \('plus', 'pro', 'ultra'\)/,
+  );
+  assert.match(
+    ultraSubscriptionPlanSql,
+    /pending_plan_id IN \('plus', 'pro', 'ultra'\)/,
   );
 
   const sandbox0LifecycleTruthSql = migrations[53]?.sql ?? "";

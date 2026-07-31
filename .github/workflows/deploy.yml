@@ -71,6 +71,7 @@ jobs:
       SANDPI_SECRET_KEY: ${{ secrets.SANDPI_SECRET_KEY }}
       SANDPI_STRIPE_PLUS_PRICE_ID: ${{ vars.SANDPI_STRIPE_PLUS_PRICE_ID }}
       SANDPI_STRIPE_PRO_PRICE_ID: ${{ vars.SANDPI_STRIPE_PRO_PRICE_ID }}
+      SANDPI_STRIPE_ULTRA_PRICE_ID: ${{ vars.SANDPI_STRIPE_ULTRA_PRICE_ID }}
       SANDPI_STRIPE_SECRET_KEY: ${{ secrets.SANDPI_STRIPE_SECRET_KEY }}
       SANDPI_STRIPE_WEBHOOK_SECRET: ${{ secrets.SANDPI_STRIPE_WEBHOOK_SECRET }}
     steps:
@@ -96,6 +97,7 @@ jobs:
             "SANDPI_SECRET_KEY",
             "SANDPI_STRIPE_PLUS_PRICE_ID",
             "SANDPI_STRIPE_PRO_PRICE_ID",
+            "SANDPI_STRIPE_ULTRA_PRICE_ID",
             "SANDPI_STRIPE_SECRET_KEY",
             "SANDPI_STRIPE_WEBHOOK_SECRET",
           ];
@@ -133,13 +135,22 @@ jobs:
           for (const name of [
             "SANDPI_STRIPE_PLUS_PRICE_ID",
             "SANDPI_STRIPE_PRO_PRICE_ID",
+            "SANDPI_STRIPE_ULTRA_PRICE_ID",
           ]) {
             if (!/^price_[A-Za-z0-9]+$/.test(process.env[name])) {
               throw new Error(`${name} must be a Stripe Price id.`);
             }
           }
-          if (!/^sk_(?:test|live)_/.test(process.env.SANDPI_STRIPE_SECRET_KEY)) {
-            throw new Error("SANDPI_STRIPE_SECRET_KEY must be a Stripe secret key.");
+          const priceIds = [
+            process.env.SANDPI_STRIPE_PLUS_PRICE_ID,
+            process.env.SANDPI_STRIPE_PRO_PRICE_ID,
+            process.env.SANDPI_STRIPE_ULTRA_PRICE_ID,
+          ];
+          if (new Set(priceIds).size !== priceIds.length) {
+            throw new Error("Each Sandpi plan must use a distinct Stripe Price id.");
+          }
+          if (!/^(?:sk|rk)_(?:test|live)_/.test(process.env.SANDPI_STRIPE_SECRET_KEY)) {
+            throw new Error("SANDPI_STRIPE_SECRET_KEY must be a Stripe secret or restricted key.");
           }
           if (!/^whsec_/.test(process.env.SANDPI_STRIPE_WEBHOOK_SECRET)) {
             throw new Error("SANDPI_STRIPE_WEBHOOK_SECRET must be a Stripe webhook signing secret.");
@@ -236,6 +247,7 @@ jobs:
             SANDPI_SECRET_KEY \
             SANDPI_STRIPE_PLUS_PRICE_ID \
             SANDPI_STRIPE_PRO_PRICE_ID \
+            SANDPI_STRIPE_ULTRA_PRICE_ID \
             SANDPI_STRIPE_SECRET_KEY \
             SANDPI_STRIPE_WEBHOOK_SECRET |
             kubectl --namespace sandpi patch secret sandpi-runtime \

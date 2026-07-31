@@ -239,7 +239,7 @@
 
 .planGrid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 9px;
 }
 
@@ -370,6 +370,12 @@
   .planHeader {
     align-items: flex-start;
     flex-direction: column;
+  }
+}
+
+@media (min-width: 681px) and (max-width: 960px) {
+  .planGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 

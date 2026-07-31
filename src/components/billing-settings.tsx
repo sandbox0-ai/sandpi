@@ -14,9 +14,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
 import {
   formatGiBHours,
+  isSandpiPaidPlanId,
   type SandpiAccountPlan,
   type SandpiBillingSummary,
   type SandpiCheckoutResult,
+  type SandpiPaidPlanId,
 } from "@/lib/billing";
 import { createId } from "@/lib/id";
 import { formatUnixTimestamp } from "@/lib/time";
@@ -38,7 +40,7 @@ export function BillingSettings({
   const [busyAction, setBusyAction] = useState("");
   const [error, setError] = useState("");
   const [reload, setReload] = useState(0);
-  const checkoutKeys = useRef<Partial<Record<"plus" | "pro", string>>>({});
+  const checkoutKeys = useRef<Partial<Record<SandpiPaidPlanId, string>>>({});
   const isZh = language === "zh-CN";
   const text = useCallback(
     (english: string, chinese: string) => (isZh ? chinese : english),
@@ -74,7 +76,7 @@ export function BillingSettings({
     return () => controller.abort();
   }, [reload, text]);
 
-  async function selectPlan(planId: "plus" | "pro") {
+  async function selectPlan(planId: SandpiPaidPlanId) {
     if (busyAction) return;
     setBusyAction(planId);
     setError("");
@@ -171,14 +173,14 @@ export function BillingSettings({
           </span>
           <strong>{summary.plan.name}</strong>
           <small>
-            {summary.plan.monthlyPriceUsd == null
+            {summary.plan.annualPriceUsd == null
               ? text(
                   "Managed by this deployment",
                   "由当前部署自行管理",
                 )
-              : summary.plan.monthlyPriceUsd === 0
-                ? text("No monthly charge", "无月费")
-                : `$${summary.plan.monthlyPriceUsd} USD / ${text("month", "月")}`}
+              : summary.plan.annualPriceUsd === 0
+                ? text("No annual charge", "无年费")
+                : `$${summary.plan.annualPriceUsd} USD / ${text("year", "年")}`}
           </small>
         </div>
         <div className={styles.usage}>
@@ -310,10 +312,9 @@ export function BillingSettings({
           </div>
           <div className={styles.planGrid}>
             {summary.availablePlans.map((plan) => {
-              const paidPlanId =
-                plan.id === "plus" || plan.id === "pro"
-                  ? plan.id
-                  : undefined;
+              const paidPlanId = isSandpiPaidPlanId(plan.id)
+                ? plan.id
+                : undefined;
               return (
                 <PlanCard
                   key={plan.id}
@@ -407,12 +408,19 @@ function PlanCard({
       <header>
         <span>{plan.name}</span>
         <strong>
-          {plan.monthlyPriceUsd === 0
-            ? text("Free", "免费")
-            : `$${plan.monthlyPriceUsd}`}
+          {plan.annualPriceUsd == null
+            ? text("Managed", "部署管理")
+            : plan.annualPriceUsd === 0
+              ? text("Free", "免费")
+              : `$${plan.annualPriceUsd}`}
         </strong>
-        {plan.monthlyPriceUsd ? (
-          <small>{text("USD per month", "美元 / 月")}</small>
+        {plan.annualPriceUsd ? (
+          <small>
+            {text(
+              "USD per year · billed annually",
+              "美元 / 年 · 按年计费",
+            )}
+          </small>
         ) : null}
       </header>
       <ul>

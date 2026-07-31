@@ -1,6 +1,13 @@
 import type { UnixTimestamp } from "./time";
 
-export type SandpiPlanId = "deployment" | "free" | "plus" | "pro";
+export const SANDPI_PAID_PLAN_IDS = ["plus", "pro", "ultra"] as const;
+export type SandpiPaidPlanId = (typeof SANDPI_PAID_PLAN_IDS)[number];
+export const SANDPI_PLAN_IDS = [
+  "deployment",
+  "free",
+  ...SANDPI_PAID_PLAN_IDS,
+] as const;
+export type SandpiPlanId = (typeof SANDPI_PLAN_IDS)[number];
 export type SandpiSubscriptionStatus =
   | "incomplete"
   | "incomplete_expired"
@@ -14,7 +21,7 @@ export type SandpiSubscriptionStatus =
 export interface SandpiAccountPlan {
   id: SandpiPlanId;
   name: string;
-  monthlyPriceUsd: number | null;
+  annualPriceUsd: number | null;
   environmentLimit: number | null;
   memoryConfigurable: boolean;
   runtimeQuotaGiBHours: number | null;
@@ -40,7 +47,7 @@ export interface SandpiSubscriptionSummary {
   cancelAtPeriodEnd: boolean;
   currentPeriodEndsAt?: UnixTimestamp;
   graceEndsAt?: UnixTimestamp;
-  pendingPlanId?: "plus" | "pro";
+  pendingPlanId?: SandpiPaidPlanId;
   pendingEffectiveAt?: UnixTimestamp;
 }
 
@@ -65,4 +72,8 @@ export function formatGiBHours(value: number) {
   return new Intl.NumberFormat("en-US", {
     maximumFractionDigits: value < 10 ? 2 : 1,
   }).format(value);
+}
+
+export function isSandpiPaidPlanId(value: string): value is SandpiPaidPlanId {
+  return (SANDPI_PAID_PLAN_IDS as readonly string[]).includes(value);
 }

@@ -2037,9 +2037,10 @@ components:
                 - free
                 - plus
                 - pro
+                - ultra
             name:
               type: string
-            monthlyPriceUsd:
+            annualPriceUsd:
               nullable: true
               type: number
             environmentLimit:
@@ -2061,7 +2062,7 @@ components:
           required:
             - id
             - name
-            - monthlyPriceUsd
+            - annualPriceUsd
             - environmentLimit
             - memoryConfigurable
             - runtimeQuotaGiBHours
@@ -2079,9 +2080,10 @@ components:
                   - free
                   - plus
                   - pro
+                  - ultra
               name:
                 type: string
-              monthlyPriceUsd:
+              annualPriceUsd:
                 nullable: true
                 type: number
               environmentLimit:
@@ -2103,7 +2105,7 @@ components:
             required:
               - id
               - name
-              - monthlyPriceUsd
+              - annualPriceUsd
               - environmentLimit
               - memoryConfigurable
               - runtimeQuotaGiBHours
@@ -2136,6 +2138,7 @@ components:
               enum:
                 - plus
                 - pro
+                - ultra
             pendingEffectiveAt:
               type: number
               description: Unix time in seconds; fractional values preserve milliseconds.
@@ -3221,6 +3224,7 @@ paths:
                   enum:
                     - plus
                     - pro
+                    - ultra
                 idempotencyKey:
                   type: string
                   minLength: 16

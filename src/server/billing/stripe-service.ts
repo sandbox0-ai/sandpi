@@ -2,12 +2,13 @@ import Stripe from "stripe";
 
 import type {
   SandpiCheckoutResult,
+  SandpiPaidPlanId,
   SandpiSubscriptionStatus,
 } from "@/lib/billing";
 import type { SandpiConfig } from "@/server/config";
 import { HttpError, notFound } from "@/server/http-error";
 
-import { PAST_DUE_GRACE_MS } from "./plans";
+import { isPaidPlanDowngrade, PAST_DUE_GRACE_MS } from "./plans";
 import { type BillingRepository } from "./repository";
 
 interface StripeServiceLogger {
@@ -50,7 +51,7 @@ export class StripeBillingService {
 
   async checkout(
     userId: string,
-    planId: "plus" | "pro",
+    planId: SandpiPaidPlanId,
     idempotencyKey: string,
   ): Promise<SandpiCheckoutResult> {
     const { stripe, config } = this.requireStripe();
@@ -61,13 +62,36 @@ export class StripeBillingService {
       account.email,
       account.name,
     );
-    const priceId =
-      planId === "plus" ? config.plusPriceId : config.proPriceId;
+    const priceId = {
+      plus: config.plusPriceId,
+      pro: config.proPriceId,
+      ultra: config.ultraPriceId,
+    }[planId];
     const stored = await this.repository.subscription(userId);
-    if (stored && subscriptionCanBeUpdated(stored.status)) {
-      const current = await stripe.subscriptions.retrieve(
-        stored.stripeSubscriptionId,
+    let current: Stripe.Subscription | undefined;
+    if (
+      stored &&
+      subscriptionCanBeUpdated(stored.status) &&
+      stored.stripeSubscriptionId.startsWith("sub_")
+    ) {
+      try {
+        current = await stripe.subscriptions.retrieve(
+          stored.stripeSubscriptionId,
+        );
+      } catch (error) {
+        if (!stripeResourceMissing(error)) throw error;
+        this.logger.warn(
+          { userId, subscriptionId: stored.stripeSubscriptionId },
+          "Starting Checkout because the projected Stripe subscription no longer exists",
+        );
+      }
+    } else if (stored && subscriptionCanBeUpdated(stored.status)) {
+      this.logger.info(
+        { userId, entitlementId: stored.stripeSubscriptionId },
+        "Starting Checkout from a non-Stripe entitlement",
       );
+    }
+    if (stored && current) {
       if (subscriptionCanBeUpdated(current.status)) {
         const item = current.items.data[0];
         if (!item) {
@@ -83,7 +107,8 @@ export class StripeBillingService {
           stored.pendingPlanId != null &&
           currentPlan !== planId;
         if (currentPlan !== planId) {
-          const downgrade = currentPlan === "pro" && planId === "plus";
+          const downgrade =
+            currentPlan != null && isPaidPlanDowngrade(currentPlan, planId);
           const updated = await stripe.subscriptions.update(
             current.id,
             {
@@ -336,7 +361,7 @@ export class StripeBillingService {
     const currentPeriodEndsAt = fromUnixSeconds(item.current_period_end);
     let planId = actualPlan;
     let stripePriceId = item.price.id;
-    let pendingPlanId: "plus" | "pro" | undefined;
+    let pendingPlanId: SandpiPaidPlanId | undefined;
     let pendingPriceId: string | undefined;
     let pendingEffectiveAt: Date | undefined;
 
@@ -354,8 +379,8 @@ export class StripeBillingService {
         ? existing.pendingPriceId
         : existing?.stripePriceId;
     const pendingDowngrade =
-      effectiveExistingPlan === "pro" &&
-      actualPlan === "plus" &&
+      effectiveExistingPlan != null &&
+      isPaidPlanDowngrade(effectiveExistingPlan, actualPlan) &&
       currentPeriodEndsAt.getTime() > now.getTime();
     if (pendingDowngrade) {
       planId = effectiveExistingPlan;
@@ -412,6 +437,7 @@ export class StripeBillingService {
     if (this.config.mode !== "stripe") return undefined;
     if (priceId === this.config.plusPriceId) return "plus" as const;
     if (priceId === this.config.proPriceId) return "pro" as const;
+    if (priceId === this.config.ultraPriceId) return "ultra" as const;
     return undefined;
   }
 
@@ -490,6 +516,11 @@ function webhookReceipt(event: Stripe.Event) {
   };
 }
 
-export function isPaidPlanInput(value: string): value is "plus" | "pro" {
-  return value === "plus" || value === "pro";
+function stripeResourceMissing(error: unknown) {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === "resource_missing"
+  );
 }

@@ -93,6 +93,7 @@ const stripeBilling = {
   webhookSecret: "whsec_test",
   plusPriceId: "price_plus",
   proPriceId: "price_pro",
+  ultraPriceId: "price_ultra",
   usagePollIntervalMs: 15_000,
 } as const;
 
@@ -138,7 +139,11 @@ test("free entitlement uses the larger confirmed or projected usage value", asyn
   assert.equal(summary.plan.environmentLimit, 1);
   assert.deepEqual(
     summary.availablePlans.map((plan) => plan.id),
-    ["free", "plus", "pro"],
+    ["free", "plus", "pro", "ultra"],
+  );
+  assert.deepEqual(
+    summary.availablePlans.map((plan) => plan.annualPriceUsd),
+    [0, 99, 199, 499],
   );
   assert.equal(summary.usage.usedGiBHours, 1);
   assert.equal(summary.usage.exhausted, true);
@@ -170,7 +175,7 @@ test("active paid entitlement has a fixed weekly quota period", async () => {
   const summary = await service.summary(account.userId);
 
   assert.equal(summary.plan.id, "plus");
-  assert.equal(summary.plan.runtimeQuotaGiBHours, 168);
+  assert.equal(summary.plan.runtimeQuotaGiBHours, 125);
   assert.equal(
     summary.usage.periodStartsAt,
     Date.parse("2026-07-22T00:00:00.000Z") / 1_000,
@@ -179,6 +184,26 @@ test("active paid entitlement has a fixed weekly quota period", async () => {
     summary.usage.periodEndsAt,
     Date.parse("2026-07-29T00:00:00.000Z") / 1_000,
   );
+});
+
+test("Ultra entitlement exposes its weekly runtime and Environment limits", async () => {
+  const store = new FakeQuotaStore();
+  store.subscriptionRecord = {
+    userId: account.userId,
+    stripeSubscriptionId: "sub_ultra",
+    stripePriceId: "price_ultra",
+    planId: "ultra",
+    status: "active",
+    cancelAtPeriodEnd: false,
+    quotaAnchorAt: new Date("2026-07-01T00:00:00.000Z"),
+  };
+  const service = quotaService(store, stripeBilling);
+
+  const summary = await service.summary(account.userId);
+
+  assert.equal(summary.plan.id, "ultra");
+  assert.equal(summary.plan.runtimeQuotaGiBHours, 625);
+  assert.equal(summary.plan.environmentLimit, 25);
 });
 
 test("an effective pending downgrade changes entitlement without waiting for a webhook", async () => {

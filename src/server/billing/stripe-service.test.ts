@@ -3,6 +3,7 @@ import test from "node:test";
 
 import type Stripe from "stripe";
 
+import { isSandpiPaidPlanId } from "@/lib/billing";
 import { HttpError } from "@/server/http-error";
 
 import type {
@@ -11,10 +12,7 @@ import type {
   SubscriptionRecord,
   WebhookEventClaim,
 } from "./repository";
-import {
-  isPaidPlanInput,
-  StripeBillingService,
-} from "./stripe-service";
+import { StripeBillingService } from "./stripe-service";
 
 const stripeConfig = {
   mode: "stripe",
@@ -22,6 +20,7 @@ const stripeConfig = {
   webhookSecret: "whsec_test",
   plusPriceId: "price_plus",
   proPriceId: "price_pro",
+  ultraPriceId: "price_ultra",
   usagePollIntervalMs: 15_000,
 } as const;
 const logger = {
@@ -85,7 +84,7 @@ class FakeBillingRepository {
 
 function subscription(input: {
   id?: string;
-  priceId: "price_plus" | "price_pro";
+  priceId: "price_plus" | "price_pro" | "price_ultra";
   startsAt: string;
   endsAt: string;
   status?: Stripe.Subscription.Status;
@@ -128,10 +127,11 @@ function subscriptionEvent(
 }
 
 test("validates paid plan input without accepting internal plan ids", () => {
-  assert.equal(isPaidPlanInput("plus"), true);
-  assert.equal(isPaidPlanInput("pro"), true);
-  assert.equal(isPaidPlanInput("free"), false);
-  assert.equal(isPaidPlanInput("deployment"), false);
+  assert.equal(isSandpiPaidPlanId("plus"), true);
+  assert.equal(isSandpiPaidPlanId("pro"), true);
+  assert.equal(isSandpiPaidPlanId("ultra"), true);
+  assert.equal(isSandpiPaidPlanId("free"), false);
+  assert.equal(isSandpiPaidPlanId("deployment"), false);
 });
 
 test("creates Stripe Checkout with a server-side price id and user metadata", async () => {
@@ -176,7 +176,7 @@ test("creates Stripe Checkout with a server-side price id and user metadata", as
   assert.match(checkoutInput?.success_url ?? "", /billing=success/);
 });
 
-test("upgrades immediately but preserves Pro entitlement through a scheduled downgrade", async () => {
+test("upgrades immediately but preserves Ultra entitlement through a scheduled downgrade", async () => {
   const repository = new FakeBillingRepository();
   repository.customerId = "cus_one";
   repository.subscriptionRecord = {
@@ -191,7 +191,7 @@ test("upgrades immediately but preserves Pro entitlement through a scheduled dow
   let current = subscription({
     priceId: "price_plus",
     startsAt: "2026-07-01T00:00:00.000Z",
-    endsAt: "2026-08-01T00:00:00.000Z",
+    endsAt: "2027-07-01T00:00:00.000Z",
   });
   const updates: Stripe.SubscriptionUpdateParams[] = [];
   const stripe = {
@@ -204,13 +204,16 @@ test("upgrades immediately but preserves Pro entitlement through a scheduled dow
         input: Stripe.SubscriptionUpdateParams,
       ) {
         updates.push(input);
+        const priceId = input.items?.[0]?.price;
+        assert.ok(
+          priceId === "price_plus" ||
+            priceId === "price_pro" ||
+            priceId === "price_ultra",
+        );
         current = subscription({
-          priceId:
-            input.items?.[0]?.price === "price_pro"
-              ? "price_pro"
-              : "price_plus",
+          priceId,
           startsAt: "2026-07-01T00:00:00.000Z",
-          endsAt: "2026-08-01T00:00:00.000Z",
+          endsAt: "2027-07-01T00:00:00.000Z",
         });
         return current;
       },
@@ -225,21 +228,115 @@ test("upgrades immediately but preserves Pro entitlement through a scheduled dow
     () => new Date("2026-07-20T00:00:00.000Z"),
   );
 
-  await service.checkout(account.userId, "pro", "upgrade-key-0001");
+  await service.checkout(account.userId, "ultra", "upgrade-key-0001");
 
   assert.equal(updates[0]?.proration_behavior, "always_invoice");
   assert.equal(updates[0]?.payment_behavior, "pending_if_incomplete");
-  assert.equal(repository.subscriptionRecord?.planId, "pro");
+  assert.equal(repository.subscriptionRecord?.planId, "ultra");
 
-  await service.checkout(account.userId, "plus", "downgrade-key-01");
+  await service.checkout(account.userId, "pro", "downgrade-key-01");
 
   assert.equal(updates[1]?.proration_behavior, "none");
-  assert.equal(repository.subscriptionRecord?.planId, "pro");
-  assert.equal(repository.subscriptionRecord?.pendingPlanId, "plus");
+  assert.equal(repository.subscriptionRecord?.planId, "ultra");
+  assert.equal(repository.subscriptionRecord?.pendingPlanId, "pro");
   assert.equal(
     repository.subscriptionRecord?.pendingEffectiveAt?.toISOString(),
-    "2026-08-01T00:00:00.000Z",
+    "2027-07-01T00:00:00.000Z",
   );
+});
+
+test("starts Checkout when an active entitlement is not a Stripe subscription", async () => {
+  const repository = new FakeBillingRepository();
+  repository.customerId = "cus_one";
+  repository.subscriptionRecord = {
+    userId: account.userId,
+    stripeSubscriptionId: "manual_plus_user_one",
+    stripePriceId: "manual_plus",
+    planId: "plus",
+    status: "active",
+    cancelAtPeriodEnd: false,
+    quotaAnchorAt: new Date("2026-07-01T00:00:00.000Z"),
+  };
+  let checkoutInput: Stripe.Checkout.SessionCreateParams | undefined;
+  const stripe = {
+    subscriptions: {
+      async retrieve() {
+        assert.fail("manual entitlements must not be retrieved from Stripe");
+      },
+    },
+    checkout: {
+      sessions: {
+        async create(input: Stripe.Checkout.SessionCreateParams) {
+          checkoutInput = input;
+          return { url: "https://checkout.stripe.example/manual" };
+        },
+      },
+    },
+  } as unknown as Stripe;
+  const service = new StripeBillingService(
+    repository as unknown as BillingRepository,
+    stripeConfig,
+    new URL("https://sandpi.example.com"),
+    logger,
+    stripe,
+  );
+
+  const result = await service.checkout(
+    account.userId,
+    "ultra",
+    "manual-entitlement-key",
+  );
+
+  assert.equal(result.kind, "checkout");
+  assert.equal(checkoutInput?.line_items?.[0]?.price, "price_ultra");
+});
+
+test("starts Checkout when a projected Stripe subscription was removed", async () => {
+  const repository = new FakeBillingRepository();
+  repository.customerId = "cus_one";
+  repository.subscriptionRecord = {
+    userId: account.userId,
+    stripeSubscriptionId: "sub_missing",
+    stripePriceId: "price_plus",
+    planId: "plus",
+    status: "active",
+    cancelAtPeriodEnd: false,
+    quotaAnchorAt: new Date("2026-07-01T00:00:00.000Z"),
+  };
+  let checkoutCreated = false;
+  const stripe = {
+    subscriptions: {
+      async retrieve() {
+        throw Object.assign(new Error("No such subscription"), {
+          code: "resource_missing",
+        });
+      },
+    },
+    checkout: {
+      sessions: {
+        async create() {
+          checkoutCreated = true;
+          return { url: "https://checkout.stripe.example/replacement" };
+        },
+      },
+    },
+  } as unknown as Stripe;
+  const service = new StripeBillingService(
+    repository as unknown as BillingRepository,
+    stripeConfig,
+    new URL("https://sandpi.example.com"),
+    logger,
+    stripe,
+  );
+
+  const result = await service.checkout(
+    account.userId,
+    "pro",
+    "missing-subscription-key",
+  );
+
+  assert.equal(result.kind, "checkout");
+  assert.equal(checkoutCreated, true);
 });
 
 test("materializes a pending downgrade after its saved period boundary", async () => {

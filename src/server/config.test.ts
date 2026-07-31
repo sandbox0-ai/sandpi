@@ -93,7 +93,7 @@ test("requires a complete server-side Stripe configuration", () => {
         SANDPI_BILLING_MODE: "stripe",
         SANDPI_STRIPE_SECRET_KEY: "sk_test_example",
       }),
-    /SANDPI_STRIPE_WEBHOOK_SECRET.*SANDPI_STRIPE_PLUS_PRICE_ID.*SANDPI_STRIPE_PRO_PRICE_ID/,
+    /SANDPI_STRIPE_WEBHOOK_SECRET.*SANDPI_STRIPE_PLUS_PRICE_ID.*SANDPI_STRIPE_PRO_PRICE_ID.*SANDPI_STRIPE_ULTRA_PRICE_ID/,
   );
 
   const config = loadConfig({
@@ -103,6 +103,7 @@ test("requires a complete server-side Stripe configuration", () => {
     SANDPI_STRIPE_WEBHOOK_SECRET: "whsec_example",
     SANDPI_STRIPE_PLUS_PRICE_ID: "price_plus",
     SANDPI_STRIPE_PRO_PRICE_ID: "price_pro",
+    SANDPI_STRIPE_ULTRA_PRICE_ID: "price_ultra",
     SANDPI_USAGE_POLL_INTERVAL_MS: "30000",
   });
   assert.deepEqual(config.billing, {
@@ -111,6 +112,7 @@ test("requires a complete server-side Stripe configuration", () => {
     webhookSecret: "whsec_example",
     plusPriceId: "price_plus",
     proPriceId: "price_pro",
+    ultraPriceId: "price_ultra",
     usagePollIntervalMs: 30_000,
   });
 });

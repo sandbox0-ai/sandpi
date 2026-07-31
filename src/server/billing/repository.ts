@@ -1,7 +1,7 @@
 import type { Pool, PoolClient, QueryResultRow } from "pg";
 
 import type {
-  SandpiPlanId,
+  SandpiPaidPlanId,
   SandpiSubscriptionStatus,
 } from "@/lib/billing";
 
@@ -16,14 +16,14 @@ export interface SubscriptionRecord {
   userId: string;
   stripeSubscriptionId: string;
   stripePriceId: string;
-  planId: "plus" | "pro";
+  planId: SandpiPaidPlanId;
   status: SandpiSubscriptionStatus;
   cancelAtPeriodEnd: boolean;
   currentPeriodStartsAt?: Date;
   currentPeriodEndsAt?: Date;
   quotaAnchorAt?: Date;
   graceEndsAt?: Date;
-  pendingPlanId?: "plus" | "pro";
+  pendingPlanId?: SandpiPaidPlanId;
   pendingPriceId?: string;
   pendingEffectiveAt?: Date;
 }
@@ -72,14 +72,14 @@ interface SubscriptionRow extends QueryResultRow {
   user_id: string;
   stripe_subscription_id: string;
   stripe_price_id: string;
-  plan_id: "plus" | "pro";
+  plan_id: SandpiPaidPlanId;
   status: SandpiSubscriptionStatus;
   cancel_at_period_end: boolean;
   current_period_starts_at: Date | null;
   current_period_ends_at: Date | null;
   quota_anchor_at: Date | null;
   grace_ends_at: Date | null;
-  pending_plan_id: "plus" | "pro" | null;
+  pending_plan_id: SandpiPaidPlanId | null;
   pending_price_id: string | null;
   pending_effective_at: Date | null;
 }
@@ -522,8 +522,4 @@ function subscriptionFromRow(
         pendingEffectiveAt: row.pending_effective_at ?? undefined,
       }
     : undefined;
-}
-
-export function paidPlanId(value: SandpiPlanId): value is "plus" | "pro" {
-  return value === "plus" || value === "pro";
 }
