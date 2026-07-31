@@ -20,6 +20,8 @@ import {
   GitCommitHorizontal,
   PanelLeftClose,
   PanelLeftOpen,
+  Eye,
+  Pencil,
   Radio,
   RefreshCw,
   Save,
@@ -296,6 +298,8 @@ const copy = {
     backEnvironment: "Back to Environment",
     binary: "Binary files cannot be rendered as text.",
     previewOnly: "Read-only preview",
+    previewMode: "Preview only",
+    editMode: "Edit file",
     previewUnavailable: "Your browser cannot preview this media format.",
     downloadPreview: "Download file",
     downloadFailed: "File could not be downloaded.",
@@ -367,6 +371,8 @@ const copy = {
     backEnvironment: "返回 Environment",
     binary: "二进制文件无法按文本显示。",
     previewOnly: "只读预览",
+    previewMode: "仅预览",
+    editMode: "编辑文件",
     previewUnavailable: "当前浏览器无法预览此媒体格式。",
     downloadPreview: "下载文件",
     downloadFailed: "文件无法下载。",
@@ -1444,6 +1450,7 @@ export function WorkspaceIde({
   const [selectedPath, setSelectedPath] = useState(
     initialCacheState.selectedPath,
   );
+  const [previewOnly, setPreviewOnly] = useState(false);
   const [loading, setLoading] = useState(!initialCacheState.snapshot);
   const [error, setError] = useState("");
   const [connection, setConnection] = useState<
@@ -1482,6 +1489,10 @@ export function WorkspaceIde({
   const environmentGenerationRef = useRef(0);
   const environmentIdentityRef = useRef(cacheKey);
   const selectedPathEnvironmentRef = useRef(environment.id);
+
+  useEffect(() => {
+    setPreviewOnly(window.matchMedia("(pointer: coarse)").matches);
+  }, []);
   const handledNavigationRequestRef = useRef("");
   const initialNavigationGenerationRef = useRef(-1);
   const revealRequestIdRef = useRef(0);
@@ -3325,12 +3336,25 @@ export function WorkspaceIde({
                     <span className={styles.saveState}>{ui.saving}</span>
                   ) : document?.dirty ? (
                     <span className={styles.saveState}>{ui.unsaved}</span>
+                  ) : selectedFile?.editable && previewOnly ? (
+                    <span className={styles.saveState}>{ui.previewOnly}</span>
                   ) : selectedFile?.editable ? (
                     <span className={styles.saveState}>
                       <Check size={10} /> {ui.saved}
                     </span>
                   ) : selectedFile?.preview ? (
                     <span className={styles.saveState}>{ui.previewOnly}</span>
+                  ) : null}
+                  {selectedFile?.kind === "text" && selectedFile.editable ? (
+                    <button
+                      type="button"
+                      aria-label={previewOnly ? ui.editMode : ui.previewMode}
+                      title={previewOnly ? ui.editMode : ui.previewMode}
+                      aria-pressed={previewOnly}
+                      onClick={() => setPreviewOnly((current) => !current)}
+                    >
+                      {previewOnly ? <Pencil size={13} /> : <Eye size={13} />}
+                    </button>
                   ) : null}
                   <button
                     type="button"
@@ -3408,7 +3432,7 @@ export function WorkspaceIde({
                         modelPath={`sandpi://${environment.id}${selectedPath}`}
                         value={text}
                         language={monacoLanguage(selectedFile.name)}
-                        readOnly={!selectedFile.editable}
+                        readOnly={!selectedFile.editable || previewOnly}
                         lineChanges={document?.dirty ? [] : selectedFile.lineChanges}
                         onChange={(value) => updateDraft(selectedPath, value)}
                         onSave={() => void saveDocument(selectedPath)}
