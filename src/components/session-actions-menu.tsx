@@ -1,6 +1,15 @@
 "use client";
 
-import { Archive, GitFork, MoreHorizontal, Pencil, Pin, PinOff } from "lucide-react";
+import {
+  Archive,
+  Circle,
+  CircleCheckBig,
+  GitFork,
+  MoreHorizontal,
+  Pencil,
+  Pin,
+  PinOff,
+} from "lucide-react";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 
 import { getOperationUiCopy, type OperationLanguage } from "@/lib/operation-ui";
@@ -17,6 +26,7 @@ interface SessionActionsMenuProps {
   onRenameSession: (sessionId: string, title: string) => void;
   onArchiveSession: (sessionId: string) => void;
   onTogglePinSession: (sessionId: string) => void;
+  onToggleSessionCompleted: (sessionId: string) => Promise<void>;
 }
 
 interface MenuPosition {
@@ -25,7 +35,7 @@ interface MenuPosition {
 }
 
 const MENU_WIDTH = 210;
-const MENU_HEIGHT = 146;
+const MENU_HEIGHT = 220;
 const VIEWPORT_GAP = 8;
 
 export function SessionActionsMenu({
@@ -38,6 +48,7 @@ export function SessionActionsMenu({
   onRenameSession,
   onArchiveSession,
   onTogglePinSession,
+  onToggleSessionCompleted,
 }: SessionActionsMenuProps) {
   const ui = getOperationUiCopy(language).sidebar;
   const renameCopy =
@@ -47,6 +58,8 @@ export function SessionActionsMenu({
   const [open, setOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [renameDraft, setRenameDraft] = useState(session.title);
+  const [completionPending, setCompletionPending] = useState(false);
+  const [completionError, setCompletionError] = useState("");
   const [position, setPosition] = useState<MenuPosition | null>(null);
   const renameInputId = useId();
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -58,6 +71,7 @@ export function SessionActionsMenu({
       setOpen(false);
       setRenaming(false);
       setRenameDraft(session.title);
+      setCompletionError("");
       setPosition(null);
 
       if (restoreTriggerFocus) {
@@ -138,6 +152,7 @@ export function SessionActionsMenu({
         : triggerRect.top - MENU_HEIGHT - 4;
 
     setRenameDraft(session.title);
+    setCompletionError("");
     setRenaming(false);
     setPosition({
       top: Math.max(VIEWPORT_GAP, top),
@@ -169,6 +184,20 @@ export function SessionActionsMenu({
   const cancelRename = () => {
     setRenaming(false);
     setRenameDraft(session.title);
+  };
+
+  const toggleCompletion = async () => {
+    if (completionPending) return;
+    setCompletionPending(true);
+    setCompletionError("");
+    try {
+      await onToggleSessionCompleted(session.id);
+      closeMenu(true);
+    } catch {
+      setCompletionError(ui.completionUpdateFailed);
+    } finally {
+      setCompletionPending(false);
+    }
   };
 
   const handleMenuKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
@@ -289,6 +318,27 @@ export function SessionActionsMenu({
                 )}
                 {session.pinned ? ui.unpin : ui.pin}
               </button>
+              <button
+                type="button"
+                role="menuitem"
+                aria-busy={completionPending}
+                disabled={completionPending}
+                onClick={() => void toggleCompletion()}
+              >
+                {completionPending ? (
+                  <span className="activity-spinner" aria-hidden="true" />
+                ) : session.completed ? (
+                  <CircleCheckBig size={14} aria-hidden="true" />
+                ) : (
+                  <Circle size={14} aria-hidden="true" />
+                )}
+                {session.completed ? ui.markIncomplete : ui.markComplete}
+              </button>
+              {completionError ? (
+                <span className="session-action-error" role="alert">
+                  {completionError}
+                </span>
+              ) : null}
               <button
                 type="button"
                 role="menuitem"

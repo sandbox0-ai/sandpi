@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import {
+  CircleCheckBig,
   ChevronDown,
   ChevronUp,
   GripVertical,
@@ -52,6 +53,7 @@ interface SidebarProps {
   onForkSession: (sessionId: string) => void;
   onArchiveSession: (sessionId: string) => void;
   onTogglePinSession: (sessionId: string) => void;
+  onToggleSessionCompleted: (sessionId: string) => Promise<void>;
   onCollapse: () => void;
   onCloseMobile: () => void;
 }
@@ -60,17 +62,26 @@ function SessionStateIndicator({
   session,
   unreadLabel,
   runningLabel,
+  completedLabel,
 }: {
   session: CodingSession;
   unreadLabel: "Unread" | "未读";
   runningLabel: "Running" | "运行中";
+  completedLabel: "Completed" | "已完成";
 }) {
   const marker = sessionStateMarker(session);
   if (!marker) return null;
 
   return (
     <span className="session-state-indicator">
-      {marker === "running" ? (
+      {marker === "completed" ? (
+        <CircleCheckBig
+          className="session-completed-indicator"
+          size={11}
+          role="img"
+          aria-label={completedLabel}
+        />
+      ) : marker === "running" ? (
         <span
           className="session-running-indicator"
           role="img"
@@ -104,12 +115,14 @@ export function Sidebar({
   onForkSession,
   onArchiveSession,
   onTogglePinSession,
+  onToggleSessionCompleted,
   onCollapse,
   onCloseMobile,
 }: SidebarProps) {
   const ui = getOperationUiCopy(language).sidebar;
   const unreadLabel = language === "zh-CN" ? "未读" : "Unread";
   const runningLabel = language === "zh-CN" ? "运行中" : "Running";
+  const completedLabel = language === "zh-CN" ? "已完成" : "Completed";
   const [sessionSearchOpen, setSessionSearchOpen] = useState(false);
   const [draggedEnvironmentId, setDraggedEnvironmentId] = useState("");
   const [visibleSessionCounts, setVisibleSessionCounts] = useState<
@@ -340,6 +353,7 @@ export function Sidebar({
                             session={session}
                             unreadLabel={unreadLabel}
                             runningLabel={runningLabel}
+                            completedLabel={completedLabel}
                           />
                           {session.owner && session.owner.id !== viewer.id ? (
                             <span
@@ -362,6 +376,7 @@ export function Sidebar({
                           onRenameSession={onRenameSession}
                           onArchiveSession={onArchiveSession}
                           onTogglePinSession={onTogglePinSession}
+                          onToggleSessionCompleted={onToggleSessionCompleted}
                         />
                       </div>
                     ))}

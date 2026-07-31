@@ -6,6 +6,8 @@ import {
   ArrowUp,
   BookOpenText,
   Check,
+  Circle,
+  CircleCheckBig,
   Copy,
   Files,
   GitFork,
@@ -185,7 +187,7 @@ interface ConversationProps {
     request: EnvironmentBrowserNavigationRequest,
   ) => void;
   onSessionChange: (session: CodexSession) => void;
-  onToggleSessionCompleted: (sessionId: string) => void;
+  onToggleSessionCompleted: (sessionId: string) => Promise<void>;
   onDerivedSessionCreated: (session: CodexSession) => void;
 }
 
@@ -281,6 +283,8 @@ export function CodexConversation({
   onDerivedSessionCreated,
 }: ConversationProps) {
   const ui = getCodexUiCopy(language).conversation;
+  const [completionSaving, setCompletionSaving] = useState(false);
+  const [completionError, setCompletionError] = useState("");
   const [mountedInspectorEnvironmentId, setMountedInspectorEnvironmentId] =
     useState(inspectorOpen ? environment.id : "");
   const [modelCatalog, setModelCatalog] = useState<CodexModelCatalog>(() => ({
@@ -294,6 +298,24 @@ export function CodexConversation({
     modelCatalog.credentialRevision === environment.credentialRevision
       ? modelCatalog.options
       : EMPTY_CODEX_MODEL_OPTIONS;
+
+  useEffect(() => {
+    setCompletionSaving(false);
+    setCompletionError("");
+  }, [session.id]);
+
+  async function toggleSessionCompleted() {
+    if (completionSaving) return;
+    setCompletionSaving(true);
+    setCompletionError("");
+    try {
+      await onToggleSessionCompleted(session.id);
+    } catch {
+      setCompletionError(ui.completionUpdateFailed);
+    } finally {
+      setCompletionSaving(false);
+    }
+  }
 
   useEffect(() => {
     if (inspectorOpen) {
@@ -2306,16 +2328,33 @@ export function CodexConversation({
           </div>
 
           <div className="conversation-header-actions">
+            {completionError ? (
+              <span className="completion-save-error" role="alert">
+                {completionError}
+              </span>
+            ) : null}
             <button
               type="button"
-              className={`header-action-button ${session.completed ? "is-active" : ""}`}
+              className={`header-action-button session-completion-button ${
+                session.completed ? "is-active" : ""
+              }`}
               aria-label={session.completed ? ui.markIncomplete : ui.markComplete}
               aria-pressed={session.completed}
+              aria-busy={completionSaving}
               title={session.completed ? ui.markIncomplete : ui.markComplete}
-              onClick={() => onToggleSessionCompleted(session.id)}
+              disabled={completionSaving}
+              onClick={() => void toggleSessionCompleted()}
             >
-              <Check size={15} aria-hidden="true" />
-              <span>{session.completed ? ui.completed : ui.markComplete}</span>
+              {completionSaving ? (
+                <span className="activity-spinner" aria-hidden="true" />
+              ) : session.completed ? (
+                <CircleCheckBig size={15} aria-hidden="true" />
+              ) : (
+                <Circle size={15} aria-hidden="true" />
+              )}
+              <span>
+                {session.completed ? ui.markIncomplete : ui.markComplete}
+              </span>
             </button>
             <button
               type="button"

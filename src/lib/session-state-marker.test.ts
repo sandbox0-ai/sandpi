@@ -25,9 +25,9 @@ test("running takes precedence over unread activity in the single marker slot", 
   );
 });
 
-test("keeps a completed Session quiet even if it has unread activity", () => {
+test("uses a quiet completion marker instead of transient activity", () => {
   assert.equal(
     sessionStateMarker({ status: "waiting", unread: true, completed: true }),
-    undefined,
+    "completed",
   );
 });
