@@ -1040,6 +1040,8 @@ export function CodexConversation({
           ...current,
           updatedAt: snapshot.thread.updatedAt ?? current.updatedAt,
           status: snapshot.sessionStatus,
+          completed:
+            snapshot.sessionStatus === "running" ? false : current.completed,
           harnessState: {
             ...current.harnessState,
             threadId: snapshot.thread.id,
@@ -1112,6 +1114,7 @@ export function CodexConversation({
           ...current,
           updatedAt: envelope.receivedAt,
           status: started ? "running" : completed ? "waiting" : current.status,
+          completed: started ? false : current.completed,
           unread:
             completed && document.visibilityState !== "visible"
               ? true
@@ -1379,6 +1382,7 @@ export function CodexConversation({
       ...current,
       status: "running",
       unread: false,
+      completed: false,
     };
     sessionRef.current = next;
     onSessionChange(next);
@@ -1858,6 +1862,7 @@ export function CodexConversation({
           ...sessionRef.current,
           status: "running" as const,
           unread: false,
+          completed: false,
           harnessState: {
             ...sessionRef.current.harnessState,
             modelId: selectedModel.id,

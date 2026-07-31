@@ -39,7 +39,8 @@ test(
         environment_id TEXT NOT NULL,
         status TEXT NOT NULL,
         archived BOOLEAN NOT NULL,
-        unread BOOLEAN NOT NULL DEFAULT FALSE
+        unread BOOLEAN NOT NULL DEFAULT FALSE,
+        completed BOOLEAN NOT NULL DEFAULT FALSE
       );
       CREATE TEMP TABLE session_runtime (
         session_id TEXT PRIMARY KEY,
@@ -90,8 +91,8 @@ test(
       ["environment-one", "supervisor-one", "attempt-one", 1],
     );
     await client.query(
-      `INSERT INTO sessions (id, environment_id, status, archived)
-       VALUES ($1, $2, 'running', FALSE)`,
+      `INSERT INTO sessions (id, environment_id, status, archived, completed)
+       VALUES ($1, $2, 'running', FALSE, TRUE)`,
       ["session-one", "environment-one"],
     );
     await client.query(
@@ -142,6 +143,10 @@ test(
       ),
       true,
     );
+    const reopened = await client.query<{ completed: boolean }>(
+      "SELECT completed FROM sessions WHERE id = 'session-one'",
+    );
+    assert.equal(reopened.rows[0]?.completed, false);
 
     assert.equal(
       await store.reconcileNativeSessionState({

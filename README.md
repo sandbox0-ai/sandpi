@@ -108,7 +108,8 @@ same files, tools and execution context.
   surfaces
 - Persistent multi-Environment and multi-Session Web UI with compact,
   progressively paginated Session lists that keep every running Session
-  visible, and completion state distinct from archival
+  visible, and completion state distinct from archival that automatically
+  reopens when another Turn starts
 - Preview-first Workspace file browser with a resizable, collapsible file tree;
   fast source, Markdown and CSV views; image, audio, video, PDF and PPTX
   previews; on-demand Monaco editing; and Git changes

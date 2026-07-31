@@ -159,6 +159,12 @@ test("commits one shared decoder cursor and routes scalar turn state by native t
     /active_turn_runtime_generation = \$5::BIGINT/,
   );
   assert.match(startedTurnUpdate?.sql ?? "", /ELSE \$5::BIGINT/);
+  const startedSessionUpdate = fixture.calls.find(
+    (call) =>
+      call.sql.includes("UPDATE sessions session") &&
+      call.sql.includes("SET status = 'running'"),
+  );
+  assert.match(startedSessionUpdate?.sql ?? "", /completed = FALSE/);
   assert.equal(
     fixture.calls.some((call) => call.sql.includes("session_turn_checkpoints")),
     false,
@@ -653,7 +659,7 @@ test("native snapshot reconciliation uses a runtime-version compare-and-swap", a
     call.sql.includes("status IS DISTINCT FROM"),
   );
   assert.ok(statusUpdate);
-  assert.deepEqual(statusUpdate.values, ["session-one", "waiting"]);
+  assert.deepEqual(statusUpdate.values, ["session-one", "waiting", false]);
 });
 
 test("stale native snapshot reconciliation leaves Session state untouched", async () => {
@@ -748,7 +754,7 @@ test("background native reconciliation clears an idle stale Turn admission", asy
   const statusUpdate = fixture.calls.find((call) =>
     call.sql.includes("status IS DISTINCT FROM"),
   );
-  assert.deepEqual(statusUpdate?.values, ["session-one", "waiting"]);
+  assert.deepEqual(statusUpdate?.values, ["session-one", "waiting", false]);
 });
 
 test("background native reconciliation preserves pending state for an active Turn", async () => {
@@ -812,7 +818,8 @@ test("background native reconciliation preserves pending state for an active Tur
   const statusUpdate = fixture.calls.find((call) =>
     call.sql.includes("status IS DISTINCT FROM"),
   );
-  assert.deepEqual(statusUpdate?.values, ["session-one", "running"]);
+  assert.match(statusUpdate?.sql ?? "", /completed = CASE/);
+  assert.deepEqual(statusUpdate?.values, ["session-one", "running", true]);
 });
 
 test("terminal recovery reconciliation clears only recovery-owned error state", async () => {
@@ -917,7 +924,7 @@ test("background native reconciliation cannot clear a fresh pending Turn", async
   const statusUpdate = fixture.calls.find((call) =>
     call.sql.includes("status IS DISTINCT FROM"),
   );
-  assert.deepEqual(statusUpdate?.values, ["session-one", "running"]);
+  assert.deepEqual(statusUpdate?.values, ["session-one", "running", false]);
 });
 
 test("background native reconciliation loses its CAS when the Session is archived", async () => {

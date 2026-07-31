@@ -98,7 +98,8 @@ Environment。如果多个 Session 本来就应该共享文件、工具和执行
 - 在输入框实时显示原生上下文窗口和 Sandbox CPU/内存使用率
 - Codex tools、Skills、MCP 配置、审批和已支持的 slash-command 界面
 - 持久化多 Environment、多 Session Web UI；Session 列表保持紧凑并支持渐进分页，
-  默认显示所有运行中的 Session，同时提供独立于归档语义的完成状态
+  默认显示所有运行中的 Session，同时提供独立于归档语义、并会在新 Turn 开始时
+  自动恢复为未完成的完成状态
 - 以预览为主的实时 Workspace 文件浏览器，支持可调整宽度、可折叠的文件树，
   快速源码、Markdown、CSV 视图，图片、音频、视频、PDF、PPTX 预览，按需加载的
   Monaco 编辑器，以及 Git 变更

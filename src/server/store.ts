@@ -2147,7 +2147,7 @@ export class SandpiStore {
           );
           await client.query(
             `UPDATE sessions session
-             SET status = 'running'
+             SET status = 'running', completed = FALSE
              FROM session_runtime runtime
              WHERE runtime.session_id = session.id
                AND session.environment_id = $1
@@ -2829,9 +2829,15 @@ export class SandpiStore {
           ? "running"
           : "waiting";
       await client.query(
-        `UPDATE sessions SET status = $2
-         WHERE id = $1 AND status <> 'failed' AND status IS DISTINCT FROM $2`,
-        [input.sessionId, status],
+        `UPDATE sessions
+         SET status = $2,
+             completed = CASE WHEN $3::BOOLEAN THEN FALSE ELSE completed END
+         WHERE id = $1 AND status <> 'failed'
+           AND (
+             status IS DISTINCT FROM $2
+             OR ($3::BOOLEAN AND completed)
+           )`,
+        [input.sessionId, status, activeNativeTurnId !== null],
       );
       await client.query("COMMIT");
       return true;

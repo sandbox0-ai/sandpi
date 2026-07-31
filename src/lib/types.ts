@@ -448,7 +448,7 @@ export interface CodingSession<
   unread: boolean;
   /** Whether the current viewer has personally pinned this Session. */
   pinned: boolean;
-  /** User-managed completion state, independent from archival. */
+  /** User-managed completion state; a later native Turn reopens the Session. */
   completed: boolean;
   archived: boolean;
   harness: THarness;

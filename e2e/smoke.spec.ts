@@ -7469,7 +7469,7 @@ test("keeps pinned Session markers compact and removes sidebar shortcuts", async
   ).toHaveCount(0);
 });
 
-test("marks a Session complete independently from archiving and quiets its sidebar row", async ({
+test("keeps completion separate from archiving and reopens a Session for a new Turn", async ({
   page,
 }) => {
   const bootstrap = getMockBootstrap();
@@ -7478,12 +7478,39 @@ test("marks a Session complete independently from archiving and quiets its sideb
     (candidate) => candidate.status === "waiting" && !candidate.archived,
   );
   expect(session).toBeTruthy();
-  if (!session) return;
+  if (!session || session.harness !== "codex") return;
+  const codexSession = session as CodexSession;
+  const nativeSessionId = codexSession.harnessState.threadId;
+  const now = Date.now() / 1_000;
+  const snapshot: CodexNativeSnapshot = {
+    protocol: "codex-app-server",
+    nativeSessionId,
+    historyRevision: codexSession.harnessState.historyRevision,
+    modelId: codexSession.harnessState.modelId,
+    reasoningEffort: codexSession.harnessState.reasoningEffort,
+    sessionStatus: "waiting",
+    tokenUsage: null,
+    activity: {
+      source: "codex-rollout",
+      availability: "available",
+      records: [],
+      error: null,
+    },
+    forkableTurnIds: [],
+    thread: {
+      id: nativeSessionId,
+      createdAt: now,
+      updatedAt: now,
+      status: { type: "idle" },
+      turns: [],
+    },
+  };
   session.completed = false;
   session.unread = true;
   bootstrap.selectedEnvironmentId = session.environmentId;
   bootstrap.selectedSessionId = session.id;
 
+  await installControlledEventSource(page);
   await page.route(
     (url) => url.pathname === "/api/v1/bootstrap",
     async (route) => {
@@ -7508,6 +7535,8 @@ test("marks a Session complete independently from archiving and quiets its sideb
   await page.goto(
     `/?environment=${encodeURIComponent(session.environmentId)}&session=${encodeURIComponent(session.id)}`,
   );
+  const eventPath = `/api/v1/sessions/${session.id}/events`;
+  await emitControlledEvent(page, eventPath, "snapshot", snapshot);
   const sessionRow = page
     .locator(".session-row")
     .filter({ hasText: session.title });
@@ -7544,6 +7573,35 @@ test("marks a Session complete independently from archiving and quiets its sideb
   await expect(menuCompletion).toHaveAttribute("aria-busy", "true");
   await expect(sessionRow).toHaveClass(/is-completed/);
   await expect(page.getByRole("menu")).toHaveCount(0);
+  await expect(completionButton).toHaveAttribute("aria-busy", "false");
+
+  const runningTurn: CodexTurn = {
+    id: "turn-e2e-reopens-completed-session",
+    items: [],
+    itemsView: "full",
+    status: "inProgress",
+    error: null,
+    startedAt: now + 1,
+    completedAt: null,
+    durationMs: null,
+  };
+  const started: CodexEventEnvelope = {
+    harness: "codex",
+    harnessVersion: "e2e",
+    protocolVersion: "v2",
+    sequence: 1,
+    receivedAt: now + 1,
+    notification: {
+      method: "turn/started",
+      params: { threadId: nativeSessionId, turn: runningTurn },
+    },
+  };
+  await emitControlledEvent(page, eventPath, "notification", started);
+  await expect(sessionRow).not.toHaveClass(/is-completed/);
+  await expect(page.getByRole("button", { name: "Mark complete" })).toHaveAttribute(
+    "aria-pressed",
+    "false",
+  );
 });
 
 test("keeps the New Environment summary on one mobile line", async ({ page }) => {
