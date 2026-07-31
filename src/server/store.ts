@@ -718,6 +718,7 @@ export class SandpiStore {
   async createEnvironmentMetadata(input: {
     userId: string;
     name: string;
+    sandboxMemoryMiB: number;
     environmentLimit?: number | null;
   }) {
     const id = `env_${randomUUID()}`;
@@ -748,16 +749,17 @@ export class SandpiStore {
         `INSERT INTO environments (
            id, created_by_user_id, name, description, color, status,
            revision, template_id, credential_revision, harness,
-           harness_metadata, network_policy, display_order
+           harness_metadata, network_policy, sandbox_memory_mib,
+           display_order
          ) VALUES (
            $1, $2, $3, '', '#151515', 'updating', 1, 'coding-agent', 0,
            'codex', '{"label":"Codex","status":"not-connected"}'::JSONB,
-           '{"mode":"allow-all","domainExceptions":[]}'::JSONB,
+           '{"mode":"allow-all","domainExceptions":[]}'::JSONB, $4,
            (SELECT COALESCE(MAX(display_order), -1) + 1
             FROM environments
             WHERE created_by_user_id = $2)
          )`,
-        [id, input.userId, input.name],
+        [id, input.userId, input.name, input.sandboxMemoryMiB],
       );
       await client.query(
         `INSERT INTO environment_runtime (

@@ -9,9 +9,17 @@ import {
   PLAN_DEFINITIONS,
   subscriptionHasPaidEntitlement,
 } from "./plans";
+import {
+  SANDPI_FREE_RUNTIME_HOURS,
+  SANDPI_FREE_SANDBOX_MEMORY_MIB,
+} from "@/lib/billing";
 
 test("defines exact runtime quota conversions", () => {
   assert.equal(MIB_MILLISECONDS_PER_GIB_HOUR, 3_686_400_000);
+  assert.equal(
+    PLAN_DEFINITIONS.free.runtimeQuotaMiBMilliseconds,
+    14_745_600_000,
+  );
   assert.equal(
     PLAN_DEFINITIONS.plus.runtimeQuotaMiBMilliseconds,
     460_800_000_000,
@@ -24,6 +32,16 @@ test("defines exact runtime quota conversions", () => {
     PLAN_DEFINITIONS.ultra.runtimeQuotaMiBMilliseconds,
     2_304_000_000_000,
   );
+});
+
+test("defines the Free plan as two hours at a fixed 2 GiB", () => {
+  assert.equal(SANDPI_FREE_SANDBOX_MEMORY_MIB, 2 * 1024);
+  assert.equal(SANDPI_FREE_RUNTIME_HOURS, 2);
+  assert.equal(
+    PLAN_DEFINITIONS.free.fixedSandboxMemoryMiB,
+    SANDPI_FREE_SANDBOX_MEMORY_MIB,
+  );
+  assert.equal(PLAN_DEFINITIONS.free.runtimeQuotaGiBHours, 4);
 });
 
 test("defines annual paid plan prices and Environment limits", () => {

@@ -56,6 +56,7 @@ import {
 
 interface SidebarProps {
   language: OperationLanguage;
+  timeZone: string;
   viewer: SandpiUser;
   environments: Environment[];
   sessions: CodingSession[];
@@ -158,6 +159,7 @@ function SessionStateIndicator({
 
 export function Sidebar({
   language,
+  timeZone,
   viewer,
   environments,
   sessions,
@@ -260,6 +262,7 @@ export function Sidebar({
         footer={
           <SidebarAccountFooter
             language={language}
+            timeZone={timeZone}
             viewer={viewer}
           />
         }

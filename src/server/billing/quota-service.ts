@@ -40,7 +40,10 @@ export interface BillingQuotaStore {
 }
 
 export interface EnvironmentQuotaPolicy {
-  environmentLimit(userId: string): Promise<number | null>;
+  environmentCreationPolicy(userId: string): Promise<{
+    environmentLimit: number | null;
+    fixedSandboxMemoryMiB: number | null;
+  }>;
   assertMemoryConfigurationAllowed(
     userId: string,
     currentMemoryMiB: number,
@@ -156,8 +159,12 @@ export class BillingQuotaService
     };
   }
 
-  async environmentLimit(userId: string) {
-    return (await this.resolveEntitlement(userId)).plan.environmentLimit;
+  async environmentCreationPolicy(userId: string) {
+    const plan = (await this.resolveEntitlement(userId)).plan;
+    return {
+      environmentLimit: plan.environmentLimit,
+      fixedSandboxMemoryMiB: plan.fixedSandboxMemoryMiB,
+    };
   }
 
   async assertMemoryConfigurationAllowed(
@@ -167,12 +174,15 @@ export class BillingQuotaService
   ) {
     if (currentMemoryMiB === requestedMemoryMiB) return;
     const entitlement = await this.resolveEntitlement(userId);
-    if (entitlement.plan.memoryConfigurable) return;
+    if (entitlement.plan.fixedSandboxMemoryMiB == null) return;
     throw new HttpError(
       403,
       "sandbox_memory_plan_restricted",
-      "The Free plan does not allow Sandbox memory changes. Upgrade to change it.",
-      { planId: entitlement.plan.id },
+      `The ${entitlement.plan.name} plan fixes Sandbox memory at ${entitlement.plan.fixedSandboxMemoryMiB / 1024} GiB. Upgrade to change it.`,
+      {
+        planId: entitlement.plan.id,
+        fixedSandboxMemoryMiB: entitlement.plan.fixedSandboxMemoryMiB,
+      },
     );
   }
 
@@ -345,7 +355,7 @@ function publicPlan(plan: PlanDefinition): SandpiAccountPlan {
     name: plan.name,
     annualPriceUsd: plan.annualPriceUsd,
     environmentLimit: plan.environmentLimit,
-    memoryConfigurable: plan.memoryConfigurable,
+    memoryConfigurable: plan.fixedSandboxMemoryMiB == null,
     runtimeQuotaGiBHours: plan.runtimeQuotaGiBHours,
     quotaPeriod: plan.quotaPeriod,
   };

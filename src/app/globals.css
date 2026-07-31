@@ -1050,6 +1050,7 @@ pre {
   color: var(--ink);
   font-size: 11px;
   font-weight: 670;
+  font-variant-numeric: tabular-nums;
 }
 
 .sidebar-account-usage-state {
@@ -1085,6 +1086,13 @@ pre {
     var(--blue),
     color-mix(in srgb, var(--blue) 20%, transparent)
   );
+}
+
+.sidebar-account-usage-reset {
+  display: block;
+  margin-top: 6px;
+  color: var(--ink-faint);
+  font-size: 9px;
 }
 
 .sidebar-account-platforms {

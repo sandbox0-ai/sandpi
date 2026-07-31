@@ -6,6 +6,7 @@ import type {
   SandpiBootstrap,
   SandpiDeploymentSummary,
 } from "@/lib/types";
+import { ENVIRONMENT_SANDBOX_MEMORY_DEFAULT_MIB } from "@/lib/environment-resources";
 import { conflict, HttpError } from "@/server/http-error";
 import type { RuntimeAdapter } from "@/server/runtime/types";
 import { SandpiStore } from "@/server/store";
@@ -152,10 +153,13 @@ export class EnvironmentService {
     userId: string;
     name: string;
   }) {
-    const environmentLimit = await this.quota?.environmentLimit(input.userId);
+    const policy = await this.quota?.environmentCreationPolicy(input.userId);
     const environment = await this.store.createEnvironmentMetadata({
       ...input,
-      environmentLimit,
+      environmentLimit: policy?.environmentLimit,
+      sandboxMemoryMiB:
+        policy?.fixedSandboxMemoryMiB ??
+        ENVIRONMENT_SANDBOX_MEMORY_DEFAULT_MIB,
     });
     // The logical Environment exists before its Workspace Volume is ready.
     // Return immediately so native harness login can run in an Auth Runner

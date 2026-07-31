@@ -3284,6 +3284,12 @@ test("shows account usage and submits only a server-owned plan id", async ({
   let checkoutBody: unknown;
   const periodStartsAt = Date.parse("2026-07-01T00:00:00.000Z") / 1_000;
   const periodEndsAt = Date.parse("2026-08-01T00:00:00.000Z") / 1_000;
+  const bootstrap = getMockBootstrap();
+  useEnglishUi(bootstrap);
+  bootstrap.preferences.general.timeZone = "Asia/Shanghai";
+  await page.route("**/api/v1/bootstrap**", async (route) => {
+    await route.fulfill({ json: { data: bootstrap } });
+  });
   await page.route(
     (url) => url.pathname === "/api/v1/billing/summary",
     async (route) => {
@@ -3297,7 +3303,7 @@ test("shows account usage and submits only a server-owned plan id", async ({
               annualPriceUsd: 0,
               environmentLimit: 1,
               memoryConfigurable: false,
-              runtimeQuotaGiBHours: 1,
+              runtimeQuotaGiBHours: 4,
               quotaPeriod: "account-month",
             },
             availablePlans: [
@@ -3307,7 +3313,7 @@ test("shows account usage and submits only a server-owned plan id", async ({
                 annualPriceUsd: 0,
                 environmentLimit: 1,
                 memoryConfigurable: false,
-                runtimeQuotaGiBHours: 1,
+                runtimeQuotaGiBHours: 4,
                 quotaPeriod: "account-month",
               },
               {
@@ -3341,14 +3347,14 @@ test("shows account usage and submits only a server-owned plan id", async ({
             usage: {
               periodStartsAt,
               periodEndsAt,
-              confirmedMiBMilliseconds: 921_600_000,
-              projectedMiBMilliseconds: 1_843_200_000,
-              usedMiBMilliseconds: 1_843_200_000,
-              limitMiBMilliseconds: 3_686_400_000,
-              remainingMiBMilliseconds: 1_843_200_000,
-              usedGiBHours: 0.5,
-              limitGiBHours: 1,
-              percentUsed: 50,
+              confirmedMiBMilliseconds: 1_843_200_000,
+              projectedMiBMilliseconds: 3_686_400_000,
+              usedMiBMilliseconds: 3_686_400_000,
+              limitMiBMilliseconds: 14_745_600_000,
+              remainingMiBMilliseconds: 11_059_200_000,
+              usedGiBHours: 1,
+              limitGiBHours: 4,
+              percentUsed: 25,
               exhausted: false,
             },
             environmentCount: 1,
@@ -3391,7 +3397,10 @@ test("shows account usage and submits only a server-owned plan id", async ({
   ).toHaveClass(/lucide-chevron-down/);
   const accountMenu = page.getByRole("menu", { name: "Account actions" });
   await expect(accountMenu.getByText("Sandbox runtime")).toBeVisible();
-  await expect(accountMenu.getByText("0.5 / 1 GiB-hours")).toBeVisible();
+  await expect(accountMenu.getByText("0.5 / 2 hours")).toBeVisible();
+  await expect(
+    accountMenu.getByText("Resets Aug 1, 2026, 8:00 AM"),
+  ).toBeVisible();
   await expect(
     accountMenu.getByRole("menuitem", {
       name: "Sandpi GitHub repository",
@@ -3413,12 +3422,20 @@ test("shows account usage and submits only a server-owned plan id", async ({
   await expect(
     page.getByRole("heading", { name: "Billing & usage" }),
   ).toBeVisible();
-  await expect(page.getByText("0.5 / 1 GiB-hours")).toBeVisible();
+  await expect(page.getByText("0.5 / 2 hours")).toBeVisible();
+  await expect(
+    page.getByText("Resets Aug 1, 2026, 8:00 AM"),
+  ).toBeVisible();
   await expect(page.getByText("Sandbox0 SDK", { exact: true })).toBeVisible();
   await expect(page.getByText("$499", { exact: true })).toBeVisible();
   await expect(
     page.getByText("USD per year · billed annually").first(),
   ).toBeVisible();
+  const freePlan = page
+    .getByRole("article")
+    .filter({ hasText: "Free" });
+  await expect(freePlan.getByText("2 runtime hours / month")).toBeVisible();
+  await expect(freePlan.getByText("Fixed 2 GiB memory")).toBeVisible();
   const plusPlan = page
     .getByRole("article")
     .filter({ hasText: "Plus" });

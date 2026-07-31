@@ -19,6 +19,56 @@ const environment = {
   },
 } as unknown as Environment;
 
+test("creates a Free Environment with the plan's fixed 2 GiB memory", async () => {
+  let createInput:
+    | Parameters<SandpiStore["createEnvironmentMetadata"]>[0]
+    | undefined;
+  const store = {
+    async createEnvironmentMetadata(
+      input: Parameters<SandpiStore["createEnvironmentMetadata"]>[0],
+    ) {
+      createInput = input;
+      return {
+        ...environment,
+        status: "updating" as const,
+        sandboxMemoryMiB: input.sandboxMemoryMiB,
+      };
+    },
+    async environmentsNeedingProvisioning() {
+      return [];
+    },
+  } as unknown as SandpiStore;
+  const quota = {
+    async environmentCreationPolicy() {
+      return {
+        environmentLimit: 1,
+        fixedSandboxMemoryMiB: 2 * 1024,
+      };
+    },
+    async assertMemoryConfigurationAllowed() {},
+  };
+  const service = new EnvironmentService(
+    store,
+    {} as RuntimeAdapter,
+    { info() {}, error() {} },
+    quota,
+  );
+
+  const created = await service.create({
+    userId: "user-test",
+    name: "Free Environment",
+  });
+  await service.reconcilePending();
+
+  assert.equal(created.sandboxMemoryMiB, 2 * 1024);
+  assert.deepEqual(createInput, {
+    userId: "user-test",
+    name: "Free Environment",
+    environmentLimit: 1,
+    sandboxMemoryMiB: 2 * 1024,
+  });
+});
+
 test("returns ready Environment lifecycle state from Sandbox0 instead of PostgreSQL", async () => {
   const stored = {
     ...environment,
@@ -459,8 +509,8 @@ test("rechecks the memory entitlement after acquiring the lifecycle lock", async
     },
   } as unknown as RuntimeAdapter;
   const quota = {
-    async environmentLimit() {
-      return 1;
+    async environmentCreationPolicy() {
+      return { environmentLimit: 1, fixedSandboxMemoryMiB: 2 * 1024 };
     },
     async assertMemoryConfigurationAllowed() {
       quotaChecks += 1;

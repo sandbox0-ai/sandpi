@@ -51,8 +51,8 @@ segments provide timely admission and Sandbox0 remains usage truth.
 
 ## Entitlement periods
 
-- Free: one account-anchored month, 1 GiB-hour, one Environment, no memory
-  changes.
+- Free: one account-anchored month, two runtime hours on one fixed 2 GiB
+  Sandbox (4 GiB-hours), and one Environment.
 - Plus: $99 billed annually, fixed seven-day periods from first paid
   activation, 125 GiB-hours per period, three Environments.
 - Pro: $199 billed annually, fixed seven-day periods from first paid

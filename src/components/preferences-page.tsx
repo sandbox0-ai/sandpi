@@ -281,6 +281,7 @@ export function PreferencesPage({
         footer={
           <SidebarAccountFooter
             language={baseline.general.language}
+            timeZone={baseline.general.timeZone}
             viewer={viewer}
             showPreferences={false}
           />

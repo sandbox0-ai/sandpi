@@ -27,6 +27,7 @@ test("serializes Environment creation against the user plan limit", async () => 
     store.createEnvironmentMetadata({
       userId: "user-viewer",
       name: "Second Environment",
+      sandboxMemoryMiB: 2 * 1024,
       environmentLimit: 1,
     }),
     (error: unknown) =>
@@ -44,6 +45,43 @@ test("serializes Environment creation against the user plan limit", async () => 
     false,
   );
   assert.equal(queries.at(-1), "ROLLBACK");
+});
+
+test("persists the plan-selected Sandbox memory during Environment creation", async () => {
+  const queries: Array<{ sql: string; values?: readonly unknown[] }> = [];
+  const client = {
+    async query(sql: string, values?: readonly unknown[]) {
+      queries.push({ sql, values });
+      return { rowCount: 1, rows: [] };
+    },
+    release() {},
+  };
+  const store = new SandpiStore({
+    async connect() {
+      return client;
+    },
+  } as unknown as Pool);
+  Object.defineProperty(store, "getEnvironment", {
+    value: async () => ({ id: "environment-user" }),
+  });
+
+  await store.createEnvironmentMetadata({
+    userId: "user-viewer",
+    name: "Free Environment",
+    sandboxMemoryMiB: 2 * 1024,
+    environmentLimit: 1,
+  });
+
+  const insert = queries.find(({ sql }) =>
+    sql.includes("INSERT INTO environments"),
+  );
+  assert.ok(insert);
+  assert.match(insert.sql, /network_policy, sandbox_memory_mib/);
+  assert.deepEqual(insert.values?.slice(1), [
+    "user-viewer",
+    "Free Environment",
+    2 * 1024,
+  ]);
 });
 
 test("scopes Environments and Sessions to the owning user", async () => {
