@@ -1094,7 +1094,9 @@ export function CodexConversation({
               : current.unread,
         };
         sessionRef.current = next;
-        onSessionChange(next);
+        if (started || completed) {
+          onSessionChange(next);
+        }
         if (completed && document.visibilityState === "visible") {
           void apiFetch(
             `/api/v1/sessions/${encodeURIComponent(session.id)}/metadata`,
@@ -1994,10 +1996,6 @@ export function CodexConversation({
     }, 700);
   }
 
-  function openMarkdownWorkspacePath(path: string) {
-    onOpenWorkspacePath(path);
-  }
-
   async function openAgentsFile() {
     if (openingAgentsFile) return;
     setOpeningAgentsFile(true);
@@ -2111,7 +2109,7 @@ export function CodexConversation({
           {message.content ? (
             <MarkdownContent
               content={message.content}
-              onOpenWorkspacePath={openMarkdownWorkspacePath}
+              onOpenWorkspacePath={onOpenWorkspacePath}
               onOpenBrowserUrl={onOpenBrowserUrl}
             />
           ) : message.streaming ? (

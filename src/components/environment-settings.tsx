@@ -313,6 +313,7 @@ export function EnvironmentSettings({
   const [codexAccountReload, setCodexAccountReload] = useState(0);
   const drawerRef = useRef<HTMLElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const onCloseRef = useRef(onClose);
   const dangerZoneRef = useRef<HTMLDivElement>(null);
   const codexUsageResetIdempotencyKeyRef = useRef<string | null>(null);
   const codexAuthFlowId = codexAuthFlow?.id;
@@ -335,6 +336,7 @@ export function EnvironmentSettings({
   const domainEmptyState = blocksByDefault
     ? "No exceptions. All outbound destinations are blocked."
     : "No exceptions. All outbound destinations are allowed.";
+  onCloseRef.current = onClose;
 
   useEffect(() => {
     setActiveTab(initialTab);
@@ -408,7 +410,7 @@ export function EnvironmentSettings({
     function handleEscape(event: KeyboardEvent) {
       if (event.key === "Escape") {
         event.preventDefault();
-        onClose();
+        onCloseRef.current();
       }
     }
 
@@ -418,7 +420,7 @@ export function EnvironmentSettings({
       document.removeEventListener("keydown", handleEscape);
       previouslyFocused?.focus();
     };
-  }, [onClose]);
+  }, []);
 
   useEffect(() => {
     if (!deleteConfirming) return;

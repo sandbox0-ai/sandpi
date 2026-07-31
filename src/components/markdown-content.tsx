@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { memo, useCallback, useMemo } from "react";
 import ReactMarkdown, {
   type Components,
   defaultUrlTransform,
@@ -52,101 +52,109 @@ function markdownUrlTransform(
 }
 
 /** Shared presentation only; each harness still owns its native message model. */
-export function MarkdownContent({
+function MarkdownContentView({
   content,
   onOpenWorkspacePath,
   onOpenBrowserUrl,
 }: MarkdownContentProps) {
-  const components: Components = {
-    a({ href, children, title }) {
-      const workspacePath = workspacePathFromHref(href);
-      if (workspacePath && onOpenWorkspacePath) {
+  const components = useMemo<Components>(
+    () => ({
+      a({ href, children, title }) {
+        const workspacePath = workspacePathFromHref(href);
+        if (workspacePath && onOpenWorkspacePath) {
+          return (
+            <button
+              type="button"
+              className="markdown-workspace-link"
+              title={title ?? workspacePath}
+              data-workspace-path={workspacePath}
+              onClick={() => onOpenWorkspacePath(workspacePath)}
+            >
+              {children}
+            </button>
+          );
+        }
+        const absolutePath = posixAbsolutePathFromHref(href);
+        if (absolutePath) {
+          return (
+            <code
+              className="markdown-local-path"
+              title={title ?? absolutePath}
+              data-local-path={absolutePath}
+            >
+              {absolutePath}
+            </code>
+          );
+        }
+        const browserUrl = sandboxLoopbackUrl(href);
+        if (browserUrl && onOpenBrowserUrl) {
+          return (
+            <button
+              type="button"
+              className="markdown-browser-link"
+              title={title ?? browserUrl}
+              data-browser-url={browserUrl}
+              onClick={() => onOpenBrowserUrl(browserUrl)}
+            >
+              {children}
+            </button>
+          );
+        }
+        const external = isExternalHref(href);
         return (
-          <button
-            type="button"
-            className="markdown-workspace-link"
-            title={title ?? workspacePath}
-            data-workspace-path={workspacePath}
-            onClick={() => onOpenWorkspacePath(workspacePath)}
+          <a
+            href={href}
+            title={title}
+            target={external ? "_blank" : undefined}
+            rel={external ? "noreferrer noopener" : undefined}
+            data-sandpi-external-link={external ? "" : undefined}
           >
             {children}
-          </button>
+          </a>
         );
-      }
-      const absolutePath = posixAbsolutePathFromHref(href);
-      if (absolutePath) {
+      },
+      table({ children }) {
         return (
-          <code
-            className="markdown-local-path"
-            title={title ?? absolutePath}
-            data-local-path={absolutePath}
-          >
-            {absolutePath}
-          </code>
+          <div className="markdown-table-scroll">
+            <table>{children}</table>
+          </div>
         );
-      }
-      const browserUrl = sandboxLoopbackUrl(href);
-      if (browserUrl && onOpenBrowserUrl) {
+      },
+      img({ alt, src }) {
+        const href = typeof src === "string" ? src : undefined;
+        const external = isExternalHref(href);
         return (
-          <button
-            type="button"
-            className="markdown-browser-link"
-            title={title ?? browserUrl}
-            data-browser-url={browserUrl}
-            onClick={() => onOpenBrowserUrl(browserUrl)}
+          <a
+            className="markdown-image-link"
+            href={href}
+            target="_blank"
+            rel="noreferrer noopener"
+            data-sandpi-external-link={external ? "" : undefined}
           >
-            {children}
-          </button>
+            {alt || "Open image"}
+          </a>
         );
-      }
-      const external = isExternalHref(href);
-      return (
-        <a
-          href={href}
-          title={title}
-          target={external ? "_blank" : undefined}
-          rel={external ? "noreferrer noopener" : undefined}
-          data-sandpi-external-link={external ? "" : undefined}
-        >
-          {children}
-        </a>
-      );
-    },
-    table({ children }) {
-      return (
-        <div className="markdown-table-scroll">
-          <table>{children}</table>
-        </div>
-      );
-    },
-    img({ alt, src }) {
-      const href = typeof src === "string" ? src : undefined;
-      const external = isExternalHref(href);
-      return (
-        <a
-          className="markdown-image-link"
-          href={href}
-          target="_blank"
-          rel="noreferrer noopener"
-          data-sandpi-external-link={external ? "" : undefined}
-        >
-          {alt || "Open image"}
-        </a>
-      );
-    },
-  };
+      },
+    }),
+    [onOpenBrowserUrl, onOpenWorkspacePath],
+  );
+  const transformUrl = useCallback(
+    (value: string, key: string) =>
+      markdownUrlTransform(value, key, Boolean(onOpenBrowserUrl)),
+    [onOpenBrowserUrl],
+  );
 
   return (
     <div className="markdown-content">
       <ReactMarkdown
         remarkPlugins={remarkPlugins}
         components={components}
-        urlTransform={(value, key) =>
-          markdownUrlTransform(value, key, Boolean(onOpenBrowserUrl))
-        }
+        urlTransform={transformUrl}
       >
         {content}
       </ReactMarkdown>
     </div>
   );
 }
+
+export const MarkdownContent = memo(MarkdownContentView);
