@@ -5,7 +5,7 @@
 <h1 align="center">Sandpi</h1>
 
 <p align="center">
-  <strong>Your coding agent, running in a persistent cloud sandbox.</strong>
+  <strong>Your coding agent in a persistent cloud sandbox—continue the same session on web, desktop, or mobile.</strong>
 </p>
 
 <p align="center">

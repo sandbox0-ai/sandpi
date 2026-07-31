@@ -5,7 +5,7 @@
 <h1 align="center">Sandpi</h1>
 
 <p align="center">
-  <strong>让你的 coding agent 运行在持久化云端 Sandbox 中。</strong>
+  <strong>让你的 coding agent 运行在持久化云端 Sandbox 中——通过 Web、桌面端或移动端继续同一个 Session。</strong>
 </p>
 
 <p align="center">
