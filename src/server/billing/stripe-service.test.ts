@@ -89,13 +89,18 @@ function subscription(input: {
   startsAt: string;
   endsAt: string;
   status?: Stripe.Subscription.Status;
+  cancelAt?: string;
+  cancelAtPeriodEnd?: boolean;
 }) {
   return {
     id: input.id ?? "sub_one",
     customer: "cus_one",
     status: input.status ?? "active",
     metadata: { sandpi_user_id: account.userId },
-    cancel_at_period_end: false,
+    cancel_at: input.cancelAt
+      ? Date.parse(input.cancelAt) / 1_000
+      : null,
+    cancel_at_period_end: input.cancelAtPeriodEnd ?? false,
     items: {
       data: [
         {
@@ -291,6 +296,58 @@ test("materializes a pending downgrade after its saved period boundary", async (
   assert.equal(repository.subscriptionRecord?.stripePriceId, "price_plus");
   assert.equal(repository.subscriptionRecord?.pendingPlanId, undefined);
   assert.equal(repository.subscriptionRecord?.pendingEffectiveAt, undefined);
+});
+
+test("projects Stripe cancel_at only while cancellation is scheduled", async () => {
+  const repository = new FakeBillingRepository();
+  const scheduled = subscription({
+    priceId: "price_plus",
+    startsAt: "2026-07-01T00:00:00.000Z",
+    endsAt: "2026-08-01T00:00:00.000Z",
+    cancelAt: "2026-08-01T00:00:00.000Z",
+  });
+  const stripe = {
+    subscriptions: {
+      async retrieve() {
+        return scheduled;
+      },
+    },
+  } as unknown as Stripe;
+  const service = new StripeBillingService(
+    repository as unknown as BillingRepository,
+    stripeConfig,
+    new URL("https://sandpi.example.com"),
+    logger,
+    stripe,
+    () => new Date("2026-07-20T00:00:00.000Z"),
+  );
+
+  await service.processWebhook(
+    subscriptionEvent("evt_scheduled_cancel", scheduled),
+  );
+
+  assert.equal(
+    repository.subscriptionRecord?.cancelAtPeriodEnd,
+    true,
+  );
+
+  await service.processWebhook(
+    subscriptionEvent(
+      "evt_canceled",
+      subscription({
+        priceId: "price_plus",
+        startsAt: "2026-07-01T00:00:00.000Z",
+        endsAt: "2026-08-01T00:00:00.000Z",
+        status: "canceled",
+        cancelAt: "2026-08-01T00:00:00.000Z",
+      }),
+    ),
+  );
+
+  assert.equal(
+    repository.subscriptionRecord?.cancelAtPeriodEnd,
+    false,
+  );
 });
 
 test("asks Stripe to retry an event that another worker still owns", async () => {
