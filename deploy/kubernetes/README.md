@@ -48,6 +48,7 @@ Required repository variables:
 - `SANDPI_PUBLIC_URL`
 - `SANDPI_STRIPE_PLUS_PRICE_ID`
 - `SANDPI_STRIPE_PRO_PRICE_ID`
+- `SANDPI_STRIPE_ULTRA_PRICE_ID`
 
 Required repository secrets:
 
@@ -75,6 +76,11 @@ Stripe webhook endpoint as
 body with `SANDPI_STRIPE_WEBHOOK_SECRET`; the endpoint intentionally bypasses
 OIDC, while every summary, Checkout and Customer Portal route remains
 user-authenticated.
+
+`SANDPI_STRIPE_SECRET_KEY` authenticates Sandpi's outbound server calls for
+Customers, Checkout, Subscriptions and Customer Portal sessions. Prefer a
+restricted key with only those runtime resources; keep it separate from the
+webhook signing secret, which authenticates inbound Stripe callbacks.
 
 Before enabling Stripe mode, publish and install a Sandbox0 JavaScript SDK
 release that exposes `client.usage.listWindows()`. Sandpi deliberately fails

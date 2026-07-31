@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { SANDPI_PAID_PLAN_IDS } from "@/lib/billing";
 import type { SandpiPreferences } from "@/lib/types";
 import {
   BROWSER_DASHBOARD_VIEWPORT_LIMITS,
@@ -122,7 +123,7 @@ export const environmentScheduleSchema = z
 
 export const billingCheckoutSchema = z
   .object({
-    planId: z.enum(["plus", "pro"]),
+    planId: z.enum(SANDPI_PAID_PLAN_IDS),
     idempotencyKey: idempotencyKeySchema,
   })
   .strict();

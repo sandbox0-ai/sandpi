@@ -53,10 +53,12 @@ segments provide timely admission and Sandbox0 remains usage truth.
 
 - Free: one account-anchored month, 1 GiB-hour, one Environment, no memory
   changes.
-- Plus: fixed seven-day periods from first paid activation, 168 GiB-hours,
-  three Environments.
-- Pro: fixed seven-day periods from first paid activation, 500 GiB-hours, ten
-  Environments.
+- Plus: $99 billed annually, fixed seven-day periods from first paid
+  activation, 125 GiB-hours per period, three Environments.
+- Pro: $199 billed annually, fixed seven-day periods from first paid
+  activation, 250 GiB-hours per period, ten Environments.
+- Ultra: $499 billed annually, fixed seven-day periods from first paid
+  activation, 625 GiB-hours per period, 25 Environments.
 - Disabled billing: unlimited deployment entitlement with no usage polling.
 
 The conversion is exact:
@@ -91,9 +93,11 @@ authorized user operation uses Sandbox0's native auto-resume path.
 
 ## Stripe projection
 
-The browser can request only a server-known `plus` or `pro` plan. Stripe Price
-ids stay in deployment configuration. Checkout creation, subscription changes
-and Customer Portal sessions are server-side operations.
+The browser can request only a server-known `plus`, `pro` or `ultra` plan.
+Stripe Price ids stay in deployment configuration and each maps to one annual
+recurring Price. Checkout creation, subscription changes and Customer Portal
+sessions are server-side operations. A non-Stripe manual entitlement may start
+a fresh Checkout; it is never sent to Stripe as a subscription id.
 
 Webhook events are signature-verified from the raw body and a minimal receipt
 (event/type/object ids plus delivery metadata) is persisted before processing;
@@ -101,12 +105,13 @@ Sandpi does not retain the full Stripe payload. Event ids make retries
 idempotent. Subscription events are re-retrieved from Stripe before projection
 so a delayed event cannot overwrite newer state.
 
-Upgrades request immediate invoicing and receive the new entitlement only when
-Stripe reports the new Price. Downgrades change the next billed Price without
-proration while Sandpi saves the old entitlement until the current period end.
-The saved effective time changes entitlement even if a renewal webhook is
-delayed. `past_due` retains paid entitlement for 72 hours; afterward the user
-falls back to Free.
+Upgrades to a higher paid tier request immediate invoicing and receive the new
+entitlement only when Stripe reports the new Price. Downgrades to any lower
+tier change the next billed Price without proration while Sandpi saves the old
+entitlement until the current annual subscription period ends. The saved
+effective time changes entitlement even if a renewal webhook is delayed.
+`past_due` retains paid entitlement for 72 hours; afterward the user falls back
+to Free.
 
 ## Failure behavior
 

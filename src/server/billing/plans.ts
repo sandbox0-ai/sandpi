@@ -1,5 +1,6 @@
 import type {
   SandpiAccountPlan,
+  SandpiPaidPlanId,
   SandpiPlanId,
   SandpiSubscriptionStatus,
 } from "@/lib/billing";
@@ -16,7 +17,7 @@ export const PLAN_DEFINITIONS = {
   deployment: {
     id: "deployment",
     name: "Self-hosted",
-    monthlyPriceUsd: null,
+    annualPriceUsd: null,
     environmentLimit: null,
     memoryConfigurable: true,
     runtimeQuotaGiBHours: null,
@@ -26,7 +27,7 @@ export const PLAN_DEFINITIONS = {
   free: {
     id: "free",
     name: "Free",
-    monthlyPriceUsd: 0,
+    annualPriceUsd: 0,
     environmentLimit: 1,
     memoryConfigurable: false,
     runtimeQuotaGiBHours: 1,
@@ -36,26 +37,47 @@ export const PLAN_DEFINITIONS = {
   plus: {
     id: "plus",
     name: "Plus",
-    monthlyPriceUsd: 10,
+    annualPriceUsd: 99,
     environmentLimit: 3,
     memoryConfigurable: true,
-    runtimeQuotaGiBHours: 168,
-    runtimeQuotaMiBMilliseconds:
-      168 * MIB_MILLISECONDS_PER_GIB_HOUR,
+    runtimeQuotaGiBHours: 125,
+    runtimeQuotaMiBMilliseconds: 125 * MIB_MILLISECONDS_PER_GIB_HOUR,
     quotaPeriod: "fixed-week",
   },
   pro: {
     id: "pro",
     name: "Pro",
-    monthlyPriceUsd: 25,
+    annualPriceUsd: 199,
     environmentLimit: 10,
     memoryConfigurable: true,
-    runtimeQuotaGiBHours: 500,
-    runtimeQuotaMiBMilliseconds:
-      500 * MIB_MILLISECONDS_PER_GIB_HOUR,
+    runtimeQuotaGiBHours: 250,
+    runtimeQuotaMiBMilliseconds: 250 * MIB_MILLISECONDS_PER_GIB_HOUR,
+    quotaPeriod: "fixed-week",
+  },
+  ultra: {
+    id: "ultra",
+    name: "Ultra",
+    annualPriceUsd: 499,
+    environmentLimit: 25,
+    memoryConfigurable: true,
+    runtimeQuotaGiBHours: 625,
+    runtimeQuotaMiBMilliseconds: 625 * MIB_MILLISECONDS_PER_GIB_HOUR,
     quotaPeriod: "fixed-week",
   },
 } as const satisfies Record<SandpiPlanId, PlanDefinition>;
+
+const PAID_PLAN_RANK = {
+  plus: 0,
+  pro: 1,
+  ultra: 2,
+} as const satisfies Record<SandpiPaidPlanId, number>;
+
+export function isPaidPlanDowngrade(
+  from: SandpiPaidPlanId,
+  to: SandpiPaidPlanId,
+) {
+  return PAID_PLAN_RANK[from] > PAID_PLAN_RANK[to];
+}
 
 export interface UsagePeriod {
   startsAt: Date;

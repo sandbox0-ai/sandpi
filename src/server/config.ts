@@ -52,6 +52,7 @@ const environmentSchema = z.object({
   SANDPI_STRIPE_WEBHOOK_SECRET: z.string().min(1).optional(),
   SANDPI_STRIPE_PLUS_PRICE_ID: z.string().min(1).optional(),
   SANDPI_STRIPE_PRO_PRICE_ID: z.string().min(1).optional(),
+  SANDPI_STRIPE_ULTRA_PRICE_ID: z.string().min(1).optional(),
   SANDPI_USAGE_POLL_INTERVAL_MS: z.coerce
     .number()
     .int()
@@ -94,6 +95,7 @@ export interface SandpiConfig {
         webhookSecret: string;
         plusPriceId: string;
         proPriceId: string;
+        ultraPriceId: string;
         usagePollIntervalMs: number;
       };
 }
@@ -168,6 +170,7 @@ export function loadConfig(
       ["SANDPI_STRIPE_WEBHOOK_SECRET", value.SANDPI_STRIPE_WEBHOOK_SECRET],
       ["SANDPI_STRIPE_PLUS_PRICE_ID", value.SANDPI_STRIPE_PLUS_PRICE_ID],
       ["SANDPI_STRIPE_PRO_PRICE_ID", value.SANDPI_STRIPE_PRO_PRICE_ID],
+      ["SANDPI_STRIPE_ULTRA_PRICE_ID", value.SANDPI_STRIPE_ULTRA_PRICE_ID],
     ]
       .filter(([, configured]) => !configured)
       .map(([name]) => name);
@@ -182,6 +185,7 @@ export function loadConfig(
       webhookSecret: value.SANDPI_STRIPE_WEBHOOK_SECRET!,
       plusPriceId: value.SANDPI_STRIPE_PLUS_PRICE_ID!,
       proPriceId: value.SANDPI_STRIPE_PRO_PRICE_ID!,
+      ultraPriceId: value.SANDPI_STRIPE_ULTRA_PRICE_ID!,
       usagePollIntervalMs: value.SANDPI_USAGE_POLL_INTERVAL_MS,
     };
   }

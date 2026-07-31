@@ -1,8 +1,10 @@
 import { z } from "zod";
 
-import type {
-  SandpiBillingSummary,
-  SandpiCheckoutResult,
+import {
+  SANDPI_PAID_PLAN_IDS,
+  SANDPI_PLAN_IDS,
+  type SandpiBillingSummary,
+  type SandpiCheckoutResult,
 } from "@/lib/billing";
 import type { EnvironmentEgressCredential } from "@/lib/environment-credentials";
 import type {
@@ -334,9 +336,9 @@ export const bootstrapSchema = component(
 );
 
 const accountPlanSchema = z.object({
-  id: z.enum(["deployment", "free", "plus", "pro"]),
+  id: z.enum(SANDPI_PLAN_IDS),
   name: z.string(),
-  monthlyPriceUsd: z.number().nullable(),
+  annualPriceUsd: z.number().nullable(),
   environmentLimit: z.number().int().nullable(),
   memoryConfigurable: z.boolean(),
   runtimeQuotaGiBHours: z.number().nullable(),
@@ -364,7 +366,7 @@ export const billingSummarySchema = component(
         cancelAtPeriodEnd: z.boolean(),
         currentPeriodEndsAt: unixTimestampSchema.optional(),
         graceEndsAt: unixTimestampSchema.optional(),
-        pendingPlanId: z.enum(["plus", "pro"]).optional(),
+        pendingPlanId: z.enum(SANDPI_PAID_PLAN_IDS).optional(),
         pendingEffectiveAt: unixTimestampSchema.optional(),
       })
       .optional(),

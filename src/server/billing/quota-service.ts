@@ -105,6 +105,7 @@ export class BillingQuotaService
               publicPlan(PLAN_DEFINITIONS.free),
               publicPlan(PLAN_DEFINITIONS.plus),
               publicPlan(PLAN_DEFINITIONS.pro),
+              publicPlan(PLAN_DEFINITIONS.ultra),
             ]
           : [publicPlan(PLAN_DEFINITIONS.deployment)],
       subscription: entitlement.subscription
@@ -342,7 +343,7 @@ function publicPlan(plan: PlanDefinition): SandpiAccountPlan {
   return {
     id: plan.id,
     name: plan.name,
-    monthlyPriceUsd: plan.monthlyPriceUsd,
+    annualPriceUsd: plan.annualPriceUsd,
     environmentLimit: plan.environmentLimit,
     memoryConfigurable: plan.memoryConfigurable,
     runtimeQuotaGiBHours: plan.runtimeQuotaGiBHours,
