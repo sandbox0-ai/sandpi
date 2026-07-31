@@ -7080,6 +7080,7 @@ test("marks a Session complete independently from archiving and quiets its sideb
         completed?: boolean;
         unread?: boolean;
       };
+      await new Promise((resolve) => setTimeout(resolve, 500));
       Object.assign(session, metadata);
       await route.fulfill({ json: { data: session } });
     },
@@ -7091,16 +7092,39 @@ test("marks a Session complete independently from archiving and quiets its sideb
   const sessionRow = page
     .locator(".session-row")
     .filter({ hasText: session.title });
-  await page.getByRole("button", { name: "Mark complete" }).click();
+  const markComplete = page.getByRole("button", { name: "Mark complete" });
+  const completionButton = page.locator(".session-completion-button");
+  await markComplete.click();
 
+  await expect(completionButton).toHaveAttribute("aria-busy", "true");
+  await expect(completionButton).toBeDisabled();
+  await expect(sessionRow).toHaveClass(/is-completed/);
+  await expect(sessionRow.locator(".session-completed-indicator")).toBeVisible();
   await expect(page.getByRole("button", { name: "Mark incomplete" })).toHaveAttribute(
     "aria-pressed",
     "true",
   );
-  await expect(sessionRow).toHaveClass(/is-completed/);
-  await expect(sessionRow.locator(".session-state-indicator")).toHaveCount(0);
+  await expect(completionButton).toHaveAttribute("aria-busy", "false");
   expect(session.archived).toBe(false);
   expect(session.completed).toBe(true);
+
+  await page.getByRole("button", { name: "Mark incomplete" }).click();
+  await expect(page.getByRole("button", { name: "Mark complete" })).toHaveAttribute(
+    "aria-pressed",
+    "false",
+  );
+  await expect(sessionRow).not.toHaveClass(/is-completed/);
+
+  await sessionRow.hover();
+  await page
+    .getByRole("button", { name: `Session actions for ${session.title}` })
+    .click();
+  const menuCompletion = page.locator(".session-action-menu > button").nth(2);
+  await expect(menuCompletion).toHaveText("Mark complete");
+  await menuCompletion.click();
+  await expect(menuCompletion).toHaveAttribute("aria-busy", "true");
+  await expect(sessionRow).toHaveClass(/is-completed/);
+  await expect(page.getByRole("menu")).toHaveCount(0);
 });
 
 test("keeps the New Environment summary on one mobile line", async ({ page }) => {

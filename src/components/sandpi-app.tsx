@@ -831,14 +831,28 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
   );
 
   const handleToggleSessionCompleted = useCallback(
-    (sessionId: string) => {
+    async (sessionId: string) => {
       const session = sessions.find((candidate) => candidate.id === sessionId);
       if (!session) return;
-      void persistSessionMetadata(sessionId, {
-        completed: !session.completed,
-      }).catch((error) => {
+      const completed = !session.completed;
+      setSessions((current) =>
+        current.map((candidate) =>
+          candidate.id === sessionId ? { ...candidate, completed } : candidate,
+        ),
+      );
+      try {
+        await persistSessionMetadata(sessionId, { completed });
+      } catch (error) {
+        setSessions((current) =>
+          current.map((candidate) =>
+            candidate.id === sessionId && candidate.completed === completed
+              ? { ...candidate, completed: session.completed }
+              : candidate,
+          ),
+        );
         console.error("Unable to update Session completion", error);
-      });
+        throw error;
+      }
     },
     [persistSessionMetadata, sessions],
   );
@@ -1006,6 +1020,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
       onForkSession={handleForkSession}
       onArchiveSession={handleArchiveSession}
       onTogglePinSession={handleTogglePinSession}
+      onToggleSessionCompleted={handleToggleSessionCompleted}
       onCollapse={() => {
         handleSidebarCollapsedChange(true);
         setSidebarOpen(false);

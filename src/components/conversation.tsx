@@ -49,7 +49,7 @@ interface ConversationProps {
     request: EnvironmentBrowserNavigationRequest,
   ) => void;
   onSessionChange: (session: CodingSession) => void;
-  onToggleSessionCompleted: (sessionId: string) => void;
+  onToggleSessionCompleted: (sessionId: string) => Promise<void>;
   onDerivedSessionCreated: (session: CodingSession) => void;
 }
 
