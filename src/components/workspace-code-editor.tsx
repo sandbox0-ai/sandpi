@@ -57,13 +57,14 @@ function editorOptions(readOnly: boolean): Monaco.editor.IStandaloneEditorConstr
     minimap: { enabled: false },
     padding: { top: 8, bottom: 18 },
     readOnly,
+    domReadOnly: readOnly,
     renderLineHighlight: "line",
     roundedSelection: false,
     scrollBeyondLastLine: false,
     smoothScrolling: true,
     stickyScroll: { enabled: false },
     tabSize: 2,
-    wordWrap: "off",
+    wordWrap: "on",
   };
 }
 
