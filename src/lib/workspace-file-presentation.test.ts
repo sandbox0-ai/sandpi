@@ -30,6 +30,24 @@ test("resolves relative Markdown paths inside the Workspace", () => {
   );
 });
 
+test("resolves line-qualified Markdown links to their Workspace files", () => {
+  assert.equal(
+    resolveWorkspaceMarkdownPath("/workspace/src/app.ts:42"),
+    "/workspace/src/app.ts",
+  );
+  assert.equal(
+    resolveWorkspaceMarkdownPath(
+      "./reference/details.md:18:7",
+      "/workspace/docs/guide.md",
+    ),
+    "/workspace/docs/reference/details.md",
+  );
+  assert.equal(
+    resolveWorkspaceMarkdownPath("/workspace/releases/report:final"),
+    "/workspace/releases/report:final",
+  );
+});
+
 test("rejects Markdown paths outside the Workspace and active schemes", () => {
   assert.equal(
     resolveWorkspaceMarkdownPath("../../../etc/passwd", "/workspace/docs/guide.md"),

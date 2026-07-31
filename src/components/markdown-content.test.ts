@@ -47,6 +47,18 @@ test("keeps Workspace and external links inside their intended boundaries", () =
   assert.match(html, /rel="noreferrer noopener"/);
 });
 
+test("opens line-qualified Workspace links as their underlying files", () => {
+  const html = render(
+    "[Line](/workspace/app/page.tsx:42) [Column](/workspace/app/page.tsx:42:7)",
+  );
+
+  assert.equal(
+    html.match(/data-workspace-path="\/workspace\/app\/page\.tsx"/g)?.length,
+    2,
+  );
+  assert.doesNotMatch(html, /data-workspace-path="[^"]*:42/);
+});
+
 test("resolves relative links from a Workspace Markdown file", () => {
   const html = renderToStaticMarkup(
     createElement(MarkdownContent, {

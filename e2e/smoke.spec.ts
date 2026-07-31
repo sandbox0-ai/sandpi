@@ -4881,7 +4881,7 @@ await Promise.all(jobs.map((job) => tools.exec_command(job.args)));`,
   expect(browserErrors).toEqual([]);
 });
 
-test("opens Environment file and loopback links in their native inspectors", async ({
+test("opens line-qualified Environment file and loopback links in their native inspectors", async ({
   page,
 }) => {
   const bootstrap = getMockBootstrap();
@@ -4903,6 +4903,13 @@ test("opens Environment file and loopback links in their native inspectors", asy
       await route.fulfill({ json: { data: bootstrap } });
     },
   );
+  await page.route("**/api/v1/environments/**/metrics/current", async (route) => {
+    await route.fulfill({
+      json: {
+        data: { cpuUtilization: 0.1, memoryUtilization: 0.2 },
+      },
+    });
+  });
   const now = Date.now() / 1_000;
   const nativeThreadId = "thread-e2e-workspace-links";
   const nativeTurnId = "turn-e2e-workspace-links";
@@ -4966,7 +4973,7 @@ test("opens Environment file and loopback links in their native inspectors", asy
               type: "agentMessage",
               id: "workspace-links-agent",
               text:
-                `Open [globals.css](${globalsPath}) or ` +
+                `Open [globals.css](${globalsPath}:1) or ` +
                 `[page.tsx](${pagePath}), then inspect ` +
                 `[the app](localhost:3000/preview).`,
               phase: "final_answer",
@@ -5157,11 +5164,18 @@ test("opens Environment file and loopback links in their native inspectors", asy
   );
   await expect(page.getByText("Loading conversation…")).toBeHidden();
 
-  await page.locator(`[data-workspace-path="${globalsPath}"]`).click();
+  const globalsLink = page.getByRole("button", {
+    name: "globals.css",
+    exact: true,
+  });
+  await expect(globalsLink).toHaveAttribute("data-workspace-path", globalsPath);
+  await globalsLink.click();
   await expect(
     page.getByText("workspace / app/globals.css", { exact: true }),
   ).toBeVisible();
-  await expect(page.getByLabel("globals.css", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("workspace-source-preview")).toContainText(
+    "body { color: tomato; }",
+  );
   await expect.poll(() => fileRequests).toContain(globalsPath);
   releaseDirectoryListings();
 
@@ -5199,7 +5213,9 @@ test("opens Environment file and loopback links in their native inspectors", asy
   await expect(
     page.getByText("workspace / app/page.tsx", { exact: true }),
   ).toBeVisible();
-  await expect(page.getByLabel("page.tsx", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("workspace-source-preview")).toContainText(
+    "Hello",
+  );
   await expect(
     workspaceTree.locator(`button[title="${pagePath}"]`),
   ).toHaveAttribute("aria-current", "page");
