@@ -102,6 +102,7 @@ export function WorkspaceTreeContextMenu({
   onRefreshFolder,
   onDownloadFile,
   onAnnounce,
+  readOnly,
   canMutateEntry,
 }: {
   language: OperationLanguage;
@@ -117,16 +118,19 @@ export function WorkspaceTreeContextMenu({
   onRefreshFolder: (path: string) => void;
   onDownloadFile: (path: string) => void;
   onAnnounce: (message: string) => void;
+  readOnly: boolean;
   canMutateEntry: boolean;
 }) {
   const ui = copy[language];
   const menuRef = useRef<HTMLDivElement>(null);
   const folder = target.file.kind === "folder";
   const canCreateEntries =
+    !readOnly &&
     folder &&
     !isWorkspaceInternalPath(target.file.path) &&
     !isWorkspaceGitMetadataPath(target.file.path);
   const canMutate =
+    !readOnly &&
     canMutateEntry &&
     target.file.path !== WORKSPACE_ROOT &&
     !isWorkspaceInternalPath(target.file.path) &&

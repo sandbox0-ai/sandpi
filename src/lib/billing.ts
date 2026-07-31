@@ -66,7 +66,7 @@ export interface SandpiBillingSummary {
   environmentCount: number;
   overEnvironmentLimit: boolean;
   customerPortalAvailable: boolean;
-  usageSource: "sandbox0-sdk" | "local-projection";
+  usageSource: "sandbox0-sdk" | "billing-disabled";
 }
 
 export interface SandpiCheckoutResult {

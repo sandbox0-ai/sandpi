@@ -13,6 +13,7 @@ export class UnconfiguredRuntime implements RuntimeAdapter {
   readonly mode = "unconfigured" as const;
 
   getEnvironmentSandboxState = unavailable;
+  getEnvironmentSandboxUsageProjection = unavailable;
   supportsUsageWindows = () => false;
   listUsageWindows = unavailable;
   provisionEnvironment = unavailable;
@@ -48,11 +49,14 @@ export class UnconfiguredRuntime implements RuntimeAdapter {
   watchCodexEvents = unavailable;
   readCodexRollout = unavailable;
   listFiles = unavailable;
+  listPersistentWorkspaceFiles = unavailable;
   searchFiles = unavailable;
   writeCodexComposerUpload = unavailable;
   readFile = unavailable;
+  readPersistentWorkspaceFile = unavailable;
   getWorkspaceGitState = unavailable;
   readWorkspaceIdeFile = unavailable;
+  readPersistentWorkspaceIdeFile = unavailable;
   writeWorkspaceIdeFile = unavailable;
   createWorkspaceIdeEntry = unavailable;
   renameWorkspaceIdeEntry = unavailable;

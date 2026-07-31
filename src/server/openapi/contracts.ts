@@ -84,6 +84,7 @@ import {
   workspaceGitStateSchema,
   workspaceIdeFileSchema,
   workspaceIdeSnapshotSchema,
+  workspaceRuntimeAccessMetaSchema,
   workspaceSearchResultSchema,
 } from "@/server/openapi/models";
 
@@ -1212,7 +1213,12 @@ export const openApiRouteContracts: readonly OpenApiRouteContract[] = [
       summary: "List one Workspace directory",
       tags: ["Workspace"],
       querystring: z.object({ path: z.string().optional() }),
-      response: { 200: dataEnvelope(workspaceDirectoryListingSchema) },
+      response: {
+        200: dataMetaEnvelope(
+          workspaceDirectoryListingSchema,
+          workspaceRuntimeAccessMetaSchema,
+        ),
+      },
     },
   }),
   defineContract({
@@ -1223,7 +1229,12 @@ export const openApiRouteContracts: readonly OpenApiRouteContract[] = [
       summary: "Read a Workspace file as base64",
       tags: ["Workspace"],
       querystring: z.object({ path: z.string().min(1) }),
-      response: { 200: dataEnvelope(workspaceRawFile) },
+      response: {
+        200: dataMetaEnvelope(
+          workspaceRawFile,
+          workspaceRuntimeAccessMetaSchema,
+        ),
+      },
     },
   }),
   defineContract({
@@ -1233,7 +1244,12 @@ export const openApiRouteContracts: readonly OpenApiRouteContract[] = [
       operationId: "getEnvironmentIdeSnapshot",
       summary: "Get the cross-client Workspace IDE snapshot",
       tags: ["Workspace IDE"],
-      response: { 200: dataEnvelope(workspaceIdeSnapshotSchema) },
+      response: {
+        200: dataMetaEnvelope(
+          workspaceIdeSnapshotSchema,
+          workspaceRuntimeAccessMetaSchema,
+        ),
+      },
     },
   }),
   defineContract({
@@ -1244,7 +1260,12 @@ export const openApiRouteContracts: readonly OpenApiRouteContract[] = [
       summary: "Read a Workspace IDE file",
       tags: ["Workspace IDE"],
       querystring: z.object({ path: z.string().min(1) }),
-      response: { 200: dataEnvelope(workspaceIdeFileSchema) },
+      response: {
+        200: dataMetaEnvelope(
+          workspaceIdeFileSchema,
+          workspaceRuntimeAccessMetaSchema,
+        ),
+      },
     },
   }),
   defineContract({

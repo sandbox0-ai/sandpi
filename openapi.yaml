@@ -2210,7 +2210,7 @@ components:
           type: string
           enum:
             - sandbox0-sdk
-            - local-projection
+            - billing-disabled
       required:
         - billingEnabled
         - plan
@@ -2844,6 +2844,7 @@ components:
             - binary
             - deleted
             - sandpi-managed
+            - runtime-blocked
         size:
           type: string
         modifiedAt:
@@ -2964,6 +2965,44 @@ components:
         - type
         - paths
       additionalProperties: false
+    WorkspaceRuntimeAccessMeta:
+      oneOf:
+        - type: object
+          properties:
+            runtimeAccess:
+              type: string
+              enum:
+                - sandbox
+          required:
+            - runtimeAccess
+          additionalProperties: false
+        - type: object
+          properties:
+            runtimeAccess:
+              type: string
+              enum:
+                - persistent-storage
+            runtimeBlock:
+              type: object
+              properties:
+                code:
+                  type: string
+                  enum:
+                    - sandbox_runtime_quota_exhausted
+                    - environment_plan_limit
+                message:
+                  type: string
+                details:
+                  type: object
+                  additionalProperties: {}
+              required:
+                - code
+                - message
+              additionalProperties: false
+          required:
+            - runtimeAccess
+            - runtimeBlock
+          additionalProperties: false
 paths:
   /api/v1/auth/callback:
     get:
@@ -4671,8 +4710,11 @@ paths:
                       - content
                       - kind
                     additionalProperties: false
+                  meta:
+                    $ref: "#/components/schemas/WorkspaceRuntimeAccessMeta"
                 required:
                   - data
+                  - meta
                 additionalProperties: false
         default:
           description: Sandpi error.
@@ -4708,8 +4750,11 @@ paths:
                 properties:
                   data:
                     $ref: "#/components/schemas/WorkspaceDirectoryListing"
+                  meta:
+                    $ref: "#/components/schemas/WorkspaceRuntimeAccessMeta"
                 required:
                   - data
+                  - meta
                 additionalProperties: false
         default:
           description: Sandpi error.
@@ -5698,8 +5743,11 @@ paths:
                 properties:
                   data:
                     $ref: "#/components/schemas/WorkspaceIdeSnapshot"
+                  meta:
+                    $ref: "#/components/schemas/WorkspaceRuntimeAccessMeta"
                 required:
                   - data
+                  - meta
                 additionalProperties: false
         default:
           description: Sandpi error.
@@ -5907,8 +5955,11 @@ paths:
                 properties:
                   data:
                     $ref: "#/components/schemas/WorkspaceIdeFile"
+                  meta:
+                    $ref: "#/components/schemas/WorkspaceRuntimeAccessMeta"
                 required:
                   - data
+                  - meta
                 additionalProperties: false
         default:
           description: Sandpi error.

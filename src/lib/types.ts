@@ -316,7 +316,11 @@ export interface WorkspaceIdeFile {
   preview?: WorkspaceIdeFilePreview;
   bom?: "utf8";
   editable: boolean;
-  readOnlyReason?: "binary" | "deleted" | "sandpi-managed";
+  readOnlyReason?:
+    | "binary"
+    | "deleted"
+    | "sandpi-managed"
+    | "runtime-blocked";
   size?: string;
   modifiedAt?: UnixTimestamp;
   git?: WorkspaceGitFileChange;

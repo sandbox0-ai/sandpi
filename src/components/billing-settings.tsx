@@ -285,7 +285,7 @@ export function BillingSettings({
           value={
             summary.usageSource === "sandbox0-sdk"
               ? "Sandbox0 SDK"
-              : text("Local runtime projection", "本地运行投影")
+              : text("Billing disabled", "未启用计费")
           }
         />
       </div>

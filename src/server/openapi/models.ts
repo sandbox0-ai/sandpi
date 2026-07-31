@@ -386,7 +386,7 @@ export const billingSummarySchema = component(
     environmentCount: z.number().int().nonnegative(),
     overEnvironmentLimit: z.boolean(),
     customerPortalAvailable: z.boolean(),
-    usageSource: z.enum(["sandbox0-sdk", "local-projection"]),
+    usageSource: z.enum(["sandbox0-sdk", "billing-disabled"]),
   }),
 );
 
@@ -854,6 +854,24 @@ export const workspaceDirectoryListingSchema = component(
   }),
 );
 
+export const workspaceRuntimeAccessMetaSchema = component(
+  "WorkspaceRuntimeAccessMeta",
+  z.discriminatedUnion("runtimeAccess", [
+    z.object({ runtimeAccess: z.literal("sandbox") }),
+    z.object({
+      runtimeAccess: z.literal("persistent-storage"),
+      runtimeBlock: z.object({
+        code: z.enum([
+          "sandbox_runtime_quota_exhausted",
+          "environment_plan_limit",
+        ]),
+        message: z.string(),
+        details: z.record(z.string(), z.unknown()).optional(),
+      }),
+    }),
+  ]),
+);
+
 const gitFileChangeSchema = z.object({
   path: z.string(),
   relativePath: z.string(),
@@ -917,7 +935,7 @@ export const workspaceIdeFileSchema = component(
     bom: z.literal("utf8").optional(),
     editable: z.boolean(),
     readOnlyReason: z
-      .enum(["binary", "deleted", "sandpi-managed"])
+      .enum(["binary", "deleted", "sandpi-managed", "runtime-blocked"])
       .optional(),
     size: z.string().optional(),
     modifiedAt: unixTimestampSchema.optional(),

@@ -613,6 +613,44 @@ export function registerApiRoutes(
   },
 ) {
   const deployment = deploymentSummary(services.config, services.runtime);
+  const quotaSafeWorkspaceRead = async <T>(
+    userId: string,
+    environmentId: string,
+    liveRead: (
+      runtime: Parameters<RuntimeAdapter["listFiles"]>[0],
+    ) => Promise<T>,
+    persistentRead: (
+      runtime: Parameters<RuntimeAdapter["listFiles"]>[0],
+    ) => Promise<T>,
+  ) => {
+    try {
+      return {
+        data: await services.runtimeAccess.withRuntimeAccess(
+          userId,
+          environmentId,
+          liveRead,
+        ),
+        meta: { runtimeAccess: "sandbox" as const },
+      };
+    } catch (error) {
+      if (!isRuntimePlanBlock(error)) throw error;
+      return {
+        data: await services.runtimeAccess.withPersistentWorkspaceAccess(
+          userId,
+          environmentId,
+          persistentRead,
+        ),
+        meta: {
+          runtimeAccess: "persistent-storage" as const,
+          runtimeBlock: {
+            code: error.code,
+            message: error.message,
+            details: error.details,
+          },
+        },
+      };
+    }
+  };
   app.addHook("onSend", async (request, reply, payload) => {
     if (
       shouldApplyApiNoStore(
@@ -1578,13 +1616,16 @@ export function registerApiRoutes(
     "/api/v1/environments/:environmentId/files",
     async (request) => {
       const requestedPath = queryString(request, "path") ?? "/workspace";
-      return {
-        data: await services.runtimeAccess.withRuntimeAccess(
-          request.principal.userId,
-          request.params.environmentId,
-          (runtime) => services.runtime.listFiles(runtime, requestedPath),
-        ),
-      };
+      return quotaSafeWorkspaceRead(
+        request.principal.userId,
+        request.params.environmentId,
+        (runtime) => services.runtime.listFiles(runtime, requestedPath),
+        (runtime) =>
+          services.runtime.listPersistentWorkspaceFiles(
+            runtime,
+            requestedPath,
+          ),
+      );
     },
   );
   app.get<{ Params: { environmentId: string } }>(
@@ -1593,25 +1634,29 @@ export function registerApiRoutes(
       const filePath = queryString(request, "path");
       if (!filePath)
         throw new HttpError(400, "path_required", "File path is required.");
-      const content = await services.runtimeAccess.withRuntimeAccess(
+      return quotaSafeWorkspaceRead(
         request.principal.userId,
         request.params.environmentId,
-        (runtime) => services.runtime.readFile(runtime, filePath),
+        async (runtime) =>
+          workspaceFileResponse(
+            filePath,
+            await services.runtime.readFile(runtime, filePath),
+          ),
+        async (runtime) =>
+          workspaceFileResponse(
+            filePath,
+            await services.runtime.readPersistentWorkspaceFile(
+              runtime,
+              filePath,
+            ),
+          ),
       );
-      return {
-        data: {
-          path: filePath,
-          encoding: "base64",
-          content: Buffer.from(content).toString("base64"),
-          kind: isUtf8(content) ? "text" : "binary",
-        },
-      };
     },
   );
   app.get<{ Params: { environmentId: string } }>(
     "/api/v1/environments/:environmentId/ide",
     async (request) => {
-      const data = await services.runtimeAccess.withRuntimeAccess(
+      return quotaSafeWorkspaceRead(
         request.principal.userId,
         request.params.environmentId,
         async (runtime) => {
@@ -1633,8 +1678,27 @@ export function registerApiRoutes(
             refreshedAt: toUnixTimestamp(new Date()),
           };
         },
+        async (runtime) => {
+          const directory =
+            await services.runtime.listPersistentWorkspaceFiles(
+              runtime,
+              "/workspace",
+            );
+          return {
+            files: [
+              {
+                id: "workspace",
+                name: "workspace",
+                path: "/workspace",
+                kind: "folder" as const,
+                children: directory.entries,
+              },
+            ],
+            git: { repositories: [] },
+            refreshedAt: toUnixTimestamp(new Date()),
+          };
+        },
       );
-      return { data };
     },
   );
   app.get<{ Params: { environmentId: string } }>(
@@ -1644,13 +1708,16 @@ export function registerApiRoutes(
       if (!filePath) {
         throw new HttpError(400, "path_required", "File path is required.");
       }
-      return {
-        data: await services.runtimeAccess.withRuntimeAccess(
-          request.principal.userId,
-          request.params.environmentId,
-          (runtime) => services.runtime.readWorkspaceIdeFile(runtime, filePath),
-        ),
-      };
+      return quotaSafeWorkspaceRead(
+        request.principal.userId,
+        request.params.environmentId,
+        (runtime) => services.runtime.readWorkspaceIdeFile(runtime, filePath),
+        (runtime) =>
+          services.runtime.readPersistentWorkspaceIdeFile(
+            runtime,
+            filePath,
+          ),
+      );
     },
   );
   app.get<{ Params: { environmentId: string } }>(
@@ -2778,6 +2845,23 @@ export function validateBillingRuntime(
       "Stripe billing requires a Sandbox0 SDK release with client.usage.listWindows().",
     );
   }
+}
+
+function isRuntimePlanBlock(error: unknown): error is HttpError {
+  return (
+    error instanceof HttpError &&
+    (error.code === "sandbox_runtime_quota_exhausted" ||
+      error.code === "environment_plan_limit")
+  );
+}
+
+function workspaceFileResponse(filePath: string, content: Uint8Array) {
+  return {
+    path: filePath,
+    encoding: "base64" as const,
+    content: Buffer.from(content).toString("base64"),
+    kind: isUtf8(content) ? ("text" as const) : ("binary" as const),
+  };
 }
 
 function deploymentSummary(

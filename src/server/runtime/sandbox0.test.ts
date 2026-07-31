@@ -109,6 +109,40 @@ test("maps public Environment lifecycle state from Sandbox0", async () => {
   }
 });
 
+test("projects the active Sandbox allocation start for live usage", async () => {
+  let sandbox = {
+    status: "running",
+    paused: false,
+    claimedAt: new Date("2026-07-26T00:30:00.000Z"),
+  };
+  const runtime = runtimeWithClient({
+    sandboxes: {
+      async get(sandboxId: string) {
+        assert.equal(sandboxId, "sandbox-one");
+        return sandbox;
+      },
+    },
+  });
+
+  assert.deepEqual(
+    await runtime.getEnvironmentSandboxUsageProjection("sandbox-one"),
+    {
+      state: "running",
+      activeSince: new Date("2026-07-26T00:30:00.000Z"),
+    },
+  );
+
+  sandbox = {
+    status: "running",
+    paused: true,
+    claimedAt: new Date("2026-07-26T00:30:00.000Z"),
+  };
+  assert.deepEqual(
+    await runtime.getEnvironmentSandboxUsageProjection("sandbox-one"),
+    { state: "paused", activeSince: undefined },
+  );
+});
+
 test("reads Sandbox0 usage only through the official SDK resource", async () => {
   const calls: unknown[] = [];
   const expected = {
@@ -3591,6 +3625,75 @@ test("lists one Workspace directory without recursively expanding folders", asyn
       { name: "README.md", kind: "file", children: undefined },
     ],
   );
+});
+
+test("reads persistent Workspace files without resuming the Sandbox", async () => {
+  const operations: string[] = [];
+  const content = Buffer.from("export const answer = 42;\n");
+  const runtime = runtimeWithClient({
+    volumes: {
+      async listFiles(volumeId: string, directoryPath: string) {
+        operations.push(`list:${volumeId}:${directoryPath}`);
+        return [
+          { name: "src", path: "/src", type: "dir", size: 0 },
+          {
+            name: "README.md",
+            path: "/README.md",
+            type: "file",
+            size: 12,
+          },
+        ];
+      },
+      async statFile(volumeId: string, filePath: string) {
+        operations.push(`stat:${volumeId}:${filePath}`);
+        if (filePath === "/src") {
+          return { type: "dir", size: 0, isLink: false };
+        }
+        assert.equal(filePath, "/src/index.ts");
+        return {
+          type: "file",
+          size: content.byteLength,
+          modTime: new Date("2026-07-26T01:00:00.000Z"),
+          isLink: false,
+        };
+      },
+      async readFile(volumeId: string, filePath: string) {
+        operations.push(`read:${volumeId}:${filePath}`);
+        return content;
+      },
+    },
+  });
+  const coordinates = environmentRuntimeRecord();
+
+  const listing = await runtime.listPersistentWorkspaceFiles(
+    coordinates,
+    "/workspace",
+  );
+  const file = await runtime.readPersistentWorkspaceIdeFile(
+    coordinates,
+    "/workspace/src/index.ts",
+  );
+
+  assert.deepEqual(
+    listing.entries.map((entry) => ({ name: entry.name, kind: entry.kind })),
+    [
+      { name: "src", kind: "folder" },
+      { name: "README.md", kind: "file" },
+    ],
+  );
+  assert.equal(file.path, "/workspace/src/index.ts");
+  assert.equal(file.editable, false);
+  assert.equal(file.readOnlyReason, "runtime-blocked");
+  assert.equal(
+    Buffer.from(file.content, "base64").toString("utf8"),
+    content.toString("utf8"),
+  );
+  assert.deepEqual(operations, [
+    "list:volume-environment:/",
+    "stat:volume-environment:/src",
+    "stat:volume-environment:/src/index.ts",
+    "read:volume-environment:/src/index.ts",
+  ]);
 });
 
 test("coalesces Git scans and invalidates them from shallow Workspace watches", async () => {

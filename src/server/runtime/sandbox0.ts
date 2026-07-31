@@ -61,6 +61,7 @@ import {
   type EnsureCodexEnvironmentRuntimeOptions,
   type CodexAuthRuntime,
   type EnvironmentRuntimeRecord,
+  type EnvironmentSandboxUsageProjection,
   type ProvisionedEnvironment,
   type RecoveredCodexEnvironmentRuntime,
   type RuntimeCredentialSourceMetadata,
@@ -248,6 +249,34 @@ head -z -n ${MAX_WORKSPACE_FILE_SEARCH_CANDIDATES * 2}`;
 type SdkRuntimeMetricSeries = SandboxMetrics["series"][number];
 const decompressZstd = promisify(zstdDecompress);
 
+function environmentSandboxState(sandbox: {
+  paused: boolean;
+  status: string;
+}): EnvironmentSandboxState {
+  if (sandbox.paused || sandbox.status === "paused") return "paused";
+  switch (sandbox.status) {
+    case "starting":
+      return "provisioning";
+    case "running":
+      return "running";
+    case "terminating":
+      return "terminated";
+    case "failed":
+      return "failed";
+    default:
+      throw new HttpError(
+        502,
+        "sandbox0_lifecycle_state_invalid",
+        `Sandbox0 returned unsupported lifecycle state ${JSON.stringify(sandbox.status)}.`,
+      );
+  }
+}
+
+function validDate(value: unknown) {
+  const date = value instanceof Date ? value : new Date(String(value));
+  return Number.isNaN(date.getTime()) ? undefined : date;
+}
+
 export class Sandbox0Runtime implements RuntimeAdapter {
   readonly mode = "sandbox0" as const;
   private readonly client: Client;
@@ -280,25 +309,22 @@ export class Sandbox0Runtime implements RuntimeAdapter {
   async getEnvironmentSandboxState(
     sandboxId: string,
   ): Promise<EnvironmentSandboxState> {
+    return (await this.getEnvironmentSandboxUsageProjection(sandboxId)).state;
+  }
+
+  async getEnvironmentSandboxUsageProjection(
+    sandboxId: string,
+  ): Promise<EnvironmentSandboxUsageProjection> {
     try {
       const sandbox = await this.client.sandboxes.get(sandboxId);
-      if (sandbox.paused || sandbox.status === "paused") return "paused";
-      switch (sandbox.status) {
-        case "starting":
-          return "provisioning";
-        case "running":
-          return "running";
-        case "terminating":
-          return "terminated";
-        case "failed":
-          return "failed";
-        default:
-          throw new HttpError(
-            502,
-            "sandbox0_lifecycle_state_invalid",
-            `Sandbox0 returned unsupported lifecycle state ${JSON.stringify(sandbox.status)}.`,
-          );
-      }
+      const state = environmentSandboxState(sandbox);
+      return {
+        state,
+        activeSince:
+          state === "running" || state === "provisioning"
+            ? validDate(sandbox.claimedAt)
+            : undefined,
+      };
     } catch (error) {
       throw translateSandbox0Error(error);
     }
@@ -1602,41 +1628,24 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     runtime: EnvironmentRuntimeRecord,
     requestedPath: string,
   ): Promise<WorkspaceDirectoryListing> {
-    const root = safeWorkspacePath(requestedPath);
-    const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
-    await assertWorkspacePathHasNoSymlink(sandbox, root);
-    const nativeEntries = await sandbox.listFiles(root);
-    const entries: WorkspaceFile[] = [...nativeEntries]
-      .sort((left, right) => {
-        const leftFolder = left.type === "dir";
-        const rightFolder = right.type === "dir";
-        if (leftFolder !== rightFolder) return leftFolder ? -1 : 1;
-        return (left.name ?? "").localeCompare(right.name ?? "");
-      })
-      .flatMap((entry) => {
-        const entryPath =
-          entry.path ?? path.posix.join(root, entry.name ?? "unknown");
-        const visibleEntryPath = userVisibleWorkspacePath(entryPath);
-        if (!visibleEntryPath) return [];
-        const folder = entry.type === "dir";
-        if (isWorkspaceIdePathHidden(visibleEntryPath, folder)) {
-          return [];
-        }
-        return [
-          {
-            id: Buffer.from(visibleEntryPath).toString("base64url"),
-            name: entry.name ?? path.posix.basename(visibleEntryPath),
-            path: visibleEntryPath,
-            kind: folder ? ("folder" as const) : ("file" as const),
-            size:
-              entry.size === undefined ? undefined : formatFileSize(entry.size),
-            modifiedAt: entry.modTime
-              ? toUnixTimestamp(entry.modTime)
-              : undefined,
-          },
-        ];
-      });
-    return { path: root, entries, refreshedAt: toUnixTimestamp(new Date()) };
+    return listWorkspaceFiles(
+      this.client.sandboxes.sandbox(runtime.sandboxId),
+      requestedPath,
+    );
+  }
+
+  async listPersistentWorkspaceFiles(
+    runtime: EnvironmentRuntimeRecord,
+    requestedPath: string,
+  ): Promise<WorkspaceDirectoryListing> {
+    try {
+      return await listWorkspaceFiles(
+        persistentWorkspaceFileReader(this.client, runtime.workspaceVolumeId),
+        requestedPath,
+      );
+    } catch (error) {
+      throw translateWorkspaceFileError(error);
+    }
   }
 
   async searchFiles(
@@ -1724,39 +1733,31 @@ export class Sandbox0Runtime implements RuntimeAdapter {
 
   async readFile(runtime: EnvironmentRuntimeRecord, requestedPath: string) {
     try {
-      const filePath = safeWorkspacePath(requestedPath);
-      const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
-      const file = await assertWorkspacePathHasNoSymlink(sandbox, filePath);
-      if (!file) {
-        throw new HttpError(
-          404,
-          "workspace_file_not_found",
-          "The Workspace file no longer exists.",
-        );
-      }
-      if (file.type !== "file") {
-        throw new HttpError(
-          400,
-          "file_preview_not_regular",
-          "Only regular files can be previewed.",
-        );
-      }
-      if ((file.size ?? 0) > MAX_FILE_PREVIEW_BYTES) {
-        throw new HttpError(
-          413,
-          "file_preview_too_large",
-          "Files larger than 5 MiB cannot be previewed.",
-        );
-      }
-      const content = await sandbox.readFile(filePath);
-      if (content.byteLength > MAX_FILE_PREVIEW_BYTES) {
-        throw new HttpError(
-          413,
-          "file_preview_too_large",
-          "Files larger than 5 MiB cannot be previewed.",
-        );
-      }
-      return content;
+      return (
+        await readWorkspaceFileData(
+          this.client.sandboxes.sandbox(runtime.sandboxId),
+          requestedPath,
+        )
+      ).content;
+    } catch (error) {
+      throw translateWorkspaceFileError(error);
+    }
+  }
+
+  async readPersistentWorkspaceFile(
+    runtime: EnvironmentRuntimeRecord,
+    requestedPath: string,
+  ) {
+    try {
+      return (
+        await readWorkspaceFileData(
+          persistentWorkspaceFileReader(
+            this.client,
+            runtime.workspaceVolumeId,
+          ),
+          requestedPath,
+        )
+      ).content;
     } catch (error) {
       throw translateWorkspaceFileError(error);
     }
@@ -2082,6 +2083,46 @@ export class Sandbox0Runtime implements RuntimeAdapter {
       git: change,
       lineChanges,
     };
+  }
+
+  async readPersistentWorkspaceIdeFile(
+    runtime: EnvironmentRuntimeRecord,
+    requestedPath: string,
+  ): Promise<WorkspaceIdeFile> {
+    try {
+      const { filePath, file, content } = await readWorkspaceFileData(
+        persistentWorkspaceFileReader(
+          this.client,
+          runtime.workspaceVolumeId,
+        ),
+        requestedPath,
+      );
+      const name = path.posix.basename(filePath);
+      const preview = detectWorkspaceFilePreview(name, content);
+      const text =
+        preview === undefined && isUtf8(content)
+          ? Buffer.from(content).toString("utf8")
+          : undefined;
+      return {
+        path: filePath,
+        name,
+        revision: workspaceFileRevision(content),
+        encoding: "base64",
+        content: Buffer.from(content).toString("base64"),
+        kind: text === undefined ? "binary" : "text",
+        preview,
+        bom: hasUtf8Bom(content) ? "utf8" : undefined,
+        editable: false,
+        readOnlyReason: "runtime-blocked",
+        size: file.size === undefined ? undefined : formatFileSize(file.size),
+        modifiedAt: file.modTime
+          ? toUnixTimestamp(file.modTime)
+          : undefined,
+        lineChanges: [],
+      };
+    } catch (error) {
+      throw translateWorkspaceFileError(error);
+    }
   }
 
   async writeWorkspaceIdeFile(
@@ -3487,17 +3528,136 @@ function mutableWorkspaceEntryFromStat(
   };
 }
 
+interface NativeWorkspaceFile {
+  name?: string;
+  path?: string;
+  type?: string;
+  size?: number;
+  modTime?: Date;
+  isLink?: boolean;
+}
+
+interface WorkspaceFileReader {
+  statFile(filePath: string): Promise<NativeWorkspaceFile>;
+  listFiles(filePath: string): Promise<NativeWorkspaceFile[]>;
+  readFile(filePath: string): Promise<Uint8Array>;
+}
+
+function workspaceVolumePath(filePath: string) {
+  const relative = path.posix.relative(WORKSPACE_ROOT, filePath);
+  return relative ? `/${relative}` : "/";
+}
+
+function persistentWorkspaceFileReader(
+  client: Client,
+  workspaceVolumeId: string,
+): WorkspaceFileReader {
+  return {
+    statFile: (filePath) =>
+      client.volumes.statFile(
+        workspaceVolumeId,
+        workspaceVolumePath(filePath),
+      ),
+    listFiles: (filePath) =>
+      client.volumes.listFiles(
+        workspaceVolumeId,
+        workspaceVolumePath(filePath),
+      ),
+    readFile: (filePath) =>
+      client.volumes.readFile(
+        workspaceVolumeId,
+        workspaceVolumePath(filePath),
+      ),
+  };
+}
+
+async function listWorkspaceFiles(
+  reader: WorkspaceFileReader,
+  requestedPath: string,
+): Promise<WorkspaceDirectoryListing> {
+  const root = safeWorkspacePath(requestedPath);
+  await assertWorkspacePathHasNoSymlink(reader, root);
+  const nativeEntries = await reader.listFiles(root);
+  const entries: WorkspaceFile[] = [...nativeEntries]
+    .sort((left, right) => {
+      const leftFolder = left.type === "dir";
+      const rightFolder = right.type === "dir";
+      if (leftFolder !== rightFolder) return leftFolder ? -1 : 1;
+      return (left.name ?? "").localeCompare(right.name ?? "");
+    })
+    .flatMap((entry) => {
+      const entryName = entry.name ?? path.posix.basename(entry.path ?? "");
+      if (!entryName) return [];
+      const visibleEntryPath = userVisibleWorkspacePath(
+        path.posix.join(root, entryName),
+      );
+      if (!visibleEntryPath) return [];
+      const folder = entry.type === "dir";
+      if (isWorkspaceIdePathHidden(visibleEntryPath, folder)) return [];
+      return [
+        {
+          id: Buffer.from(visibleEntryPath).toString("base64url"),
+          name: entryName,
+          path: visibleEntryPath,
+          kind: folder ? ("folder" as const) : ("file" as const),
+          size:
+            entry.size === undefined ? undefined : formatFileSize(entry.size),
+          modifiedAt: entry.modTime
+            ? toUnixTimestamp(entry.modTime)
+            : undefined,
+        },
+      ];
+    });
+  return { path: root, entries, refreshedAt: toUnixTimestamp(new Date()) };
+}
+
+async function readWorkspaceFileData(
+  reader: WorkspaceFileReader,
+  requestedPath: string,
+) {
+  const filePath = safeWorkspacePath(requestedPath);
+  const file = await assertWorkspacePathHasNoSymlink(reader, filePath);
+  if (!file) {
+    throw new HttpError(
+      404,
+      "workspace_file_not_found",
+      "The Workspace file no longer exists.",
+    );
+  }
+  if (file.type !== "file") {
+    throw new HttpError(
+      400,
+      "file_preview_not_regular",
+      "Only regular files can be previewed.",
+    );
+  }
+  if ((file.size ?? 0) > MAX_FILE_PREVIEW_BYTES) {
+    throw new HttpError(
+      413,
+      "file_preview_too_large",
+      "Files larger than 5 MiB cannot be previewed.",
+    );
+  }
+  const content = await reader.readFile(filePath);
+  if (content.byteLength > MAX_FILE_PREVIEW_BYTES) {
+    throw new HttpError(
+      413,
+      "file_preview_too_large",
+      "Files larger than 5 MiB cannot be previewed.",
+    );
+  }
+  return { filePath, file, content };
+}
+
 async function assertWorkspacePathHasNoSymlink(
-  sandbox: ReturnType<Client["sandboxes"]["sandbox"]>,
+  sandbox: Pick<WorkspaceFileReader, "statFile">,
   filePath: string,
   allowMissingLeaf = false,
 ) {
   const relative = path.posix.relative("/workspace", filePath);
   let current = "/workspace";
   const components = relative.split("/").filter(Boolean);
-  let leaf:
-    | Awaited<ReturnType<typeof sandbox.statFile>>
-    | undefined;
+  let leaf: NativeWorkspaceFile | undefined;
   for (const [index, component] of components.entries()) {
     current = path.posix.join(current, component);
     let file;

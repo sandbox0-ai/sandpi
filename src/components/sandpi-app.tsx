@@ -149,6 +149,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
   const browserNavigationRequestIdRef = useRef(0);
   const environmentOrderRequestIdRef = useRef(0);
   const restoredWorkspaceNavigationRef = useRef(false);
+  const restoredEnvironmentSettingsRef = useRef(false);
   const sessionHydratedAtRef = useRef(
     new Map(
       initialData.sessions.map((session) => [session.id, Date.now()] as const),
@@ -573,6 +574,20 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
     },
     [canManageEnvironment, environments],
   );
+
+  useEffect(() => {
+    if (restoredEnvironmentSettingsRef.current) return;
+    const search = new URLSearchParams(window.location.search);
+    if (search.get("settings") !== "sandbox") return;
+    const environmentId = search.get("environment");
+    if (!environmentId) return;
+    const environment = environments.find(
+      (candidate) => candidate.id === environmentId,
+    );
+    if (!environment) return;
+    restoredEnvironmentSettingsRef.current = true;
+    openEnvironmentSettings(environmentId, "sandbox");
+  }, [environments, openEnvironmentSettings]);
 
   const handleSelectEnvironment = useCallback(
     (environmentId: string) => {
