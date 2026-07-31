@@ -299,7 +299,7 @@ export interface WorkspaceLineChange {
 }
 
 export interface WorkspaceIdeFilePreview {
-  kind: "audio" | "image" | "pdf" | "video";
+  kind: "audio" | "image" | "pdf" | "presentation" | "video";
   /** Server-verified media type; clients must not infer it from the filename. */
   mimeType: string;
 }

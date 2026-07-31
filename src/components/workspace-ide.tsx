@@ -20,6 +20,7 @@ import {
   GitCommitHorizontal,
   PanelLeftClose,
   PanelLeftOpen,
+  Presentation,
   Eye,
   Pencil,
   Radio,
@@ -93,7 +94,7 @@ import type {
 } from "@/lib/types";
 
 import { useAlertDialog } from "./alert-dialog";
-import { WorkspaceImagePreview } from "./workspace-image-preview";
+import { WorkspaceFileViewer } from "./workspace-file-viewer";
 import {
   WorkspaceTreeContextMenu,
   type WorkspaceTreeContextMenuTarget,
@@ -127,6 +128,7 @@ interface DocumentState {
   conflict?: WorkspaceIdeFile;
   comparing?: boolean;
   error?: string;
+  mode?: "edit" | "preview";
 }
 
 interface WorkspaceClientCacheEntry {
@@ -297,15 +299,10 @@ const copy = {
     openFull: "Open full Web IDE",
     back: "Back to Session",
     backEnvironment: "Back to Environment",
-    binary: "Binary files cannot be rendered as text.",
     previewOnly: "Read-only preview",
-    previewMode: "Preview only",
+    previewMode: "Preview file",
     editMode: "Edit file",
-    previewUnavailable: "Your browser cannot preview this media format.",
-    downloadPreview: "Download file",
     downloadFailed: "File could not be downloaded.",
-    previewLabel: (kind: string, name: string) =>
-      `${kind === "pdf" ? "PDF" : `${kind[0]?.toUpperCase()}${kind.slice(1)}`} preview: ${name}`,
     deletedFile: "Deleted files are read-only. Restore them from Git before editing.",
     managedFile: "Sandpi-managed files are read-only in the Web IDE.",
     save: "Save file (⌘/Ctrl+S)",
@@ -377,14 +374,10 @@ const copy = {
     openFull: "在完整 Web IDE 中打开",
     back: "返回 Session",
     backEnvironment: "返回 Environment",
-    binary: "二进制文件无法按文本显示。",
     previewOnly: "只读预览",
-    previewMode: "仅预览",
+    previewMode: "预览文件",
     editMode: "编辑文件",
-    previewUnavailable: "当前浏览器无法预览此媒体格式。",
-    downloadPreview: "下载文件",
     downloadFailed: "文件无法下载。",
-    previewLabel: (kind: string, name: string) => `${name} ${kind}预览`,
     deletedFile: "已删除文件为只读；请先通过 Git 恢复后再编辑。",
     managedFile: "Sandpi 管理的文件在 Web IDE 中为只读。",
     save: "保存文件（⌘/Ctrl+S）",
@@ -574,6 +567,7 @@ function fileIcon(fileName: string, folder = false, open = false) {
   if (previewKind === "image") return <FileImage size={14} />;
   if (previewKind === "video") return <FileVideo size={14} />;
   if (previewKind === "pdf") return <FileText size={14} />;
+  if (previewKind === "presentation") return <Presentation size={14} />;
   if (fileName.endsWith(".json")) return <FileJson size={14} />;
   if (fileName.endsWith(".md") || fileName.endsWith(".mdx")) {
     return <FileText size={14} />;
@@ -595,6 +589,8 @@ function languageLabel(fileName: string) {
       json: "JSON",
       md: "Markdown",
       mdx: "MDX",
+      csv: "CSV",
+      tsv: "TSV",
       css: "CSS",
       html: "HTML",
       go: "Go",
@@ -614,6 +610,8 @@ function workspaceFileTypeLabel(file: WorkspaceIdeFile) {
   return (
     {
       "application/pdf": "PDF",
+      "application/vnd.openxmlformats-officedocument.presentationml.presentation":
+        "PowerPoint presentation",
       "audio/aac": "AAC audio",
       "audio/aiff": "AIFF audio",
       "audio/flac": "FLAC audio",
@@ -704,92 +702,6 @@ function encodeBase64(content: string, bom?: "utf8") {
     binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
   }
   return window.btoa(binary);
-}
-
-function useWorkspacePreviewUrl(file: WorkspaceIdeFile) {
-  const [source, setSource] = useState<string>();
-  const mimeType = file.preview?.mimeType;
-
-  useEffect(() => {
-    if (!mimeType) return;
-    const objectUrl = URL.createObjectURL(
-      new Blob([decodeBase64Bytes(file.content)], { type: mimeType }),
-    );
-    setSource(objectUrl);
-    return () => URL.revokeObjectURL(objectUrl);
-  }, [file.content, mimeType]);
-
-  return source;
-}
-
-function WorkspaceFileMediaPreview({
-  file,
-  language,
-}: {
-  file: WorkspaceIdeFile;
-  language: OperationLanguage;
-}) {
-  const source = useWorkspacePreviewUrl(file);
-  const preview = file.preview;
-  if (!preview) return null;
-  const ui = copy[language];
-  const label = ui.previewLabel(preview.kind, file.name);
-  if (!source) {
-    return (
-      <div className={styles.loading} role="status">
-        <RefreshCw size={17} /> {ui.loading}
-      </div>
-    );
-  }
-
-  if (preview.kind === "image") {
-    return (
-      <div className={`${styles.filePreview} ${styles.imagePreview}`}>
-        <WorkspaceImagePreview
-          key={`${file.path}:${file.revision}`}
-          source={source}
-          name={file.name}
-          alt={label}
-          language={language}
-        />
-      </div>
-    );
-  }
-  if (preview.kind === "audio") {
-    return (
-      <div className={`${styles.filePreview} ${styles.audioPreview}`}>
-        <div className={styles.audioIdentity}>
-          <FileAudio size={30} aria-hidden="true" />
-          <strong>{file.name}</strong>
-          <span>{workspaceFileTypeLabel(file)}</span>
-        </div>
-        <audio aria-label={label} controls preload="metadata" src={source}>
-          {ui.previewUnavailable}
-        </audio>
-      </div>
-    );
-  }
-  if (preview.kind === "video") {
-    return (
-      <div className={`${styles.filePreview} ${styles.videoPreview}`}>
-        <video aria-label={label} controls preload="metadata" src={source}>
-          {ui.previewUnavailable}
-        </video>
-      </div>
-    );
-  }
-  return (
-    <div className={`${styles.filePreview} ${styles.pdfPreview}`}>
-      <object aria-label={label} data={source} type={preview.mimeType}>
-        <p>
-          {ui.previewUnavailable}{" "}
-          <a href={source} download={file.name}>
-            {ui.downloadPreview}
-          </a>
-        </p>
-      </object>
-    </div>
-  );
 }
 
 export function workspaceIdeHref(
@@ -1418,7 +1330,7 @@ export function WorkspaceIde({
   const ui = copy[language];
   const { confirm } = useAlertDialog();
   const localUiPreferences = useLocalUiPreferences();
-  const fileBrowserSidebarCollapsed =
+  const preferredFileBrowserSidebarCollapsed =
     localUiPreferences.workspace.fileBrowserSidebarCollapsed;
   const storedFileBrowserSidebarWidth =
     localUiPreferences.workspace.fileBrowserSidebarWidth;
@@ -1466,7 +1378,6 @@ export function WorkspaceIde({
   const [selectedPath, setSelectedPath] = useState(
     initialCacheState.selectedPath,
   );
-  const [previewOnly, setPreviewOnly] = useState(false);
   const [loading, setLoading] = useState(!initialCacheState.snapshot);
   const [error, setError] = useState("");
   const [connection, setConnection] = useState<
@@ -1477,6 +1388,14 @@ export function WorkspaceIde({
   );
   const [fileBrowserWorkbenchWidth, setFileBrowserWorkbenchWidth] = useState(0);
   const [fileBrowserResizing, setFileBrowserResizing] = useState(false);
+  const [mobileFileBrowserExpanded, setMobileFileBrowserExpanded] =
+    useState(false);
+  const narrowFileBrowser =
+    fileBrowserWorkbenchWidth > 0 && fileBrowserWorkbenchWidth <= 560;
+  const fileBrowserSidebarCollapsed =
+    narrowFileBrowser && selectedPath
+      ? !mobileFileBrowserExpanded
+      : preferredFileBrowserSidebarCollapsed;
   const snapshotRef = useRef(snapshot);
   const gitStateRef = useRef<WorkspaceGitState>(
     snapshot?.git ?? { repositories: [] },
@@ -1506,9 +1425,6 @@ export function WorkspaceIde({
   const environmentIdentityRef = useRef(cacheKey);
   const selectedPathEnvironmentRef = useRef(environment.id);
 
-  useEffect(() => {
-    setPreviewOnly(window.matchMedia("(pointer: coarse)").matches);
-  }, []);
   const handledNavigationRequestRef = useRef("");
   const initialNavigationGenerationRef = useRef(-1);
   const revealRequestIdRef = useRef(0);
@@ -1748,7 +1664,6 @@ export function WorkspaceIde({
     async (filePath: string, reason: "open" | "external" | "reload" = "open") => {
       const visiblePath = userVisibleWorkspacePath(filePath);
       if (!visiblePath) return;
-      void loadWorkspaceCodeEditorModule();
       const environmentId = environment.id;
       const environmentGeneration = environmentGenerationRef.current;
       setDocuments((current) => {
@@ -1756,6 +1671,7 @@ export function WorkspaceIde({
           ...current,
           [visiblePath]: {
             ...current[visiblePath],
+            mode: current[visiblePath]?.mode ?? "preview",
             loading: reason !== "external" || !current[visiblePath]?.data,
             error: undefined,
           },
@@ -1802,6 +1718,7 @@ export function WorkspaceIde({
                       : responseData,
                 }
               : {
+                  mode: current[visiblePath]?.mode ?? "preview",
                   data: responseData,
                   draft:
                     responseData.kind === "text"
@@ -2030,9 +1947,21 @@ export function WorkspaceIde({
   }, [snapshot]);
 
   const openFile = useCallback(
-    (filePath: string) => {
+    (filePath: string, initialMode: "edit" | "preview" = "preview") => {
       const visiblePath = userVisibleWorkspacePath(filePath);
       if (!visiblePath) return Promise.resolve();
+      if (narrowFileBrowser) setMobileFileBrowserExpanded(false);
+      setDocuments((current) => {
+        const existing = current[visiblePath];
+        if (existing?.mode || initialMode === "preview") return current;
+        const next = {
+          ...current,
+          [visiblePath]: { ...existing, loading: !existing?.data, mode: initialMode },
+        };
+        documentsRef.current = next;
+        return next;
+      });
+      if (initialMode === "edit") void loadWorkspaceCodeEditorModule();
       setOpenPaths((current) => {
         const next = current.includes(visiblePath)
           ? current
@@ -2049,7 +1978,7 @@ export function WorkspaceIde({
       }
       return Promise.resolve();
     },
-    [environment.id, loadDocument],
+    [environment.id, loadDocument, narrowFileBrowser],
   );
 
   const createWorkspaceEntry = useCallback(
@@ -2100,7 +2029,7 @@ export function WorkspaceIde({
         return;
       }
       setError("");
-      if (kind === "file") openFile(responsePath);
+      if (kind === "file") openFile(responsePath, "edit");
     },
     [environment.id, loadDirectory, openFile],
   );
@@ -2873,6 +2802,7 @@ export function WorkspaceIde({
       setDocuments((current) => ({
         ...current,
         [visiblePath]: {
+          mode: current[visiblePath]?.mode ?? "edit",
           data: responseData,
           draft: savedDraft,
           loading: false,
@@ -2914,6 +2844,7 @@ export function WorkspaceIde({
       return {
         ...current,
         [filePath]: {
+          mode: document.mode ?? "preview",
           data: latest,
           draft: latest.kind === "text" ? decodeBase64(latest.content) : undefined,
           loading: false,
@@ -2924,10 +2855,12 @@ export function WorkspaceIde({
   }
 
   function toggleComparison(filePath: string) {
+    void loadWorkspaceCodeEditorModule();
     setDocuments((current) => ({
       ...current,
       [filePath]: {
         ...current[filePath],
+        mode: "edit",
         comparing: !current[filePath]?.comparing,
       },
     }));
@@ -2976,15 +2909,40 @@ export function WorkspaceIde({
     setOpenPaths((current) => {
       const index = current.indexOf(filePath);
       const next = current.filter((path) => path !== filePath);
+      openPathsRef.current = next;
       if (selectedPath === filePath) {
-        setSelectedPath(next[Math.min(index, next.length - 1)] ?? "");
+        const nextSelectedPath = next[Math.min(index, next.length - 1)] ?? "";
+        selectedPathRef.current = nextSelectedPath;
+        setSelectedPath(nextSelectedPath);
       }
+      return next;
+    });
+    setDocuments((current) => {
+      if (!current[filePath]) return current;
+      const next = { ...current };
+      delete next[filePath];
+      documentsRef.current = next;
+      return next;
+    });
+  }
+
+  function setDocumentMode(filePath: string, mode: "edit" | "preview") {
+    if (mode === "edit") void loadWorkspaceCodeEditorModule();
+    setDocuments((current) => {
+      const existing = current[filePath];
+      if (!existing || existing.mode === mode) return current;
+      const next = {
+        ...current,
+        [filePath]: { ...existing, mode, comparing: mode === "edit" ? existing.comparing : false },
+      };
+      documentsRef.current = next;
       return next;
     });
   }
 
   const document = selectedPath ? documents[selectedPath] : undefined;
   const selectedFile = document?.data;
+  const documentMode = document?.mode ?? "preview";
   const text =
     document?.draft ??
     (selectedFile?.kind === "text" ? decodeBase64(selectedFile.content) : "");
@@ -3053,13 +3011,17 @@ export function WorkspaceIde({
   }
 
   function setFileBrowserSidebarCollapsed(collapsed: boolean) {
-    updateLocalUiPreferences((current) => ({
-      ...current,
-      workspace: {
-        ...current.workspace,
-        fileBrowserSidebarCollapsed: collapsed,
-      },
-    }));
+    if (narrowFileBrowser) {
+      setMobileFileBrowserExpanded(!collapsed);
+    } else {
+      updateLocalUiPreferences((current) => ({
+        ...current,
+        workspace: {
+          ...current.workspace,
+          fileBrowserSidebarCollapsed: collapsed,
+        },
+      }));
+    }
     window.requestAnimationFrame(() => {
       (collapsed
         ? fileBrowserExpandButtonRef
@@ -3381,40 +3343,51 @@ export function WorkspaceIde({
                     <span className={styles.saveState}>{ui.saving}</span>
                   ) : document?.dirty ? (
                     <span className={styles.saveState}>{ui.unsaved}</span>
-                  ) : selectedFile?.editable && previewOnly ? (
+                  ) : selectedFile?.editable && documentMode === "preview" ? (
                     <span className={styles.saveState}>{ui.previewOnly}</span>
                   ) : selectedFile?.editable ? (
                     <span className={styles.saveState}>
                       <Check size={10} /> {ui.saved}
                     </span>
-                  ) : selectedFile?.preview ? (
+                  ) : selectedFile ? (
                     <span className={styles.saveState}>{ui.previewOnly}</span>
                   ) : null}
                   {selectedFile?.kind === "text" && selectedFile.editable ? (
                     <button
                       type="button"
-                      aria-label={previewOnly ? ui.editMode : ui.previewMode}
-                      title={previewOnly ? ui.editMode : ui.previewMode}
-                      aria-pressed={previewOnly}
-                      onClick={() => setPreviewOnly((current) => !current)}
+                      className={styles.modeButton}
+                      aria-label={documentMode === "preview" ? ui.editMode : ui.previewMode}
+                      title={documentMode === "preview" ? ui.editMode : ui.previewMode}
+                      aria-pressed={documentMode === "edit"}
+                      onClick={() =>
+                        setDocumentMode(
+                          selectedPath,
+                          documentMode === "preview" ? "edit" : "preview",
+                        )
+                      }
                     >
-                      {previewOnly ? <Pencil size={13} /> : <Eye size={13} />}
+                      {documentMode === "preview" ? <Pencil size={13} /> : <Eye size={13} />}
+                      <span>
+                        {documentMode === "preview" ? ui.editMode : ui.previewMode}
+                      </span>
                     </button>
                   ) : null}
-                  <button
-                    type="button"
-                    aria-label={ui.save}
-                    title={ui.save}
-                    disabled={
-                      !selectedFile?.editable ||
-                      !document?.dirty ||
-                      document.saving ||
-                      Boolean(document.conflict)
-                    }
-                    onClick={() => void saveDocument(selectedPath)}
-                  >
-                    <Save size={13} />
-                  </button>
+                  {documentMode === "edit" ? (
+                    <button
+                      type="button"
+                      aria-label={ui.save}
+                      title={ui.save}
+                      disabled={
+                        !selectedFile?.editable ||
+                        !document?.dirty ||
+                        document.saving ||
+                        Boolean(document.conflict)
+                      }
+                      onClick={() => void saveDocument(selectedPath)}
+                    >
+                      <Save size={13} />
+                    </button>
+                  ) : null}
                 </span>
               </header>
               <div className={styles.documentBody}>
@@ -3456,13 +3429,16 @@ export function WorkspaceIde({
                   <div className={styles.loading} role="status">
                     <RefreshCw size={17} /> {ui.loading}
                   </div>
-                ) : selectedFile?.preview ? (
-                  <WorkspaceFileMediaPreview
+                ) : selectedFile &&
+                  (selectedFile.kind === "binary" || documentMode === "preview") ? (
+                  <WorkspaceFileViewer
+                    key={`${selectedFile.path}:${selectedFile.revision}`}
+                    environmentId={environment.id}
                     file={selectedFile}
+                    text={text}
                     language={language}
+                    onOpenWorkspacePath={(path) => void openFile(path)}
                   />
-                ) : selectedFile?.kind === "binary" ? (
-                  <div className={styles.loading}>{ui.binary}</div>
                 ) : selectedFile ? (
                   <div className={styles.code} aria-label={selectedFile.name}>
                     {document?.comparing && document.conflict ? (
@@ -3477,7 +3453,7 @@ export function WorkspaceIde({
                         modelPath={`sandpi://${environment.id}${selectedPath}`}
                         value={text}
                         language={monacoLanguage(selectedFile.name)}
-                        readOnly={!selectedFile.editable || previewOnly}
+                        readOnly={!selectedFile.editable}
                         lineChanges={document?.dirty ? [] : selectedFile.lineChanges}
                         onChange={(value) => updateDraft(selectedPath, value)}
                         onSave={() => void saveDocument(selectedPath)}

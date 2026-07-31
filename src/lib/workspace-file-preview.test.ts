@@ -206,6 +206,28 @@ test("treats ASCII-compatible PDF and ID3 containers as previews", () => {
   );
 });
 
+test("recognizes verified PPTX archives without trusting the extension", () => {
+  const pptx = Buffer.concat([
+    bytes(0x50, 0x4b, 0x03, 0x04),
+    ascii("[Content_Types].xml"),
+    bytes(0, 0, 0, 0),
+    ascii("ppt/presentation.xml"),
+  ]);
+
+  assert.deepEqual(detectWorkspaceFilePreview("renamed.zip", pptx), {
+    kind: "presentation",
+    mimeType:
+      "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  });
+  assert.equal(
+    detectWorkspaceFilePreview(
+      "spoofed.pptx",
+      Buffer.concat([bytes(0x50, 0x4b, 0x03, 0x04), ascii("word/document.xml")]),
+    ),
+    undefined,
+  );
+});
+
 test("keeps SVG and arbitrary UTF-8 files in the text editor", () => {
   assert.equal(
     detectWorkspaceFilePreview("icon.svg", ascii("<svg></svg>")),
@@ -222,5 +244,7 @@ test("provides extension hints for file-tree icons only", () => {
   assert.equal(workspacePreviewKindForName("voice.m4a"), "audio");
   assert.equal(workspacePreviewKindForName("demo.webm"), "video");
   assert.equal(workspacePreviewKindForName("guide.pdf"), "pdf");
+  assert.equal(workspacePreviewKindForName("deck.pptx"), "presentation");
+  assert.equal(workspacePreviewKindForName("legacy.ppt"), "presentation");
   assert.equal(workspacePreviewKindForName("server.ts"), undefined);
 });

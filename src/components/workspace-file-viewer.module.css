@@ -1,0 +1,525 @@
+.sourcePreview,
+.csvPreview,
+.markdownPreview,
+.presentationPreview,
+.filePreview {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.sourcePreview {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+  background: var(--panel);
+}
+
+.sourcePreview:not(:has(.limitNotice)) {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.sourceScroller {
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+.sourceLines {
+  width: max-content;
+  min-width: 100%;
+  padding: 7px 0 22px;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 10.5px;
+  line-height: 1.68;
+  tab-size: 2;
+}
+
+.sourceLine {
+  display: grid;
+  min-height: 18px;
+  grid-template-columns: 54px minmax(max-content, 1fr);
+}
+
+.sourceLine:global(.sandpi-line-added) {
+  background: color-mix(in srgb, var(--green-soft) 70%, transparent);
+}
+
+.sourceLine:global(.sandpi-line-modified) {
+  background: color-mix(in srgb, var(--amber-soft) 66%, transparent);
+}
+
+.sourceLine:global(.sandpi-line-deleted) {
+  background: color-mix(in srgb, var(--red-soft) 70%, transparent);
+}
+
+.lineNumber {
+  position: sticky;
+  left: 0;
+  padding: 0 10px 0 6px;
+  border-right: 1px solid var(--line-soft);
+  background: color-mix(in srgb, var(--panel) 96%, transparent);
+  color: var(--ink-faint);
+  text-align: right;
+  user-select: none;
+}
+
+.sourceLine code {
+  padding: 0 18px;
+  color: var(--ink-soft);
+  font: inherit;
+  white-space: pre;
+}
+
+.limitNotice,
+.csvNotice {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--amber-soft);
+  color: var(--ink-soft);
+  font-size: 8.5px;
+}
+
+.markdownPreview {
+  overflow: auto;
+  padding: clamp(22px, 4vw, 52px) clamp(20px, 6vw, 76px) 70px;
+  overscroll-behavior: contain;
+  background: var(--panel);
+}
+
+.markdownPreview > :global(.markdown-content) {
+  width: min(820px, 100%);
+  margin: 0 auto;
+  font-size: 14px;
+}
+
+.markdownImage {
+  display: flex;
+  min-height: 92px;
+  align-items: center;
+  justify-content: center;
+  margin: 14px 0;
+  overflow: hidden;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: var(--canvas);
+}
+
+.markdownImage button {
+  display: flex;
+  width: 100%;
+  min-height: 92px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink-faint);
+  cursor: pointer;
+  font-size: 9px;
+}
+
+.markdownImage img {
+  width: 100%;
+  max-height: min(70vh, 680px);
+  object-fit: contain;
+}
+
+.csvPreview {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  overflow: hidden;
+  background: var(--panel);
+}
+
+.csvPreview > .sourcePreview {
+  grid-row: 2 / -1;
+}
+
+.csvToolbar {
+  display: flex;
+  grid-row: 1;
+  min-height: 39px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 5px 9px;
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--panel-strong);
+}
+
+.csvNotice {
+  grid-row: 2;
+}
+
+.segmentedControl {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  background: var(--canvas);
+}
+
+.segmentedControl button,
+.csvFooter button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 7px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ink-faint);
+  cursor: pointer;
+  font-size: 8.5px;
+}
+
+.segmentedControl button[aria-pressed="true"] {
+  background: var(--panel-strong);
+  box-shadow: 0 1px 3px rgb(20 20 16 / 10%);
+  color: var(--ink);
+}
+
+.csvSearch {
+  display: flex;
+  width: min(260px, 45%);
+  height: 27px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  background: var(--canvas);
+  color: var(--ink-faint);
+}
+
+.csvSearch input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 9px;
+}
+
+.tableScroller {
+  min-height: 0;
+  grid-row: 3;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+.tableScroller table {
+  width: max-content;
+  min-width: 100%;
+  border-spacing: 0;
+  border-collapse: separate;
+  color: var(--ink-soft);
+  font-size: 9.5px;
+}
+
+.tableScroller th,
+.tableScroller td {
+  max-width: 360px;
+  padding: 6px 9px;
+  overflow: hidden;
+  border-right: 1px solid var(--line-soft);
+  border-bottom: 1px solid var(--line-soft);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tableScroller thead th {
+  position: sticky;
+  z-index: 2;
+  top: 0;
+  background: var(--sidebar);
+  color: var(--ink);
+  font-weight: 650;
+}
+
+.tableScroller .rowNumber {
+  position: sticky;
+  z-index: 1;
+  left: 0;
+  width: 43px;
+  min-width: 43px;
+  background: var(--sidebar);
+  color: var(--ink-faint);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-weight: 500;
+  text-align: right;
+}
+
+.tableScroller thead .rowNumber {
+  z-index: 3;
+}
+
+.tableScroller tbody tr:nth-child(even) td {
+  background: color-mix(in srgb, var(--sidebar) 35%, transparent);
+}
+
+.csvFooter {
+  display: flex;
+  grid-row: 4;
+  min-height: 32px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 10px;
+  border-top: 1px solid var(--line-soft);
+  color: var(--ink-faint);
+  font-size: 8.5px;
+}
+
+.csvFooter button {
+  color: var(--blue);
+}
+
+.filePreview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background:
+    linear-gradient(45deg, var(--line-soft) 25%, transparent 25%) 0 0 / 18px 18px,
+    linear-gradient(-45deg, var(--line-soft) 25%, transparent 25%) 0 9px / 18px 18px,
+    linear-gradient(45deg, transparent 75%, var(--line-soft) 75%) 9px -9px / 18px 18px,
+    linear-gradient(-45deg, transparent 75%, var(--line-soft) 75%) -9px 0 / 18px 18px,
+    var(--panel);
+}
+
+.imagePreview {
+  position: relative;
+  align-items: stretch;
+  justify-content: stretch;
+}
+
+.audioPreview {
+  flex-direction: column;
+  gap: 22px;
+  padding: 30px;
+}
+
+.audioIdentity {
+  display: flex;
+  min-width: 0;
+  max-width: min(480px, 100%);
+  align-items: center;
+  gap: 11px;
+  color: var(--ink-soft);
+}
+
+.audioIdentity svg {
+  flex: 0 0 auto;
+  color: var(--ink-faint);
+}
+
+.audioIdentity strong,
+.audioIdentity span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.audioIdentity strong {
+  font-size: 12px;
+  font-weight: 620;
+}
+
+.audioIdentity span {
+  color: var(--ink-faint);
+  font-size: 9px;
+}
+
+.audioPreview audio {
+  width: min(480px, 100%);
+}
+
+.videoPreview {
+  padding: clamp(10px, 2.5vw, 28px);
+  background: #090909;
+}
+
+.videoPreview video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.pdfPreview {
+  padding: 10px;
+  background: var(--canvas);
+}
+
+.pdfPreview object {
+  width: 100%;
+  height: 100%;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: white;
+}
+
+.pdfPreview p {
+  padding: 20px;
+  color: var(--ink-soft);
+  font-size: 10px;
+}
+
+.pdfPreview a,
+.presentationStatus a {
+  color: var(--blue);
+}
+
+.presentationPreview {
+  position: relative;
+  overflow: hidden;
+  background: var(--canvas);
+}
+
+.presentationPreview iframe {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: var(--canvas);
+}
+
+.presentationStatus,
+.presentationToolbar {
+  display: flex;
+  position: absolute;
+  z-index: 2;
+  top: 10px;
+  min-height: 30px;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border: 1px solid color-mix(in srgb, var(--line) 84%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--panel-strong) 92%, transparent);
+  box-shadow: 0 7px 22px rgb(20 20 16 / 11%);
+  color: var(--ink-soft);
+  font-size: 8.5px;
+  backdrop-filter: blur(10px);
+}
+
+.presentationStatus {
+  left: 10px;
+  max-width: calc(100% - 150px);
+}
+
+.presentationStatus span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.presentationStatus a {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  white-space: nowrap;
+}
+
+.presentationToolbar {
+  right: 10px;
+  gap: 2px;
+  padding: 2px;
+}
+
+.presentationToolbar button {
+  display: inline-flex;
+  width: 26px;
+  height: 26px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+
+.presentationToolbar button:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+.presentationToolbar button:disabled {
+  opacity: 0.35;
+}
+
+.presentationToolbar output {
+  width: 40px;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 8px;
+  text-align: center;
+}
+
+.emptyState {
+  display: flex;
+  height: 100%;
+  min-height: 90px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 18px;
+  color: var(--ink-faint);
+  font-size: 9px;
+}
+
+.emptyState a {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--blue);
+}
+
+.spin {
+  animation: spin 0.9s linear infinite;
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 620px) {
+  .markdownPreview {
+    padding: 20px 16px 60px;
+  }
+
+  .csvSearch {
+    width: min(180px, 50%);
+  }
+
+  .presentationStatus {
+    max-width: calc(100% - 126px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spin {
+    animation: none;
+  }
+}

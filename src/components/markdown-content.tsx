@@ -1,6 +1,11 @@
 "use client";
 
-import React, { memo, useCallback, useMemo } from "react";
+import React, {
+  memo,
+  useCallback,
+  useMemo,
+  type ReactNode,
+} from "react";
 import ReactMarkdown, {
   type Components,
   defaultUrlTransform,
@@ -8,11 +13,14 @@ import ReactMarkdown, {
 import remarkGfm from "remark-gfm";
 
 import { sandboxLoopbackUrl } from "@/lib/environment-browser";
+import { resolveWorkspaceMarkdownPath } from "@/lib/workspace-file-presentation";
 
 interface MarkdownContentProps {
   content: string;
+  baseWorkspacePath?: string;
   onOpenWorkspacePath?: (path: string) => void;
   onOpenBrowserUrl?: (url: string) => void;
+  renderWorkspaceImage?: (path: string, alt: string) => ReactNode;
 }
 
 const remarkPlugins = [remarkGfm];
@@ -29,10 +37,14 @@ function posixAbsolutePathFromHref(href: string | undefined) {
   }
 }
 
-function workspacePathFromHref(href: string | undefined) {
+function workspacePathFromHref(
+  href: string | undefined,
+  baseWorkspacePath?: string,
+) {
   const path = posixAbsolutePathFromHref(href);
-  return path === "/workspace" || path?.startsWith("/workspace/")
-    ? path
+  if (path === "/workspace" || path?.startsWith("/workspace/")) return path;
+  return baseWorkspacePath
+    ? resolveWorkspaceMarkdownPath(href, baseWorkspacePath)
     : undefined;
 }
 
@@ -54,13 +66,15 @@ function markdownUrlTransform(
 /** Shared presentation only; each harness still owns its native message model. */
 function MarkdownContentView({
   content,
+  baseWorkspacePath,
   onOpenWorkspacePath,
   onOpenBrowserUrl,
+  renderWorkspaceImage,
 }: MarkdownContentProps) {
   const components = useMemo<Components>(
     () => ({
       a({ href, children, title }) {
-        const workspacePath = workspacePathFromHref(href);
+        const workspacePath = workspacePathFromHref(href, baseWorkspacePath);
         if (workspacePath && onOpenWorkspacePath) {
           return (
             <button
@@ -122,6 +136,22 @@ function MarkdownContentView({
       },
       img({ alt, src }) {
         const href = typeof src === "string" ? src : undefined;
+        const workspacePath = workspacePathFromHref(href, baseWorkspacePath);
+        if (workspacePath && renderWorkspaceImage) {
+          return <>{renderWorkspaceImage(workspacePath, alt || "Workspace image")}</>;
+        }
+        if (workspacePath && onOpenWorkspacePath) {
+          return (
+            <button
+              type="button"
+              className="markdown-workspace-link markdown-image-link"
+              data-workspace-path={workspacePath}
+              onClick={() => onOpenWorkspacePath(workspacePath)}
+            >
+              {alt || "Open image"}
+            </button>
+          );
+        }
         const external = isExternalHref(href);
         return (
           <a
@@ -136,7 +166,12 @@ function MarkdownContentView({
         );
       },
     }),
-    [onOpenBrowserUrl, onOpenWorkspacePath],
+    [
+      baseWorkspacePath,
+      onOpenBrowserUrl,
+      onOpenWorkspacePath,
+      renderWorkspaceImage,
+    ],
   );
   const transformUrl = useCallback(
     (value: string, key: string) =>

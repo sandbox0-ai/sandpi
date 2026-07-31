@@ -904,7 +904,7 @@ export const workspaceIdeFileSchema = component(
     kind: z.enum(["binary", "text"]),
     preview: z
       .object({
-        kind: z.enum(["audio", "image", "pdf", "video"]),
+        kind: z.enum(["audio", "image", "pdf", "presentation", "video"]),
         mimeType: z.string(),
       })
       .optional(),

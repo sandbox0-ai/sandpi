@@ -6748,20 +6748,21 @@ test("renders the dedicated live Web IDE with Git state and changed lines", asyn
   await expect(
     page.getByRole("button", { name: /^Share / }),
   ).toHaveCount(0);
-  const editor = page.locator(".monaco-editor").first();
-  const previewOnly = page.getByRole("button", { name: "Preview only" });
-  await expect(previewOnly).toHaveAttribute("aria-pressed", "false");
-  await previewOnly.click();
+  await expect(page.getByTestId("workspace-source-preview")).toBeVisible();
+  await expect(page.locator(".monaco-editor")).toHaveCount(0);
   await expect(page.getByText("Read-only preview", { exact: true })).toBeVisible();
   const editFile = page.getByRole("button", { name: "Edit file" });
-  await expect(editFile).toHaveAttribute("aria-pressed", "true");
+  await expect(editFile).toHaveAttribute("aria-pressed", "false");
   await editFile.click();
+  const editor = page.locator(".monaco-editor").first();
+  await expect(editor).toBeVisible();
+  await expect(editor.locator("textarea.inputarea")).not.toHaveAttribute(
+    "readonly",
+    "",
+  );
   await expect(
-    page.getByText("Read-only preview", { exact: true }),
-  ).toHaveCount(0);
-  await expect(
-    page.getByRole("button", { name: "Preview only" }),
-  ).toHaveAttribute("aria-pressed", "false");
+    page.getByRole("button", { name: "Preview file" }),
+  ).toHaveAttribute("aria-pressed", "true");
   await editor.click();
   await page.keyboard.press("Control+A");
   await page.keyboard.insertText("export const editedInBrowser = true;\n");
@@ -6885,13 +6886,13 @@ test("renders the dedicated live Web IDE with Git state and changed lines", asyn
     page.getByText("Sandpi-managed files are read-only in the Web IDE."),
   ).toBeVisible();
   await expect(page.getByText('{"managed":true}')).toBeVisible();
-  await expect(save).toBeDisabled();
+  await expect(page.getByRole("button", { name: /Save file/ })).toHaveCount(0);
   expect(managedDirectoryLoads).toBeGreaterThan(0);
   await expect.poll(() => pageBlocksUnload(page)).toBe(true);
   expect(browserErrors).toEqual([]);
 });
 
-test("renders verified image, audio, video and PDF Workspace previews", async ({
+test("renders preview-first documents and verified rich Workspace previews", async ({
   page,
 }) => {
   const bootstrap = getMockBootstrap();
@@ -6899,6 +6900,37 @@ test("renders verified image, audio, video and PDF Workspace previews", async ({
   bootstrap.selectedEnvironmentId = environment.id;
   bootstrap.selectedSessionId = "";
   useEnglishUi(bootstrap);
+
+  await page.addInitScript(() => {
+    class PresentationWorkerMock extends EventTarget {
+      postMessage() {
+        queueMicrotask(() => {
+          const messages = [
+            { type: "slideSize", data: { width: 960, height: 540 } },
+            { type: "progress-update", data: 55 },
+            {
+              type: "slide",
+              slide_num: 1,
+              data: '<section class="slide" style="width:960px;height:540px;background:white"><div style="padding:80px;font:48px system-ui">Preview first slides</div></section>',
+            },
+            { type: "Done" },
+          ];
+          for (const data of messages) {
+            this.dispatchEvent(new MessageEvent("message", { data }));
+          }
+        });
+      }
+
+      terminate() {
+        // The deterministic worker has no resources beyond queued messages.
+      }
+    }
+
+    Object.defineProperty(window, "Worker", {
+      configurable: true,
+      value: PresentationWorkerMock,
+    });
+  });
 
   await page.route(
     (url) => url.pathname === "/api/v1/bootstrap",
@@ -6909,6 +6941,55 @@ test("renders verified image, audio, video and PDF Workspace previews", async ({
 
   const now = Date.now() / 1_000;
   const previewFiles: WorkspaceIdeFile[] = [
+    {
+      path: "/workspace/README.md",
+      name: "README.md",
+      revision: `sha256:${"0".repeat(43)}`,
+      encoding: "base64",
+      content: Buffer.from(
+        "# Preview first\n\nInspect [report data](./report.csv) without opening an editor.\n",
+      ).toString("base64"),
+      kind: "text",
+      editable: true,
+      size: "81 B",
+      modifiedAt: now,
+      lineChanges: [],
+    },
+    {
+      path: "/workspace/report.csv",
+      name: "report.csv",
+      revision: `sha256:${"5".repeat(43)}`,
+      encoding: "base64",
+      content: Buffer.from("name,status\nagent,ready\nhuman,reviewing\n").toString(
+        "base64",
+      ),
+      kind: "text",
+      editable: true,
+      size: "42 B",
+      modifiedAt: now,
+      lineChanges: [],
+    },
+    {
+      path: "/workspace/deck.pptx",
+      name: "deck.pptx",
+      revision: `sha256:${"6".repeat(43)}`,
+      encoding: "base64",
+      content: Buffer.concat([
+        Buffer.from([0x50, 0x4b, 0x03, 0x04]),
+        Buffer.from("[Content_Types].xml....ppt/presentation.xml"),
+      ]).toString("base64"),
+      kind: "binary",
+      preview: {
+        kind: "presentation",
+        mimeType:
+          "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      },
+      editable: false,
+      readOnlyReason: "binary",
+      size: "49 B",
+      modifiedAt: now,
+      lineChanges: [],
+    },
     {
       path: "/workspace/pixel.png",
       name: "pixel.png",
@@ -7045,6 +7126,30 @@ test("renders verified image, audio, video and PDF Workspace previews", async ({
     `/ide/?environment=${encodeURIComponent(environment.id)}&new=1`,
   );
 
+  await page.locator('button[title="/workspace/README.md"]').click();
+  await expect(page.getByTestId("workspace-markdown-preview")).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Preview first" }),
+  ).toBeVisible();
+  await expect(page.locator(".monaco-editor")).toHaveCount(0);
+  await page.getByRole("button", { name: "Edit file" }).click();
+  await expect(page.locator(".monaco-editor")).toBeVisible();
+  await page.getByRole("button", { name: "Preview file" }).click();
+  await expect(page.locator(".monaco-editor")).toHaveCount(0);
+  await expect(page.getByTestId("workspace-markdown-preview")).toBeVisible();
+  await page.getByRole("button", { name: "report data" }).click();
+  await expect(page.getByTestId("workspace-csv-preview")).toBeVisible();
+  await expect(page.getByRole("cell", { name: "reviewing" })).toBeVisible();
+
+  await page.locator('button[title="/workspace/deck.pptx"]').click();
+  await expect(page.getByTestId("workspace-presentation-preview")).toBeVisible();
+  await expect(page.getByText("Presentation ready", { exact: true })).toBeVisible();
+  await expect(
+    page
+      .frameLocator('iframe[title="deck.pptx presentation preview"]')
+      .getByText("Preview first slides"),
+  ).toBeVisible();
+
   await page.locator('button[title="/workspace/pixel.png"]').click();
   await expect(
     page.getByAltText("Image preview: pixel.png"),
@@ -7119,9 +7224,18 @@ test("renders verified image, audio, video and PDF Workspace previews", async ({
   await expect(
     page.getByText("Binary files cannot be rendered as text."),
   ).toHaveCount(0);
-  await expect(
-    page.getByRole("button", { name: /Save file/ }),
-  ).toBeDisabled();
+  await expect(page.getByRole("button", { name: /Save file/ })).toHaveCount(0);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  const fileBrowser = page.getByRole("complementary", {
+    name: "Workspace files",
+  });
+  await expect(fileBrowser).toBeHidden();
+  await page.getByRole("button", { name: "Expand file browser" }).click();
+  await expect(fileBrowser).toBeVisible();
+  await page.locator('button[title="/workspace/README.md"]').click();
+  await expect(fileBrowser).toBeHidden();
+  await expect(page.getByTestId("workspace-markdown-preview")).toBeVisible();
 });
 
 test("restores a new-Session deep link and keeps overlays usable in dark mode", async ({
