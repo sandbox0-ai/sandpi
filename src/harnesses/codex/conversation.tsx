@@ -19,7 +19,6 @@ import {
   Square,
   SquareTerminal,
   TriangleAlert,
-  X,
 } from "lucide-react";
 import {
   Fragment,
@@ -45,8 +44,8 @@ import { MarkdownContent } from "@/components/markdown-content";
 import type { EnvironmentBrowserNavigationRequest } from "@/components/environment-browser";
 import type { WorkspaceFileNavigationRequest } from "@/components/workspace-ide";
 import {
+  CodexComposer,
   CodexComposerLocalImages,
-  CodexComposerToolbar,
   encodeCodexComposerLocalImages,
 } from "@/harnesses/codex/composer";
 import { insertCodexFileMentions } from "@/harnesses/codex/file-mentions";
@@ -189,11 +188,6 @@ interface ConversationProps {
   onSessionChange: (session: CodexSession) => void;
   onToggleSessionCompleted: (sessionId: string) => Promise<void>;
   onDerivedSessionCreated: (session: CodexSession) => void;
-}
-
-function syncComposerHeight(textarea: HTMLTextAreaElement) {
-  textarea.style.height = "auto";
-  textarea.style.height = `${textarea.scrollHeight}px`;
 }
 
 const CODEX_SESSION_STATUSES = new Set<CodexNativeSnapshot["sessionStatus"]>([
@@ -1274,12 +1268,6 @@ export function CodexConversation({
     ui.nativeStreamUnavailableBody,
   ]);
 
-  useEffect(() => {
-    if (composerRef.current) {
-      syncComposerHeight(composerRef.current);
-    }
-  }, [draft]);
-
   useEffect(
     () => () => {
       if (scrollbarHideTimerRef.current !== null) {
@@ -1351,7 +1339,6 @@ export function CodexConversation({
       if (!composerRef.current) return;
       composerRef.current.focus();
       composerRef.current.setSelectionRange(insertion.cursor, insertion.cursor);
-      syncComposerHeight(composerRef.current);
     });
   }
 
@@ -1362,7 +1349,6 @@ export function CodexConversation({
       if (!textarea) return;
       textarea.focus();
       textarea.setSelectionRange(value.length, value.length);
-      syncComposerHeight(textarea);
     });
   }
 
@@ -1371,7 +1357,6 @@ export function CodexConversation({
     window.requestAnimationFrame(() => {
       const textarea = composerRef.current;
       if (!textarea) return;
-      textarea.style.height = "auto";
       textarea.focus();
     });
   }
@@ -2497,119 +2482,30 @@ export function CodexConversation({
               <span>{ui.jumpToLatest}</span>
             </button>
           ) : null}
-          <div className="composer-shell">
-            <CodexSlashCommandMenu
-              id={slashMenu.id}
-              language={language}
-              commands={slashMenu.commands}
-              activeIndex={slashMenu.activeIndex}
-              onActiveIndexChange={slashMenu.setActiveIndex}
-              onSelect={slashMenu.select}
-            />
-            {pastedImages.length ? (
-              <div
-                className="composer-image-previews"
-                aria-label={ui.attachedImages}
-              >
-                {pastedImages.map((attachment) => (
-                  <div className="composer-image-preview" key={attachment.id}>
-                    <Image
-                      src={attachment.previewUrl}
-                      alt={attachment.name}
-                      width={64}
-                      height={64}
-                      unoptimized
-                    />
-                    <button
-                      type="button"
-                      aria-label={ui.removeImage(attachment.name)}
-                      title={ui.removeImage(attachment.name)}
-                      onClick={() => {
-                        setPastedImages((current) =>
-                          current.filter((image) => image.id !== attachment.id),
-                        );
-                        setAttachmentError("");
-                      }}
-                    >
-                      <X size={12} aria-hidden="true" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            ) : null}
-            {attachmentError ? (
-              <div className="composer-attachment-error" role="status">
-                {attachmentError}
-              </div>
-            ) : null}
-            {commandNotice ? (
-              <div
-                className="codex-composer-notice"
-                data-tone={commandNotice.tone}
-                role={commandNotice.tone === "error" ? "alert" : "status"}
-              >
-                <span>{commandNotice.message}</span>
-              </div>
-            ) : null}
-            {planMode ? (
-              <div className="codex-composer-mode" role="status">
-                <span>
-                  <strong>{language === "zh-CN" ? "计划模式" : "Plan mode"}</strong>
-                  {" · "}
-                  {language === "zh-CN"
-                    ? "后续消息使用 Codex 计划协作模式"
-                    : "Subsequent messages use Codex Plan collaboration mode"}
-                </span>
-                <button
-                  type="button"
-                  aria-label={
-                    language === "zh-CN" ? "退出计划模式" : "Exit Plan mode"
-                  }
-                  onClick={() => {
-                    setPlanMode(false);
-                    setCommandNotice(null);
-                  }}
-                >
-                  <X size={12} aria-hidden="true" />
-                </button>
-              </div>
-            ) : null}
-            <CodexComposerLocalImages
-              language={language}
-              localImages={localImages}
-              onRemove={(id) => {
-                setLocalImages((current) =>
-                  current.filter((localImage) => localImage.id !== id),
-                );
-                setAttachmentError("");
-              }}
-            />
-            {/*
-              Slash commands, approvals, steering and other composer behavior are Codex-native.
-              Do not lift them into the shared dispatcher when additional harnesses are added.
-            */}
-            <textarea
-              ref={composerRef}
-              name="message"
-              autoComplete="off"
-              value={draft}
-              onChange={(event) => {
+          {/*
+            Slash commands, approvals, steering and other composer behavior are Codex-native.
+            Do not lift them into the shared dispatcher when additional harnesses are added.
+          */}
+          <CodexComposer
+            language={language}
+            inputRef={composerRef}
+            inputProps={{
+              name: "message",
+              value: draft,
+              onChange: (event) => {
                 setDraft(event.target.value);
                 slashMenu.show();
                 setCommandNotice(null);
-                syncComposerHeight(event.currentTarget);
-              }}
-              onPaste={(event) => {
+              },
+              onPaste: (event) => {
                 const imageFiles = clipboardCodexImageFiles(event.clipboardData);
-                if (imageFiles.length === 0) {
-                  return;
-                }
+                if (imageFiles.length === 0) return;
                 // A textarea ignores image clipboard items on its own. Let the
                 // browser keep any accompanying plain text while images are
                 // attached separately.
                 void addPastedImages(imageFiles);
-              }}
-              onKeyDown={(event) => {
+              },
+              onKeyDown: (event) => {
                 if (slashMenu.handleKeyDown(event)) return;
                 if (
                   shouldSubmitComposer(
@@ -2626,53 +2522,86 @@ export function CodexConversation({
                   event.preventDefault();
                   void submitMessage();
                 }
-              }}
-              aria-controls={
-                slashMenu.commands.length > 0 ? slashMenu.id : undefined
-              }
-              aria-activedescendant={
-                slashMenu.activeCommand
-                  ? `${slashMenu.id}-${slashMenu.activeCommand.name}`
-                  : undefined
-              }
-              aria-label={ui.messageAgent(environment.codingAgent.label)}
-              placeholder={
-                turnRunning
-                  ? ui.steerPlaceholder(environment.codingAgent.label)
-                  : ui.askPlaceholder(environment.codingAgent.label)
-              }
-              rows={1}
-            />
-            <CodexComposerToolbar
-              language={language}
-              environmentId={environment.id}
-              agentLabel={environment.codingAgent.label}
-              localImages={localImages}
-              onLocalImagesChange={setLocalImages}
-              onInsertFileMentions={insertFileMentions}
-              onAttachmentError={setAttachmentError}
-              modelOptions={
-                modelOptions.length > 0 ? modelOptions : [selectedModel]
-              }
-              selectedModel={selectedModel}
-              modelPlaceholder={selectedModel.displayName}
-              modelTitle={modelCatalogUnavailable || undefined}
-              modelDisabled={
-                modelOptions.length === 0 || sending || turnRunning
-              }
-              reasoningDisabled={sending || turnRunning}
-              selectedReasoningEffort={selectedReasoningEffort}
-              onModelChange={selectModel}
-              onReasoningEffortChange={selectReasoningEffort}
-              fastEnabled={fastMode}
-              fastDisabled={sending || turnRunning}
-              onFastEnabledChange={(enabled) => {
+              },
+              "aria-controls":
+                slashMenu.commands.length > 0 ? slashMenu.id : undefined,
+              "aria-activedescendant": slashMenu.activeCommand
+                ? `${slashMenu.id}-${slashMenu.activeCommand.name}`
+                : undefined,
+              "aria-label": ui.messageAgent(environment.codingAgent.label),
+              placeholder: turnRunning
+                ? ui.steerPlaceholder(environment.codingAgent.label)
+                : ui.askPlaceholder(environment.codingAgent.label),
+            }}
+            slashCommandMenu={
+              <CodexSlashCommandMenu
+                id={slashMenu.id}
+                language={language}
+                commands={slashMenu.commands}
+                activeIndex={slashMenu.activeIndex}
+                onActiveIndexChange={slashMenu.setActiveIndex}
+                onSelect={slashMenu.select}
+              />
+            }
+            images={pastedImages}
+            onRemoveImage={(id) => {
+              setPastedImages((current) =>
+                current.filter((image) => image.id !== id),
+              );
+              setAttachmentError("");
+            }}
+            localImages={localImages}
+            onRemoveLocalImage={(id) => {
+              setLocalImages((current) =>
+                current.filter((localImage) => localImage.id !== id),
+              );
+              setAttachmentError("");
+            }}
+            attachmentError={attachmentError}
+            notice={commandNotice}
+            mode={
+              planMode
+                ? {
+                    label: language === "zh-CN" ? "计划模式" : "Plan mode",
+                    description:
+                      language === "zh-CN"
+                        ? "后续消息使用 Codex 计划协作模式"
+                        : "Subsequent messages use Codex Plan collaboration mode",
+                    exitLabel:
+                      language === "zh-CN" ? "退出计划模式" : "Exit Plan mode",
+                    onExit: () => {
+                      setPlanMode(false);
+                      setCommandNotice(null);
+                    },
+                  }
+                : null
+            }
+            toolbar={{
+              environmentId: environment.id,
+              agentLabel: environment.codingAgent.label,
+              onLocalImagesChange: setLocalImages,
+              onInsertFileMentions: insertFileMentions,
+              onAttachmentError: setAttachmentError,
+              modelOptions:
+                modelOptions.length > 0 ? modelOptions : [selectedModel],
+              selectedModel,
+              modelPlaceholder: selectedModel.displayName,
+              modelTitle: modelCatalogUnavailable || undefined,
+              modelDisabled:
+                modelOptions.length === 0 || sending || turnRunning,
+              reasoningDisabled: sending || turnRunning,
+              selectedReasoningEffort,
+              onModelChange: selectModel,
+              onReasoningEffortChange: selectReasoningEffort,
+              fastEnabled: fastMode,
+              fastDisabled: sending || turnRunning,
+              onFastEnabledChange: (enabled) => {
                 setFastMode(enabled);
                 setCommandNotice(null);
-              }}
-              mentionOpenRequest={mentionOpenRequest}
-              contextUsedPercent={contextUsedPercent}
-              status={{
+              },
+              mentionOpenRequest,
+              contextUsedPercent,
+              status: {
                 state: nativeHistoryError
                   ? "unavailable"
                   : nativeReady
@@ -2683,8 +2612,8 @@ export function CodexConversation({
                   : nativeReady
                     ? ui.durableSession
                     : ui.checkingRuntime,
-              }}
-              action={
+              },
+              action: (
                 <>
                   {turnRunning ? (
                     <button
@@ -2742,9 +2671,9 @@ export function CodexConversation({
                     <ArrowUp size={17} strokeWidth={2.5} />
                   </button>
                 </>
-              }
-            />
-          </div>
+              ),
+            }}
+          />
           <p className="composer-footnote">
             <Files size={12} /> {ui.workingInWorkspace}
             <span>·</span>
