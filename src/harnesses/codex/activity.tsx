@@ -1124,12 +1124,14 @@ export function CodexTurnResult({
 
 export function CodexTurnActivity({
   activeTurn,
+  autoExpand = true,
   turn,
   language,
   now,
   children,
 }: {
   activeTurn?: CodexActiveTurnView;
+  autoExpand?: boolean;
   turn?: CodexTurnView;
   language: OperationLanguage;
   now: number;
@@ -1138,15 +1140,15 @@ export function CodexTurnActivity({
   const ui = getCodexUiCopy(language).conversation;
   const running = Boolean(activeTurn);
   const hasActivity = Children.count(children) > 0;
-  const [open, setOpen] = useState(running && hasActivity);
+  const [open, setOpen] = useState(running && autoExpand && hasActivity);
 
   useEffect(() => {
     if (!hasActivity) {
       setOpen(false);
       return;
     }
-    setOpen(running);
-  }, [hasActivity, running]);
+    setOpen(running && autoExpand);
+  }, [autoExpand, hasActivity, running]);
 
   const durationMs = activeTurn
     ? Math.max(0, now - activeTurn.startedAt * 1_000)
