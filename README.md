@@ -107,8 +107,8 @@ same files, tools and execution context.
 - Codex tools, Skills, MCP configuration, approvals and supported slash-command
   surfaces
 - Persistent multi-Environment and multi-Session Web UI with compact,
-  progressively paginated Session lists and completion state distinct from
-  archival
+  progressively paginated Session lists that keep every running Session
+  visible, and completion state distinct from archival
 - Live Workspace file browser with a resizable, collapsible file tree, wrapping
   Monaco editor, keyboard-safe read-only preview mode, media previews and Git
   changes
