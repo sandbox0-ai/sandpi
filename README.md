@@ -111,8 +111,9 @@ same files, tools and execution context.
   visible, and completion state distinct from archival that automatically
   reopens when another Turn starts
 - Preview-first Workspace file browser with a resizable, collapsible file tree;
-  fast source, Markdown and CSV views; image, audio, video, PDF and PPTX
-  previews; on-demand Monaco editing; and Git changes
+  explicit refresh feedback; fast source, GitHub-like Markdown and CSV views;
+  image, audio, video, PDF and PPTX previews; on-demand Monaco editing; and Git
+  changes
 - Shared official Playwright Browser with multi-tab controls, loading feedback
   and persisted desktop-fit, responsive and mobile viewport modes
 - Environment terminal, runtime metrics, configurable idle pause, and manual

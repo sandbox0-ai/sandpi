@@ -1608,6 +1608,216 @@ pre {
   font-weight: 650;
 }
 
+.markdown-content.markdown-content-document {
+  color: var(--ink);
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.5;
+  overflow-wrap: break-word;
+}
+
+.markdown-content-document p,
+.markdown-content-document blockquote,
+.markdown-content-document ul,
+.markdown-content-document ol,
+.markdown-content-document pre,
+.markdown-content-document .markdown-table-scroll {
+  margin-top: 0;
+  margin-bottom: 16px;
+}
+
+.markdown-content-document h1,
+.markdown-content-document h2,
+.markdown-content-document h3,
+.markdown-content-document h4,
+.markdown-content-document h5,
+.markdown-content-document h6 {
+  margin-top: 24px;
+  margin-bottom: 16px;
+  color: var(--ink);
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.markdown-content-document h1,
+.markdown-content-document h2 {
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.markdown-content-document h1 {
+  font-size: 2em;
+}
+
+.markdown-content-document h2 {
+  font-size: 1.5em;
+}
+
+.markdown-content-document h3 {
+  font-size: 1.25em;
+}
+
+.markdown-content-document h4 {
+  font-size: 1em;
+}
+
+.markdown-content-document h5 {
+  font-size: 0.875em;
+}
+
+.markdown-content-document h6 {
+  color: var(--ink-soft);
+  font-size: 0.85em;
+}
+
+.markdown-content-document ul,
+.markdown-content-document ol {
+  padding-left: 2em;
+}
+
+.markdown-content-document ul ul,
+.markdown-content-document ul ol,
+.markdown-content-document ol ul,
+.markdown-content-document ol ol {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+.markdown-content-document li + li {
+  margin-top: 0.25em;
+}
+
+.markdown-content-document li > p {
+  margin-top: 16px;
+  margin-bottom: 0;
+}
+
+.markdown-content-document .contains-task-list {
+  padding-left: 0;
+}
+
+.markdown-content-document .task-list-item {
+  list-style: none;
+}
+
+.markdown-content-document .task-list-item > input {
+  width: 1em;
+  height: 1em;
+  margin: 0 0.5em 0.25em -1.4em;
+  vertical-align: middle;
+}
+
+.markdown-content-document blockquote {
+  padding: 0 1em;
+  border-left: 0.25em solid var(--line);
+  color: var(--ink-soft);
+}
+
+.markdown-content-document blockquote > :first-child {
+  margin-top: 0;
+}
+
+.markdown-content-document blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown-content-document a,
+.markdown-content-document .markdown-workspace-link,
+.markdown-content-document .markdown-browser-link,
+.markdown-content-document .markdown-image-link {
+  color: var(--blue);
+  text-decoration: none;
+}
+
+.markdown-content-document a:hover,
+.markdown-content-document .markdown-workspace-link:hover,
+.markdown-content-document .markdown-browser-link:hover,
+.markdown-content-document .markdown-image-link:hover {
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+
+.markdown-content-document strong {
+  font-weight: 600;
+}
+
+.markdown-content-document :not(pre) > code {
+  padding: 0.2em 0.4em;
+  border: 0;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--sidebar) 78%, transparent);
+  font-size: 85%;
+}
+
+.markdown-content-document pre {
+  max-width: 100%;
+  padding: 16px;
+  overflow: auto;
+  border: 0;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--sidebar) 78%, transparent);
+  color: var(--ink);
+  font-size: 85%;
+  line-height: 1.45;
+  tab-size: 4;
+}
+
+.markdown-content-document pre code {
+  display: inline;
+  padding: 0;
+  margin: 0;
+  overflow: visible;
+  border: 0;
+  background: transparent;
+  font-size: 100%;
+  line-height: inherit;
+  overflow-wrap: normal;
+}
+
+.markdown-content-document hr {
+  height: 0.25em;
+  padding: 0;
+  margin: 24px 0;
+  border: 0;
+  background: var(--line-soft);
+}
+
+.markdown-content-document .markdown-table-scroll {
+  scrollbar-width: thin;
+}
+
+.markdown-content-document table {
+  width: max-content;
+  min-width: 0;
+  border-spacing: 0;
+  border-collapse: collapse;
+  font-size: inherit;
+}
+
+.markdown-content-document tr {
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.markdown-content-document tr:nth-child(2n) {
+  background: color-mix(in srgb, var(--sidebar) 52%, var(--panel));
+}
+
+.markdown-content-document th,
+.markdown-content-document td {
+  padding: 6px 13px;
+  border: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.markdown-content-document th {
+  background: transparent;
+  color: var(--ink);
+  font-weight: 600;
+}
+
 .message-image-attachments {
   display: grid;
   width: min(100%, 460px);
@@ -7814,6 +8024,11 @@ html[data-density="compact"] .message {
 html[data-density="compact"] .markdown-content {
   font-size: 13px;
   line-height: 1.55;
+}
+
+html[data-density="compact"] .markdown-content.markdown-content-document {
+  font-size: 15px;
+  line-height: 1.5;
 }
 
 html[data-density="compact"] .codex-activity-heading {

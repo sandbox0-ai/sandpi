@@ -17,6 +17,7 @@ import { resolveWorkspaceMarkdownPath } from "@/lib/workspace-file-presentation"
 
 interface MarkdownContentProps {
   content: string;
+  variant?: "message" | "document";
   baseWorkspacePath?: string;
   onOpenWorkspacePath?: (path: string) => void;
   onOpenBrowserUrl?: (url: string) => void;
@@ -62,6 +63,7 @@ function markdownUrlTransform(
 /** Shared presentation only; each harness still owns its native message model. */
 function MarkdownContentView({
   content,
+  variant = "message",
   baseWorkspacePath,
   onOpenWorkspacePath,
   onOpenBrowserUrl,
@@ -176,7 +178,11 @@ function MarkdownContentView({
   );
 
   return (
-    <div className="markdown-content">
+    <div
+      className={`markdown-content${
+        variant === "document" ? " markdown-content-document" : ""
+      }`}
+    >
       <ReactMarkdown
         remarkPlugins={remarkPlugins}
         components={components}

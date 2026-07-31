@@ -555,6 +555,25 @@ button.directoryStatus:hover {
   color: var(--ink);
 }
 
+.tabActions .workspaceRefreshButton:disabled {
+  opacity: 1;
+  cursor: progress;
+}
+
+.workspaceRefreshButtonRefreshing svg {
+  animation: spin 0.8s linear infinite;
+}
+
+.tabActions .workspaceRefreshButtonRefreshing {
+  background: var(--amber-soft);
+  color: var(--amber);
+}
+
+.tabActions .workspaceRefreshButtonComplete {
+  background: var(--green-soft);
+  color: var(--green);
+}
+
 .documentActions button:disabled {
   opacity: 0.4;
   cursor: not-allowed;
@@ -894,7 +913,8 @@ button.directoryStatus:hover {
   }
 
   .loading svg,
-  .documentRefreshing svg {
+  .documentRefreshing svg,
+  .workspaceRefreshButtonRefreshing svg {
     animation: none;
   }
 }
