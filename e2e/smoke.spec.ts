@@ -3873,14 +3873,27 @@ test("maps Codex slash commands to Sandpi new and fork Session flows", async ({
   expect(browserErrors).toEqual([]);
 });
 
-test("keeps an optimistic prompt ahead of native Activity without duplicating it", async ({
+test("keeps an optimistic prompt ahead of Activity and folds it for the streamed answer", async ({
   page,
-  request,
 }) => {
-  const workspace = await activeWorkspace(request);
-  test.skip(!workspace, "An active Session is required for this check.");
-  if (!workspace) return;
-  const { environment, session } = workspace;
+  const bootstrap = getMockBootstrap();
+  useEnglishUi(bootstrap);
+  const session = bootstrap.sessions.find(
+    (candidate) =>
+      candidate.harness === "codex" &&
+      candidate.status === "waiting" &&
+      !candidate.archived,
+  );
+  const environment = bootstrap.environments.find(
+    (candidate) => candidate.id === session?.environmentId,
+  );
+  test.skip(!session || !environment, "A waiting Codex Session is required.");
+  if (!session || !environment) return;
+  test.skip(session.harness !== "codex", "A Codex Session is required.");
+  if (session.harness !== "codex") return;
+  session.unread = false;
+  bootstrap.selectedEnvironmentId = environment.id;
+  bootstrap.selectedSessionId = session.id;
   const eventPath = `/api/v1/sessions/${session.id}/events`;
   const nativeThreadId = "thread-e2e-optimistic-order";
   const nativeTurnId = "turn-e2e-optimistic-order";
@@ -3923,6 +3936,34 @@ test("keeps an optimistic prompt ahead of native Activity without duplicating it
     releaseTurnResponse = resolve;
   });
 
+  await page.route(
+    (url) => url.pathname === "/api/v1/bootstrap",
+    async (route) => {
+      await route.fulfill({ json: { data: bootstrap } });
+    },
+  );
+  await page.route(
+    (url) =>
+      url.pathname ===
+      `/api/v1/sessions/${encodeURIComponent(session.id)}/metadata`,
+    async (route) => {
+      const metadata = route.request().postDataJSON() as {
+        unread?: boolean;
+      };
+      Object.assign(session, metadata);
+      await route.fulfill({ json: { data: session } });
+    },
+  );
+  await page.route(
+    "**/api/v1/environments/**/metrics/current",
+    async (route) => {
+      await route.fulfill({
+        json: {
+          data: { cpuUtilization: 0.1, memoryUtilization: 0.2 },
+        },
+      });
+    },
+  );
   await installControlledEventSource(page);
   await page.route(
     "**/api/v1/environments/**/harnesses/codex/models",
@@ -4213,7 +4254,12 @@ test("keeps an optimistic prompt ahead of native Activity without duplicating it
       },
     }),
   );
-  const finalMessageText = "## The ordering is stable.\n\n- Streamed Markdown";
+  const finalMessageChunks = [
+    "## The ordering is stable.",
+    "\n\nThe first streamed paragraph stays visible.",
+    "\n\nThe second streamed paragraph arrives without hiding the first.",
+  ];
+  const finalMessageText = finalMessageChunks.join("");
   const streamingFinalMessage: CodexThreadItem = {
     type: "agentMessage",
     id: "native-final-e2e-order",
@@ -4235,26 +4281,51 @@ test("keeps an optimistic prompt ahead of native Activity without duplicating it
       },
     }),
   );
-  await emitControlledEvent(
-    page,
-    eventPath,
-    "notification",
-    envelope({
-      method: "item/agentMessage/delta",
-      params: {
-        threadId: nativeThreadId,
-        turnId: nativeTurnId,
-        itemId: streamingFinalMessage.id,
-        delta: finalMessageText,
-      },
-    }),
+  await expect(activityDetails).not.toHaveAttribute("open", "");
+  const respondingActivityHeight = await activityDetails.evaluate(
+    (details) => details.getBoundingClientRect().height,
   );
+  expect(respondingActivityHeight).toBeLessThan(runningActivityHeight);
+
   const streamingAssistant = page.locator(
     ".message-column > .message-assistant",
   );
-  await expect(streamingAssistant.locator("h2")).toHaveText(
-    "The ordering is stable.",
-  );
+  for (const [index, chunk] of finalMessageChunks.entries()) {
+    await emitControlledEvent(
+      page,
+      eventPath,
+      "notification",
+      envelope({
+        method: "item/agentMessage/delta",
+        params: {
+          threadId: nativeThreadId,
+          turnId: nativeTurnId,
+          itemId: streamingFinalMessage.id,
+          delta: chunk,
+        },
+      }),
+    );
+    await expect(streamingAssistant.locator("h2")).toHaveText(
+      "The ordering is stable.",
+    );
+    if (index >= 1) {
+      await expect(
+        streamingAssistant.getByText(
+          "The first streamed paragraph stays visible.",
+          { exact: true },
+        ),
+      ).toBeVisible();
+    }
+    if (index >= 2) {
+      await expect(
+        streamingAssistant.getByText(
+          "The second streamed paragraph arrives without hiding the first.",
+          { exact: true },
+        ),
+      ).toBeVisible();
+    }
+    await expect(activityDetails).not.toHaveAttribute("open", "");
+  }
   await expect(
     activityDetails.locator(".message-assistant"),
   ).toHaveCount(0);

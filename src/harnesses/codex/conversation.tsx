@@ -2212,6 +2212,17 @@ export function CodexConversation({
     const lastActivityBlockIndex = timelineTurn.blocks.findLastIndex(
       (block) => block.kind === "activity",
     );
+    // The answer lives below this disclosure. Release completed tool history
+    // as soon as response streaming starts so bottom-following tracks text.
+    const streamingFinalResponse =
+      runningTurn?.turnId === timelineTurn.turnId &&
+      runningTurn.state === "responding" &&
+      timelineTurn.blocks.some(
+        (block) =>
+          block.kind === "message" &&
+          block.entry.role === "assistant" &&
+          block.entry.streaming,
+      );
     return (
       <Fragment key={timelineTurn.turnId}>
         {timelineTurn.blocks.map((block, blockIndex) => {
@@ -2231,6 +2242,7 @@ export function CodexConversation({
             <CodexTurnActivity
               key={block.id}
               activeTurn={activeTurn}
+              autoExpand={!streamingFinalResponse}
               turn={
                 blockIndex === lastActivityBlockIndex
                   ? timelineTurn.turn
