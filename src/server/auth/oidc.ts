@@ -267,12 +267,13 @@ async function createPersonalEnvironment(client: PoolClient, userId: string) {
     `
       INSERT INTO environments (
         id, created_by_user_id, name, description, color, status,
-        revision, template_id, harness, harness_metadata, network_policy
+        revision, template_id, harness, harness_metadata, network_policy,
+        display_order
       ) VALUES (
         $1, $2, 'Development', '', '#315c4b', 'updating', 1,
         'coding-agent', 'codex',
         '{"label":"Codex","status":"not-connected"}'::JSONB,
-        '{"mode":"allow-all","domainExceptions":[]}'::JSONB
+        '{"mode":"allow-all","domainExceptions":[]}'::JSONB, 0
       )
     `,
     [`env_${randomUUID()}`, userId],

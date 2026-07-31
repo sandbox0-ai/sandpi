@@ -397,7 +397,19 @@ pre {
 }
 
 .environment-group.is-dragging {
+  position: relative;
+  z-index: 2;
   opacity: 0.45;
+}
+
+.environment-group.is-drop-target .environment-row {
+  background: var(--hover);
+}
+
+.environment-list.is-reordering,
+.environment-list.is-reordering * {
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .environment-drag-handle {
@@ -413,6 +425,11 @@ pre {
   color: var(--ink-faint);
   cursor: grab;
   opacity: 0;
+  -webkit-touch-callout: none;
+  -webkit-user-drag: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+  user-select: none;
 }
 
 .environment-row:hover .environment-drag-handle,
@@ -459,7 +476,16 @@ pre {
   border: 0;
   background: transparent;
   text-align: left;
-  cursor: pointer;
+  cursor: grab;
+  -webkit-touch-callout: none;
+  -webkit-user-drag: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+  user-select: none;
+}
+
+.environment-main-button:active {
+  cursor: grabbing;
 }
 
 .environment-avatar {

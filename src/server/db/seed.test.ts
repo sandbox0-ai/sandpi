@@ -44,5 +44,7 @@ test("community seed persists only user-owned resources", async () => {
   const sql = queries.join("\n");
   assert.match(sql, /INSERT INTO users/);
   assert.match(sql, /INSERT INTO environments[\s\S]+created_by_user_id/);
+  assert.match(sql, /metadata,\s*display_order/);
+  assert.match(sql, /\$9::JSONB,\s*0/);
   assert.doesNotMatch(sql, /\bteams\b|team_memberships|team_id/i);
 });

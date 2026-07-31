@@ -1440,8 +1440,9 @@ test("logs OIDC users out to the anonymous app home", async ({ page }) => {
   await expect(
     page.getByRole("button", { name: "Log in or sign up" }),
   ).toBeVisible();
-  expect(new URL(page.url()).pathname).toBe("/");
-  expect(new URL(page.url()).search).toBe("");
+  await expect(page).toHaveURL(
+    (url) => url.pathname === "/" && url.search === "",
+  );
   expect(logoutRequests).toBe(1);
 });
 
@@ -1466,8 +1467,9 @@ test("keeps built-in logout anonymous until the user signs in again", async ({
   await expect(
     page.getByRole("heading", { name: "What should Codex work on?" }),
   ).toBeVisible();
-  expect(new URL(page.url()).pathname).toBe("/");
-  expect(new URL(page.url()).search).toBe("");
+  await expect(page).toHaveURL(
+    (url) => url.pathname === "/" && url.search === "",
+  );
 
   await page.getByRole("button", { name: "Log in or sign up" }).click();
   await expect(
@@ -2075,23 +2077,38 @@ test("waits for native New Session models and scopes reasoning effort by model",
   const modelPicker = page.getByRole("combobox", {
     name: /Select Codex model|选择 Codex 模型/,
   });
+  const selectPickerOption = async (
+    picker: typeof modelPicker,
+    optionName: string,
+  ) => {
+    await picker.click();
+    await page
+      .getByRole("listbox")
+      .getByRole("option", { name: optionName, exact: true })
+      .click();
+  };
   await expect(modelPicker).toBeDisabled();
-  await expect(modelPicker.locator("option")).toHaveCount(1);
+  await expect(modelPicker).toContainText(/Starting Codex|正在启动 Codex/);
   await expect(
     page.getByRole("status").filter({
       hasText: /Starting Codex|正在启动 Codex/,
     }),
   ).toBeVisible();
-  await expect(modelPicker.locator("option")).not.toContainText(/default|默认/);
+  await expect(modelPicker).not.toContainText(/default|默认/);
 
   releaseCatalog();
   await expect(modelPicker).toBeEnabled();
-  await expect(modelPicker).toHaveValue("e2e-codex-fast");
+  await expect(modelPicker).toContainText("E2E Codex Fast");
   const fastEffortPicker = page.getByRole("combobox", {
     name: /Select reasoning effort for E2E Codex Fast|选择 E2E Codex Fast 的推理深度/,
   });
-  await expect(fastEffortPicker).toHaveValue("high");
-  await expect(fastEffortPicker.locator("option")).toHaveText(["Low", "High"]);
+  await expect(fastEffortPicker).toContainText("High");
+  await fastEffortPicker.click();
+  await expect(page.getByRole("listbox").getByRole("option")).toHaveText([
+    "Low",
+    "High",
+  ]);
+  await page.keyboard.press("Escape");
   const fastToggle = page.getByTestId("codex-fast-toggle");
   await expect(fastToggle).toHaveAttribute("aria-pressed", "false");
   await fastToggle.click();
@@ -2132,22 +2149,24 @@ test("waits for native New Session models and scopes reasoning effort by model",
       ".sandpi/uploads/e2e-requirements/requirements.pdf README.md ",
   );
 
-  await modelPicker.selectOption("e2e-codex-deep");
+  await selectPickerOption(modelPicker, "E2E Codex Deep");
   await expect(fastToggle).toBeHidden();
   const deepEffortPicker = page.getByRole("combobox", {
     name: /Select reasoning effort for E2E Codex Deep|选择 E2E Codex Deep 的推理深度/,
   });
-  await expect(deepEffortPicker).toHaveValue("max");
-  await expect(deepEffortPicker.locator("option")).toHaveText([
+  await expect(deepEffortPicker).toContainText("Max");
+  await deepEffortPicker.click();
+  await expect(page.getByRole("listbox").getByRole("option")).toHaveText([
     "Medium",
     "Max",
   ]);
-  await deepEffortPicker.selectOption("medium");
-  await modelPicker.selectOption("e2e-codex-fast");
-  await expect(fastEffortPicker).toHaveValue("high");
+  await page.keyboard.press("Escape");
+  await selectPickerOption(deepEffortPicker, "Medium");
+  await selectPickerOption(modelPicker, "E2E Codex Fast");
+  await expect(fastEffortPicker).toContainText("High");
   await expect(fastToggle).toHaveAttribute("aria-pressed", "false");
-  await modelPicker.selectOption("e2e-codex-deep");
-  await expect(deepEffortPicker).toHaveValue("medium");
+  await selectPickerOption(modelPicker, "E2E Codex Deep");
+  await expect(deepEffortPicker).toContainText("Medium");
   await page.locator(".composer-shell .send-button").click();
   await expect
     .poll(() => createSessionBody)
@@ -2164,12 +2183,12 @@ test("waits for native New Session models and scopes reasoning effort by model",
   expect(createSessionBody).not.toHaveProperty("serviceTier");
   await page.reload();
   await expect(modelPicker).toBeEnabled();
-  await expect(modelPicker).toHaveValue("e2e-codex-deep");
+  await expect(modelPicker).toContainText("E2E Codex Deep");
   await expect(
     page.getByRole("combobox", {
       name: /Select reasoning effort for E2E Codex Deep|选择 E2E Codex Deep 的推理深度/,
     }),
-  ).toHaveValue("medium");
+  ).toContainText("Medium");
   expect(browserErrors).toEqual([]);
 });
 
@@ -5681,13 +5700,16 @@ test("shows incremental Workspace loading and a matching Metrics skeleton", asyn
 }) => {
   const bootstrap = getMockBootstrap();
   useEnglishUi(bootstrap);
-  const session = bootstrap.sessions.find((candidate) => !candidate.archived);
+  const session = bootstrap.sessions.find(
+    (candidate) => !candidate.archived && candidate.status === "waiting",
+  );
   const environment = bootstrap.environments.find(
     (candidate) => candidate.id === session?.environmentId,
   );
   expect(session).toBeTruthy();
   expect(environment).toBeTruthy();
   if (!session || !environment) return;
+  session.unread = false;
   bootstrap.selectedEnvironmentId = environment.id;
   bootstrap.selectedSessionId = session.id;
   const browserErrors: string[] = [];
@@ -5821,7 +5843,7 @@ test("shows incremental Workspace loading and a matching Metrics skeleton", asyn
   await expect(page.locator(".metric-chart-pause-legend")).toHaveCount(3);
   await expect(
     page.locator(".metric-chart-pause-legend").first(),
-  ).toContainText("Sandpi idle pause");
+  ).toContainText("Sandpi-managed pause");
   const metricChartEdges = await page
     .locator(".metric-card")
     .evaluateAll((cards) =>
@@ -5867,16 +5889,13 @@ test("shows incremental Workspace loading and a matching Metrics skeleton", asyn
     name: `Select ${environment.codingAgent.label} model`,
   });
   await expect(modelPicker).toBeEnabled();
-  await expect
-    .poll(() => modelPicker.locator("option").count())
-    .toBeGreaterThan(0);
-  const firstNativeModel = await modelPicker
-    .locator("option")
-    .first()
-    .getAttribute("value");
-  expect(firstNativeModel).toBeTruthy();
-  await modelPicker.selectOption(firstNativeModel ?? "");
-  await expect(modelPicker).toHaveValue(firstNativeModel ?? "");
+  await modelPicker.click();
+  const nativeModelOption = page
+    .getByRole("listbox")
+    .getByRole("option", { name: "E2E native Codex model", exact: true });
+  await expect(nativeModelOption).toBeVisible();
+  await nativeModelOption.click();
+  await expect(modelPicker).toContainText("E2E native Codex model");
   const reasoningEffortPicker = page.getByRole("combobox", {
     name: "Select reasoning effort for E2E native Codex model",
   });
@@ -5884,9 +5903,13 @@ test("shows incremental Workspace loading and a matching Metrics skeleton", asyn
     page.locator(".conversation-header-actions button[aria-haspopup='menu']"),
   ).toHaveCount(0);
   await expect(reasoningEffortPicker).toBeEnabled();
-  await expect(reasoningEffortPicker).toHaveValue("high");
-  await reasoningEffortPicker.selectOption("low");
-  await expect(reasoningEffortPicker).toHaveValue("low");
+  await expect(reasoningEffortPicker).toContainText("High");
+  await reasoningEffortPicker.click();
+  await page
+    .getByRole("listbox")
+    .getByRole("option", { name: "Low", exact: true })
+    .click();
+  await expect(reasoningEffortPicker).toContainText("Low");
 
   await page.reload();
   await expect(tabs).toBeVisible();
@@ -5894,7 +5917,7 @@ test("shows incremental Workspace loading and a matching Metrics skeleton", asyn
     tabs.getByRole("button", { name: "Metrics" }),
   ).toHaveClass(/is-active/);
   await expect(metricsRange).toHaveValue("21600");
-  await expect(reasoningEffortPicker).toHaveValue("low");
+  await expect(reasoningEffortPicker).toContainText("Low");
   await page
     .getByRole("complementary", { name: "Inspector" })
     .getByRole("button", { name: "Close inspector" })
@@ -7049,6 +7072,126 @@ test("restores a new-Session deep link and keeps overlays usable in dark mode", 
     page.getByRole("dialog", { name: "Development settings" }),
   ).toBeVisible();
   expect(browserErrors).toEqual([]);
+});
+
+test("reorders Environments from the whole title without selecting text", async ({
+  page,
+}) => {
+  const bootstrap = getMockBootstrap();
+  useEnglishUi(bootstrap);
+  const target = bootstrap.environments[0];
+  const source = bootstrap.environments[1];
+  expect(target).toBeTruthy();
+  expect(source).toBeTruthy();
+  if (!target || !source) return;
+  bootstrap.selectedEnvironmentId = target.id;
+  bootstrap.selectedSessionId = "";
+  let requestedOrder: string[] = [];
+
+  await page.route(
+    (url) => url.pathname === "/api/v1/bootstrap",
+    async (route) => {
+      await route.fulfill({ json: { data: bootstrap } });
+    },
+  );
+  await page.route(
+    (url) => url.pathname === "/api/v1/environments/order",
+    async (route) => {
+      const body = route.request().postDataJSON() as {
+        environmentIds: string[];
+      };
+      requestedOrder = body.environmentIds;
+      const byId = new Map(
+        bootstrap.environments.map((environment) => [
+          environment.id,
+          environment,
+        ]),
+      );
+      await route.fulfill({
+        json: {
+          data: body.environmentIds.flatMap((environmentId) => {
+            const environment = byId.get(environmentId);
+            return environment ? [environment] : [];
+          }),
+        },
+      });
+    },
+  );
+
+  await page.goto(
+    `/?environment=${encodeURIComponent(target.id)}&new=1`,
+  );
+  const environmentGroup = (environment: Environment) =>
+    page.locator(".environment-group").filter({
+      has: page.getByRole("button", {
+        name: environment.name,
+        exact: true,
+      }),
+    });
+  const sourceTitle = environmentGroup(source).getByRole("button", {
+    name: source.name,
+    exact: true,
+  });
+  const targetRow = environmentGroup(target).locator(".environment-row");
+
+  await expect(sourceTitle).toHaveAttribute(
+    "aria-roledescription",
+    "sortable",
+  );
+  expect(
+    await sourceTitle.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return {
+        cursor: style.cursor,
+        userSelect: style.userSelect,
+      };
+    }),
+  ).toEqual({
+    cursor: "grab",
+    userSelect: "none",
+  });
+
+  const sourceBox = await sourceTitle.boundingBox();
+  const targetBox = await targetRow.boundingBox();
+  expect(sourceBox).toBeTruthy();
+  expect(targetBox).toBeTruthy();
+  if (!sourceBox || !targetBox) return;
+  await page.mouse.move(
+    sourceBox.x + sourceBox.width / 2,
+    sourceBox.y + sourceBox.height / 2,
+  );
+  await page.mouse.down();
+  await page.mouse.move(
+    sourceBox.x + sourceBox.width / 2,
+    sourceBox.y + sourceBox.height / 2 - 8,
+    { steps: 3 },
+  );
+  await page.mouse.move(
+    targetBox.x + targetBox.width / 2,
+    targetBox.y + targetBox.height / 2,
+    { steps: 10 },
+  );
+  await page.mouse.up();
+  const expectedOrder = [
+    source.id,
+    target.id,
+    ...bootstrap.environments
+      .slice(2)
+      .map((environment) => environment.id),
+  ];
+  await expect.poll(() => requestedOrder).toEqual(expectedOrder);
+  expect(
+    await page.locator(".environment-name").allTextContents(),
+  ).toEqual(
+    expectedOrder.map(
+      (environmentId) =>
+        bootstrap.environments.find(
+          (environment) => environment.id === environmentId,
+        )?.name ?? "",
+    ),
+  );
+  await expect(sourceTitle).not.toHaveAttribute("aria-current", "page");
+  expect(await page.evaluate(() => window.getSelection()?.toString())).toBe("");
 });
 
 test("keeps pinned Session markers compact and removes sidebar shortcuts", async ({

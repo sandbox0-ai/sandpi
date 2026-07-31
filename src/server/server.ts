@@ -370,10 +370,14 @@ export async function createSandpiServer(
   });
 
   if (existsSync(config.webDir)) {
-    app.get("/preferences", async (_request, reply) =>
-      reply.redirect("/preferences/", 308),
-    );
-    app.get("/ide", async (_request, reply) => reply.redirect("/ide/", 308));
+    app.get("/preferences", async (request, reply) => {
+      const { search } = new URL(request.url, config.publicUrl);
+      return reply.redirect(`/preferences/${search}`, 308);
+    });
+    app.get("/ide", async (request, reply) => {
+      const { search } = new URL(request.url, config.publicUrl);
+      return reply.redirect(`/ide/${search}`, 308);
+    });
     await app.register(fastifyStatic, {
       root: config.webDir,
       prefix: "/",
