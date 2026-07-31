@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <a href="https://sandpi.ai">Open Sandpi</a> · <a href="https://github.com/sandbox0-ai/sandbox0">Sandbox0</a>
+  <a href="https://sandpi.ai">Open Sandpi</a> · <a href="https://sandbox0.ai">Sandbox0</a>
 </p>
 
 Sandpi is an open-source [Sandbox0](https://github.com/sandbox0-ai/sandbox0)
