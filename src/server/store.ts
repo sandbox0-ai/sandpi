@@ -396,10 +396,53 @@ export class SandpiStore {
       `${ENVIRONMENT_SELECT}
        WHERE environment.status <> 'archived'
          AND environment.created_by_user_id = $1
-       ORDER BY environment.created_at, environment.id`,
+       ORDER BY environment.display_order, environment.id`,
       [userId],
     );
     return result.rows.map(environmentFromRow);
+  }
+
+  async reorderEnvironments(userId: string, environmentIds: string[]) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+        [`sandpi:environment-limit:${userId}`],
+      );
+      const owned = await client.query<{ id: string }>(
+        `SELECT id
+         FROM environments
+         WHERE created_by_user_id = $1 AND status <> 'archived'
+         FOR UPDATE`,
+        [userId],
+      );
+      const ownedIds = new Set(owned.rows.map(({ id }) => id));
+      if (
+        ownedIds.size !== environmentIds.length ||
+        environmentIds.some((id) => !ownedIds.has(id))
+      ) {
+        throw conflict(
+          "environment_order_mismatch",
+          "Environment order must contain every accessible Environment exactly once.",
+        );
+      }
+      await client.query(
+        `UPDATE environments environment
+         SET display_order = (ordered.ordinality - 1)::INTEGER
+         FROM UNNEST($2::TEXT[]) WITH ORDINALITY
+              AS ordered(id, ordinality)
+         WHERE environment.created_by_user_id = $1
+           AND environment.id = ordered.id`,
+        [userId, environmentIds],
+      );
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async getEnvironment(userId: string, environmentId: string) {
@@ -661,11 +704,11 @@ export class SandpiStore {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
+      await client.query(
+        "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+        [`sandpi:environment-limit:${input.userId}`],
+      );
       if (input.environmentLimit != null) {
-        await client.query(
-          "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
-          [`sandpi:environment-limit:${input.userId}`],
-        );
         const count = await client.query<{ count: string }>(
           `SELECT COUNT(*)::TEXT AS count
            FROM environments
@@ -685,11 +728,14 @@ export class SandpiStore {
         `INSERT INTO environments (
            id, created_by_user_id, name, description, color, status,
            revision, template_id, credential_revision, harness,
-           harness_metadata, network_policy
+           harness_metadata, network_policy, display_order
          ) VALUES (
            $1, $2, $3, '', '#151515', 'updating', 1, 'coding-agent', 0,
            'codex', '{"label":"Codex","status":"not-connected"}'::JSONB,
-           '{"mode":"allow-all","domainExceptions":[]}'::JSONB
+           '{"mode":"allow-all","domainExceptions":[]}'::JSONB,
+           (SELECT COALESCE(MAX(display_order), -1) + 1
+            FROM environments
+            WHERE created_by_user_id = $2)
          )`,
         [id, input.userId, input.name],
       );

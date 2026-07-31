@@ -81,6 +81,7 @@ test("migration history contains every durable Sandpi boundary", async () => {
       "0054_use_sandbox0_lifecycle_truth",
       "0055_native_auth_attempts",
       "0056_manual_environment_lifecycle",
+      "0057_environment_display_order",
     ],
   );
 

@@ -147,6 +147,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
   );
   const workspaceNavigationRequestIdRef = useRef(0);
   const browserNavigationRequestIdRef = useRef(0);
+  const environmentOrderRequestIdRef = useRef(0);
   const restoredWorkspaceNavigationRef = useRef(false);
   const sessionHydratedAtRef = useRef(
     new Map(
@@ -676,6 +677,33 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
     [],
   );
 
+  const handleReorderEnvironments = useCallback(
+    (reordered: Environment[]) => {
+      const previous = environmentsRef.current;
+      const requestId = ++environmentOrderRequestIdRef.current;
+      environmentsRef.current = reordered;
+      setEnvironments(reordered);
+      void apiFetch<ApiEnvelope<Environment[]>>("/api/v1/environments/order", {
+        method: "PUT",
+        body: JSON.stringify({
+          environmentIds: reordered.map(({ id }) => id),
+        }),
+      })
+        .then(({ data }) => {
+          if (requestId !== environmentOrderRequestIdRef.current) return;
+          environmentsRef.current = data;
+          setEnvironments(data);
+        })
+        .catch((error) => {
+          if (requestId !== environmentOrderRequestIdRef.current) return;
+          environmentsRef.current = previous;
+          setEnvironments(previous);
+          console.error("Unable to reorder Environments", error);
+        });
+    },
+    [],
+  );
+
   const handleEnvironmentWorkspaceRestore = useCallback(
     (nextEnvironment: Environment) => {
       handleEnvironmentChange(nextEnvironment);
@@ -959,6 +987,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
         handleSelectEnvironment(environmentId);
         openEnvironmentSettings(environmentId);
       }}
+      onReorderEnvironments={handleReorderEnvironments}
       onRenameSession={handleRenameSession}
       onForkSession={handleForkSession}
       onArchiveSession={handleArchiveSession}

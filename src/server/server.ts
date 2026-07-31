@@ -111,6 +111,7 @@ import {
   codexSkillConfigurationSchema,
   environmentBrowserViewportSchema,
   environmentCreateSchema,
+  environmentOrderSchema,
   environmentProvisioningSchema,
   environmentScheduleSchema,
   environmentUpdateSchema,
@@ -702,6 +703,15 @@ export function registerApiRoutes(
       ...body,
     });
     return reply.status(201).send({ data: environment });
+  });
+  app.put("/api/v1/environments/order", async (request) => {
+    const body = environmentOrderSchema.parse(request.body);
+    return {
+      data: await services.environments.reorder(
+        request.principal.userId,
+        body.environmentIds,
+      ),
+    };
   });
   app.put<{ Params: { environmentId: string } }>(
     "/api/v1/environments/:environmentId",

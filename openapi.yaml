@@ -3442,6 +3442,50 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /api/v1/environments/order:
+    put:
+      operationId: reorderEnvironments
+      summary: Replace the Environment display order
+      tags:
+        - Environments
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                environmentIds:
+                  maxItems: 1000
+                  type: array
+                  items:
+                    type: string
+                    minLength: 1
+                    maxLength: 200
+              required:
+                - environmentIds
+              additionalProperties: false
+      responses:
+        "200":
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Environment"
+                required:
+                  - data
+                additionalProperties: false
+        default:
+          description: Sandpi error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /api/v1/environments/{environmentId}:
     put:
       operationId: updateEnvironment
