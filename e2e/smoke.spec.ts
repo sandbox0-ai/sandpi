@@ -1796,6 +1796,145 @@ test("opens Environment settings from the Inspector and controls Sandbox recover
   await expect(settingsAction).not.toHaveClass(/is-active/);
 });
 
+test("preserves Markdown table scroll and settings focus while a Turn is running", async ({
+  page,
+}) => {
+  const bootstrap = getMockBootstrap();
+  useEnglishUi(bootstrap);
+  const session = bootstrap.sessions.find(
+    (candidate) => candidate.harness === "codex" && !candidate.archived,
+  );
+  const environment = bootstrap.environments.find(
+    (candidate) => candidate.id === session?.environmentId,
+  );
+  test.skip(!session || !environment, "A Codex Session is required.");
+  if (!session || !environment) return;
+  test.skip(session.harness !== "codex", "A Codex Session is required.");
+  if (session.harness !== "codex") return;
+  const codexSession = session as CodexSession;
+  bootstrap.selectedEnvironmentId = environment.id;
+  bootstrap.selectedSessionId = session.id;
+  session.status = "running";
+
+  await page.route(
+    (url) => url.pathname === "/api/v1/bootstrap",
+    async (route) => {
+      await route.fulfill({ json: { data: bootstrap } });
+    },
+  );
+  await installControlledEventSource(page);
+  await page.route("**/api/v1/**/models", async (route) => {
+    await route.fulfill({
+      json: {
+        data: {
+          data: [
+            {
+              id: codexSession.harnessState.modelId,
+              displayName: "E2E stability model",
+              isDefault: true,
+            },
+          ],
+        },
+        meta: { availability: "available", source: "codex" },
+      },
+    });
+  });
+
+  const now = Date.now() / 1_000;
+  const nativeThreadId = "thread-e2e-render-stability";
+  const runningTurn: CodexTurn = {
+    id: "turn-e2e-render-stability-running",
+    itemsView: "full",
+    status: "inProgress",
+    error: null,
+    startedAt: now,
+    completedAt: null,
+    durationMs: null,
+    items: [],
+  };
+  const snapshot: CodexNativeSnapshot = {
+    protocol: "codex-app-server",
+    nativeSessionId: nativeThreadId,
+    historyRevision: 1,
+    modelId: codexSession.harnessState.modelId,
+    sessionStatus: "running",
+    forkableTurnIds: [],
+    activity: {
+      source: "codex-rollout",
+      availability: "available",
+      error: null,
+      records: [],
+    },
+    thread: {
+      id: nativeThreadId,
+      createdAt: now - 10,
+      updatedAt: now,
+      status: { type: "active", activeFlags: [] },
+      turns: [
+        {
+          id: "turn-e2e-render-stability-completed",
+          itemsView: "full",
+          status: "completed",
+          error: null,
+          startedAt: now - 10,
+          completedAt: now - 5,
+          durationMs: 5_000,
+          items: [
+            {
+              type: "agentMessage",
+              id: "item-e2e-render-stability-table",
+              text:
+                "| First column with wide content | Second column with wide content | Third column with wide content | Fourth column with wide content | Fifth column with wide content |\n" +
+                "| --- | --- | --- | --- | --- |\n" +
+                "| alpha alpha alpha alpha | beta beta beta beta | gamma gamma gamma gamma | delta delta delta delta | epsilon epsilon epsilon epsilon |",
+              phase: "final_answer",
+              memoryCitation: null,
+            },
+          ],
+        },
+        runningTurn,
+      ],
+    },
+  };
+  const eventPath = `/api/v1/sessions/${encodeURIComponent(session.id)}/events`;
+
+  await page.goto(
+    `/?environment=${encodeURIComponent(environment.id)}` +
+      `&session=${encodeURIComponent(session.id)}`,
+  );
+  await emitControlledEvent(page, eventPath, "snapshot", snapshot);
+  const tableScroll = page.locator(".markdown-table-scroll");
+  await expect(tableScroll).toBeVisible();
+  await expect
+    .poll(() =>
+      tableScroll.evaluate((element) => {
+        const table = element.querySelector("table");
+        if (table) table.style.width = "2000px";
+        element.scrollLeft = element.scrollWidth;
+        return element.scrollLeft;
+      }),
+    )
+    .toBeGreaterThan(0);
+  const scrolledLeft = await tableScroll.evaluate((element) => element.scrollLeft);
+  await page.waitForTimeout(1_200);
+  expect(await tableScroll.evaluate((element) => element.scrollLeft)).toBe(
+    scrolledLeft,
+  );
+
+  await page
+    .getByRole("button", { name: `${environment.name} settings` })
+    .click();
+  const nameInput = page.locator('input[name="environment-name"]');
+  await nameInput.focus();
+  await expect(nameInput).toBeFocused();
+  await emitControlledEvent(page, eventPath, "snapshot", {
+    ...snapshot,
+    historyRevision: 2,
+  });
+  await page.waitForTimeout(50);
+  await expect(nameInput).toBeFocused();
+});
+
 test("waits for native New Session models and scopes reasoning effort by model", async ({
   page,
   request,
