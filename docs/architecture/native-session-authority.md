@@ -140,6 +140,8 @@ client because coding agents normally own writes while humans inspect their
 results. UTF-8 source uses a bounded, line-numbered DOM view; Markdown renders
 semantically with lazy Workspace images and safe relative navigation; and CSV
 uses a bounded, progressively revealed table with filtering and a raw view.
+Line-qualified Markdown targets such as `/workspace/app.ts:12:4` resolve to the
+underlying Workspace file before the client issues its bounded read.
 Monaco and its assets load only after an explicit Edit action. A newly created
 file is the deliberate exception and opens directly in Edit mode.
 

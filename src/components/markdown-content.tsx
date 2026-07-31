@@ -41,11 +41,7 @@ function workspacePathFromHref(
   href: string | undefined,
   baseWorkspacePath?: string,
 ) {
-  const path = posixAbsolutePathFromHref(href);
-  if (path === "/workspace" || path?.startsWith("/workspace/")) return path;
-  return baseWorkspacePath
-    ? resolveWorkspaceMarkdownPath(href, baseWorkspacePath)
-    : undefined;
+  return resolveWorkspaceMarkdownPath(href, baseWorkspacePath);
 }
 
 function isExternalHref(href: string | undefined) {
