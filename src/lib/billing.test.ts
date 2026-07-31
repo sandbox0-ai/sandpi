@@ -17,8 +17,8 @@ const usage = {
   limitMiBMilliseconds: 0,
   remainingMiBMilliseconds: 0,
   usedGiBHours: 1,
-  limitGiBHours: 8,
-  percentUsed: 12.5,
+  limitGiBHours: 4,
+  percentUsed: 25,
   exhausted: false,
 } satisfies SandpiUsageSummary;
 
@@ -29,13 +29,13 @@ test("presents the Free GiB-hour allowance as fixed-memory runtime hours", () =>
     annualPriceUsd: 0,
     environmentLimit: 1,
     memoryConfigurable: false,
-    runtimeQuotaGiBHours: 8,
+    runtimeQuotaGiBHours: 4,
     quotaPeriod: "account-month",
   } satisfies SandpiAccountPlan;
 
   assert.deepEqual(runtimeUsageDisplay(plan, usage), {
     used: 0.5,
-    limit: 4,
+    limit: 2,
     unit: "hours",
   });
 });

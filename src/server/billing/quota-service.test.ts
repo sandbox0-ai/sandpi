@@ -136,7 +136,7 @@ test("free entitlement adds the live Sandbox0 allocation to closed usage", async
   const store = new FakeQuotaStore();
   store.customerId = "cus_one";
   store.usage = {
-    confirmedMiBMilliseconds: 6 * MIB_MILLISECONDS_PER_GIB_HOUR,
+    confirmedMiBMilliseconds: 2 * MIB_MILLISECONDS_PER_GIB_HOUR,
   };
   store.candidates = [
     {
@@ -167,11 +167,11 @@ test("free entitlement adds the live Sandbox0 allocation to closed usage", async
     summary.availablePlans.map((plan) => plan.annualPriceUsd),
     [0, 99, 199, 499],
   );
-  assert.equal(summary.plan.runtimeQuotaGiBHours, 8);
-  assert.equal(summary.usage.usedGiBHours, 8);
+  assert.equal(summary.plan.runtimeQuotaGiBHours, 4);
+  assert.equal(summary.usage.usedGiBHours, 4);
   assert.equal(
     summary.usage.projectedMiBMilliseconds,
-    8 * MIB_MILLISECONDS_PER_GIB_HOUR,
+    4 * MIB_MILLISECONDS_PER_GIB_HOUR,
   );
   assert.equal(summary.usage.exhausted, true);
   assert.equal(
@@ -366,14 +366,14 @@ test("free users cannot resize memory or run outside plan limits", async () => {
 
   store.position = 1;
   store.usage.confirmedMiBMilliseconds =
-    8 * MIB_MILLISECONDS_PER_GIB_HOUR;
+    4 * MIB_MILLISECONDS_PER_GIB_HOUR;
   await assert.rejects(
     service.assertEnvironmentRuntimeAllowed("environment-one"),
     (error) =>
       error instanceof HttpError &&
       error.statusCode === 429 &&
       error.code === "sandbox_runtime_quota_exhausted" &&
-      (error.details as { usedGiBHours?: number }).usedGiBHours === 8,
+      (error.details as { usedGiBHours?: number }).usedGiBHours === 4,
   );
 });
 
@@ -420,7 +420,7 @@ test("background enforcement reconciles fixed memory and pauses only running vio
 test("background enforcement pauses live runtime as soon as open usage reaches quota", async () => {
   const store = new FakeQuotaStore();
   store.usage.confirmedMiBMilliseconds =
-    7 * MIB_MILLISECONDS_PER_GIB_HOUR;
+    3 * MIB_MILLISECONDS_PER_GIB_HOUR;
   store.candidates = [
     {
       environmentId: "environment-one",
