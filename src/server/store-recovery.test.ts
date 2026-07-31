@@ -1113,7 +1113,7 @@ test("archives an idle Session only after locking its control projection", async
     call.sql.includes("archived = TRUE"),
   );
   assert.ok(archive);
-  assert.deepEqual(archive.values, ["session-one", null, false]);
+  assert.deepEqual(archive.values, ["session-one", null, false, null]);
   assert.equal(fixture.calls.at(-1)?.sql, "COMMIT");
 });
 
