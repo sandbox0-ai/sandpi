@@ -17,8 +17,8 @@ const usage = {
   limitMiBMilliseconds: 0,
   remainingMiBMilliseconds: 0,
   usedGiBHours: 1,
-  limitGiBHours: 4,
-  percentUsed: 25,
+  limitGiBHours: 8,
+  percentUsed: 12.5,
   exhausted: false,
 } satisfies SandpiUsageSummary;
 
@@ -29,13 +29,13 @@ test("presents the Free GiB-hour allowance as fixed-memory runtime hours", () =>
     annualPriceUsd: 0,
     environmentLimit: 1,
     memoryConfigurable: false,
-    runtimeQuotaGiBHours: 4,
+    runtimeQuotaGiBHours: 8,
     quotaPeriod: "account-month",
   } satisfies SandpiAccountPlan;
 
   assert.deepEqual(runtimeUsageDisplay(plan, usage), {
     used: 0.5,
-    limit: 2,
+    limit: 4,
     unit: "hours",
   });
 });
@@ -47,15 +47,18 @@ test("keeps configurable-memory plans in GiB-hours", () => {
     annualPriceUsd: 99,
     environmentLimit: 3,
     memoryConfigurable: true,
-    runtimeQuotaGiBHours: 125,
+    runtimeQuotaGiBHours: 250,
     quotaPeriod: "fixed-week",
   } satisfies SandpiAccountPlan;
 
-  assert.deepEqual(runtimeUsageDisplay(plan, usage), {
-    used: 1,
-    limit: 4,
-    unit: "gib-hours",
-  });
+  assert.deepEqual(
+    runtimeUsageDisplay(plan, { ...usage, limitGiBHours: 250 }),
+    {
+      used: 1,
+      limit: 250,
+      unit: "gib-hours",
+    },
+  );
 });
 
 test("formats quota reset time in the configured user time zone", () => {

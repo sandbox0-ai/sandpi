@@ -20,6 +20,14 @@ export interface PlanDefinition
 const FREE_RUNTIME_QUOTA_GIB_HOURS =
   (SANDPI_FREE_SANDBOX_MEMORY_MIB / 1024) * SANDPI_FREE_RUNTIME_HOURS;
 
+function runtimeQuota(runtimeQuotaGiBHours: number) {
+  return {
+    runtimeQuotaGiBHours,
+    runtimeQuotaMiBMilliseconds:
+      runtimeQuotaGiBHours * MIB_MILLISECONDS_PER_GIB_HOUR,
+  };
+}
+
 export const PLAN_DEFINITIONS = {
   deployment: {
     id: "deployment",
@@ -37,9 +45,7 @@ export const PLAN_DEFINITIONS = {
     annualPriceUsd: 0,
     environmentLimit: 1,
     fixedSandboxMemoryMiB: SANDPI_FREE_SANDBOX_MEMORY_MIB,
-    runtimeQuotaGiBHours: FREE_RUNTIME_QUOTA_GIB_HOURS,
-    runtimeQuotaMiBMilliseconds:
-      FREE_RUNTIME_QUOTA_GIB_HOURS * MIB_MILLISECONDS_PER_GIB_HOUR,
+    ...runtimeQuota(FREE_RUNTIME_QUOTA_GIB_HOURS),
     quotaPeriod: "account-month",
   },
   plus: {
@@ -48,8 +54,7 @@ export const PLAN_DEFINITIONS = {
     annualPriceUsd: 99,
     environmentLimit: 3,
     fixedSandboxMemoryMiB: null,
-    runtimeQuotaGiBHours: 125,
-    runtimeQuotaMiBMilliseconds: 125 * MIB_MILLISECONDS_PER_GIB_HOUR,
+    ...runtimeQuota(250),
     quotaPeriod: "fixed-week",
   },
   pro: {
@@ -58,8 +63,7 @@ export const PLAN_DEFINITIONS = {
     annualPriceUsd: 199,
     environmentLimit: 10,
     fixedSandboxMemoryMiB: null,
-    runtimeQuotaGiBHours: 250,
-    runtimeQuotaMiBMilliseconds: 250 * MIB_MILLISECONDS_PER_GIB_HOUR,
+    ...runtimeQuota(500),
     quotaPeriod: "fixed-week",
   },
   ultra: {
@@ -68,8 +72,7 @@ export const PLAN_DEFINITIONS = {
     annualPriceUsd: 499,
     environmentLimit: 25,
     fixedSandboxMemoryMiB: null,
-    runtimeQuotaGiBHours: 625,
-    runtimeQuotaMiBMilliseconds: 625 * MIB_MILLISECONDS_PER_GIB_HOUR,
+    ...runtimeQuota(1_250),
     quotaPeriod: "fixed-week",
   },
 } as const satisfies Record<SandpiPlanId, PlanDefinition>;

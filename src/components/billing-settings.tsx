@@ -17,7 +17,6 @@ import {
   formatUsageResetTime,
   isSandpiPaidPlanId,
   runtimeUsageDisplay,
-  SANDPI_FREE_RUNTIME_HOURS,
   SANDPI_FREE_SANDBOX_MEMORY_MIB,
   type SandpiAccountPlan,
   type SandpiBillingSummary,
@@ -463,12 +462,7 @@ function PlanCard({
               )}
         </li>
         <li>
-          {plan.id === "free"
-            ? `${SANDPI_FREE_RUNTIME_HOURS} ${text(
-                "runtime hours",
-                "小时",
-              )} / ${text("month", "月")}`
-            : plan.runtimeQuotaGiBHours == null
+          {plan.runtimeQuotaGiBHours == null
             ? text("Unlimited runtime", "运行额度不限")
             : `${formatRuntimeQuantity(plan.runtimeQuotaGiBHours)} ${text(
                 "GiB-hours",
