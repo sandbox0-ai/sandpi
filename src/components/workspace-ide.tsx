@@ -92,6 +92,7 @@ import type {
   WorkspaceIdeWriteRequest,
 } from "@/lib/types";
 
+import { useAlertDialog } from "./alert-dialog";
 import { WorkspaceImagePreview } from "./workspace-image-preview";
 import {
   WorkspaceTreeContextMenu,
@@ -317,8 +318,14 @@ const copy = {
     hideCompare: "Hide comparison",
     useLatest: "Use latest",
     overwrite: "Overwrite with mine",
-    discardClose: "Discard the unsaved changes and close this file?",
-    reloadDiscard: "Discard unsaved changes and reload the Workspace?",
+    discardCloseTitle: "Discard changes?",
+    discardClose: "Closing this file will discard its unsaved changes.",
+    discardCloseAction: "Discard & close",
+    reloadDiscardTitle: "Reload Workspace?",
+    reloadDiscard: "Unsaved changes in open files will be discarded.",
+    reloadDiscardAction: "Discard & reload",
+    keepEditing: "Keep editing",
+    cancel: "Cancel",
     loading: "Loading Workspace…",
     loadingFolder: "Loading folder…",
     folderUnavailable: "Folder unavailable. Click to retry.",
@@ -334,14 +341,15 @@ const copy = {
     entryRenameFailed: "The Workspace entry could not be renamed.",
     entryRenamed: (name: string) => `Renamed to ${name}`,
     entryDeleted: (name: string) => `${name} deleted`,
-    deleteConfirm: (
-      name: string,
-      kind: "file" | "folder",
-      dirtyCount: number,
-    ) =>
-      dirtyCount > 0
-        ? `Delete “${name}”${kind === "folder" ? " and everything inside it" : ""}? ${dirtyCount} open ${dirtyCount === 1 ? "file has" : "files have"} unsaved changes. This cannot be undone.`
-        : `Delete “${name}”${kind === "folder" ? " and everything inside it" : ""}? This cannot be undone.`,
+    deleteTitle: (name: string) => `Delete “${name}”?`,
+    deleteConfirm: (kind: "file" | "folder", dirtyCount: number) =>
+      `${kind === "folder" ? "Everything inside this folder will also be deleted." : "This file will be deleted."}${
+        dirtyCount > 0
+          ? ` ${dirtyCount} open ${dirtyCount === 1 ? "file has" : "files have"} unsaved changes.`
+          : ""
+      } This cannot be undone.`,
+    deleteAction: (kind: "file" | "folder") =>
+      kind === "folder" ? "Delete folder" : "Delete file",
     deleteFailed: "The Workspace entry could not be deleted.",
     selectFile: "Select a file from workspace.",
     staged: "staged",
@@ -389,8 +397,14 @@ const copy = {
     hideCompare: "隐藏比较",
     useLatest: "使用最新版本",
     overwrite: "用我的版本覆盖",
-    discardClose: "放弃未保存修改并关闭此文件？",
-    reloadDiscard: "放弃未保存修改并刷新 Workspace？",
+    discardCloseTitle: "放弃修改？",
+    discardClose: "关闭此文件将丢失其中尚未保存的修改。",
+    discardCloseAction: "放弃并关闭",
+    reloadDiscardTitle: "刷新 Workspace？",
+    reloadDiscard: "已打开文件中尚未保存的修改将会丢失。",
+    reloadDiscardAction: "放弃并刷新",
+    keepEditing: "继续编辑",
+    cancel: "取消",
     loading: "正在加载 Workspace…",
     loadingFolder: "正在加载文件夹…",
     folderUnavailable: "文件夹暂时不可用，点击重试。",
@@ -406,14 +420,15 @@ const copy = {
     entryRenameFailed: "无法重命名 Workspace 条目。",
     entryRenamed: (name: string) => `已重命名为 ${name}`,
     entryDeleted: (name: string) => `已删除 ${name}`,
-    deleteConfirm: (
-      name: string,
-      kind: "file" | "folder",
-      dirtyCount: number,
-    ) =>
-      dirtyCount > 0
-        ? `确定删除“${name}”${kind === "folder" ? "及其中的所有内容" : ""}吗？其中 ${dirtyCount} 个已打开文件有未保存修改。此操作无法撤销。`
-        : `确定删除“${name}”${kind === "folder" ? "及其中的所有内容" : ""}吗？此操作无法撤销。`,
+    deleteTitle: (name: string) => `删除“${name}”？`,
+    deleteConfirm: (kind: "file" | "folder", dirtyCount: number) =>
+      `${kind === "folder" ? "此文件夹中的所有内容也将一并删除。" : "此文件将被删除。"}${
+        dirtyCount > 0
+          ? ` 其中 ${dirtyCount} 个已打开文件有未保存修改。`
+          : ""
+      }此操作无法撤销。`,
+    deleteAction: (kind: "file" | "folder") =>
+      kind === "folder" ? "删除文件夹" : "删除文件",
     deleteFailed: "无法删除 Workspace 条目。",
     selectFile: "从 workspace 中选择文件。",
     staged: "已暂存",
@@ -1401,6 +1416,7 @@ export function WorkspaceIde({
   onNavigationHandled,
 }: WorkspaceIdeProps) {
   const ui = copy[language];
+  const { confirm } = useAlertDialog();
   const localUiPreferences = useLocalUiPreferences();
   const fileBrowserSidebarCollapsed =
     localUiPreferences.workspace.fileBrowserSidebarCollapsed;
@@ -2295,7 +2311,14 @@ export function WorkspaceIde({
         ([filePath, document]) =>
           document.dirty && workspacePathAtOrBelow(filePath, entryPath),
       ).length;
-      if (!window.confirm(ui.deleteConfirm(entry.name, entry.kind, dirtyCount))) {
+      const confirmed = await confirm({
+        title: ui.deleteTitle(entry.name),
+        description: ui.deleteConfirm(entry.kind, dirtyCount),
+        actionLabel: ui.deleteAction(entry.kind),
+        cancelLabel: ui.cancel,
+        tone: "danger",
+      });
+      if (!confirmed) {
         return false;
       }
 
@@ -2419,7 +2442,7 @@ export function WorkspaceIde({
         return false;
       }
     },
-    [environment.id, loadDirectory, refreshSnapshot, ui],
+    [confirm, environment.id, loadDirectory, refreshSnapshot, ui],
   );
 
   const downloadWorkspaceFile = useCallback(
@@ -2914,19 +2937,41 @@ export function WorkspaceIde({
     const dirty = Object.values(documentsRef.current).some(
       (candidate) => candidate.dirty,
     );
-    if (dirty && !window.confirm(ui.reloadDiscard)) return;
+    if (
+      dirty &&
+      !(await confirm({
+        title: ui.reloadDiscardTitle,
+        description: ui.reloadDiscard,
+        actionLabel: ui.reloadDiscardAction,
+        cancelLabel: ui.keepEditing,
+        tone: "danger",
+      }))
+    ) {
+      return;
+    }
     await refreshSnapshot(false, true);
     await Promise.all(
       openPathsRef.current.map((filePath) => loadDocument(filePath, "reload")),
     );
   }
 
-  function closeTab(filePath: string) {
-    if (
-      documentsRef.current[filePath]?.dirty &&
-      !window.confirm(ui.discardClose)
-    ) {
-      return;
+  async function closeTab(filePath: string) {
+    if (documentsRef.current[filePath]?.dirty) {
+      const discard = await confirm({
+        title: ui.discardCloseTitle,
+        description: ui.discardClose,
+        actionLabel: ui.discardCloseAction,
+        cancelLabel: ui.keepEditing,
+        tone: "danger",
+      });
+      if (!discard) return;
+      setDocuments((current) => {
+        if (!current[filePath]?.dirty) return current;
+        const next = { ...current };
+        delete next[filePath];
+        documentsRef.current = next;
+        return next;
+      });
     }
     setOpenPaths((current) => {
       const index = current.indexOf(filePath);
@@ -3266,13 +3311,13 @@ export function WorkspaceIde({
                   aria-label={`Close ${filePath.split("/").at(-1)}`}
                   onClick={(event) => {
                     event.stopPropagation();
-                    closeTab(filePath);
+                    void closeTab(filePath);
                   }}
                   onKeyDown={(event) => {
                     if (event.key === "Enter" || event.key === " ") {
                       event.preventDefault();
                       event.stopPropagation();
-                      closeTab(filePath);
+                      void closeTab(filePath);
                     }
                   }}
                 >
