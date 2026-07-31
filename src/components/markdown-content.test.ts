@@ -36,6 +36,21 @@ export default function App() {}
   assert.match(html, /class="language-tsx"/);
 });
 
+test("marks Workspace documents for the GitHub-like reading presentation", () => {
+  const html = renderToStaticMarkup(
+    createElement(MarkdownContent, {
+      content: "# Workspace guide",
+      variant: "document",
+    }),
+  );
+
+  assert.match(
+    html,
+    /class="markdown-content markdown-content-document"/,
+  );
+  assert.match(html, /<h1>Workspace guide<\/h1>/);
+});
+
 test("keeps Workspace and external links inside their intended boundaries", () => {
   const html = render(
     "[Page](/workspace/app/page.tsx) [Docs](https://example.com)",

@@ -89,9 +89,8 @@
 }
 
 .markdownPreview > :global(.markdown-content) {
-  width: min(820px, 100%);
+  width: min(980px, 100%);
   margin: 0 auto;
-  font-size: 14px;
 }
 
 .markdownImage {

@@ -289,6 +289,9 @@ const copy = {
     polling: "Polling",
     offline: "Disconnected",
     refresh: "Refresh Workspace",
+    refreshing: "Refreshing Workspace",
+    refreshed: "Workspace refreshed",
+    refreshFailed: "Workspace could not be refreshed.",
     files: "Files",
     collapseFileBrowser: "Collapse file browser",
     expandFileBrowser: "Expand file browser",
@@ -364,6 +367,9 @@ const copy = {
     polling: "轮询更新",
     offline: "已断开",
     refresh: "刷新 Workspace",
+    refreshing: "正在刷新 Workspace",
+    refreshed: "Workspace 已刷新",
+    refreshFailed: "无法刷新 Workspace。",
     files: "文件",
     collapseFileBrowser: "折叠文件浏览器",
     expandFileBrowser: "展开文件浏览器",
@@ -1380,6 +1386,9 @@ export function WorkspaceIde({
   );
   const [loading, setLoading] = useState(!initialCacheState.snapshot);
   const [error, setError] = useState("");
+  const [workspaceRefreshStatus, setWorkspaceRefreshStatus] = useState<
+    "idle" | "refreshing" | "complete"
+  >("idle");
   const [connection, setConnection] = useState<
     "connecting" | "live" | "reconnecting" | "polling" | "offline"
   >("connecting");
@@ -1416,6 +1425,8 @@ export function WorkspaceIde({
   const openPathsRef = useRef(openPaths);
   const selectedPathRef = useRef(selectedPath);
   const pendingPathsRef = useRef(new Set<string>());
+  const workspaceRefreshRequestRef = useRef<symbol | null>(null);
+  const workspaceRefreshFeedbackTimerRef = useRef<number | null>(null);
   const refreshTimerRef = useRef<number | null>(null);
   const gitRefreshTimerRef = useRef<number | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
@@ -1534,6 +1545,11 @@ export function WorkspaceIde({
       for (const release of activeRequestReleasesRef.current) release();
       activeRequestReleasesRef.current.clear();
       directoryRequestsRef.current.clear();
+      workspaceRefreshRequestRef.current = null;
+      if (workspaceRefreshFeedbackTimerRef.current !== null) {
+        window.clearTimeout(workspaceRefreshFeedbackTimerRef.current);
+        workspaceRefreshFeedbackTimerRef.current = null;
+      }
     },
     [cacheKey],
   );
@@ -1851,6 +1867,7 @@ export function WorkspaceIde({
     setRevealRequest(undefined);
     setError("");
     setLoading(!nextSnapshot);
+    setWorkspaceRefreshStatus("idle");
   }, [
     cacheKey,
     environment.id,
@@ -2867,6 +2884,7 @@ export function WorkspaceIde({
   }
 
   async function refreshWorkspace() {
+    if (workspaceRefreshRequestRef.current) return;
     const dirty = Object.values(documentsRef.current).some(
       (candidate) => candidate.dirty,
     );
@@ -2882,10 +2900,55 @@ export function WorkspaceIde({
     ) {
       return;
     }
-    await refreshSnapshot(false, true);
-    await Promise.all(
-      openPathsRef.current.map((filePath) => loadDocument(filePath, "reload")),
-    );
+    const refreshRequest = Symbol("workspace-refresh");
+    const refreshEnvironmentId = environment.id;
+    const refreshEnvironmentGeneration = environmentGenerationRef.current;
+    workspaceRefreshRequestRef.current = refreshRequest;
+    if (workspaceRefreshFeedbackTimerRef.current !== null) {
+      window.clearTimeout(workspaceRefreshFeedbackTimerRef.current);
+      workspaceRefreshFeedbackTimerRef.current = null;
+    }
+    setWorkspaceRefreshStatus("refreshing");
+
+    let completed = false;
+    try {
+      await refreshSnapshot(false, true);
+      await Promise.all(
+        openPathsRef.current.map((filePath) => loadDocument(filePath, "reload")),
+      );
+      completed = true;
+    } catch (cause) {
+      if (
+        environmentIdRef.current === refreshEnvironmentId &&
+        environmentGenerationRef.current === refreshEnvironmentGeneration
+      ) {
+        setError(
+          cause instanceof Error && cause.message
+            ? cause.message
+            : ui.refreshFailed,
+        );
+      }
+    } finally {
+      if (workspaceRefreshRequestRef.current !== refreshRequest) return;
+      workspaceRefreshRequestRef.current = null;
+      if (
+        environmentIdRef.current !== refreshEnvironmentId ||
+        environmentGenerationRef.current !== refreshEnvironmentGeneration
+      ) {
+        return;
+      }
+      if (!completed) {
+        setWorkspaceRefreshStatus("idle");
+        return;
+      }
+      setWorkspaceRefreshStatus("complete");
+      workspaceRefreshFeedbackTimerRef.current = window.setTimeout(() => {
+        workspaceRefreshFeedbackTimerRef.current = null;
+        setWorkspaceRefreshStatus((current) =>
+          current === "complete" ? "idle" : current,
+        );
+      }, 1_600);
+    }
   }
 
   async function closeTab(filePath: string) {
@@ -2971,6 +3034,12 @@ export function WorkspaceIde({
     polling: ui.polling,
     offline: ui.offline,
   }[connection];
+  const workspaceRefreshLabel =
+    workspaceRefreshStatus === "refreshing"
+      ? ui.refreshing
+      : workspaceRefreshStatus === "complete"
+        ? ui.refreshed
+        : ui.refresh;
   const displayedFileBrowserSidebarWidth =
     fileBrowserWorkbenchWidth > 0
       ? clampFileBrowserSidebarWidthForAvailableWidth(
@@ -3290,11 +3359,31 @@ export function WorkspaceIde({
             <span className={styles.tabActions}>
               <button
                 type="button"
-                aria-label={ui.refresh}
+                className={`${styles.workspaceRefreshButton} ${
+                  workspaceRefreshStatus === "refreshing"
+                    ? styles.workspaceRefreshButtonRefreshing
+                    : workspaceRefreshStatus === "complete"
+                      ? styles.workspaceRefreshButtonComplete
+                      : ""
+                }`}
+                aria-label={workspaceRefreshLabel}
+                aria-busy={workspaceRefreshStatus === "refreshing"}
+                data-state={workspaceRefreshStatus}
+                title={workspaceRefreshLabel}
+                disabled={workspaceRefreshStatus === "refreshing"}
                 onClick={() => void refreshWorkspace()}
               >
-                <RefreshCw size={13} />
+                {workspaceRefreshStatus === "complete" ? (
+                  <Check size={13} aria-hidden="true" />
+                ) : (
+                  <RefreshCw size={13} aria-hidden="true" />
+                )}
               </button>
+              {workspaceRefreshStatus !== "idle" ? (
+                <span className="sr-only" role="status" aria-live="polite">
+                  {workspaceRefreshLabel}
+                </span>
+              ) : null}
               {variant === "embedded" ? (
                 <a
                   href={workspaceIdeHref(

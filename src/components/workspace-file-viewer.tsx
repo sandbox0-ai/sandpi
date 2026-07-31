@@ -784,6 +784,7 @@ export function WorkspaceFileViewer({
       <div className={styles.markdownPreview} data-testid="workspace-markdown-preview">
         <MarkdownContent
           content={content}
+          variant="document"
           baseWorkspacePath={file.path}
           onOpenWorkspacePath={onOpenWorkspacePath}
           renderWorkspaceImage={renderWorkspaceImage}

@@ -6963,7 +6963,27 @@ test("renders preview-first documents and verified rich Workspace previews", asy
       revision: `sha256:${"0".repeat(43)}`,
       encoding: "base64",
       content: Buffer.from(
-        "# Preview first\n\nInspect [report data](./report.csv) without opening an editor.\n",
+        [
+          "# Preview first",
+          "",
+          "Inspect [report data](./report.csv) without opening an editor.",
+          "",
+          "## Verification",
+          "",
+          "> Workspace previews keep documentation readable and navigation safe.",
+          "",
+          "- [x] GitHub-flavored task lists",
+          "- [ ] Final review",
+          "",
+          "| File | Status |",
+          "| --- | --- |",
+          "| `report.csv` | Ready |",
+          "",
+          "```ts",
+          'const preview = "ready";',
+          "```",
+          "",
+        ].join("\n"),
       ).toString("base64"),
       kind: "text",
       editable: true,
@@ -7094,6 +7114,9 @@ test("renders preview-first documents and verified rich Workspace previews", asy
     ],
     git: { repositories: [] },
   };
+  let rootDirectoryLoads = 0;
+  let delayNextRootDirectoryLoad = false;
+  let releaseRootDirectoryLoad: (() => void) | undefined;
 
   await page.route("**/api/v1/environments/**/ide/file?*", async (route) => {
     const filePath = new URL(route.request().url()).searchParams.get("path");
@@ -7113,6 +7136,14 @@ test("renders preview-first documents and verified rich Workspace previews", asy
     await route.fulfill({ json: { data: file } });
   });
   await page.route("**/api/v1/environments/**/files?*", async (route) => {
+    rootDirectoryLoads += 1;
+    if (delayNextRootDirectoryLoad) {
+      delayNextRootDirectoryLoad = false;
+      await new Promise<void>((resolve) => {
+        releaseRootDirectoryLoad = resolve;
+      });
+      releaseRootDirectoryLoad = undefined;
+    }
     await route.fulfill({
       json: {
         data: {
@@ -7142,11 +7173,46 @@ test("renders preview-first documents and verified rich Workspace previews", asy
     `/ide/?environment=${encodeURIComponent(environment.id)}&new=1`,
   );
 
+  const refreshWorkspace = page.getByRole("button", {
+    name: "Refresh Workspace",
+  });
+  await expect(refreshWorkspace).toBeEnabled();
+  await expect.poll(() => rootDirectoryLoads).toBeGreaterThan(0);
+  delayNextRootDirectoryLoad = true;
+  await refreshWorkspace.click();
+  const refreshingWorkspace = page.getByRole("button", {
+    name: "Refreshing Workspace",
+  });
+  await expect(refreshingWorkspace).toBeDisabled();
+  await expect(refreshingWorkspace).toHaveAttribute("aria-busy", "true");
+  await expect(refreshingWorkspace).toHaveAttribute("data-state", "refreshing");
+  await expect.poll(() => Boolean(releaseRootDirectoryLoad)).toBe(true);
+  releaseRootDirectoryLoad?.();
+  const refreshedWorkspace = page.getByRole("button", {
+    name: "Workspace refreshed",
+  });
+  await expect(refreshedWorkspace).toBeEnabled();
+  await expect(refreshedWorkspace).toHaveAttribute("data-state", "complete");
+  await expect(refreshWorkspace).toBeVisible({ timeout: 4_000 });
+
   await page.locator('button[title="/workspace/README.md"]').click();
   await expect(page.getByTestId("workspace-markdown-preview")).toBeVisible();
   await expect(
     page.getByRole("heading", { name: "Preview first" }),
   ).toBeVisible();
+  const markdownDocument = page.locator(
+    ".markdown-content.markdown-content-document",
+  );
+  await expect(markdownDocument).toBeVisible();
+  await expect(markdownDocument).toHaveCSS("font-size", "16px");
+  await expect(
+    page.getByRole("heading", { name: "Verification" }),
+  ).toHaveCSS("border-bottom-style", "solid");
+  await expect(markdownDocument.locator('input[type="checkbox"]')).toHaveCount(2);
+  await expect(markdownDocument.getByRole("table")).toBeVisible();
+  await expect(markdownDocument.locator("pre code.language-ts")).toContainText(
+    'const preview = "ready";',
+  );
   await expect(page.locator(".monaco-editor")).toHaveCount(0);
   await page.getByRole("button", { name: "Edit file" }).click();
   await expect(page.locator(".monaco-editor")).toBeVisible();
