@@ -2819,6 +2819,7 @@ components:
                 - audio
                 - image
                 - pdf
+                - presentation
                 - video
             mimeType:
               type: string

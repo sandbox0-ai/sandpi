@@ -47,6 +47,35 @@ test("keeps Workspace and external links inside their intended boundaries", () =
   assert.match(html, /rel="noreferrer noopener"/);
 });
 
+test("resolves relative links from a Workspace Markdown file", () => {
+  const html = renderToStaticMarkup(
+    createElement(MarkdownContent, {
+      content: "[Details](./reference/details.md)",
+      baseWorkspacePath: "/workspace/docs/guide.md",
+      onOpenWorkspacePath: () => undefined,
+    }),
+  );
+
+  assert.match(
+    html,
+    /data-workspace-path="\/workspace\/docs\/reference\/details\.md"/,
+  );
+});
+
+test("delegates relative Workspace images to a safe file renderer", () => {
+  const html = renderToStaticMarkup(
+    createElement(MarkdownContent, {
+      content: "![Chart](../assets/chart.png)",
+      baseWorkspacePath: "/workspace/docs/guide.md",
+      renderWorkspaceImage: (path, alt) =>
+        createElement("span", { "data-image-path": path }, alt),
+    }),
+  );
+
+  assert.match(html, /data-image-path="\/workspace\/assets\/chart\.png"/);
+  assert.match(html, />Chart<\/span>/);
+});
+
 test("routes sandbox loopback links into the shared Environment browser", () => {
   const html = render(
     "[Next.js](http://localhost:3000/dashboard) [API](127.0.0.1:8080/health)",

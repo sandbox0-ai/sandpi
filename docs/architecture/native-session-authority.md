@@ -135,14 +135,23 @@ Deletion requires an explicit client confirmation that calls out recursive
 folder removal and open unsaved files. A rename remaps open tabs and preserves
 dirty drafts; a deletion closes every affected tab. The client then reconciles
 the parent page and opens a newly created file.
-Each file open is one bounded Sandbox0 read. UTF-8 content enters the text
-editor with wrapped lines and an explicit read-only preview mode. Coarse-pointer
-clients default to preview mode so opening a text file does not summon the
-software keyboard; signature-verified image, audio, video and PDF containers
-receive a read-only browser preview. Sandpi does not infer a preview MIME type from the
-filename alone. The 5 MiB bound also applies to media because Sandbox0 does not
-currently expose a ranged file read or streaming URL; browser codec support is
-therefore the remaining format-specific playback boundary.
+Each file open is one bounded Sandbox0 read. Files open in preview mode on every
+client because coding agents normally own writes while humans inspect their
+results. UTF-8 source uses a bounded, line-numbered DOM view; Markdown renders
+semantically with lazy Workspace images and safe relative navigation; and CSV
+uses a bounded, progressively revealed table with filtering and a raw view.
+Monaco and its assets load only after an explicit Edit action. A newly created
+file is the deliberate exception and opens directly in Edit mode.
+
+Signature-verified image, audio, video, PDF and Open XML PowerPoint (`.pptx`)
+containers receive read-only browser previews. PPTX parsing runs in a lazily
+loaded Web Worker, renders only a window of nearby slides, and places generated
+slide markup in a script-disabled, network-denied frame. Legacy binary `.ppt`
+files remain downloadable because supporting that format would require a much
+larger conversion runtime. Sandpi does not infer a preview MIME type from the
+filename alone. The 5 MiB bound also applies to rich previews because Sandbox0
+does not currently expose a ranged file read or streaming URL; browser codec
+support is therefore the remaining format-specific playback boundary.
 
 The Environment credential source is encrypted in PostgreSQL and materialized
 at `/dev/shm/sandpi-codex-auth.json`. Persistent `CODEX_HOME/auth.json` is only a

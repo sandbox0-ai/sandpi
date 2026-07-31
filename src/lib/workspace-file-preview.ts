@@ -24,6 +24,8 @@ const PREVIEW_EXTENSIONS: Readonly<Record<string, WorkspacePreviewKind>> = {
   jpeg: "image",
   jpg: "image",
   png: "image",
+  ppt: "presentation",
+  pptx: "presentation",
   webp: "image",
   pdf: "pdf",
   m4v: "video",
@@ -82,12 +84,23 @@ function containsAscii(
   value: string,
   maximumBytes = 4_096,
 ) {
+  const expected = Uint8Array.from(value, (character) =>
+    character.charCodeAt(0),
+  );
   const end = Math.min(
-    content.byteLength - value.length,
-    maximumBytes - value.length,
+    content.byteLength - expected.length,
+    maximumBytes - expected.length,
   );
   for (let offset = 0; offset <= end; offset += 1) {
-    if (asciiEqual(content, value, offset)) return true;
+    if (content[offset] !== expected[0]) continue;
+    let matches = true;
+    for (let index = 1; index < expected.length; index += 1) {
+      if (content[offset + index] !== expected[index]) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches) return true;
   }
   return false;
 }
@@ -198,6 +211,20 @@ export function detectWorkspaceFilePreview(
   content: Uint8Array,
 ): WorkspaceIdeFilePreview | undefined {
   const extension = extensionOf(fileName);
+
+  if (
+    (bytesEqual(content, [0x50, 0x4b, 0x03, 0x04]) ||
+      bytesEqual(content, [0x50, 0x4b, 0x05, 0x06]) ||
+      bytesEqual(content, [0x50, 0x4b, 0x07, 0x08])) &&
+    containsAscii(content, "[Content_Types].xml", content.byteLength) &&
+    containsAscii(content, "ppt/presentation.xml", content.byteLength)
+  ) {
+    return {
+      kind: "presentation",
+      mimeType:
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    };
+  }
 
   if (
     bytesEqual(content, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
