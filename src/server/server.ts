@@ -1215,6 +1215,7 @@ export function registerApiRoutes(
       const sessionId = await services.codex.createSession({
         userId: request.principal.userId,
         environment,
+        idempotencyKey: body.idempotencyKey,
         title: body.title || body.prompt.slice(0, 56) || "File task",
         prompt: body.prompt,
         images: body.images,

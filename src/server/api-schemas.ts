@@ -46,6 +46,13 @@ export const workspaceFileSearchQuerySchema = z
 
 export const codexReasoningEffortSchema = z.string().trim().min(1).max(100);
 
+const idempotencyKeySchema = z
+  .string()
+  .trim()
+  .min(16)
+  .max(128)
+  .refine((value) => !/[\u0000\r\n]/.test(value));
+
 const codexReferenceNameSchema = z
   .string()
   .trim()
@@ -77,12 +84,7 @@ export const codexComposerUploadSchema = z.object({
 
 export const codexRateLimitResetSchema = z
   .object({
-    idempotencyKey: z
-      .string()
-      .trim()
-      .min(16)
-      .max(128)
-      .refine((value) => !/[\u0000\r\n]/.test(value)),
+    idempotencyKey: idempotencyKeySchema,
   })
   .strict();
 
@@ -121,12 +123,7 @@ export const environmentScheduleSchema = z
 export const billingCheckoutSchema = z
   .object({
     planId: z.enum(["plus", "pro"]),
-    idempotencyKey: z
-      .string()
-      .trim()
-      .min(16)
-      .max(128)
-      .refine((value) => !/[\u0000\r\n]/.test(value)),
+    idempotencyKey: idempotencyKeySchema,
   })
   .strict();
 
@@ -225,6 +222,7 @@ export const codexInputImagesSchema = z
 export const sessionCreateSchema = z
   .object({
     environmentId: z.string().min(1),
+    idempotencyKey: idempotencyKeySchema.optional(),
     prompt: z.string().trim().max(100_000).default(""),
     title: z.string().trim().max(200).optional(),
     modelId: z.string().max(200).optional(),

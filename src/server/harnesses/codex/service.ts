@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import path from "node:path";
 
@@ -71,6 +71,7 @@ import {
   SandpiStore,
   WORKSPACE_RESTORE_UNAVAILABLE_SESSION_ERROR,
   type CodexControlTransition,
+  type IdempotentResourceState,
   type StoredEnvironmentRuntime,
   type StoredSessionRuntime,
   type TurnSubmissionCoordinates,
@@ -98,6 +99,11 @@ const RPC_TIMEOUT_MS = 30_000;
 const RPC_SUBMISSION_TIMEOUT_MS = 30_000;
 const RUNTIME_RECOVERY_LOCK_TIMEOUT_MS = 130_000;
 const RUNTIME_RECOVERY_LOCK_RETRY_MS = 250;
+const SESSION_CREATION_IDEMPOTENCY_OPERATION = "session.create";
+const SESSION_CREATION_IDEMPOTENCY_TTL_MS = 24 * 60 * 60_000;
+const SESSION_CREATION_IDEMPOTENCY_POLL_MS = 100;
+const SESSION_CREATION_IDEMPOTENCY_WAIT_MS =
+  RUNTIME_RECOVERY_LOCK_TIMEOUT_MS + RPC_TIMEOUT_MS;
 const ACCEPTED_TURN_SNAPSHOT_RACE_GRACE_MS = 60_000;
 const EXCEPTIONAL_PENDING_TURN_GRACE_MS = 10 * 60_000;
 const EXCEPTIONAL_SESSION_RETRY_BASE_MS = 1_000;
@@ -284,6 +290,21 @@ export interface CodexNativeSnapshotRead {
   supplement: Promise<CodexRolloutSupplement>;
 }
 
+interface CreateSessionInput {
+  userId: string;
+  environment: Environment;
+  title: string;
+  prompt: string;
+  images: EncodedCodexInputImage[];
+  localImages?: EncodedCodexLocalImage[];
+  modelId?: string;
+  reasoningEffort?: string;
+  collaborationMode?: "plan";
+  serviceTier?: string;
+  sessionStartSource?: "startup" | "clear";
+  idempotencyKey?: string;
+}
+
 interface NativeSnapshotReadEntry {
   key: string;
   promise: Promise<CodexNativeSnapshotRead>;
@@ -398,24 +419,79 @@ export class CodexService {
     await Promise.allSettled(recoveries);
   }
 
-  async createSession(input: {
-    userId: string;
-    environment: Environment;
-    title: string;
-    prompt: string;
-    images: EncodedCodexInputImage[];
-    localImages?: EncodedCodexLocalImage[];
-    modelId?: string;
-    reasoningEffort?: string;
-    collaborationMode?: "plan";
-    serviceTier?: string;
-    sessionStartSource?: "startup" | "clear";
-  }) {
+  async createSession(input: CreateSessionInput) {
+    const idempotencyKey = input.idempotencyKey;
+    if (!idempotencyKey) return this.createSessionOnce(input);
+
+    const requestFingerprint = sessionCreationRequestFingerprint(input);
+    const claim = await this.store.claimIdempotentResource({
+      userId: input.userId,
+      operation: SESSION_CREATION_IDEMPOTENCY_OPERATION,
+      key: idempotencyKey,
+      requestFingerprint,
+      resourceId: `session_${randomUUID()}`,
+      expiresAt: new Date(Date.now() + SESSION_CREATION_IDEMPOTENCY_TTL_MS),
+    });
+    if (!claim.claimed) {
+      return this.waitForIdempotentSessionCreation(
+        input,
+        idempotencyKey,
+        requestFingerprint,
+        claim,
+      );
+    }
+
+    let sessionId: string;
+    try {
+      sessionId = await this.createSessionOnce(input, claim.resourceId);
+    } catch (error) {
+      const failure = sessionCreationFailure(error);
+      await this.store
+        .failIdempotentResource({
+          userId: input.userId,
+          operation: SESSION_CREATION_IDEMPOTENCY_OPERATION,
+          key: idempotencyKey,
+          requestFingerprint,
+          resourceId: claim.resourceId,
+          responseStatus: failure.statusCode,
+          responseBody: {
+            code: failure.code,
+            message: failure.message,
+          },
+        })
+        .catch((persistenceError) => {
+          this.logger.error(
+            {
+              sessionId: claim.resourceId,
+              error: errorMessage(persistenceError),
+            },
+            "Failed to persist Session creation idempotency failure",
+          );
+        });
+      throw error;
+    }
+    await this.store.completeIdempotentResource({
+      userId: input.userId,
+      operation: SESSION_CREATION_IDEMPOTENCY_OPERATION,
+      key: idempotencyKey,
+      requestFingerprint,
+      resourceId: sessionId,
+    });
+    return sessionId;
+  }
+
+  private async createSessionOnce(
+    input: CreateSessionInput,
+    reservedSessionId?: string,
+  ) {
     const environmentRuntime = await this.ensureEnvironmentRuntimeForUser(
       input.userId,
       input.environment,
     );
-    const sessionId = await this.store.createSessionMetadata(input);
+    const sessionId = await this.store.createSessionMetadata({
+      ...input,
+      sessionId: reservedSessionId,
+    });
     try {
       await this.ensureNativeSessionCreated(
         input,
@@ -439,6 +515,45 @@ export class CodexService {
       await this.store.markSessionFailed(sessionId, errorMessage(error));
       throw error;
     }
+  }
+
+  private async waitForIdempotentSessionCreation(
+    input: CreateSessionInput,
+    idempotencyKey: string,
+    requestFingerprint: string,
+    initial: IdempotentResourceState,
+  ) {
+    const deadline = Date.now() + SESSION_CREATION_IDEMPOTENCY_WAIT_MS;
+    let state = initial;
+    while (state.status === "processing" && !this.closed) {
+      if (Date.now() >= deadline) {
+        throw new HttpError(
+          409,
+          "session_creation_in_progress",
+          "This Session is still being created. Try opening it again shortly.",
+          { sessionId: state.resourceId },
+        );
+      }
+      await waitForSessionCreationPoll();
+      state = await this.store.readIdempotentResource({
+        userId: input.userId,
+        operation: SESSION_CREATION_IDEMPOTENCY_OPERATION,
+        key: idempotencyKey,
+        requestFingerprint,
+      });
+    }
+    if (state.status === "completed") return state.resourceId;
+    if (state.status === "failed") {
+      const code = objectString(state.responseBody, "code");
+      const message = objectString(state.responseBody, "message");
+      throw new HttpError(
+        state.responseStatus ?? 500,
+        code ?? "session_creation_failed",
+        message ?? "Session creation failed.",
+        { sessionId: state.resourceId },
+      );
+    }
+    throw new Error("Codex service closed while Session creation was pending.");
   }
 
   async ensureScheduledSession(input: {
@@ -6673,6 +6788,37 @@ function codexInputDeliveryTimeout() {
     504,
     "codex_input_delivery_timeout",
     "Codex input delivery did not finish in time. Sandpi will reconcile native state without replaying the request.",
+  );
+}
+
+function sessionCreationRequestFingerprint(input: CreateSessionInput) {
+  return createHash("sha256")
+    .update(
+      JSON.stringify([
+        input.environment.id,
+        input.title,
+        input.prompt,
+        input.images,
+        input.localImages ?? [],
+        input.modelId ?? null,
+        input.reasoningEffort ?? null,
+        input.collaborationMode ?? null,
+        input.serviceTier ?? null,
+        input.sessionStartSource ?? null,
+      ]),
+    )
+    .digest("hex");
+}
+
+function sessionCreationFailure(error: unknown) {
+  return error instanceof HttpError
+    ? error
+    : new HttpError(500, "internal_error", "Internal server error.");
+}
+
+function waitForSessionCreationPoll() {
+  return new Promise<void>((resolve) =>
+    setTimeout(resolve, SESSION_CREATION_IDEMPOTENCY_POLL_MS),
   );
 }
 

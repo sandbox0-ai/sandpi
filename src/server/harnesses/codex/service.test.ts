@@ -14,6 +14,7 @@ import { HttpError } from "@/server/http-error";
 import {
   WORKSPACE_RESTORE_UNAVAILABLE_SESSION_ERROR,
   type CodexControlTransition,
+  type IdempotentResourceState,
   type SandpiStore,
   type StoredEnvironmentRuntime,
   type StoredSessionRuntime,
@@ -445,6 +446,10 @@ function fixture(
     sandboxRestarted: false,
   };
   let newSessionSequence = 0;
+  const idempotentResources = new Map<
+    string,
+    { fingerprint: string; state: IdempotentResourceState }
+  >();
   let childSequence = 0;
   let eventSequence = input.initialEventSequence ?? 0;
   let lastStartedThreadId: string | undefined;
@@ -812,12 +817,100 @@ function fixture(
     async sessionIdsForEnvironment() {
       return [...sessions.keys()];
     },
+    async claimIdempotentResource(options: {
+      userId: string;
+      operation: string;
+      key: string;
+      requestFingerprint: string;
+      resourceId: string;
+    }) {
+      const key = `${options.userId}\0${options.operation}\0${options.key}`;
+      const existing = idempotentResources.get(key);
+      if (existing) {
+        if (existing.fingerprint !== options.requestFingerprint) {
+          throw new HttpError(
+            409,
+            "idempotency_key_reused",
+            "This idempotency key was already used for a different request.",
+          );
+        }
+        return { ...existing.state, claimed: false };
+      }
+      const state: IdempotentResourceState = {
+        status: "processing",
+        resourceId: options.resourceId,
+      };
+      idempotentResources.set(key, {
+        fingerprint: options.requestFingerprint,
+        state,
+      });
+      return { ...state, claimed: true };
+    },
+    async readIdempotentResource(options: {
+      userId: string;
+      operation: string;
+      key: string;
+      requestFingerprint: string;
+    }) {
+      const key = `${options.userId}\0${options.operation}\0${options.key}`;
+      const existing = idempotentResources.get(key);
+      assert.ok(existing, `missing idempotency resource ${key}`);
+      if (existing.fingerprint !== options.requestFingerprint) {
+        throw new HttpError(
+          409,
+          "idempotency_key_reused",
+          "This idempotency key was already used for a different request.",
+        );
+      }
+      return existing.state;
+    },
+    async completeIdempotentResource(options: {
+      userId: string;
+      operation: string;
+      key: string;
+      requestFingerprint: string;
+      resourceId: string;
+    }) {
+      const key = `${options.userId}\0${options.operation}\0${options.key}`;
+      const existing = idempotentResources.get(key);
+      assert.ok(existing, `missing idempotency resource ${key}`);
+      assert.equal(existing.fingerprint, options.requestFingerprint);
+      assert.equal(existing.state.resourceId, options.resourceId);
+      existing.state = {
+        status: "completed",
+        resourceId: options.resourceId,
+        responseStatus: 201,
+      };
+    },
+    async failIdempotentResource(options: {
+      userId: string;
+      operation: string;
+      key: string;
+      requestFingerprint: string;
+      resourceId: string;
+      responseStatus: number;
+      responseBody: Record<string, unknown>;
+    }) {
+      const key = `${options.userId}\0${options.operation}\0${options.key}`;
+      const existing = idempotentResources.get(key);
+      assert.ok(existing, `missing idempotency resource ${key}`);
+      assert.equal(existing.fingerprint, options.requestFingerprint);
+      assert.equal(existing.state.resourceId, options.resourceId);
+      existing.state = {
+        status: "failed",
+        resourceId: options.resourceId,
+        responseStatus: options.responseStatus,
+        responseBody: options.responseBody,
+      };
+      return true;
+    },
     async createSessionMetadata(options: {
       title: string;
       modelId?: string;
       reasoningEffort?: string;
+      sessionId?: string;
     }) {
-      const id = `session-new-${++newSessionSequence}`;
+      const id = options.sessionId ?? `session-new-${++newSessionSequence}`;
       sessions.set(id, session(id, "", "paused"));
       sessions.set(id, {
         ...sessions.get(id)!,
@@ -2491,6 +2584,72 @@ test("starts the first Turn on a newly created loaded Thread without resume", as
       "high",
     );
   } finally {
+    await context.close();
+  }
+});
+
+test("creates one Session and first Turn for concurrent idempotent requests", async () => {
+  let releaseWrite: (() => void) | undefined;
+  const blockedWrite = new Promise<void>((resolve) => {
+    releaseWrite = resolve;
+  });
+  const context = fixture({ writeDelays: { "thread/start": blockedWrite } });
+  const input = {
+    userId: "user",
+    environment,
+    title: "One native Session",
+    prompt: "Create this once",
+    images: [],
+    modelId: "gpt-test",
+    idempotencyKey: "session-create-idempotency-key",
+  };
+  const first = context.service.createSession(input);
+  let replay: Promise<string> | undefined;
+
+  try {
+    await eventually(
+      () =>
+        context.writes.some(({ message }) => message.method === "thread/start"),
+      "first Session creation did not reach thread/start",
+    );
+    await assert.rejects(
+      context.service.createSession({
+        ...input,
+        prompt: "A different request",
+      }),
+      (error: unknown) =>
+        error instanceof HttpError && error.code === "idempotency_key_reused",
+    );
+
+    replay = context.service.createSession(input);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.equal(context.sessions.size, 3);
+    assert.equal(
+      context.writes.filter(({ message }) => message.method === "thread/start")
+        .length,
+      1,
+    );
+
+    releaseWrite?.();
+    const [firstSessionId, replaySessionId] = await Promise.all([
+      first,
+      replay,
+    ]);
+    assert.equal(replaySessionId, firstSessionId);
+    assert.equal(context.sessions.get(firstSessionId)?.title, input.title);
+    assert.equal(
+      context.writes.filter(({ message }) => message.method === "thread/start")
+        .length,
+      1,
+    );
+    assert.equal(
+      context.writes.filter(({ message }) => message.method === "turn/start")
+        .length,
+      1,
+    );
+  } finally {
+    releaseWrite?.();
+    await Promise.allSettled(replay ? [first, replay] : [first]);
     await context.close();
   }
 });
