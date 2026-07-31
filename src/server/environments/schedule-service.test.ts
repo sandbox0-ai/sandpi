@@ -51,6 +51,7 @@ const session: CodingSession = {
   status: "waiting",
   unread: false,
   pinned: false,
+  completed: false,
   archived: false,
   harness: "codex",
   harnessLabel: "Codex",

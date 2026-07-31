@@ -6480,6 +6480,20 @@ test("renders the dedicated live Web IDE with Git state and changed lines", asyn
     page.getByRole("button", { name: /^Share / }),
   ).toHaveCount(0);
   const editor = page.locator(".monaco-editor").first();
+  const previewOnly = page.getByRole("button", { name: "Preview only" });
+  await expect(previewOnly).toHaveAttribute("aria-pressed", "false");
+  await previewOnly.click();
+  await expect(page.getByText("Read-only preview", { exact: true })).toBeVisible();
+  await expect(
+    editor.locator("textarea.inputarea"),
+  ).toHaveAttribute("readonly", "");
+  const editFile = page.getByRole("button", { name: "Edit file" });
+  await expect(editFile).toHaveAttribute("aria-pressed", "true");
+  await editFile.click();
+  await expect(editor.locator("textarea.inputarea")).not.toHaveAttribute(
+    "readonly",
+    "",
+  );
   await editor.click();
   await page.keyboard.press("Control+A");
   await page.keyboard.insertText("export const editedInBrowser = true;\n");

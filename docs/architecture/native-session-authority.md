@@ -136,8 +136,10 @@ folder removal and open unsaved files. A rename remaps open tabs and preserves
 dirty drafts; a deletion closes every affected tab. The client then reconciles
 the parent page and opens a newly created file.
 Each file open is one bounded Sandbox0 read. UTF-8 content enters the text
-editor; signature-verified image, audio, video and PDF containers receive a
-read-only browser preview. Sandpi does not infer a preview MIME type from the
+editor with wrapped lines and an explicit read-only preview mode. Coarse-pointer
+clients default to preview mode so opening a text file does not summon the
+software keyboard; signature-verified image, audio, video and PDF containers
+receive a read-only browser preview. Sandpi does not infer a preview MIME type from the
 filename alone. The 5 MiB bound also applies to media because Sandbox0 does not
 currently expose a ranged file read or streaming URL; browser codec support is
 therefore the remaining format-specific playback boundary.

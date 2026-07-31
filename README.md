@@ -109,8 +109,9 @@ same files, tools and execution context.
 - Persistent multi-Environment and multi-Session Web UI with compact,
   progressively paginated Session lists and completion state distinct from
   archival
-- Live Workspace file browser with a resizable, collapsible file tree, Monaco
-  editor, media previews and Git changes
+- Live Workspace file browser with a resizable, collapsible file tree, wrapping
+  Monaco editor, keyboard-safe read-only preview mode, media previews and Git
+  changes
 - Shared official Playwright Browser with multi-tab controls, loading feedback
   and persisted desktop-fit, responsive and mobile viewport modes
 - Environment terminal, runtime metrics, configurable idle pause, and manual
