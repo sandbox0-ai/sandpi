@@ -786,3 +786,279 @@ test("checks runtime quota before provisioning Sandbox0 resources", async () => 
 
   assert.deepEqual(failures, ["runtime quota exhausted"]);
 });
+
+test("retains a failed Sandbox allocation when provisioning cleanup fails", async () => {
+  const cleared: string[] = [];
+  const failures: string[] = [];
+  const pendingEnvironment = {
+    ...environment,
+    status: "updating" as const,
+    sandboxId: "",
+    workspaceVolumeId: "volume-test",
+  };
+  const store = {
+    async environmentsNeedingProvisioning() {
+      return [pendingEnvironment];
+    },
+    async getEnvironmentById() {
+      return pendingEnvironment;
+    },
+    async listEnvironmentEgressCredentialsByEnvironmentId() {
+      return [];
+    },
+    async recordEnvironmentAllocation() {},
+    async clearEnvironmentSandboxAllocation(
+      _environmentId: string,
+      sandboxId: string,
+    ) {
+      cleared.push(sandboxId);
+    },
+    async markEnvironmentFailed(_environmentId: string, error: string) {
+      failures.push(error);
+    },
+    async withEnvironmentLifecycleLock(
+      _environmentId: string,
+      operation: (lockedStore: SandpiStore) => Promise<unknown>,
+    ) {
+      return {
+        acquired: true as const,
+        value: await operation(store as unknown as SandpiStore),
+      };
+    },
+  } as unknown as SandpiStore;
+  const runtime = {
+    async provisionEnvironment(input: {
+      onResourcesAllocated?: (
+        resources: Record<string, string>,
+      ) => Promise<void>;
+    }) {
+      await input.onResourcesAllocated?.({
+        sandboxId: "sandbox-orphan",
+        workspaceVolumeId: "volume-test",
+      });
+      throw new Error("Sandbox start timed out");
+    },
+    async deleteEnvironmentResources() {
+      throw new Error("Sandbox lifecycle is starting");
+    },
+  } as unknown as RuntimeAdapter;
+  const service = new EnvironmentService(store, runtime, {
+    info() {},
+    error() {},
+  });
+
+  await service.reconcilePending();
+
+  assert.deepEqual(cleared, []);
+  assert.equal(failures.length, 1);
+  assert.match(failures[0] ?? "", /cleanup remains pending/);
+  assert.match(failures[0] ?? "", /sandbox-orphan/);
+  await service.close();
+});
+
+test("retries retained Sandbox cleanup in the background before provisioning a replacement", async () => {
+  const steps: string[] = [];
+  let cleanupCalls = 0;
+  let readyResolve!: () => void;
+  const ready = new Promise<void>((resolve) => {
+    readyResolve = resolve;
+  });
+  let current: Environment = {
+    ...environment,
+    status: "updating",
+    sandboxId: "",
+    workspaceVolumeId: "volume-test",
+  };
+  const store = {
+    async environmentsNeedingProvisioning() {
+      return current.status === "ready" ? [] : [current];
+    },
+    async getEnvironmentById() {
+      return current;
+    },
+    async listEnvironmentEgressCredentialsByEnvironmentId() {
+      return [];
+    },
+    async recordEnvironmentAllocation(
+      _environmentId: string,
+      resources: { sandboxId?: string },
+    ) {
+      current = {
+        ...current,
+        sandboxId: resources.sandboxId ?? current.sandboxId,
+      };
+    },
+    async clearEnvironmentSandboxAllocation(
+      _environmentId: string,
+      sandboxId: string,
+    ) {
+      assert.equal(sandboxId, "sandbox-orphan");
+      steps.push("clear-orphan");
+      current = { ...current, sandboxId: "" };
+    },
+    async markEnvironmentFailed() {
+      current = { ...current, status: "error" };
+    },
+    async markEnvironmentReady() {
+      steps.push("ready");
+      current = {
+        ...current,
+        status: "ready",
+        sandboxId: "sandbox-replacement",
+      };
+      readyResolve();
+      return current;
+    },
+    async withEnvironmentLifecycleLock(
+      _environmentId: string,
+      operation: (store: SandpiStore) => Promise<unknown>,
+    ) {
+      return {
+        acquired: true as const,
+        value: await operation(store as unknown as SandpiStore),
+      };
+    },
+  } as unknown as SandpiStore;
+  const runtime = {
+    async provisionEnvironment(input: {
+      onResourcesAllocated?: (
+        resources: Record<string, string>,
+      ) => Promise<void>;
+    }) {
+      if (!current.sandboxId) {
+        if (steps.includes("clear-orphan")) {
+          steps.push("provision-replacement");
+          return {
+            sandboxId: "sandbox-replacement",
+            workspaceVolumeId: "volume-test",
+          };
+        }
+        await input.onResourcesAllocated?.({
+          sandboxId: "sandbox-orphan",
+          workspaceVolumeId: "volume-test",
+        });
+        steps.push("provision-failed");
+        throw new Error("Sandbox start timed out");
+      }
+      assert.fail("the retained Sandbox must be deleted before replacement");
+    },
+    async deleteEnvironmentResources(resources: { sandboxId?: string }) {
+      assert.equal(resources.sandboxId, "sandbox-orphan");
+      cleanupCalls += 1;
+      steps.push(`delete-orphan-${cleanupCalls}`);
+      if (cleanupCalls === 1) {
+        throw new Error("Sandbox lifecycle is starting");
+      }
+    },
+  } as unknown as RuntimeAdapter;
+  const service = new EnvironmentService(
+    store,
+    runtime,
+    { info() {}, error() {} },
+    undefined,
+    undefined,
+    {
+      provisioningCleanupRetryInitialMs: 0,
+      provisioningCleanupRetryMaxMs: 1,
+    },
+  );
+  let timeout: NodeJS.Timeout | undefined;
+
+  try {
+    await service.reconcilePending();
+    await Promise.race([
+      ready,
+      new Promise<void>((_resolve, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error("background cleanup retry timed out")),
+          500,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+    await service.close();
+  }
+
+  assert.deepEqual(steps, [
+    "provision-failed",
+    "delete-orphan-1",
+    "delete-orphan-2",
+    "clear-orphan",
+    "provision-replacement",
+    "ready",
+  ]);
+  assert.equal(current.sandboxId, "sandbox-replacement");
+});
+
+test("cleans a retained Sandbox allocation before provisioning its replacement", async () => {
+  const steps: string[] = [];
+  let current = {
+    ...environment,
+    status: "error" as const,
+    sandboxId: "sandbox-orphan",
+    workspaceVolumeId: "volume-test",
+  };
+  const store = {
+    async environmentsNeedingProvisioning() {
+      return [current];
+    },
+    async getEnvironmentById() {
+      return current;
+    },
+    async clearEnvironmentSandboxAllocation(
+      _environmentId: string,
+      sandboxId: string,
+    ) {
+      assert.equal(sandboxId, "sandbox-orphan");
+      steps.push("clear-orphan");
+      current = { ...current, sandboxId: "" };
+    },
+    async listEnvironmentEgressCredentialsByEnvironmentId() {
+      return [];
+    },
+    async recordEnvironmentAllocation() {},
+    async markEnvironmentReady() {
+      steps.push("ready");
+      return environment;
+    },
+    async markEnvironmentFailed() {
+      assert.fail("successful reconciliation must not mark the Environment failed");
+    },
+    async withEnvironmentLifecycleLock(
+      _environmentId: string,
+      operation: (lockedStore: SandpiStore) => Promise<unknown>,
+    ) {
+      return {
+        acquired: true as const,
+        value: await operation(store as unknown as SandpiStore),
+      };
+    },
+  } as unknown as SandpiStore;
+  const runtime = {
+    async deleteEnvironmentResources(resources: { sandboxId?: string }) {
+      assert.equal(resources.sandboxId, "sandbox-orphan");
+      steps.push("delete-orphan");
+    },
+    async provisionEnvironment() {
+      steps.push("provision-replacement");
+      return {
+        sandboxId: "sandbox-replacement",
+        workspaceVolumeId: "volume-test",
+      };
+    },
+  } as unknown as RuntimeAdapter;
+  const service = new EnvironmentService(store, runtime, {
+    info() {},
+    error() {},
+  });
+
+  await service.reconcilePending();
+
+  assert.deepEqual(steps, [
+    "delete-orphan",
+    "clear-orphan",
+    "provision-replacement",
+    "ready",
+  ]);
+});

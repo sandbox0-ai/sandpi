@@ -351,7 +351,7 @@ export type WorkspaceIdeEvent =
   | {
       type: "error";
       error: string;
-      code?: "workspace_watch_unavailable";
+      code?: "workspace_watch_unavailable" | "environment_paused";
       at: UnixTimestamp;
     };
 

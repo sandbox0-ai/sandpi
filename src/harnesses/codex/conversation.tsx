@@ -185,6 +185,7 @@ interface ConversationProps {
   onBrowserNavigationHandled: (
     request: EnvironmentBrowserNavigationRequest,
   ) => void;
+  onEnvironmentChange: (environment: Environment) => void;
   onSessionChange: (session: CodexSession) => void;
   onToggleSessionCompleted: (sessionId: string) => Promise<void>;
   onDerivedSessionCreated: (session: CodexSession) => void;
@@ -272,6 +273,7 @@ export function CodexConversation({
   onWorkspaceNavigationHandled,
   browserNavigationRequest,
   onBrowserNavigationHandled,
+  onEnvironmentChange,
   onSessionChange,
   onToggleSessionCompleted,
   onDerivedSessionCreated,
@@ -2731,6 +2733,7 @@ export function CodexConversation({
           onWorkspaceNavigationHandled={onWorkspaceNavigationHandled}
           browserNavigationRequest={browserNavigationRequest}
           onBrowserNavigationHandled={onBrowserNavigationHandled}
+          onEnvironmentChange={onEnvironmentChange}
           onTabChange={onInspectorTabChange}
           onWidthRatioChange={onInspectorWidthRatioChange}
           onOpenEnvironmentSettings={() =>

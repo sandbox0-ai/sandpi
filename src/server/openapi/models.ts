@@ -946,7 +946,9 @@ export const workspaceIdeEventSchema = component(
     z.object({
       type: z.literal("error"),
       error: z.string(),
-      code: z.literal("workspace_watch_unavailable").optional(),
+      code: z
+        .enum(["workspace_watch_unavailable", "environment_paused"])
+        .optional(),
       at: unixTimestampSchema,
     }),
   ]),

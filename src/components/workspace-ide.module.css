@@ -781,6 +781,63 @@ button.directoryStatus:hover {
   margin: 0;
 }
 
+.pausedRuntime {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 8px;
+  padding: 24px;
+  text-align: center;
+}
+
+.pausedRuntime > svg {
+  color: var(--amber);
+}
+
+.pausedRuntime strong {
+  font-size: 12px;
+}
+
+.pausedRuntime p {
+  max-width: 430px;
+  margin: 0;
+  color: var(--ink-faint);
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.pausedRuntime button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 3px;
+  padding: 7px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  background: var(--panel-strong);
+  color: var(--ink);
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.pausedRuntime button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.pausedRuntime > span {
+  color: var(--red);
+  font-size: 9px;
+}
+
+.spinning {
+  animation: spin 0.9s linear infinite;
+}
+
 .error {
   display: flex;
   position: absolute;
@@ -914,7 +971,8 @@ button.directoryStatus:hover {
 
   .loading svg,
   .documentRefreshing svg,
-  .workspaceRefreshButtonRefreshing svg {
+  .workspaceRefreshButtonRefreshing svg,
+  .spinning {
     animation: none;
   }
 }

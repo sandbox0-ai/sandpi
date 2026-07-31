@@ -408,6 +408,69 @@ test("manual pause is authorized and recorded under the lifecycle lock", async (
   ]);
 });
 
+test("manual resume is authorized and recorded under the lifecycle lock", async () => {
+  const calls: string[] = [];
+  const runtimeState = storedRuntime({ desiredState: "paused" });
+  const scopedStore = {
+    async getManageableEnvironment(userId: string, environmentId: string) {
+      assert.equal(userId, "user-one");
+      assert.equal(environmentId, runtimeState.id);
+      calls.push("authorize");
+      return {};
+    },
+    async getEnvironmentRuntime(userId: string, environmentId: string) {
+      assert.equal(userId, "user-one");
+      assert.equal(environmentId, runtimeState.id);
+      calls.push("runtime");
+      return runtimeState;
+    },
+    async recordEnvironmentRuntimeAccess(environmentId: string) {
+      assert.equal(environmentId, runtimeState.id);
+      calls.push("record-running");
+    },
+    async recordEnvironmentManualLifecycleFailure() {
+      assert.fail("successful manual resume must not record a failure");
+    },
+  } as unknown as SandpiStore;
+  const store = {
+    async withEnvironmentLifecycleLock(
+      environmentId: string,
+      operation: (lockedStore: SandpiStore) => Promise<void>,
+    ) {
+      assert.equal(environmentId, runtimeState.id);
+      calls.push("lock");
+      return { acquired: true as const, value: await operation(scopedStore) };
+    },
+  } as unknown as SandpiStore;
+  const runtime = {
+    mode: "sandbox0",
+    async resumeEnvironment(received: StoredEnvironmentRuntime) {
+      assert.strictEqual(received, runtimeState);
+      calls.push("resume");
+    },
+  } as unknown as RuntimeAdapter;
+  const service = new EnvironmentLifecycleService(store, runtime, logger, {
+    quotaGate: {
+      async assertEnvironmentRuntimeAllowed(environmentId: string) {
+        assert.equal(environmentId, runtimeState.id);
+        calls.push("quota");
+      },
+    },
+  });
+
+  await service.resumeManually("user-one", runtimeState.id);
+  await service.close();
+
+  assert.deepEqual(calls, [
+    "lock",
+    "authorize",
+    "quota",
+    "runtime",
+    "resume",
+    "record-running",
+  ]);
+});
+
 test("manual restart pauses and resumes one Sandbox under the same lock", async () => {
   const calls: string[] = [];
   const runtimeState = storedRuntime({ desiredState: "paused" });

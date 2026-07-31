@@ -82,6 +82,7 @@ interface InspectorProps {
   onBrowserNavigationHandled?: (
     request: EnvironmentBrowserNavigationRequest,
   ) => void;
+  onEnvironmentChange?: (environment: Environment) => void;
   activeTab: InspectorTab;
   onTabChange: (tab: InspectorTab) => void;
   widthRatio: number;
@@ -331,6 +332,7 @@ export function Inspector({
   onWorkspaceNavigationHandled,
   browserNavigationRequest,
   onBrowserNavigationHandled,
+  onEnvironmentChange,
   activeTab,
   onTabChange,
   widthRatio,
@@ -704,6 +706,7 @@ export function Inspector({
             variant="embedded"
             navigationRequest={workspaceNavigationRequest}
             onNavigationHandled={onWorkspaceNavigationHandled}
+            onEnvironmentChange={onEnvironmentChange}
           />
         </div>
       ) : null}

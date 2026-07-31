@@ -293,6 +293,45 @@ test("creates one Workspace Volume when provisioning a new Environment", async (
   ]);
 });
 
+test("leaves a journaled provisioning Sandbox for durable cleanup", async () => {
+  const allocations: Array<Record<string, string>> = [];
+  const deleted: string[] = [];
+  const runtime = runtimeWithClient({
+    sandboxes: {
+      async claim() {
+        return { id: "sandbox-pending-cleanup" };
+      },
+      async waitForLifecycle() {
+        throw new Error("Sandbox start timed out");
+      },
+      async delete(sandboxId: string) {
+        deleted.push(sandboxId);
+      },
+    },
+  });
+
+  await assert.rejects(
+    runtime.provisionEnvironment({
+      environment: {
+        ...environment,
+        workspaceVolumeId: "volume-existing",
+      },
+      async onResourcesAllocated(resources) {
+        allocations.push(resources as Record<string, string>);
+      },
+    }),
+    /Sandbox start timed out/,
+  );
+
+  assert.deepEqual(allocations, [
+    {
+      sandboxId: "sandbox-pending-cleanup",
+      workspaceVolumeId: "volume-existing",
+    },
+  ]);
+  assert.deepEqual(deleted, []);
+});
+
 test("deletes only retired Sandboxes that mount the Environment Workspace", async () => {
   const inspected: string[] = [];
   const deleted: string[] = [];

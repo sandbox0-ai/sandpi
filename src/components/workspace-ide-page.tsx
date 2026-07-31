@@ -21,10 +21,11 @@ interface WorkspaceIdePageProps {
 
 export function WorkspaceIdePage({ initialData }: WorkspaceIdePageProps) {
   const [preferences, setPreferences] = useState(initialData.preferences);
+  const [environments, setEnvironments] = useState(initialData.environments);
   const session = initialData.sessions.find(
     (candidate) => candidate.id === initialData.selectedSessionId,
   );
-  const environment = initialData.environments.find(
+  const environment = environments.find(
     (candidate) =>
       candidate.id ===
       (session?.environmentId || initialData.selectedEnvironmentId),
@@ -86,6 +87,15 @@ export function WorkspaceIdePage({ initialData }: WorkspaceIdePageProps) {
       environment={environment}
       session={session}
       variant="standalone"
+      onEnvironmentChange={(nextEnvironment) =>
+        setEnvironments((current) =>
+          current.map((candidate) =>
+            candidate.id === nextEnvironment.id
+              ? nextEnvironment
+              : candidate,
+          ),
+        )
+      }
     />
   );
 }

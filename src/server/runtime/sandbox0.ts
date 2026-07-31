@@ -405,11 +405,9 @@ export class Sandbox0Runtime implements RuntimeAdapter {
         workspaceVolumeId,
       };
     } catch (error) {
-      // The allocation journal owns retry/cleanup once a resource id has been
-      // published. Only an unpublished Sandbox is safe to delete here.
-      if (sandboxId) {
-        await this.client.sandboxes.delete(sandboxId).catch(() => undefined);
-      }
+      // The allocation callback journals every accepted Sandbox id before the
+      // lifecycle wait. EnvironmentService owns cleanup so a failed delete can
+      // remain durable and be retried without losing the only resource handle.
       throw translateSandbox0Error(error);
     }
   }

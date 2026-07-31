@@ -393,6 +393,7 @@ export async function createSandpiServer(
   }
 
   app.addHook("onClose", async () => {
+    await environments.close();
     await sandboxUsage?.close();
     await schedules.close();
     await workspaceBackups.close();
@@ -743,6 +744,21 @@ export function registerApiRoutes(
     "/api/v1/environments/:environmentId/sandbox/pause",
     async (request) => {
       await services.lifecycle.pauseManually(
+        request.principal.userId,
+        request.params.environmentId,
+      );
+      return {
+        data: await services.environments.get(
+          request.principal.userId,
+          request.params.environmentId,
+        ),
+      };
+    },
+  );
+  app.put<{ Params: { environmentId: string } }>(
+    "/api/v1/environments/:environmentId/sandbox/resume",
+    async (request) => {
+      await services.lifecycle.resumeManually(
         request.principal.userId,
         request.params.environmentId,
       );
@@ -1580,6 +1596,7 @@ export function registerApiRoutes(
           request.principal.userId,
           request.params.environmentId,
           (runtime) => services.runtime.listFiles(runtime, requestedPath),
+          { wakePaused: false },
         ),
       };
     },
@@ -1630,6 +1647,7 @@ export function registerApiRoutes(
             refreshedAt: toUnixTimestamp(new Date()),
           };
         },
+        { wakePaused: false },
       );
       return { data };
     },
@@ -1646,6 +1664,7 @@ export function registerApiRoutes(
           request.principal.userId,
           request.params.environmentId,
           (runtime) => services.runtime.readWorkspaceIdeFile(runtime, filePath),
+          { wakePaused: false },
         ),
       };
     },
@@ -1657,6 +1676,7 @@ export function registerApiRoutes(
         request.principal.userId,
         request.params.environmentId,
         (runtime) => services.runtime.getWorkspaceGitState(runtime),
+        { wakePaused: false },
       ),
     }),
   );
@@ -1801,6 +1821,7 @@ export function registerApiRoutes(
           request.params.environmentId,
           (runtime) =>
             services.runtime.watchWorkspaceFiles(runtime, directoryPath),
+          { wakePaused: false },
         );
         if (closed) {
           watcher.close();
@@ -1853,13 +1874,19 @@ export function registerApiRoutes(
           JSON.stringify({ type: "ready", at: toUnixTimestamp(new Date()) }),
         );
         await closedPromise;
-      } catch {
+      } catch (error) {
         if (socket.readyState === socket.OPEN) {
+          const paused =
+            error instanceof HttpError && error.code === "environment_paused";
           socket.send(
             JSON.stringify({
               type: "error",
-              code: "workspace_watch_unavailable",
-              error: "Live Workspace events are temporarily unavailable.",
+              code: paused
+                ? "environment_paused"
+                : "workspace_watch_unavailable",
+              error: paused
+                ? "The Environment Sandbox is paused."
+                : "Live Workspace events are temporarily unavailable.",
               at: toUnixTimestamp(new Date()),
             }),
           );

@@ -19,9 +19,30 @@ interface ServiceLogger {
   error(fields: object, message: string): void;
 }
 
+interface EnvironmentServiceOptions {
+  provisioningCleanupRetryInitialMs?: number;
+  provisioningCleanupRetryMaxMs?: number;
+}
+
+const PROVISIONING_CLEANUP_RETRY_INITIAL_MS = 5_000;
+const PROVISIONING_CLEANUP_RETRY_MAX_MS = 5 * 60_000;
+
+class EnvironmentProvisioningCleanupPendingError extends AggregateError {
+  constructor(original: unknown, cleanup: unknown, sandboxId: string) {
+    super(
+      [original, cleanup],
+      `Environment provisioning failed and Sandbox ${sandboxId} cleanup remains pending`,
+    );
+    this.name = "EnvironmentProvisioningCleanupPendingError";
+  }
+}
+
 export class EnvironmentService {
   private reconciliation?: Promise<void>;
   private reconciliationRequested = false;
+  private provisioningCleanupRetryTimer?: NodeJS.Timeout;
+  private provisioningCleanupRetryDelayMs: number;
+  private closed = false;
   private beforeDelete?: (
     userId: string,
     environmentId: string,
@@ -38,7 +59,12 @@ export class EnvironmentService {
     private readonly logger: ServiceLogger,
     private readonly quota?: EnvironmentQuotaPolicy,
     private readonly runtimeQuotaGate?: RuntimeQuotaGate,
-  ) {}
+    private readonly options: EnvironmentServiceOptions = {},
+  ) {
+    this.provisioningCleanupRetryDelayMs =
+      options.provisioningCleanupRetryInitialMs ??
+      PROVISIONING_CLEANUP_RETRY_INITIAL_MS;
+  }
 
   setBeforeDelete(
     handler: (userId: string, environmentId: string) => Promise<void> | void,
@@ -120,6 +146,11 @@ export class EnvironmentService {
   }
 
   reconcilePending() {
+    if (this.closed) return Promise.resolve();
+    if (this.provisioningCleanupRetryTimer) {
+      clearTimeout(this.provisioningCleanupRetryTimer);
+      this.provisioningCleanupRetryTimer = undefined;
+    }
     this.reconciliationRequested = true;
     this.reconciliation ??= this.runRequestedReconciliations().finally(() => {
       this.reconciliation = undefined;
@@ -136,16 +167,66 @@ export class EnvironmentService {
 
   private async runReconciliation() {
     const environments = await this.store.environmentsNeedingProvisioning();
+    let cleanupRetryNeeded = false;
     for (const environment of environments) {
       try {
         await this.provision(environment.id);
       } catch (error) {
+        cleanupRetryNeeded ||=
+          error instanceof EnvironmentProvisioningCleanupPendingError;
         this.logger.error(
           { environmentId: environment.id, error: errorMessage(error) },
           "Environment provisioning failed",
         );
       }
     }
+    if (cleanupRetryNeeded) {
+      this.scheduleProvisioningCleanupRetry();
+    } else {
+      if (this.provisioningCleanupRetryTimer) {
+        clearTimeout(this.provisioningCleanupRetryTimer);
+        this.provisioningCleanupRetryTimer = undefined;
+      }
+      this.provisioningCleanupRetryDelayMs =
+        this.options.provisioningCleanupRetryInitialMs ??
+        PROVISIONING_CLEANUP_RETRY_INITIAL_MS;
+    }
+  }
+
+  private scheduleProvisioningCleanupRetry() {
+    if (this.closed || this.provisioningCleanupRetryTimer) return;
+    const retryInMs = this.provisioningCleanupRetryDelayMs;
+    const maxRetryMs =
+      this.options.provisioningCleanupRetryMaxMs ??
+      PROVISIONING_CLEANUP_RETRY_MAX_MS;
+    this.provisioningCleanupRetryDelayMs = Math.min(
+      Math.max(retryInMs * 2, 1),
+      maxRetryMs,
+    );
+    this.provisioningCleanupRetryTimer = setTimeout(() => {
+      this.provisioningCleanupRetryTimer = undefined;
+      void this.reconcilePending().catch((error) => {
+        this.logger.error(
+          { error: errorMessage(error) },
+          "Environment Sandbox cleanup retry failed",
+        );
+        this.scheduleProvisioningCleanupRetry();
+      });
+    }, retryInMs);
+    this.provisioningCleanupRetryTimer.unref();
+    this.logger.info(
+      { retryInMs },
+      "Environment Sandbox cleanup retry scheduled",
+    );
+  }
+
+  async close() {
+    this.closed = true;
+    if (this.provisioningCleanupRetryTimer) {
+      clearTimeout(this.provisioningCleanupRetryTimer);
+      this.provisioningCleanupRetryTimer = undefined;
+    }
+    await this.reconciliation;
   }
 
   async create(input: {
@@ -384,12 +465,32 @@ export class EnvironmentService {
   ) {
     let resources: Parameters<RuntimeAdapter["deleteEnvironmentResources"]>[0] = {};
     try {
-      const environment = await store.getEnvironmentById(environmentId);
-      if (
-        !["updating", "error"].includes(environment.status) ||
-        (environment.workspaceVolumeId && environment.sandboxId)
-      ) {
+      let environment = await store.getEnvironmentById(environmentId);
+      if (!["updating", "error"].includes(environment.status)) {
         return environment;
+      }
+      resources = {
+        ...(environment.workspaceVolumeId
+          ? { workspaceVolumeId: environment.workspaceVolumeId }
+          : {}),
+        ...(environment.sandboxId
+          ? { sandboxId: environment.sandboxId }
+          : {}),
+      };
+      if (environment.sandboxId) {
+        await this.runtime.deleteEnvironmentResources({
+          sandboxId: environment.sandboxId,
+        });
+        await store.clearEnvironmentSandboxAllocation(
+          environmentId,
+          environment.sandboxId,
+        );
+        resources = {
+          ...(environment.workspaceVolumeId
+            ? { workspaceVolumeId: environment.workspaceVolumeId }
+            : {}),
+        };
+        environment = await store.getEnvironmentById(environmentId);
       }
       await this.runtimeQuotaGate?.assertEnvironmentRuntimeAllowed(
         environmentId,
@@ -407,29 +508,33 @@ export class EnvironmentService {
         },
       });
       resources = provisioned;
-      try {
-        const ready = await store.markEnvironmentReady(
-          environmentId,
-          provisioned,
-        );
-        this.logger.info({ environmentId }, "Environment is ready");
-        return ready;
-      } catch (error) {
-        await this.runtime.deleteEnvironmentResources(provisioned);
-        throw error;
-      }
+      const ready = await store.markEnvironmentReady(
+        environmentId,
+        provisioned,
+      );
+      this.logger.info({ environmentId }, "Environment is ready");
+      return ready;
     } catch (error) {
+      let failure = error;
       if (resources.sandboxId) {
-        await this.runtime.deleteEnvironmentResources({
-          sandboxId: resources.sandboxId,
-        }).catch(() => undefined);
-        await store.clearEnvironmentSandboxAllocation(
-          environmentId,
-          resources.sandboxId,
-        );
+        try {
+          await this.runtime.deleteEnvironmentResources({
+            sandboxId: resources.sandboxId,
+          });
+          await store.clearEnvironmentSandboxAllocation(
+            environmentId,
+            resources.sandboxId,
+          );
+        } catch (cleanupError) {
+          failure = new EnvironmentProvisioningCleanupPendingError(
+            error,
+            cleanupError,
+            resources.sandboxId,
+          );
+        }
       }
-      await store.markEnvironmentFailed(environmentId, errorMessage(error));
-      throw error;
+      await store.markEnvironmentFailed(environmentId, errorMessage(failure));
+      throw failure;
     }
   }
 }

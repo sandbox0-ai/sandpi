@@ -19,8 +19,9 @@ const MANUAL_LIFECYCLE_LOCK_RETRY_MS = 250;
 
 /**
  * Executes durable Environment policy and idle-pause timers. Ordinary runtime
- * access is resumed natively by Sandbox0; the explicit user restart below is a
- * bounded recovery operation rather than a separate wake-up state machine.
+ * access is resumed natively by Sandbox0; explicit user resume and restart
+ * operations below are bounded lifecycle actions rather than a second
+ * automatic wake-up state machine.
  * PostgreSQL stores deadlines so any Sandpi replica can take over after a crash.
  */
 export class EnvironmentLifecycleService {
@@ -152,6 +153,41 @@ export class EnvironmentLifecycleService {
           this.logger.info(
             { environmentId },
             "Environment Sandbox paused by user",
+          );
+        } catch (error) {
+          await scopedStore.recordEnvironmentManualLifecycleFailure(
+            environmentId,
+            runtime.sandboxId,
+            errorMessage(error),
+          );
+          throw error;
+        }
+      },
+    );
+  }
+
+  async resumeManually(userId: string, environmentId: string) {
+    this.requireManualLifecycle();
+    await this.withManualLifecycleLock(
+      environmentId,
+      async (scopedStore) => {
+        await scopedStore.getManageableEnvironment(userId, environmentId);
+        await this.options.quotaGate?.assertEnvironmentRuntimeAllowed(
+          environmentId,
+        );
+        const runtime = await scopedStore.getEnvironmentRuntime(
+          userId,
+          environmentId,
+        );
+        try {
+          await this.runtime.resumeEnvironment(
+            runtime,
+            this.controller.signal,
+          );
+          await scopedStore.recordEnvironmentRuntimeAccess(environmentId);
+          this.logger.info(
+            { environmentId },
+            "Environment Sandbox resumed by user",
           );
         } catch (error) {
           await scopedStore.recordEnvironmentManualLifecycleFailure(

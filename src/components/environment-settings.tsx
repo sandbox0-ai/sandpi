@@ -13,6 +13,7 @@ import {
   LockKeyhole,
   Network,
   Pause,
+  Play,
   Plus,
   RefreshCw,
   RotateCcw,
@@ -277,7 +278,7 @@ export function EnvironmentSettings({
   const [workspaceRestoreBusy, setWorkspaceRestoreBusy] = useState(false);
   const [workspaceRestoreSuccess, setWorkspaceRestoreSuccess] = useState("");
   const [sandboxLifecycleAction, setSandboxLifecycleAction] = useState<
-    "pause" | "restart" | null
+    "pause" | "resume" | "restart" | null
   >(null);
   const [sandboxLifecycleConfirming, setSandboxLifecycleConfirming] = useState<
     "pause" | "restart" | null
@@ -805,7 +806,9 @@ export function EnvironmentSettings({
     }
   }
 
-  async function updateSandboxLifecycle(action: "pause" | "restart") {
+  async function updateSandboxLifecycle(
+    action: "pause" | "resume" | "restart",
+  ) {
     if (sandboxLifecycleAction) return;
     setSandboxLifecycleAction(action);
     setSandboxLifecycleError("");
@@ -824,8 +827,10 @@ export function EnvironmentSettings({
       setSandboxLifecycleConfirming(null);
       setSandboxLifecycleMessage(
         action === "pause"
-          ? "Sandbox paused. Workspace and Browser profile data remain durable; supported access can wake it again."
-          : "Sandbox restarted. Live processes and connections will reconnect on demand.",
+          ? "Sandbox paused. Passive Workspace refresh is stopped until you resume it or start another explicit runtime operation."
+          : action === "resume"
+            ? "Sandbox resumed. Workspace access is available again."
+            : "Sandbox restarted. Live processes and connections will reconnect on demand.",
       );
     } catch (error) {
       setSandboxLifecycleError(
@@ -1241,35 +1246,62 @@ export function EnvironmentSettings({
                     </span>
                   </div>
                   <div className="sandbox-lifecycle-actions">
-                    <button
-                      type="button"
-                      className="secondary-action-button"
-                      disabled={
-                        Boolean(sandboxLifecycleAction) ||
-                        workspaceBackupBusy ||
-                        workspaceRestoreBusy ||
-                        draft.status !== "ready" ||
-                        draft.sandboxState !== "running"
-                      }
-                      onClick={() => {
-                        setSandboxLifecycleConfirming("pause");
-                        setSandboxLifecycleError("");
-                        setSandboxLifecycleMessage("");
-                      }}
-                    >
-                      {sandboxLifecycleAction === "pause" ? (
-                        <RefreshCw
-                          className="is-spinning"
-                          size={13}
-                          aria-hidden="true"
-                        />
-                      ) : (
-                        <Pause size={13} aria-hidden="true" />
-                      )}
-                      {sandboxLifecycleAction === "pause"
-                        ? "Pausing…"
-                        : "Pause Sandbox"}
-                    </button>
+                    {draft.sandboxState === "paused" ? (
+                      <button
+                        type="button"
+                        className="secondary-action-button"
+                        disabled={
+                          Boolean(sandboxLifecycleAction) ||
+                          workspaceBackupBusy ||
+                          workspaceRestoreBusy ||
+                          draft.status !== "ready"
+                        }
+                        onClick={() => void updateSandboxLifecycle("resume")}
+                      >
+                        {sandboxLifecycleAction === "resume" ? (
+                          <RefreshCw
+                            className="is-spinning"
+                            size={13}
+                            aria-hidden="true"
+                          />
+                        ) : (
+                          <Play size={13} aria-hidden="true" />
+                        )}
+                        {sandboxLifecycleAction === "resume"
+                          ? "Resuming…"
+                          : "Resume Sandbox"}
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        className="secondary-action-button"
+                        disabled={
+                          Boolean(sandboxLifecycleAction) ||
+                          workspaceBackupBusy ||
+                          workspaceRestoreBusy ||
+                          draft.status !== "ready" ||
+                          draft.sandboxState !== "running"
+                        }
+                        onClick={() => {
+                          setSandboxLifecycleConfirming("pause");
+                          setSandboxLifecycleError("");
+                          setSandboxLifecycleMessage("");
+                        }}
+                      >
+                        {sandboxLifecycleAction === "pause" ? (
+                          <RefreshCw
+                            className="is-spinning"
+                            size={13}
+                            aria-hidden="true"
+                          />
+                        ) : (
+                          <Pause size={13} aria-hidden="true" />
+                        )}
+                        {sandboxLifecycleAction === "pause"
+                          ? "Pausing…"
+                          : "Pause Sandbox"}
+                      </button>
+                    )}
                     <button
                       type="button"
                       className="secondary-action-button"

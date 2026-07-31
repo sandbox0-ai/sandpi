@@ -789,13 +789,17 @@ waking up` while that transition commits; Sandpi waits for the native running
 generation and retries the same supported runtime access. A definitive
 `sandbox_resume_failed` response skips lifecycle polling and receives exactly
 one immediate supported-access retry. If that retry also fails, Sandpi surfaces
-the error without entering its longer runtime-recovery retry loop. Ordinary
-runtime access never calls an explicit resume API. The user-facing
-**Environment Settings → Sandbox → Restart Sandbox** recovery action is the
-only exception: under the same advisory lock, it flushes and suspends retained
-workers, commits a pause, calls `resumeAndWait`, and records the resulting
-running intent. Runtime recovery, idle/quota/manual pause, and restart therefore
-cannot commit their database projections out of order.
+the error without entering its longer runtime-recovery retry loop. Passive Web
+IDE directory, file, Git and watch requests never wake a paused Environment;
+the client stops polling and reconnecting after it observes that state. The
+user-facing **Resume Sandbox** action is the explicit wake boundary for that
+surface and records running intent under the same advisory lock. Other direct
+runtime actions, such as Turn or terminal admission, remain explicit user work
+and may use Sandbox0-native auto-resume. **Restart Sandbox** is a bounded
+recovery action: it flushes and suspends retained workers, commits a pause,
+calls `resumeAndWait`, and records the resulting running intent. Runtime
+recovery, idle/quota/manual pause, explicit resume, and restart therefore cannot
+commit their database projections out of order.
 
 `environment_runtime.paused_at` remains the current Sandpi lifecycle
 projection. Its transitions automatically append and close
@@ -819,6 +823,14 @@ Only after that succeeds does one PostgreSQL transaction remove active and
 archived Session references, credentials and Environment metadata. If Sandbox0
 cleanup fails, Sandpi keeps the coordinates and records the error for a safe
 retry instead of hiding a leaked Sandbox or Workspace Volume.
+
+Provisioning uses the same resource-journal rule. Once Sandbox0 returns a
+Sandbox id, Sandpi stores it before waiting for the runtime to become ready. A
+failed cleanup retains that id on the failed Environment. Startup
+reconciliation and a bounded background backoff keep retrying that cleanup; an
+explicit provisioning retry also runs it immediately. Sandpi deletes the
+retained Sandbox before claiming a replacement, so a lifecycle conflict cannot
+turn into an untracked orphan.
 
 ## Branch and mutation semantics
 

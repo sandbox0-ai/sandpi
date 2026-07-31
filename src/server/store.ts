@@ -942,10 +942,6 @@ export class SandpiStore {
          ON runtime.environment_id = environment.id
        WHERE environment.status IN ('updating', 'error')
          AND environment.status <> 'archived'
-         AND (
-           environment.workspace_volume_id IS NULL
-           OR runtime.sandbox_id IS NULL
-         )
        ORDER BY environment.created_at`,
     );
     return result.rows;

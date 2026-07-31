@@ -1164,6 +1164,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
           onWorkspaceNavigationHandled={handleWorkspaceNavigationHandled}
           browserNavigationRequest={browserNavigationRequest}
           onBrowserNavigationHandled={handleBrowserNavigationHandled}
+          onEnvironmentChange={handleEnvironmentChange}
           onSessionChange={handleSessionChange}
           onToggleSessionCompleted={handleToggleSessionCompleted}
           onDerivedSessionCreated={handleSessionCreated}
@@ -1205,6 +1206,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
           onWorkspaceNavigationHandled={handleWorkspaceNavigationHandled}
           browserNavigationRequest={browserNavigationRequest}
           onBrowserNavigationHandled={handleBrowserNavigationHandled}
+          onEnvironmentChange={handleEnvironmentChange}
           activeTab={inspectorTab === "activity" ? "files" : inspectorTab}
           onTabChange={handleInspectorTabChange}
           widthRatio={inspectorWidthRatio}

@@ -14,6 +14,10 @@ interface EnvironmentRuntimeAccessOptions {
   quotaGate?: RuntimeQuotaGate;
 }
 
+interface RuntimeAccessAdmissionOptions {
+  wakePaused?: boolean;
+}
+
 type RuntimeAdmission<T> =
   | { kind: "ready"; value: T }
   | { kind: "repair" };
@@ -37,6 +41,7 @@ export class EnvironmentRuntimeAccessService {
     userId: string,
     environmentId: string,
     operation: (runtime: StoredEnvironmentRuntime) => Promise<T>,
+    admission: RuntimeAccessAdmissionOptions = {},
   ): Promise<T> {
     // Authorize before waiting on a lifecycle transition. The runtime is read
     // again under the shared lock so deletion and recovery cannot change its
@@ -56,7 +61,7 @@ export class EnvironmentRuntimeAccessService {
             userId,
             environmentId,
           );
-          requireAccessibleEnvironment(current);
+          requireAccessibleEnvironment(current, admission);
           await this.options.quotaGate?.assertEnvironmentRuntimeAllowed(
             environmentId,
           );
@@ -82,7 +87,12 @@ export class EnvironmentRuntimeAccessService {
       );
       if (locked.acquired) {
         if (locked.value.kind === "ready") return locked.value.value;
-        await this.repairEnvironmentRuntime(userId, environmentId, deadline);
+        await this.repairEnvironmentRuntime(
+          userId,
+          environmentId,
+          deadline,
+          admission,
+        );
         repaired = true;
         continue;
       }
@@ -94,6 +104,7 @@ export class EnvironmentRuntimeAccessService {
     userId: string,
     environmentId: string,
     deadline: number,
+    admission: RuntimeAccessAdmissionOptions,
   ) {
     const pending = this.repairs.get(environmentId);
     if (pending) {
@@ -105,6 +116,7 @@ export class EnvironmentRuntimeAccessService {
       userId,
       environmentId,
       deadline,
+      admission,
     );
     this.repairs.set(environmentId, repair);
     void repair
@@ -121,6 +133,7 @@ export class EnvironmentRuntimeAccessService {
     userId: string,
     environmentId: string,
     deadline: number,
+    admission: RuntimeAccessAdmissionOptions,
   ) {
     while (true) {
       const locked = await this.store.withEnvironmentLifecycleLock(
@@ -134,7 +147,7 @@ export class EnvironmentRuntimeAccessService {
             userId,
             environmentId,
           );
-          requireAccessibleEnvironment(current);
+          requireAccessibleEnvironment(current, admission);
           await this.options.quotaGate?.assertEnvironmentRuntimeAllowed(
             environmentId,
           );
@@ -180,12 +193,22 @@ export class EnvironmentRuntimeAccessService {
   }
 }
 
-function requireAccessibleEnvironment(runtime: StoredEnvironmentRuntime) {
+function requireAccessibleEnvironment(
+  runtime: StoredEnvironmentRuntime,
+  admission: RuntimeAccessAdmissionOptions,
+) {
   if (runtime.desiredState === "terminated") {
     throw new HttpError(
       409,
       "environment_terminated",
       "The Environment is being deleted.",
+    );
+  }
+  if (runtime.desiredState === "paused" && admission.wakePaused === false) {
+    throw new HttpError(
+      409,
+      "environment_paused",
+      "The Environment Sandbox is paused. Resume it before accessing the Workspace.",
     );
   }
 }

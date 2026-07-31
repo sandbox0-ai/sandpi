@@ -71,6 +71,95 @@ test("executes a warm Environment access without a runtime probe", async () => {
   ]);
 });
 
+test("rejects passive access while the Environment is paused", async () => {
+  let operationCalls = 0;
+  let accessRecords = 0;
+  const store = runtimeAccessStore({
+    runtime: { ...environmentRuntime, desiredState: "paused" as const },
+    async recordEnvironmentRuntimeAccess() {
+      accessRecords += 1;
+      return environmentRuntime;
+    },
+  });
+  const service = new EnvironmentRuntimeAccessService(
+    store,
+    {} as RuntimeAdapter,
+  );
+
+  await assert.rejects(
+    service.withRuntimeAccess(
+      "user-test",
+      environmentRuntime.id,
+      async () => {
+        operationCalls += 1;
+      },
+      { wakePaused: false },
+    ),
+    (error: unknown) =>
+      error instanceof HttpError && error.code === "environment_paused",
+  );
+  assert.equal(operationCalls, 0);
+  assert.equal(accessRecords, 0);
+});
+
+test("keeps explicit access able to wake a paused Environment", async () => {
+  let operationCalls = 0;
+  const paused = { ...environmentRuntime, desiredState: "paused" as const };
+  const store = runtimeAccessStore({ runtime: paused });
+  const service = new EnvironmentRuntimeAccessService(
+    store,
+    {} as RuntimeAdapter,
+  );
+
+  await service.withRuntimeAccess(
+    "user-test",
+    environmentRuntime.id,
+    async (current) => {
+      operationCalls += 1;
+      assert.strictEqual(current, paused);
+    },
+  );
+  assert.equal(operationCalls, 1);
+});
+
+test("rechecks passive admission before repairing a newly paused Environment", async () => {
+  let runtimeReads = 0;
+  let ensureCalls = 0;
+  const store = runtimeAccessStore({
+    async getEnvironmentRuntime() {
+      runtimeReads += 1;
+      return runtimeReads === 1
+        ? environmentRuntime
+        : { ...environmentRuntime, desiredState: "paused" as const };
+    },
+  });
+  const runtime = {
+    async ensureEnvironmentRuntimeAccess() {
+      ensureCalls += 1;
+    },
+  } as unknown as RuntimeAdapter;
+  const service = new EnvironmentRuntimeAccessService(store, runtime);
+
+  await assert.rejects(
+    service.withRuntimeAccess(
+      "user-test",
+      environmentRuntime.id,
+      async () => {
+        throw new HttpError(
+          503,
+          "sandbox0_workspace_unavailable",
+          "Workspace unavailable.",
+        );
+      },
+      { wakePaused: false },
+    ),
+    (error: unknown) =>
+      error instanceof HttpError && error.code === "environment_paused",
+  );
+  assert.equal(runtimeReads, 2);
+  assert.equal(ensureCalls, 0);
+});
+
 test("repairs and retries a recoverable native Environment access once", async () => {
   const recoverableErrors = [
     new HttpError(
@@ -506,6 +595,7 @@ test("quota admission rejects a runtime operation while holding the shared lock"
 function runtimeAccessStore(
   overrides: {
     runtime?: StoredEnvironmentRuntime;
+    getEnvironmentRuntime?: () => Promise<StoredEnvironmentRuntime>;
     withEnvironmentRuntimeAccessLock?: (
       environmentId: string,
       operation: () => Promise<unknown>,
@@ -532,7 +622,9 @@ function runtimeAccessStore(
       return {};
     },
     async getEnvironmentRuntime() {
-      return current;
+      return overrides.getEnvironmentRuntime
+        ? overrides.getEnvironmentRuntime()
+        : current;
     },
     async withEnvironmentRuntimeAccessLock(
       environmentId: string,

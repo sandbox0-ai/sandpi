@@ -492,6 +492,18 @@ export const openApiRouteContracts: readonly OpenApiRouteContract[] = [
   }),
   defineContract({
     method: "PUT",
+    url: "/api/v1/environments/:environmentId/sandbox/resume",
+    schema: {
+      operationId: "resumeEnvironmentSandbox",
+      summary: "Resume an Environment Sandbox",
+      description:
+        "Explicitly resumes the shared Sandbox under the Environment lifecycle lock. Passive Workspace refreshes do not resume a paused Sandbox.",
+      tags: ["Environments"],
+      response: { 200: dataEnvelope(environmentSchema) },
+    },
+  }),
+  defineContract({
+    method: "PUT",
     url: "/api/v1/environments/:environmentId/sandbox/restart",
     schema: {
       operationId: "restartEnvironmentSandbox",

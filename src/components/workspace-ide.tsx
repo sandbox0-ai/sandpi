@@ -20,6 +20,8 @@ import {
   GitCommitHorizontal,
   PanelLeftClose,
   PanelLeftOpen,
+  Pause,
+  Play,
   Presentation,
   Eye,
   Pencil,
@@ -117,6 +119,7 @@ interface WorkspaceIdeProps {
   initialSnapshot?: WorkspaceIdeSnapshot;
   navigationRequest?: WorkspaceFileNavigationRequest;
   onNavigationHandled?: (request: WorkspaceFileNavigationRequest) => void;
+  onEnvironmentChange?: (environment: Environment) => void;
 }
 
 interface DocumentState {
@@ -288,6 +291,11 @@ const copy = {
     reconnecting: "Reconnecting",
     polling: "Polling",
     offline: "Disconnected",
+    paused: "Sandbox paused",
+    pausedDescription:
+      "Automatic Workspace refresh is stopped. Resume the Sandbox when you want to access its files again.",
+    resume: "Resume Sandbox",
+    resuming: "Resuming…",
     refresh: "Refresh Workspace",
     refreshing: "Refreshing Workspace",
     refreshed: "Workspace refreshed",
@@ -366,6 +374,11 @@ const copy = {
     reconnecting: "正在重连",
     polling: "轮询更新",
     offline: "已断开",
+    paused: "Sandbox 已暂停",
+    pausedDescription:
+      "Workspace 自动刷新已停止。需要再次访问文件时，请手动恢复 Sandbox。",
+    resume: "恢复 Sandbox",
+    resuming: "正在恢复…",
     refresh: "刷新 Workspace",
     refreshing: "正在刷新 Workspace",
     refreshed: "Workspace 已刷新",
@@ -454,6 +467,10 @@ function workspaceParentPath(filePath: string) {
   return separator <= WORKSPACE_ROOT.length
     ? WORKSPACE_ROOT
     : filePath.slice(0, separator);
+}
+
+function isEnvironmentPausedError(error: unknown) {
+  return error instanceof ApiError && error.code === "environment_paused";
 }
 
 function remapWorkspaceIdeFile(
@@ -1332,6 +1349,7 @@ export function WorkspaceIde({
   initialSnapshot,
   navigationRequest,
   onNavigationHandled,
+  onEnvironmentChange,
 }: WorkspaceIdeProps) {
   const ui = copy[language];
   const { confirm } = useAlertDialog();
@@ -1392,6 +1410,11 @@ export function WorkspaceIde({
   const [connection, setConnection] = useState<
     "connecting" | "live" | "reconnecting" | "polling" | "offline"
   >("connecting");
+  const [runtimePaused, setRuntimePaused] = useState(
+    environment.sandboxState === "paused",
+  );
+  const [resumingRuntime, setResumingRuntime] = useState(false);
+  const [resumeError, setResumeError] = useState("");
   const [fileBrowserSidebarWidth, setFileBrowserSidebarWidth] = useState(
     storedFileBrowserSidebarWidth,
   );
@@ -1432,6 +1455,7 @@ export function WorkspaceIde({
   const reconnectTimerRef = useRef<number | null>(null);
   const workspaceSocketRef = useRef<WebSocket | undefined>(undefined);
   const workspaceSocketReadyRef = useRef(false);
+  const runtimePausedRef = useRef(runtimePaused);
   const environmentGenerationRef = useRef(0);
   const environmentIdentityRef = useRef(cacheKey);
   const selectedPathEnvironmentRef = useRef(environment.id);
@@ -1469,6 +1493,19 @@ export function WorkspaceIde({
     environmentGenerationRef.current += 1;
     selectedPathEnvironmentRef.current = "";
   }
+
+  const markRuntimePaused = useCallback(() => {
+    runtimePausedRef.current = true;
+    setRuntimePaused(true);
+    setConnection("offline");
+  }, []);
+
+  useEffect(() => {
+    const paused = environment.sandboxState === "paused";
+    runtimePausedRef.current = paused;
+    setRuntimePaused(paused);
+    if (paused) setConnection("offline");
+  }, [cacheKey, environment.sandboxState]);
 
   useEffect(() => {
     snapshotRef.current = snapshot;
@@ -1625,6 +1662,7 @@ export function WorkspaceIde({
           }
         } catch (cause) {
           if (isAbortError(cause)) return;
+          if (isEnvironmentPausedError(cause)) markRuntimePaused();
           if (
             environmentIdRef.current !== environmentId ||
             environmentGenerationRef.current !== environmentGeneration
@@ -1673,7 +1711,7 @@ export function WorkspaceIde({
       });
       return task;
     },
-    [cacheKey, environment.id],
+    [cacheKey, environment.id, markRuntimePaused],
   );
 
   const loadDocument = useCallback(
@@ -1749,6 +1787,7 @@ export function WorkspaceIde({
         });
       } catch (cause) {
         if (isAbortError(cause)) return;
+        if (isEnvironmentPausedError(cause)) markRuntimePaused();
         if (
           environmentIdRef.current !== environmentId ||
           environmentGenerationRef.current !== environmentGeneration
@@ -1770,7 +1809,7 @@ export function WorkspaceIde({
         });
       }
     },
-    [cacheKey, environment.id],
+    [cacheKey, environment.id, markRuntimePaused],
   );
 
   const loadGitState = useCallback(async () => {
@@ -1799,11 +1838,12 @@ export function WorkspaceIde({
       snapshotRef.current = next;
       setSnapshot(next);
     } catch (cause) {
+      if (isEnvironmentPausedError(cause)) markRuntimePaused();
       if (!isAbortError(cause)) {
         // The file tree remains useful while Git projection refresh retries.
       }
     }
-  }, [cacheKey, environment.id]);
+  }, [cacheKey, environment.id, markRuntimePaused]);
 
   const refreshSnapshot = useCallback(
     async (silent = false, refreshLoadedDirectories = false) => {
@@ -1875,6 +1915,10 @@ export function WorkspaceIde({
   ]);
 
   useEffect(() => {
+    if (runtimePaused) {
+      setLoading(false);
+      return;
+    }
     if (prioritizeExplicitFileContent) return;
     void loadDirectory(WORKSPACE_ROOT, true);
     void loadGitState();
@@ -1883,6 +1927,7 @@ export function WorkspaceIde({
     loadDirectory,
     loadGitState,
     prioritizeExplicitFileContent,
+    runtimePaused,
   ]);
 
   const visibleGit = useMemo(
@@ -2535,6 +2580,10 @@ export function WorkspaceIde({
   }, [environment.id, selectedPath]);
 
   useEffect(() => {
+    if (runtimePaused) {
+      setConnection("offline");
+      return;
+    }
     if (prioritizeExplicitFileContent) {
       setConnection("connecting");
       return;
@@ -2607,15 +2656,67 @@ export function WorkspaceIde({
     };
 
     const startPolling = () => {
-      if (disposed || pollingTimer !== undefined) return;
+      if (
+        disposed ||
+        runtimePausedRef.current ||
+        pollingTimer !== undefined
+      ) {
+        return;
+      }
       void refreshSnapshot(true, true);
       pollingTimer = window.setInterval(() => {
         void refreshSnapshot(true, true);
       }, 15_000);
     };
 
+    const reconnectAfterLifecycleCheck = async () => {
+      try {
+        const response = await apiFetch<ApiEnvelope<Environment[]>>(
+          "/api/v1/environments",
+        );
+        if (disposed) return;
+        const current = response.data.find(
+          (candidate) => candidate.id === environment.id,
+        );
+        if (current?.sandboxState === "paused") {
+          markRuntimePaused();
+          onEnvironmentChange?.(current);
+          return;
+        }
+        if (!current) {
+          setConnection("offline");
+          reconnectTimerRef.current = window.setTimeout(
+            () => void reconnectAfterLifecycleCheck(),
+            30_000,
+          );
+          return;
+        }
+        startPolling();
+        setConnection(
+          pollingFallback
+            ? "polling"
+            : retry > 5
+              ? "polling"
+              : "reconnecting",
+        );
+        reconnectTimerRef.current = window.setTimeout(
+          connect,
+          pollingFallback
+            ? 30_000
+            : Math.min(5_000, 500 * 2 ** Math.min(retry, 4)),
+        );
+      } catch {
+        if (disposed) return;
+        setConnection("offline");
+        reconnectTimerRef.current = window.setTimeout(
+          () => void reconnectAfterLifecycleCheck(),
+          30_000,
+        );
+      }
+    };
+
     const connect = () => {
-      if (disposed) return;
+      if (disposed || runtimePausedRef.current) return;
       setConnection(
         pollingFallback
           ? "polling"
@@ -2631,7 +2732,13 @@ export function WorkspaceIde({
       workspaceSocketRef.current = socket;
       workspaceSocketReadyRef.current = false;
       handshakeTimer = window.setTimeout(() => {
-        if (disposed || workspaceSocketReadyRef.current) return;
+        if (
+          disposed ||
+          runtimePausedRef.current ||
+          workspaceSocketReadyRef.current
+        ) {
+          return;
+        }
         pollingFallback = true;
         startPolling();
         setConnection("polling");
@@ -2658,7 +2765,10 @@ export function WorkspaceIde({
           } else if (event.type === "change") {
             scheduleRefresh(event.path, event.event);
           } else if (event.type === "error") {
-            if (event.code === "workspace_watch_unavailable") {
+            if (event.code === "environment_paused") {
+              markRuntimePaused();
+              socket?.close();
+            } else if (event.code === "workspace_watch_unavailable") {
               pollingFallback = true;
               startPolling();
               setConnection("polling");
@@ -2681,22 +2791,10 @@ export function WorkspaceIde({
           handshakeTimer = undefined;
         }
         retry += 1;
-        // Keep editor state fresh only while the native watch is unavailable
-        // or reconnecting. A subsequent `ready` event stops this fallback.
-        startPolling();
-        setConnection(
-          pollingFallback
-            ? "polling"
-            : retry > 5
-              ? "polling"
-              : "reconnecting",
-        );
-        reconnectTimerRef.current = window.setTimeout(
-          connect,
-          pollingFallback
-            ? 30_000
-            : Math.min(5_000, 500 * 2 ** Math.min(retry, 4)),
-        );
+        if (runtimePausedRef.current) return;
+        // Resolve lifecycle state before any fallback read. A paused Sandbox
+        // remains cold until an explicit user action resumes it.
+        void reconnectAfterLifecycleCheck();
       });
       socket.addEventListener("error", () => socket?.close());
     };
@@ -2728,8 +2826,11 @@ export function WorkspaceIde({
     loadDirectory,
     loadDocument,
     loadGitState,
+    markRuntimePaused,
+    onEnvironmentChange,
     prioritizeExplicitFileContent,
     refreshSnapshot,
+    runtimePaused,
   ]);
 
   useEffect(() => {
@@ -3179,6 +3280,31 @@ export function WorkspaceIde({
     );
   }
 
+  async function resumeSandbox() {
+    if (resumingRuntime) return;
+    setResumingRuntime(true);
+    setResumeError("");
+    try {
+      const response = await apiFetch<ApiEnvelope<Environment>>(
+        `/api/v1/environments/${encodeURIComponent(environment.id)}/sandbox/resume`,
+        { method: "PUT" },
+      );
+      runtimePausedRef.current = false;
+      setRuntimePaused(false);
+      setConnection("connecting");
+      setError("");
+      onEnvironmentChange?.(response.data);
+    } catch (cause) {
+      setResumeError(
+        cause instanceof Error
+          ? cause.message
+          : "The Sandbox could not be resumed.",
+      );
+    } finally {
+      setResumingRuntime(false);
+    }
+  }
+
   return (
     <section
       className={`${styles.ide} ${
@@ -3203,13 +3329,33 @@ export function WorkspaceIde({
         </header>
       ) : null}
 
-      <div
-        ref={fileBrowserWorkbenchRef}
-        className={`${styles.workbench} ${
-          fileBrowserSidebarCollapsed ? styles.sidebarCollapsed : ""
-        } ${fileBrowserResizing ? styles.resizing : ""}`}
-        style={fileBrowserWorkbenchStyle}
-      >
+      {runtimePaused ? (
+        <div className={styles.pausedRuntime} role="status">
+          <Pause size={24} aria-hidden="true" />
+          <strong>{ui.paused}</strong>
+          <p>{ui.pausedDescription}</p>
+          <button
+            type="button"
+            disabled={resumingRuntime}
+            onClick={() => void resumeSandbox()}
+          >
+            {resumingRuntime ? (
+              <RefreshCw className={styles.spinning} size={13} />
+            ) : (
+              <Play size={13} aria-hidden="true" />
+            )}
+            {resumingRuntime ? ui.resuming : ui.resume}
+          </button>
+          {resumeError ? <span role="alert">{resumeError}</span> : null}
+        </div>
+      ) : (
+        <div
+          ref={fileBrowserWorkbenchRef}
+          className={`${styles.workbench} ${
+            fileBrowserSidebarCollapsed ? styles.sidebarCollapsed : ""
+          } ${fileBrowserResizing ? styles.resizing : ""}`}
+          style={fileBrowserWorkbenchStyle}
+        >
         <aside
           id={fileBrowserSidebarId}
           className={styles.sidebar}
@@ -3564,7 +3710,8 @@ export function WorkspaceIde({
             </div>
           )}
         </main>
-      </div>
+        </div>
+      )}
 
       <footer className={styles.statusbar}>
         <span>

@@ -2784,6 +2784,7 @@ components:
               type: string
               enum:
                 - workspace_watch_unavailable
+                - environment_paused
             at:
               type: number
               description: Unix time in seconds; fractional values preserve milliseconds.
@@ -6169,6 +6170,41 @@ paths:
       description: Performs one committed pause and resume under the Environment
         lifecycle lock so Sandbox0 advances the runtime generation. Persistent
         Workspace and browser profile data are retained.
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+          in: path
+          name: environmentId
+          required: true
+      responses:
+        "200":
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Environment"
+                required:
+                  - data
+                additionalProperties: false
+        default:
+          description: Sandpi error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/environments/{environmentId}/sandbox/resume:
+    put:
+      operationId: resumeEnvironmentSandbox
+      summary: Resume an Environment Sandbox
+      tags:
+        - Environments
+      description: Explicitly resumes the shared Sandbox under the Environment
+        lifecycle lock. Passive Workspace refreshes do not resume a paused
+        Sandbox.
       parameters:
         - schema:
             type: string
