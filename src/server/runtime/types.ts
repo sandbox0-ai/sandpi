@@ -139,6 +139,12 @@ export interface RuntimeUsageWindowPage {
   nextCursor: string;
 }
 
+export interface EnvironmentSandboxUsageProjection {
+  state: EnvironmentSandboxState;
+  /** Start of the currently running allocation, absent when no allocation is active. */
+  activeSince?: Date;
+}
+
 export interface CodexAuthRuntime {
   sandboxId: string;
   supervisorSessionId: string;
@@ -151,6 +157,9 @@ export interface RuntimeAdapter {
   getEnvironmentSandboxState(
     sandboxId: string,
   ): Promise<EnvironmentSandboxState>;
+  getEnvironmentSandboxUsageProjection(
+    sandboxId: string,
+  ): Promise<EnvironmentSandboxUsageProjection>;
   supportsUsageWindows(): boolean;
   listUsageWindows(options?: {
     cursor?: string;
@@ -295,6 +304,11 @@ export interface RuntimeAdapter {
     runtime: EnvironmentRuntimeRecord,
     path: string,
   ): Promise<WorkspaceDirectoryListing>;
+  /** Reads the persistent Workspace Volume without starting Sandbox compute. */
+  listPersistentWorkspaceFiles(
+    runtime: EnvironmentRuntimeRecord,
+    path: string,
+  ): Promise<WorkspaceDirectoryListing>;
   /** Searches the shared Workspace independently of any coding-agent harness. */
   searchFiles(
     runtime: EnvironmentRuntimeRecord,
@@ -309,10 +323,20 @@ export interface RuntimeAdapter {
     runtime: EnvironmentRuntimeRecord,
     path: string,
   ): Promise<Uint8Array>;
+  /** Reads one persistent Workspace Volume file without starting Sandbox compute. */
+  readPersistentWorkspaceFile(
+    runtime: EnvironmentRuntimeRecord,
+    path: string,
+  ): Promise<Uint8Array>;
   getWorkspaceGitState(
     runtime: EnvironmentRuntimeRecord,
   ): Promise<WorkspaceGitState>;
   readWorkspaceIdeFile(
+    runtime: EnvironmentRuntimeRecord,
+    path: string,
+  ): Promise<WorkspaceIdeFile>;
+  /** Returns a read-only Web IDE file from persistent storage only. */
+  readPersistentWorkspaceIdeFile(
     runtime: EnvironmentRuntimeRecord,
     path: string,
   ): Promise<WorkspaceIdeFile>;

@@ -2,10 +2,10 @@ import type {
   SandpiAccountPlan,
   SandpiBillingSummary,
 } from "@/lib/billing";
-import type { EnvironmentSandboxState } from "@/lib/types";
 import { toUnixTimestamp } from "@/lib/time";
 import type { SandpiConfig } from "@/server/config";
 import { HttpError, notFound } from "@/server/http-error";
+import type { EnvironmentSandboxUsageProjection } from "@/server/runtime/types";
 
 import {
   accountMonthPeriod,
@@ -36,7 +36,9 @@ export interface BillingQuotaStore {
     startsAt: Date,
     endsAt: Date,
   ): Promise<UsageTotals>;
-  runningEnvironmentCandidates(): Promise<RunningEnvironmentCandidate[]>;
+  runningEnvironmentCandidates(
+    userId?: string,
+  ): Promise<RunningEnvironmentCandidate[]>;
 }
 
 export interface EnvironmentQuotaPolicy {
@@ -59,9 +61,9 @@ export interface RuntimeQuotaGate {
 }
 
 export interface SandboxLifecycleReader {
-  getEnvironmentSandboxState(
+  getEnvironmentSandboxUsageProjection(
     sandboxId: string,
-  ): Promise<EnvironmentSandboxState>;
+  ): Promise<EnvironmentSandboxUsageProjection>;
 }
 
 interface ResolvedEntitlement {
@@ -76,32 +78,48 @@ export interface EnvironmentPlanEnforcement {
   reconcileMemoryEnvironmentIds: string[];
 }
 
+interface LiveRuntimeObservation {
+  candidate: RunningEnvironmentCandidate;
+  projection: EnvironmentSandboxUsageProjection;
+}
+
+interface ProjectedUsageTotals extends UsageTotals {
+  projectedMiBMilliseconds: number;
+}
+
+const LIVE_USAGE_OBSERVATION_CACHE_TTL_MS = 5_000;
+
 export class BillingQuotaService
   implements EnvironmentQuotaPolicy, RuntimeQuotaGate
 {
+  private readonly liveObservationCache = new Map<
+    string,
+    {
+      expiresAt: number;
+      value: Promise<LiveRuntimeObservation[]>;
+    }
+  >();
+
   constructor(
     private readonly store: BillingQuotaStore,
     private readonly billing: SandpiConfig["billing"],
     private readonly runtime: SandboxLifecycleReader,
     private readonly now: () => Date = () => new Date(),
+    private readonly liveObservationCacheTtlMs =
+      LIVE_USAGE_OBSERVATION_CACHE_TTL_MS,
   ) {}
 
   async summary(userId: string): Promise<SandpiBillingSummary> {
     const entitlement = await this.resolveEntitlement(userId);
     const [usage, environmentCount, customerId] = await Promise.all([
-      this.store.usageTotals(
-        userId,
-        entitlement.period.startsAt,
-        entitlement.period.endsAt,
-      ),
+      this.billing.mode === "stripe"
+        ? this.projectedUsage(userId, entitlement.period)
+        : this.confirmedUsage(userId, entitlement.period),
       this.store.environmentCount(userId),
       this.store.stripeCustomerId(userId),
     ]);
     const limit = entitlement.plan.runtimeQuotaMiBMilliseconds;
-    const used = Math.max(
-      usage.confirmedMiBMilliseconds,
-      usage.projectedMiBMilliseconds,
-    );
+    const used = usage.projectedMiBMilliseconds;
     const remaining = limit == null ? null : Math.max(0, limit - used);
 
     return {
@@ -160,7 +178,7 @@ export class BillingQuotaService
       usageSource:
         this.billing.mode === "stripe"
           ? "sandbox0-sdk"
-          : "local-projection",
+          : "billing-disabled",
     };
   }
 
@@ -208,21 +226,19 @@ export class BillingQuotaService
         entitlement.period.endsAt,
       );
     }
-    const usage = await this.store.usageTotals(
+    const usage = await this.projectedUsage(
       position.userId,
-      entitlement.period.startsAt,
-      entitlement.period.endsAt,
+      entitlement.period,
     );
     if (
       entitlement.plan.runtimeQuotaMiBMilliseconds != null &&
-      Math.max(
-        usage.confirmedMiBMilliseconds,
-        usage.projectedMiBMilliseconds,
-      ) >= entitlement.plan.runtimeQuotaMiBMilliseconds
+      usage.projectedMiBMilliseconds >=
+        entitlement.plan.runtimeQuotaMiBMilliseconds
     ) {
       throw runtimeQuotaError(
         entitlement.plan,
         entitlement.period.endsAt,
+        usage.projectedMiBMilliseconds,
       );
     }
   }
@@ -250,59 +266,58 @@ export class BillingQuotaService
         reconcileMemoryEnvironmentIds: [],
       };
     }
-    const entitlementByUser = new Map<
-      string,
-      Promise<ResolvedEntitlement>
-    >();
-    const usageByUser = new Map<string, Promise<UsageTotals>>();
-    const actions = await Promise.all(
-      (await this.store.runningEnvironmentCandidates()).map(
-        async (candidate) => {
-          let entitlement = entitlementByUser.get(candidate.userId);
-          if (!entitlement) {
-            entitlement = this.resolveEntitlement(candidate.userId);
-            entitlementByUser.set(candidate.userId, entitlement);
-          }
-          const resolved = await entitlement;
-          const reconcileMemory =
-            resolved.plan.fixedSandboxMemoryMiB != null &&
-            candidate.sandboxMemoryMiB !==
-              resolved.plan.fixedSandboxMemoryMiB;
-          const running =
-            (await this.runtime.getEnvironmentSandboxState(
-              candidate.sandboxId,
-            )) === "running";
-          if (!running) {
-            return { candidate, pause: false, reconcileMemory };
-          }
-
-          let usage = usageByUser.get(candidate.userId);
-          if (!usage) {
-            usage = this.store.usageTotals(
-              candidate.userId,
-              resolved.period.startsAt,
-              resolved.period.endsAt,
-            );
-            usageByUser.set(candidate.userId, usage);
-          }
-          const totals = await usage;
-          const environmentViolation =
-            resolved.plan.environmentLimit != null &&
-            candidate.position > resolved.plan.environmentLimit;
-          const runtimeViolation =
-            resolved.plan.runtimeQuotaMiBMilliseconds != null &&
-            Math.max(
-              totals.confirmedMiBMilliseconds,
-              totals.projectedMiBMilliseconds,
-            ) >= resolved.plan.runtimeQuotaMiBMilliseconds;
-          return {
-            candidate,
-            pause: environmentViolation || runtimeViolation,
-            reconcileMemory,
-          };
+    const observations = await Promise.all(
+      (await this.store.runningEnvironmentCandidates()).map((candidate) =>
+        this.observeRuntime(candidate),
+      ),
+    );
+    const observationsByUser = new Map<string, LiveRuntimeObservation[]>();
+    for (const observation of observations) {
+      const current = observationsByUser.get(observation.candidate.userId);
+      if (current) current.push(observation);
+      else observationsByUser.set(observation.candidate.userId, [observation]);
+    }
+    const actionGroups = await Promise.all(
+      [...observationsByUser.entries()].map(
+        async ([userId, userObservations]) => {
+          const resolved = await this.resolveEntitlement(userId);
+          const invalidActiveProjection = userObservations.some(
+            ({ projection }) =>
+              activeRuntimeState(projection.state) &&
+              !validActiveSince(projection.activeSince),
+          );
+          const totals = invalidActiveProjection
+            ? undefined
+            : await this.projectedUsage(
+                userId,
+                resolved.period,
+                userObservations,
+              );
+          return userObservations.map(({ candidate, projection }) => {
+            const reconcileMemory =
+              resolved.plan.fixedSandboxMemoryMiB != null &&
+              candidate.sandboxMemoryMiB !==
+                resolved.plan.fixedSandboxMemoryMiB;
+            const active = activeRuntimeState(projection.state);
+            const environmentViolation =
+              resolved.plan.environmentLimit != null &&
+              candidate.position > resolved.plan.environmentLimit;
+            const runtimeViolation =
+              invalidActiveProjection ||
+              (resolved.plan.runtimeQuotaMiBMilliseconds != null &&
+                (totals?.projectedMiBMilliseconds ?? 0) >=
+                  resolved.plan.runtimeQuotaMiBMilliseconds);
+            return {
+              candidate,
+              pause:
+                active && (environmentViolation || runtimeViolation),
+              reconcileMemory,
+            };
+          });
         },
       ),
     );
+    const actions = actionGroups.flat();
     return {
       pauseEnvironmentIds: actions
         .filter((action) => action.pause)
@@ -310,6 +325,82 @@ export class BillingQuotaService
       reconcileMemoryEnvironmentIds: actions
         .filter((action) => action.reconcileMemory)
         .map((action) => action.candidate.environmentId),
+    };
+  }
+
+  private async confirmedUsage(
+    userId: string,
+    period: { startsAt: Date; endsAt: Date },
+  ): Promise<ProjectedUsageTotals> {
+    const usage = await this.store.usageTotals(
+      userId,
+      period.startsAt,
+      period.endsAt,
+    );
+    return {
+      ...usage,
+      projectedMiBMilliseconds: usage.confirmedMiBMilliseconds,
+    };
+  }
+
+  private async projectedUsage(
+    userId: string,
+    period: { startsAt: Date; endsAt: Date },
+    observations?: LiveRuntimeObservation[],
+  ): Promise<ProjectedUsageTotals> {
+    const [usage, live] = await Promise.all([
+      this.store.usageTotals(userId, period.startsAt, period.endsAt),
+      observations ?? this.liveObservationsForUser(userId),
+    ]);
+    const observedAt = this.now();
+    const openMiBMilliseconds = live.reduce(
+      (total, observation) =>
+        total + liveRuntimeUsage(observation, period, observedAt),
+      0,
+    );
+    return {
+      ...usage,
+      projectedMiBMilliseconds:
+        usage.confirmedMiBMilliseconds + Math.floor(openMiBMilliseconds),
+    };
+  }
+
+  private async liveObservationsForUser(userId: string) {
+    const cached = this.liveObservationCache.get(userId);
+    const cacheNow = Date.now();
+    if (cached && cached.expiresAt > cacheNow) return cached.value;
+
+    const value = this.store
+      .runningEnvironmentCandidates(userId)
+      .then((candidates) =>
+        Promise.all(
+          candidates.map((candidate) => this.observeRuntime(candidate)),
+        ),
+      );
+    if (this.liveObservationCacheTtlMs > 0) {
+      const entry = {
+        expiresAt: cacheNow + this.liveObservationCacheTtlMs,
+        value,
+      };
+      this.liveObservationCache.set(userId, entry);
+      void value.catch(() => {
+        if (this.liveObservationCache.get(userId) === entry) {
+          this.liveObservationCache.delete(userId);
+        }
+      });
+    }
+    return value;
+  }
+
+  private async observeRuntime(
+    candidate: RunningEnvironmentCandidate,
+  ): Promise<LiveRuntimeObservation> {
+    return {
+      candidate,
+      projection:
+        await this.runtime.getEnvironmentSandboxUsageProjection(
+          candidate.sandboxId,
+        ),
     };
   }
 
@@ -377,7 +468,11 @@ function publicPlan(plan: PlanDefinition): SandpiAccountPlan {
   };
 }
 
-function runtimeQuotaError(plan: PlanDefinition, resetAt: Date) {
+function runtimeQuotaError(
+  plan: PlanDefinition,
+  resetAt: Date,
+  usedMiBMilliseconds: number,
+) {
   return new HttpError(
     429,
     "sandbox_runtime_quota_exhausted",
@@ -386,7 +481,48 @@ function runtimeQuotaError(plan: PlanDefinition, resetAt: Date) {
       planId: plan.id,
       resetAt: toUnixTimestamp(resetAt),
       limitMiBMilliseconds: plan.runtimeQuotaMiBMilliseconds,
+      usedMiBMilliseconds,
+      usedGiBHours: usedMiBMilliseconds / MIB_MILLISECONDS_PER_GIB_HOUR,
+      limitGiBHours: plan.runtimeQuotaGiBHours,
     },
+  );
+}
+
+function activeRuntimeState(state: EnvironmentSandboxUsageProjection["state"]) {
+  return state === "running" || state === "provisioning";
+}
+
+function validActiveSince(value: Date | undefined): value is Date {
+  return Boolean(value && Number.isFinite(value.getTime()));
+}
+
+function liveRuntimeUsage(
+  observation: LiveRuntimeObservation,
+  period: { startsAt: Date; endsAt: Date },
+  observedAt: Date,
+) {
+  if (!activeRuntimeState(observation.projection.state)) return 0;
+  const activeSince = observation.projection.activeSince;
+  if (!validActiveSince(activeSince)) {
+    throw new HttpError(
+      502,
+      "sandbox0_usage_projection_invalid",
+      "Sandbox0 returned an active Sandbox without a valid claimed_at timestamp.",
+      { sandboxId: observation.candidate.sandboxId },
+    );
+  }
+  const latestClosedAt = observation.candidate.lastUsageWindowEndsAt;
+  const startsAt = Math.max(
+    period.startsAt.getTime(),
+    activeSince.getTime(),
+    latestClosedAt && Number.isFinite(latestClosedAt.getTime())
+      ? latestClosedAt.getTime()
+      : Number.NEGATIVE_INFINITY,
+  );
+  const endsAt = Math.min(observedAt.getTime(), period.endsAt.getTime());
+  return (
+    Math.max(0, endsAt - startsAt) *
+    Math.max(0, observation.candidate.sandboxMemoryMiB)
   );
 }
 

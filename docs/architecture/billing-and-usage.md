@@ -29,7 +29,11 @@ Sandbox0 lifecycle
   -> PostgreSQL metering projection/outbox
   -> ClickHouse usage windows
   -> public team-scoped SDK cursor
-  -> Sandpi attributed usage projection
+  -> Sandpi attributed closed-window projection
+Sandbox0 current Sandbox lifecycle + claimedAt
+  -> public Sandbox SDK resource
+  -> Sandpi ephemeral open-allocation projection
+closed windows + open allocations
   -> user entitlement admission
 ```
 
@@ -38,16 +42,23 @@ cursor and window ids are durable and idempotent. A window is stored only when
 its Sandbox id has a Sandpi attribution, which excludes short-lived Codex
 device-login runners and unrelated Sandboxes sharing the deployment team.
 
-Closed windows are eventually consistent. Sandpi therefore records local
-runtime segments whenever its Environment runtime projection enters or leaves
-`running`, or its memory allocation changes. For a quota period:
+Closed windows are eventually consistent. For timely admission, Sandpi combines
+the imported closed windows with an ephemeral observation of each currently
+`running` or `provisioning` Sandbox allocation. The open interval begins at the
+latest of the entitlement-period start, Sandbox0 `claimedAt`, and that
+Sandbox's latest imported window end. The final boundary prevents overlap when
+a closed window lands after a live observation or the Environment memory
+allocation changes. For a quota period:
 
 ```text
-used = max(imported Sandbox0 windows, projected Sandpi runtime segments)
+used = imported closed Sandbox0 windows + current open Sandbox0 allocations
 ```
 
-The values are never summed because they represent the same runtime. Local
-segments provide timely admission and Sandbox0 remains usage truth.
+Sandpi does not persist a second set of local runtime segments. Live
+observations are cached for at most five seconds per user and are discarded on
+restart. Sandbox0 remains the lifecycle and usage authority. An active Sandbox
+without a valid `claimedAt` fails admission closed instead of silently
+under-counting usage.
 
 ## Entitlement periods
 
@@ -91,10 +102,17 @@ The runtime entitlement gate is shared by:
 - runtime repair and startup recovery
 
 An over-limit operation cannot wake or allocate a Sandbox. The usage worker
-also scans running Environments after every SDK import. It pauses violations
+also scans current Sandbox lifecycle projections on every enforcement tick,
+including ticks where no new closed window was imported. It pauses violations
 under the Environment lifecycle lock and records `quota` as a separate pause
 reason. A later period reset does not eagerly resume anything; the next
 authorized user operation uses Sandbox0's native auto-resume path.
+
+Quota and plan blocks apply to compute, Agent, Terminal and Workspace writes,
+but they do not make durable data look lost. File listing, preview and download
+fall back to the Environment's persistent Sandbox0 Volume without resuming its
+Sandbox. The Web IDE shows the block reason, usage and reset time, disables
+edits, and links to plan management plus Environment data and backup controls.
 
 ## Stripe projection
 
@@ -124,8 +142,10 @@ to Free.
   `sandbox0` package exposes `client.usage.listWindows()`; no raw HTTP fallback
   exists.
 - SDK usage temporarily unavailable after startup: the durable cursor is not
-  advanced; local runtime projection continues admission and the worker
-  retries.
+  advanced; current Sandbox observations still protect admission and the
+  worker retries the closed-window import.
+- Active Sandbox without a valid allocation start: runtime admission fails
+  closed with an upstream projection error, preventing an unmetered wake-up.
 - ClickHouse unavailable: Sandbox0 returns usage unavailable; Sandpi never
   bypasses the SDK to reach another store.
 - Stripe unavailable: existing projected entitlement remains; Checkout and

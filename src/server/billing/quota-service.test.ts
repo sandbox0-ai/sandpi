@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { HttpError } from "@/server/http-error";
-import type { EnvironmentSandboxState } from "@/lib/types";
+import type { EnvironmentSandboxUsageProjection } from "@/server/runtime/types";
 
 import { MIB_MILLISECONDS_PER_GIB_HOUR } from "./plans";
 import {
@@ -28,7 +28,6 @@ class FakeQuotaStore implements BillingQuotaStore {
   subscriptionRecord?: SubscriptionRecord;
   usage: UsageTotals = {
     confirmedMiBMilliseconds: 0,
-    projectedMiBMilliseconds: 0,
   };
   count = 1;
   position = 1;
@@ -65,16 +64,26 @@ class FakeQuotaStore implements BillingQuotaStore {
     return this.usage;
   }
 
-  async runningEnvironmentCandidates() {
-    return this.candidates;
+  async runningEnvironmentCandidates(userId?: string) {
+    return userId
+      ? this.candidates.filter((candidate) => candidate.userId === userId)
+      : this.candidates;
   }
 }
 
 class FakeLifecycleReader {
-  readonly states = new Map<string, EnvironmentSandboxState>();
+  readonly projections = new Map<
+    string,
+    EnvironmentSandboxUsageProjection
+  >();
 
-  async getEnvironmentSandboxState(sandboxId: string) {
-    return this.states.get(sandboxId) ?? ("running" as const);
+  async getEnvironmentSandboxUsageProjection(sandboxId: string) {
+    return (
+      this.projections.get(sandboxId) ?? {
+        state: "running" as const,
+        activeSince: NOW,
+      }
+    );
   }
 }
 
@@ -83,7 +92,7 @@ function quotaService(
   billing: typeof disabledBilling | typeof stripeBilling,
   runtime = new FakeLifecycleReader(),
 ) {
-  return new BillingQuotaService(store, billing, runtime, () => NOW);
+  return new BillingQuotaService(store, billing, runtime, () => NOW, 0);
 }
 
 const disabledBilling = { mode: "disabled" } as const;
@@ -102,7 +111,6 @@ test("self-hosted deployments remain unlimited without Stripe", async () => {
   store.count = 12;
   store.usage = {
     confirmedMiBMilliseconds: 30,
-    projectedMiBMilliseconds: 50,
   };
   const service = quotaService(store, disabledBilling);
 
@@ -116,22 +124,36 @@ test("self-hosted deployments remain unlimited without Stripe", async () => {
     ["deployment"],
   );
   assert.equal(summary.plan.memoryConfigurable, true);
-  assert.equal(summary.usage.usedMiBMilliseconds, 50);
+  assert.equal(summary.usage.usedMiBMilliseconds, 30);
   assert.equal(summary.usage.limitMiBMilliseconds, null);
-  assert.equal(summary.usageSource, "local-projection");
+  assert.equal(summary.usageSource, "billing-disabled");
   assert.equal(summary.overEnvironmentLimit, false);
   await service.assertMemoryConfigurationAllowed(account.userId, 2048, 4096);
   await service.assertEnvironmentRuntimeAllowed("environment-one");
 });
 
-test("free entitlement uses the larger confirmed or projected usage value", async () => {
+test("free entitlement adds the live Sandbox0 allocation to closed usage", async () => {
   const store = new FakeQuotaStore();
   store.customerId = "cus_one";
   store.usage = {
     confirmedMiBMilliseconds: 2 * MIB_MILLISECONDS_PER_GIB_HOUR,
-    projectedMiBMilliseconds: 4 * MIB_MILLISECONDS_PER_GIB_HOUR,
   };
-  const service = quotaService(store, stripeBilling);
+  store.candidates = [
+    {
+      environmentId: "environment-one",
+      sandboxId: "sandbox-one",
+      userId: account.userId,
+      position: 1,
+      environmentCount: 1,
+      sandboxMemoryMiB: 2 * 1024,
+    },
+  ];
+  const runtime = new FakeLifecycleReader();
+  runtime.projections.set("sandbox-one", {
+    state: "running",
+    activeSince: new Date(NOW.getTime() - 60 * 60 * 1_000),
+  });
+  const service = quotaService(store, stripeBilling, runtime);
 
   const summary = await service.summary(account.userId);
 
@@ -147,6 +169,10 @@ test("free entitlement uses the larger confirmed or projected usage value", asyn
   );
   assert.equal(summary.plan.runtimeQuotaGiBHours, 4);
   assert.equal(summary.usage.usedGiBHours, 4);
+  assert.equal(
+    summary.usage.projectedMiBMilliseconds,
+    4 * MIB_MILLISECONDS_PER_GIB_HOUR,
+  );
   assert.equal(summary.usage.exhausted, true);
   assert.equal(
     summary.usage.periodStartsAt,
@@ -162,6 +188,67 @@ test("free entitlement uses the larger confirmed or projected usage value", asyn
     environmentLimit: 1,
     fixedSandboxMemoryMiB: 2 * 1024,
   });
+});
+
+test("live projection starts after the latest imported Sandbox0 window", async () => {
+  const store = new FakeQuotaStore();
+  store.usage = {
+    confirmedMiBMilliseconds: MIB_MILLISECONDS_PER_GIB_HOUR,
+  };
+  store.candidates = [
+    {
+      environmentId: "environment-one",
+      sandboxId: "sandbox-one",
+      userId: account.userId,
+      position: 1,
+      environmentCount: 1,
+      sandboxMemoryMiB: 2 * 1024,
+      lastUsageWindowEndsAt: new Date(NOW.getTime() - 30 * 60 * 1_000),
+    },
+  ];
+  const runtime = new FakeLifecycleReader();
+  runtime.projections.set("sandbox-one", {
+    state: "running",
+    activeSince: new Date(NOW.getTime() - 2 * 60 * 60 * 1_000),
+  });
+
+  const summary = await quotaService(
+    store,
+    stripeBilling,
+    runtime,
+  ).summary(account.userId);
+
+  assert.equal(
+    summary.usage.confirmedMiBMilliseconds,
+    MIB_MILLISECONDS_PER_GIB_HOUR,
+  );
+  assert.equal(summary.usage.usedGiBHours, 2);
+});
+
+test("active Sandbox projection without claimed_at fails quota admission closed", async () => {
+  const store = new FakeQuotaStore();
+  store.candidates = [
+    {
+      environmentId: "environment-one",
+      sandboxId: "sandbox-one",
+      userId: account.userId,
+      position: 1,
+      environmentCount: 1,
+      sandboxMemoryMiB: 2 * 1024,
+    },
+  ];
+  const runtime = new FakeLifecycleReader();
+  runtime.projections.set("sandbox-one", { state: "running" });
+
+  await assert.rejects(
+    quotaService(store, stripeBilling, runtime).assertEnvironmentRuntimeAllowed(
+      "environment-one",
+    ),
+    (error) =>
+      error instanceof HttpError &&
+      error.statusCode === 502 &&
+      error.code === "sandbox0_usage_projection_invalid",
+  );
 });
 
 test("active paid entitlement has a fixed weekly quota period", async () => {
@@ -278,14 +365,15 @@ test("free users cannot resize memory or run outside plan limits", async () => {
   );
 
   store.position = 1;
-  store.usage.projectedMiBMilliseconds =
+  store.usage.confirmedMiBMilliseconds =
     4 * MIB_MILLISECONDS_PER_GIB_HOUR;
   await assert.rejects(
     service.assertEnvironmentRuntimeAllowed("environment-one"),
     (error) =>
       error instanceof HttpError &&
       error.statusCode === 429 &&
-      error.code === "sandbox_runtime_quota_exhausted",
+      error.code === "sandbox_runtime_quota_exhausted" &&
+      (error.details as { usedGiBHours?: number }).usedGiBHours === 4,
   );
 });
 
@@ -310,7 +398,7 @@ test("background enforcement reconciles fixed memory and pauses only running vio
     },
   ];
   const runtime = new FakeLifecycleReader();
-  runtime.states.set("sandbox-two", "paused");
+  runtime.projections.set("sandbox-two", { state: "paused" });
   const service = quotaService(store, stripeBilling, runtime);
 
   assert.deepEqual(await service.environmentPlanEnforcement(), {
@@ -318,10 +406,74 @@ test("background enforcement reconciles fixed memory and pauses only running vio
     reconcileMemoryEnvironmentIds: ["environment-one"],
   });
 
-  runtime.states.set("sandbox-two", "running");
+  runtime.projections.set("sandbox-two", {
+    state: "running",
+    activeSince: NOW,
+  });
 
   assert.deepEqual(await service.environmentPlanEnforcement(), {
     pauseEnvironmentIds: ["environment-two"],
     reconcileMemoryEnvironmentIds: ["environment-one"],
   });
+});
+
+test("background enforcement pauses live runtime as soon as open usage reaches quota", async () => {
+  const store = new FakeQuotaStore();
+  store.usage.confirmedMiBMilliseconds =
+    3 * MIB_MILLISECONDS_PER_GIB_HOUR;
+  store.candidates = [
+    {
+      environmentId: "environment-one",
+      sandboxId: "sandbox-one",
+      userId: account.userId,
+      position: 1,
+      environmentCount: 1,
+      sandboxMemoryMiB: 2 * 1024,
+    },
+  ];
+  const runtime = new FakeLifecycleReader();
+  runtime.projections.set("sandbox-one", {
+    state: "running",
+    activeSince: new Date(NOW.getTime() - 30 * 60 * 1_000),
+  });
+
+  assert.deepEqual(
+    await quotaService(
+      store,
+      stripeBilling,
+      runtime,
+    ).environmentPlanEnforcement(),
+    {
+      pauseEnvironmentIds: ["environment-one"],
+      reconcileMemoryEnvironmentIds: [],
+    },
+  );
+});
+
+test("background enforcement pauses active runtime when its allocation start is invalid", async () => {
+  const store = new FakeQuotaStore();
+  store.candidates = [
+    {
+      environmentId: "environment-one",
+      sandboxId: "sandbox-one",
+      userId: account.userId,
+      position: 1,
+      environmentCount: 1,
+      sandboxMemoryMiB: 2 * 1024,
+    },
+  ];
+  const runtime = new FakeLifecycleReader();
+  runtime.projections.set("sandbox-one", { state: "running" });
+
+  assert.deepEqual(
+    await quotaService(
+      store,
+      stripeBilling,
+      runtime,
+    ).environmentPlanEnforcement(),
+    {
+      pauseEnvironmentIds: ["environment-one"],
+      reconcileMemoryEnvironmentIds: [],
+    },
+  );
 });

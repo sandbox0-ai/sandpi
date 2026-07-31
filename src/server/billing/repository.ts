@@ -41,7 +41,6 @@ export interface UsageWindowImport {
 
 export interface UsageTotals {
   confirmedMiBMilliseconds: number;
-  projectedMiBMilliseconds: number;
 }
 
 export interface EnvironmentEntitlementPosition {
@@ -55,6 +54,8 @@ export interface RunningEnvironmentCandidate
   environmentId: string;
   sandboxId: string;
   sandboxMemoryMiB: number;
+  /** Latest imported closed-window boundary for this Sandbox. */
+  lastUsageWindowEndsAt?: Date;
 }
 
 export type WebhookEventClaim =
@@ -245,54 +246,33 @@ export class BillingRepository {
     startsAt: Date,
     endsAt: Date,
   ): Promise<UsageTotals> {
-    const [confirmed, projected] = await Promise.all([
-      this.pool.query<{ value: string }>(
-        `SELECT COALESCE(
-           FLOOR(SUM(
-             CASE
-               WHEN window_ends_at = window_starts_at THEN value::NUMERIC
-               ELSE value::NUMERIC
-                 * EXTRACT(EPOCH FROM (
-                     LEAST(window_ends_at, $3)
-                     - GREATEST(window_starts_at, $2)
-                   ))
-                 / NULLIF(
-                     EXTRACT(EPOCH FROM (window_ends_at - window_starts_at)),
-                     0
-                   )
-             END
-           )),
-           0
-         )::TEXT AS value
-         FROM sandbox_usage_windows
-         WHERE user_id = $1
-           AND unit = 'mib_milliseconds'
-           AND window_starts_at < $3
-           AND window_ends_at > $2`,
-        [userId, startsAt, endsAt],
-      ),
-      this.pool.query<{ value: string }>(
-        `SELECT COALESCE(
-           FLOOR(SUM(
-             memory_mib::NUMERIC
-             * EXTRACT(EPOCH FROM (
-                 LEAST(COALESCE(ended_at, NOW()), $3)
-                 - GREATEST(started_at, $2)
-               ))
-             * 1000
-           )),
-           0
-         )::TEXT AS value
-         FROM sandbox_runtime_segments
-         WHERE user_id = $1
-           AND started_at < $3
-           AND COALESCE(ended_at, NOW()) > $2`,
-        [userId, startsAt, endsAt],
-      ),
-    ]);
+    const confirmed = await this.pool.query<{ value: string }>(
+      `SELECT COALESCE(
+         FLOOR(SUM(
+           CASE
+             WHEN window_ends_at = window_starts_at THEN value::NUMERIC
+             ELSE value::NUMERIC
+               * EXTRACT(EPOCH FROM (
+                   LEAST(window_ends_at, $3)
+                   - GREATEST(window_starts_at, $2)
+                 ))
+               / NULLIF(
+                   EXTRACT(EPOCH FROM (window_ends_at - window_starts_at)),
+                   0
+                 )
+           END
+         )),
+         0
+       )::TEXT AS value
+       FROM sandbox_usage_windows
+       WHERE user_id = $1
+         AND unit = 'mib_milliseconds'
+         AND window_starts_at < $3
+         AND window_ends_at > $2`,
+      [userId, startsAt, endsAt],
+    );
     return {
       confirmedMiBMilliseconds: Number(confirmed.rows[0]?.value ?? 0),
-      projectedMiBMilliseconds: Number(projected.rows[0]?.value ?? 0),
     };
   }
 
@@ -368,7 +348,9 @@ export class BillingRepository {
     }
   }
 
-  async runningEnvironmentCandidates(): Promise<RunningEnvironmentCandidate[]> {
+  async runningEnvironmentCandidates(
+    userId?: string,
+  ): Promise<RunningEnvironmentCandidate[]> {
     const result = await this.pool.query<{
       environment_id: string;
       sandbox_id: string;
@@ -376,6 +358,7 @@ export class BillingRepository {
       position: string;
       environment_count: string;
       sandbox_memory_mib: number;
+      last_usage_window_ends_at: Date | null;
     }>(
       `WITH ranked AS (
          SELECT
@@ -391,6 +374,7 @@ export class BillingRepository {
            sandbox_memory_mib
          FROM environments
          WHERE status <> 'archived'
+           AND ($1::TEXT IS NULL OR created_by_user_id = $1)
        )
        SELECT
          ranked.id AS environment_id,
@@ -398,13 +382,21 @@ export class BillingRepository {
          ranked.user_id,
          ranked.position::TEXT,
          ranked.environment_count::TEXT,
-         ranked.sandbox_memory_mib
+         ranked.sandbox_memory_mib,
+         usage.last_usage_window_ends_at
        FROM ranked
        JOIN environment_runtime runtime
          ON runtime.environment_id = ranked.id
+       LEFT JOIN LATERAL (
+         SELECT MAX(window_ends_at) AS last_usage_window_ends_at
+         FROM sandbox_usage_windows
+         WHERE sandbox_id = runtime.sandbox_id
+           AND user_id = ranked.user_id
+       ) usage ON TRUE
        WHERE runtime.sandbox_id IS NOT NULL
          AND runtime.desired_state <> 'terminated'
        ORDER BY ranked.user_id, ranked.position`,
+      [userId ?? null],
     );
     return result.rows.map((row) => ({
       environmentId: row.environment_id,
@@ -413,6 +405,7 @@ export class BillingRepository {
       position: Number(row.position),
       environmentCount: Number(row.environment_count),
       sandboxMemoryMiB: row.sandbox_memory_mib,
+      lastUsageWindowEndsAt: row.last_usage_window_ends_at ?? undefined,
     }));
   }
 

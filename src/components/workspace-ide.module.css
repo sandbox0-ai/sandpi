@@ -14,10 +14,18 @@
   grid-template-rows: minmax(0, 1fr) 25px;
 }
 
+.embedded.runtimeBlocked {
+  grid-template-rows: auto minmax(0, 1fr) 25px;
+}
+
 .standalone {
   width: 100vw;
   height: 100dvh;
   grid-template-rows: 42px minmax(0, 1fr) 25px;
+}
+
+.standalone.runtimeBlocked {
+  grid-template-rows: 42px auto minmax(0, 1fr) 25px;
 }
 
 .topbar {
@@ -82,6 +90,76 @@
 
 .liveBadge.polling {
   color: var(--amber);
+}
+
+.runtimePlanBlock {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+  padding: 9px 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--amber) 28%, var(--line));
+  background: color-mix(in srgb, var(--amber-soft) 48%, var(--panel));
+  color: var(--ink-soft);
+  font-size: 10px;
+}
+
+.runtimePlanBlock > svg {
+  margin-top: 1px;
+  color: var(--amber);
+}
+
+.runtimePlanBlockCopy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.runtimePlanBlockCopy strong {
+  color: var(--ink);
+  font-size: 11px;
+}
+
+.runtimePlanBlockCopy p {
+  margin: 0;
+}
+
+.runtimePlanBlockMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 10px;
+  color: var(--ink-faint);
+  font-size: 9px;
+}
+
+.runtimePlanBlockMeta b {
+  color: var(--ink-soft);
+  font-weight: 650;
+}
+
+.runtimePlanBlockActions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.runtimePlanBlockActions a {
+  padding: 5px 7px;
+  border: 1px solid color-mix(in srgb, var(--amber) 28%, var(--line));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--panel-strong) 80%, transparent);
+  color: var(--ink-soft);
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.runtimePlanBlockActions a:hover,
+.runtimePlanBlockActions a:focus-visible {
+  border-color: color-mix(in srgb, var(--amber) 45%, var(--line));
+  color: var(--ink);
 }
 
 .workbench {
@@ -737,6 +815,11 @@ button.directoryStatus:hover {
   color: var(--ink);
 }
 
+.conflictBanner button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .conflictBanner .overwriteButton {
   border-color: color-mix(in srgb, var(--red) 35%, var(--line));
   color: var(--red);
@@ -898,6 +981,15 @@ button.directoryStatus:hover {
 
   .liveBadge {
     display: none;
+  }
+
+  .runtimePlanBlock {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .runtimePlanBlockActions {
+    grid-column: 2;
+    justify-content: flex-start;
   }
 
   .statusbar > span:nth-child(2) {
