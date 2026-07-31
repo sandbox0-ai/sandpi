@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import Script from "next/script";
 
+import { AlertDialogProvider } from "@/components/alert-dialog";
 import {
   DEFAULT_CLIENT_PREFERENCES,
   getClientPreferencesBootstrapScript,
@@ -75,7 +76,9 @@ gtag("config", ${JSON.stringify(googleAnalyticsMeasurementId)});`}
           </>
         ) : null}
       </head>
-      <body>{children}</body>
+      <body>
+        <AlertDialogProvider>{children}</AlertDialogProvider>
+      </body>
     </html>
   );
 }

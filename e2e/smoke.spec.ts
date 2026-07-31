@@ -6133,12 +6133,19 @@ test("resizes the Inspector proportionally, reflows the composer, and restores t
 
 test("renders the dedicated live Web IDE with Git state and changed lines", async ({
   page,
-  request,
 }) => {
-  const workspace = await activeWorkspace(request);
-  test.skip(!workspace, "An active Session is required for this check.");
-  if (!workspace) return;
-  const { environment } = workspace;
+  test.slow();
+  const bootstrap = getMockBootstrap();
+  const environment = bootstrap.environments[0]!;
+  bootstrap.selectedEnvironmentId = environment.id;
+  bootstrap.selectedSessionId = "";
+  useEnglishUi(bootstrap);
+  await page.route(
+    (url) => url.pathname === "/api/v1/bootstrap",
+    async (route) => {
+      await route.fulfill({ json: { data: bootstrap } });
+    },
+  );
   const now = Date.now() / 1_000;
   const snapshot: WorkspaceIdeSnapshot = {
     refreshedAt: now,
@@ -6567,11 +6574,35 @@ test("renders the dedicated live Web IDE with Git state and changed lines", asyn
 
   await uiFolder.click({ button: "right" });
   const uiFolderMenu = page.getByRole("menu", { name: "Actions for ui" });
-  page.once("dialog", async (dialog) => {
-    expect(dialog.message()).toContain("and everything inside it");
-    await dialog.accept();
-  });
   await uiFolderMenu.getByRole("menuitem", { name: "Delete" }).click();
+  const deleteFolderAlert = page.getByRole("alertdialog", {
+    name: "Delete “ui”?",
+  });
+  await expect(deleteFolderAlert).toBeVisible();
+  await expect(deleteFolderAlert).toContainText(
+    "Everything inside this folder will also be deleted.",
+  );
+  await expect(
+    deleteFolderAlert.getByRole("button", { name: "Cancel" }),
+  ).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(
+    deleteFolderAlert.getByRole("button", { name: "Delete folder" }),
+  ).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(
+    deleteFolderAlert.getByRole("button", { name: "Cancel" }),
+  ).toBeFocused();
+  await deleteFolderAlert.getByRole("button", { name: "Cancel" }).click();
+  await expect(deleteFolderAlert).toBeHidden();
+  await expect(uiFolder).toBeVisible();
+  expect(deleteRequests).not.toContain("/workspace/src/ui");
+
+  await uiFolder.click({ button: "right" });
+  await uiFolderMenu.getByRole("menuitem", { name: "Delete" }).click();
+  await deleteFolderAlert
+    .getByRole("button", { name: "Delete folder" })
+    .click();
   await expect(uiFolder).toHaveCount(0);
   expect(deleteRequests.at(-1)).toBe("/workspace/src/ui");
 
@@ -6638,11 +6669,16 @@ test("renders the dedicated live Web IDE with Git state and changed lines", asyn
   const renamedFileMenu = page.getByRole("menu", {
     name: "Actions for renamed.md",
   });
-  page.once("dialog", async (dialog) => {
-    expect(dialog.message()).toContain("1 open file has unsaved changes");
-    await dialog.accept();
-  });
   await renamedFileMenu.getByRole("menuitem", { name: "Delete" }).click();
+  const deleteFileAlert = page.getByRole("alertdialog", {
+    name: "Delete “renamed.md”?",
+  });
+  await expect(deleteFileAlert).toContainText(
+    "1 open file has unsaved changes",
+  );
+  await deleteFileAlert
+    .getByRole("button", { name: "Delete file" })
+    .click();
   await expect(renamedFile).toHaveCount(0);
   await expect(page.getByRole("tab", { name: /renamed\.md/ })).toHaveCount(0);
   expect(deleteRequests.at(-1)).toBe("/workspace/src/renamed.md");
@@ -6717,16 +6753,15 @@ test("renders the dedicated live Web IDE with Git state and changed lines", asyn
   await expect(previewOnly).toHaveAttribute("aria-pressed", "false");
   await previewOnly.click();
   await expect(page.getByText("Read-only preview", { exact: true })).toBeVisible();
-  await expect(
-    editor.locator("textarea.inputarea"),
-  ).toHaveAttribute("readonly", "");
   const editFile = page.getByRole("button", { name: "Edit file" });
   await expect(editFile).toHaveAttribute("aria-pressed", "true");
   await editFile.click();
-  await expect(editor.locator("textarea.inputarea")).not.toHaveAttribute(
-    "readonly",
-    "",
-  );
+  await expect(
+    page.getByText("Read-only preview", { exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Preview only" }),
+  ).toHaveAttribute("aria-pressed", "false");
   await editor.click();
   await page.keyboard.press("Control+A");
   await page.keyboard.insertText("export const editedInBrowser = true;\n");
@@ -6734,6 +6769,34 @@ test("renders the dedicated live Web IDE with Git state and changed lines", asyn
   await expect(save).toBeEnabled();
   await save.click();
   await expect.poll(() => savedContent).toContain("editedInBrowser");
+  await expect(save).toBeDisabled();
+
+  await editor.click();
+  await page.keyboard.press("Control+End");
+  await page.keyboard.insertText("// discard on reload\n");
+  const refreshWorkspace = page.getByRole("button", {
+    name: "Refresh Workspace",
+  });
+  await refreshWorkspace.click();
+  const reloadAlert = page.getByRole("alertdialog", {
+    name: "Reload Workspace?",
+  });
+  await expect(reloadAlert).toContainText(
+    "Unsaved changes in open files will be discarded.",
+  );
+  await expect(
+    reloadAlert.getByRole("button", { name: "Keep editing" }),
+  ).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(reloadAlert).toBeHidden();
+  await expect(refreshWorkspace).toBeFocused();
+  await expect(save).toBeEnabled();
+
+  await refreshWorkspace.click();
+  await reloadAlert
+    .getByRole("button", { name: "Discard & reload" })
+    .click();
+  await expect(reloadAlert).toBeHidden();
   await expect(save).toBeDisabled();
 
   await editor.click();
@@ -6760,9 +6823,37 @@ test("renders the dedicated live Web IDE with Git state and changed lines", asyn
   ).toBeVisible();
   await expect(save).toBeDisabled();
 
+  await editor.click();
+  await page.keyboard.press("Control+End");
+  await page.keyboard.insertText("// discard on close\n");
+  const demoTab = page.getByRole("tab", { name: /demo\.ts/ });
+  const closeDemo = demoTab.getByRole("button", { name: "Close demo.ts" });
+  await closeDemo.focus();
+  await closeDemo.click();
+  const closeAlert = page.getByRole("alertdialog", {
+    name: "Discard changes?",
+  });
+  await expect(closeAlert).toContainText(
+    "Closing this file will discard its unsaved changes.",
+  );
+  await closeAlert.getByRole("button", { name: "Keep editing" }).click();
+  await expect(closeAlert).toBeHidden();
+  await expect(closeDemo).toBeFocused();
+  await expect(demoTab).toHaveAttribute("aria-selected", "true");
+
+  await closeDemo.click();
+  await closeAlert
+    .getByRole("button", { name: "Discard & close" })
+    .click();
+  await expect(demoTab).toHaveCount(0);
+  await demoFile.click();
+  await expect(
+    page.getByText("export const externalChange = true;"),
+  ).toBeVisible();
+
   snapshot.git = { repositories: [] };
   remoteFile = { ...remoteFile, git: undefined, lineChanges: [] };
-  await page.getByRole("button", { name: "Refresh Workspace" }).click();
+  await refreshWorkspace.click();
   await expect(
     page.getByText("No Git repositories in this Workspace", { exact: true }),
   ).toBeVisible();
