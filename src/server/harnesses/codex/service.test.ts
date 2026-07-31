@@ -3455,6 +3455,172 @@ test("delivers the conversation snapshot before persisted rollout Activity", asy
   }
 });
 
+test("keeps a newly accepted Turn active across a stale interrupted snapshot", async () => {
+  const context = fixture({
+    sessions: [
+      {
+        id: "session-start-race",
+        nativeSessionId: "thread-start-race",
+        status: "running",
+        activeNativeTurnId: "turn-start-race",
+        activeTurnAttemptId: "attempt-environment-test",
+        activeTurnRuntimeGeneration: 1,
+        pendingTurnPhase: "accepted",
+        pendingTurnNativeTurnId: "turn-start-race",
+        pendingTurnStartedAt: new Date(),
+        pendingTurnAttemptId: "attempt-environment-test",
+        pendingTurnRuntimeGeneration: 1,
+      },
+    ],
+    onRequest(message) {
+      if (message.method !== "thread/read") return undefined;
+      return {
+        id: message.id,
+        result: {
+          thread: {
+            id: "thread-start-race",
+            status: { type: "idle" },
+            turns: [interruptedTurn("turn-start-race")],
+          },
+        },
+      };
+    },
+  });
+
+  try {
+    const read = await context.service.readNativeSnapshotWithCursor(
+      "user",
+      "session-start-race",
+    );
+
+    assert.deepEqual(read.snapshot.thread.status, {
+      type: "active",
+      activeFlags: [],
+    });
+    assert.deepEqual(read.snapshot.thread.turns[0], {
+      ...interruptedTurn("turn-start-race"),
+      status: "inProgress",
+      completedAt: null,
+      durationMs: null,
+    });
+    assert.equal(read.snapshot.sessionStatus, "running");
+    assert.deepEqual(read.snapshot.forkableTurnIds, []);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.equal(context.exceptionalCandidateQueryCount(), 0);
+    assert.equal(
+      context.writes.filter(({ message }) => message.method === "thread/read")
+        .length,
+      1,
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("preserves an explicit interrupt during the accepted Turn grace window", async () => {
+  const context = fixture({
+    sessions: [
+      {
+        id: "session-explicit-interrupt",
+        nativeSessionId: "thread-explicit-interrupt",
+        status: "running",
+        activeNativeTurnId: "turn-explicit-interrupt",
+        activeTurnAttemptId: "attempt-environment-test",
+        activeTurnRuntimeGeneration: 1,
+        pendingTurnPhase: "accepted",
+        pendingTurnNativeTurnId: "turn-explicit-interrupt",
+        pendingTurnStartedAt: new Date(),
+        pendingTurnAttemptId: "attempt-environment-test",
+        pendingTurnRuntimeGeneration: 1,
+        interruptRequestedNativeTurnId: "turn-explicit-interrupt",
+      },
+    ],
+    onRequest(message) {
+      if (message.method !== "thread/read") return undefined;
+      return {
+        id: message.id,
+        result: {
+          thread: {
+            id: "thread-explicit-interrupt",
+            status: { type: "idle" },
+            turns: [interruptedTurn("turn-explicit-interrupt")],
+          },
+        },
+      };
+    },
+  });
+
+  try {
+    const read = await context.service.readNativeSnapshotWithCursor(
+      "user",
+      "session-explicit-interrupt",
+    );
+
+    assert.deepEqual(read.snapshot.thread.status, { type: "idle" });
+    assert.equal(read.snapshot.thread.turns[0]?.status, "interrupted");
+    assert.deepEqual(read.snapshot.forkableTurnIds, [
+      "turn-explicit-interrupt",
+    ]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("shares an in-flight native snapshot read across SSE subscribers", async () => {
+  let releaseWrite: (() => void) | undefined;
+  const blockedWrite = new Promise<void>((resolve) => {
+    releaseWrite = resolve;
+  });
+  const context = fixture({ writeDelays: { "thread/read": blockedWrite } });
+  const firstController = new AbortController();
+
+  try {
+    const first = context.service.readNativeSnapshotWithCursor(
+      "user",
+      "session-one",
+      firstController.signal,
+    );
+    const second = context.service.readNativeSnapshotWithCursor(
+      "user",
+      "session-one",
+    );
+    await eventually(
+      () =>
+        context.writes.some(({ message }) => message.method === "thread/read"),
+      "shared native snapshot read was not submitted",
+    );
+    assert.equal(
+      context.writes.filter(({ message }) => message.method === "thread/read")
+        .length,
+      1,
+    );
+
+    const firstRejected = assert.rejects(
+      first,
+      (error: unknown) => error instanceof Error && error.name === "AbortError",
+    );
+    firstController.abort();
+    await firstRejected;
+    assert.equal(
+      context.writes.filter(({ message }) => message.method === "thread/read")
+        .length,
+      1,
+    );
+
+    releaseWrite?.();
+    const read = await second;
+    assert.equal(read.snapshot.thread.id, "thread-one");
+    assert.equal(
+      context.writes.filter(({ message }) => message.method === "thread/read")
+        .length,
+      1,
+    );
+  } finally {
+    releaseWrite?.();
+    await context.close();
+  }
+});
+
 test("keeps the conversation snapshot when persisted rollout Activity cannot be read", async () => {
   const context = fixture({
     rollouts: { "thread-one": new Error("volume read failed") },
