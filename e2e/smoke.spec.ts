@@ -174,6 +174,25 @@ async function pageBlocksUnload(page: Page) {
   });
 }
 
+async function setTestPageVisibility(
+  page: Page,
+  visibilityState: DocumentVisibilityState,
+) {
+  await page.evaluate((nextVisibilityState) => {
+    Object.defineProperties(document, {
+      hidden: {
+        configurable: true,
+        get: () => nextVisibilityState === "hidden",
+      },
+      visibilityState: {
+        configurable: true,
+        get: () => nextVisibilityState,
+      },
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+  }, visibilityState);
+}
+
 async function pullNativeSurface(page: Page, selector: string) {
   await page.locator(selector).evaluate((target) => {
     const touch = (clientY: number) =>
@@ -5664,6 +5683,124 @@ test("reconciles agent-created files while the native volume watch is unavailabl
     timeout: 13_000,
   });
   expect(rootReads).toBeGreaterThan(1);
+});
+
+test("suspends Workspace synchronization while the page is hidden", async ({
+  page,
+}) => {
+  const bootstrap = getMockBootstrap();
+  const environment = bootstrap.environments[0]!;
+  bootstrap.selectedEnvironmentId = environment.id;
+  bootstrap.selectedSessionId = "";
+  useEnglishUi(bootstrap);
+  await page.route(
+    (url) => url.pathname === "/api/v1/bootstrap",
+    async (route) => {
+      await route.fulfill({ json: { data: bootstrap } });
+    },
+  );
+
+  let directoryReads = 0;
+  let gitReads = 0;
+  let socketConnections = 0;
+  let socketCloses = 0;
+  await page.route("**/api/v1/environments/**/files?*", async (route) => {
+    directoryReads += 1;
+    const directoryPath = new URL(route.request().url()).searchParams.get(
+      "path",
+    );
+    await route.fulfill({
+      json: {
+        data: {
+          path: directoryPath ?? "/workspace",
+          entries: [],
+          refreshedAt: Date.now() / 1_000,
+        },
+      },
+    });
+  });
+  await page.route("**/api/v1/environments/**/ide/git", async (route) => {
+    gitReads += 1;
+    await route.fulfill({ json: { data: { repositories: [] } } });
+  });
+  await page.routeWebSocket(
+    (url) =>
+      url.pathname ===
+      `/api/v1/environments/${encodeURIComponent(environment.id)}/ide/events`,
+    (socket) => {
+      socketConnections += 1;
+      socket.onClose(() => {
+        socketCloses += 1;
+      });
+      socket.send(
+        JSON.stringify({ type: "ready", at: Date.now() / 1_000 }),
+      );
+    },
+  );
+  await page.addInitScript(() => {
+    Object.defineProperties(document, {
+      hidden: { configurable: true, get: () => true },
+      visibilityState: { configurable: true, get: () => "hidden" },
+    });
+  });
+
+  await page.goto(
+    `/ide/?environment=${encodeURIComponent(environment.id)}&new=1`,
+  );
+  await expect(
+    page.getByRole("region", { name: "Sandpi Web IDE" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Disconnected", { exact: true }).first(),
+  ).toBeVisible();
+  await page.waitForTimeout(1_000);
+  expect({ directoryReads, gitReads, socketConnections }).toEqual({
+    directoryReads: 0,
+    gitReads: 0,
+    socketConnections: 0,
+  });
+
+  await setTestPageVisibility(page, "visible");
+  await expect(page.getByText("Live", { exact: true }).first()).toBeVisible();
+  await expect.poll(() => directoryReads).toBeGreaterThan(0);
+  await expect.poll(() => gitReads).toBeGreaterThan(0);
+  await page.waitForTimeout(250);
+
+  const foregroundCounts = {
+    directoryReads,
+    gitReads,
+    socketConnections,
+    socketCloses,
+  };
+  await setTestPageVisibility(page, "hidden");
+  await expect(
+    page.getByText("Disconnected", { exact: true }).first(),
+  ).toBeVisible();
+  await expect.poll(() => socketCloses).toBeGreaterThan(
+    foregroundCounts.socketCloses,
+  );
+  await page.waitForTimeout(1_000);
+  expect(directoryReads).toBe(foregroundCounts.directoryReads);
+  expect(gitReads).toBe(foregroundCounts.gitReads);
+  expect(socketConnections).toBe(foregroundCounts.socketConnections);
+
+  await setTestPageVisibility(page, "visible");
+  await expect.poll(() => socketConnections).toBeGreaterThan(
+    foregroundCounts.socketConnections,
+  );
+  await expect.poll(() => directoryReads).toBeGreaterThan(
+    foregroundCounts.directoryReads,
+  );
+  await expect.poll(() => gitReads).toBeGreaterThan(
+    foregroundCounts.gitReads,
+  );
+  await expect(page.getByText("Live", { exact: true }).first()).toBeVisible();
+
+  const resumedCounts = { directoryReads, gitReads, socketConnections };
+  await page.waitForTimeout(1_000);
+  expect({ directoryReads, gitReads, socketConnections }).toEqual(
+    resumedCounts,
+  );
 });
 
 test("opens the Environment terminal from New Session and replays only the last three commands", async ({

@@ -236,6 +236,15 @@ changes its long-running conversation status after two seconds to explain that
 an idle checkpoint may be restoring and that Files and Terminal remain
 independently available.
 
+The Web IDE runs its automatic Workspace synchronization only while the page
+is visible. Moving the page to the background closes the native file-watch
+WebSocket and cancels polling, reconnect, and event-refresh timers; URL-driven
+file navigation also remains deferred. Returning to the foreground opens a new
+watch and performs one reconciliation of the root and loaded directories, Git
+state, and open documents so changes missed while hidden are not lost. A file
+operation already initiated by an explicit foreground action may finish after
+the visibility transition.
+
 ## Shared Environment browser
 
 The Browser Inspector embeds the official Playwright Dashboard. Playwright

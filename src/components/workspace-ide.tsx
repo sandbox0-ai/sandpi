@@ -1392,6 +1392,7 @@ export function WorkspaceIde({
   const [connection, setConnection] = useState<
     "connecting" | "live" | "reconnecting" | "polling" | "offline"
   >("connecting");
+  const [workspaceForeground, setWorkspaceForeground] = useState(false);
   const [fileBrowserSidebarWidth, setFileBrowserSidebarWidth] = useState(
     storedFileBrowserSidebarWidth,
   );
@@ -1432,6 +1433,7 @@ export function WorkspaceIde({
   const reconnectTimerRef = useRef<number | null>(null);
   const workspaceSocketRef = useRef<WebSocket | undefined>(undefined);
   const workspaceSocketReadyRef = useRef(false);
+  const foregroundSyncKeyRef = useRef("");
   const environmentGenerationRef = useRef(0);
   const environmentIdentityRef = useRef(cacheKey);
   const selectedPathEnvironmentRef = useRef(environment.id);
@@ -1469,6 +1471,23 @@ export function WorkspaceIde({
     environmentGenerationRef.current += 1;
     selectedPathEnvironmentRef.current = "";
   }
+
+  useEffect(() => {
+    const updateWorkspaceForeground = () => {
+      setWorkspaceForeground(window.document.visibilityState === "visible");
+    };
+    updateWorkspaceForeground();
+    window.document.addEventListener(
+      "visibilitychange",
+      updateWorkspaceForeground,
+    );
+    return () => {
+      window.document.removeEventListener(
+        "visibilitychange",
+        updateWorkspaceForeground,
+      );
+    };
+  }, []);
 
   useEffect(() => {
     snapshotRef.current = snapshot;
@@ -1875,14 +1894,29 @@ export function WorkspaceIde({
   ]);
 
   useEffect(() => {
-    if (prioritizeExplicitFileContent) return;
-    void loadDirectory(WORKSPACE_ROOT, true);
-    void loadGitState();
+    if (!workspaceForeground) {
+      foregroundSyncKeyRef.current = "";
+      return;
+    }
+    if (
+      prioritizeExplicitFileContent ||
+      foregroundSyncKeyRef.current === cacheKey
+    ) {
+      return;
+    }
+    foregroundSyncKeyRef.current = cacheKey;
+    void Promise.all([
+      refreshSnapshot(true, true),
+      ...openPathsRef.current.map((filePath) =>
+        loadDocument(filePath, "external"),
+      ),
+    ]);
   }, [
     cacheKey,
-    loadDirectory,
-    loadGitState,
+    loadDocument,
     prioritizeExplicitFileContent,
+    refreshSnapshot,
+    workspaceForeground,
   ]);
 
   const visibleGit = useMemo(
@@ -2449,7 +2483,13 @@ export function WorkspaceIde({
   );
 
   useEffect(() => {
-    if (prioritizeExplicitFileContent || !revealRequest) return;
+    if (
+      !workspaceForeground ||
+      prioritizeExplicitFileContent ||
+      !revealRequest
+    ) {
+      return;
+    }
     void Promise.all(
       workspaceFileParentDirectories(revealRequest.path).map((directoryPath) =>
         loadDirectory(directoryPath),
@@ -2459,10 +2499,11 @@ export function WorkspaceIde({
     loadDirectory,
     prioritizeExplicitFileContent,
     revealRequest,
+    workspaceForeground,
   ]);
 
   useEffect(() => {
-    if (!navigationRequest) return;
+    if (!workspaceForeground || !navigationRequest) return;
     if (navigationRequest.environmentId !== environment.id) return;
     const requestKey = `${navigationRequest.environmentId}:${navigationRequest.requestId}:${navigationRequest.path}`;
     if (handledNavigationRequestRef.current === requestKey) return;
@@ -2486,10 +2527,16 @@ export function WorkspaceIde({
     navigationRequest,
     onNavigationHandled,
     revealWorkspaceFile,
+    workspaceForeground,
   ]);
 
   useEffect(() => {
-    if (navigationRequest?.environmentId === environment.id) return;
+    if (
+      !workspaceForeground ||
+      navigationRequest?.environmentId === environment.id
+    ) {
+      return;
+    }
     const environmentGeneration = environmentGenerationRef.current;
     if (initialNavigationGenerationRef.current === environmentGeneration) {
       return;
@@ -2514,6 +2561,7 @@ export function WorkspaceIde({
     environment.id,
     navigationRequest,
     revealWorkspaceFile,
+    workspaceForeground,
   ]);
 
   useEffect(() => {
@@ -2535,6 +2583,10 @@ export function WorkspaceIde({
   }, [environment.id, selectedPath]);
 
   useEffect(() => {
+    if (!workspaceForeground) {
+      setConnection("offline");
+      return;
+    }
     if (prioritizeExplicitFileContent) {
       setConnection("connecting");
       return;
@@ -2721,7 +2773,9 @@ export function WorkspaceIde({
       }
       if (reconnectTimerRef.current !== null) {
         window.clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
       }
+      pendingPathsRef.current.clear();
     };
   }, [
     environment.id,
@@ -2730,11 +2784,13 @@ export function WorkspaceIde({
     loadGitState,
     prioritizeExplicitFileContent,
     refreshSnapshot,
+    workspaceForeground,
   ]);
 
   useEffect(() => {
     const socket = workspaceSocketRef.current;
     if (
+      !workspaceForeground ||
       !workspaceSocketReadyRef.current ||
       socket?.readyState !== WebSocket.OPEN
     ) {
@@ -2745,7 +2801,7 @@ export function WorkspaceIde({
       paths: watchedDirectoryPathsRef.current,
     };
     socket.send(JSON.stringify(subscription));
-  }, [watchedDirectorySignature]);
+  }, [watchedDirectorySignature, workspaceForeground]);
 
   useEffect(() => {
     const warnForUnsavedFiles = (event: BeforeUnloadEvent) => {
