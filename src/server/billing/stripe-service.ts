@@ -387,7 +387,7 @@ export class StripeBillingService {
       stripePriceId,
       planId,
       status,
-      cancelAtPeriodEnd: subscription.cancel_at_period_end,
+      cancelAtPeriodEnd: cancellationIsScheduled(subscription, now),
       currentPeriodStartsAt,
       currentPeriodEndsAt,
       quotaAnchorAt,
@@ -434,6 +434,19 @@ function subscriptionCanBeUpdated(status: SandpiSubscriptionStatus) {
     status === "past_due" ||
     status === "unpaid" ||
     status === "paused"
+  );
+}
+
+function cancellationIsScheduled(
+  subscription: Stripe.Subscription,
+  now: Date,
+) {
+  return (
+    subscriptionCanBeUpdated(subscription.status) &&
+    (subscription.cancel_at_period_end ||
+      (subscription.cancel_at != null &&
+        fromUnixSeconds(subscription.cancel_at).getTime() >
+          now.getTime()))
   );
 }
 
