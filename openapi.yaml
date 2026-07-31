@@ -880,6 +880,8 @@ components:
           type: boolean
         completed:
           type: boolean
+          description: User-managed completion state. A later native Turn automatically
+            resets it to false.
         archived:
           type: boolean
         harness:

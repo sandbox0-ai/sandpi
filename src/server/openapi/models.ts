@@ -287,7 +287,11 @@ export const codingSessionSchema = component(
     status: z.enum(["running", "waiting", "paused", "completed", "failed"]),
     unread: z.boolean(),
     pinned: z.boolean(),
-    completed: z.boolean(),
+    completed: z
+      .boolean()
+      .describe(
+        "User-managed completion state. A later native Turn automatically resets it to false.",
+      ),
     archived: z.boolean(),
     harness: z.enum(["codex", "claude-code", "opencode", "pi"]),
     harnessLabel: z.string(),
