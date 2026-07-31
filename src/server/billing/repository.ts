@@ -54,6 +54,7 @@ export interface RunningEnvironmentCandidate
   extends EnvironmentEntitlementPosition {
   environmentId: string;
   sandboxId: string;
+  sandboxMemoryMiB: number;
 }
 
 export type WebhookEventClaim =
@@ -374,6 +375,7 @@ export class BillingRepository {
       user_id: string;
       position: string;
       environment_count: string;
+      sandbox_memory_mib: number;
     }>(
       `WITH ranked AS (
          SELECT
@@ -385,7 +387,8 @@ export class BillingRepository {
            ) AS position,
            COUNT(*) OVER (
              PARTITION BY created_by_user_id
-           ) AS environment_count
+           ) AS environment_count,
+           sandbox_memory_mib
          FROM environments
          WHERE status <> 'archived'
        )
@@ -394,7 +397,8 @@ export class BillingRepository {
          runtime.sandbox_id,
          ranked.user_id,
          ranked.position::TEXT,
-         ranked.environment_count::TEXT
+         ranked.environment_count::TEXT,
+         ranked.sandbox_memory_mib
        FROM ranked
        JOIN environment_runtime runtime
          ON runtime.environment_id = ranked.id
@@ -408,6 +412,7 @@ export class BillingRepository {
       userId: row.user_id,
       position: Number(row.position),
       environmentCount: Number(row.environment_count),
+      sandboxMemoryMiB: row.sandbox_memory_mib,
     }));
   }
 

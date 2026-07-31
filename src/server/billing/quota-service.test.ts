@@ -128,8 +128,8 @@ test("free entitlement uses the larger confirmed or projected usage value", asyn
   const store = new FakeQuotaStore();
   store.customerId = "cus_one";
   store.usage = {
-    confirmedMiBMilliseconds: MIB_MILLISECONDS_PER_GIB_HOUR / 2,
-    projectedMiBMilliseconds: MIB_MILLISECONDS_PER_GIB_HOUR,
+    confirmedMiBMilliseconds: 2 * MIB_MILLISECONDS_PER_GIB_HOUR,
+    projectedMiBMilliseconds: 4 * MIB_MILLISECONDS_PER_GIB_HOUR,
   };
   const service = quotaService(store, stripeBilling);
 
@@ -145,7 +145,8 @@ test("free entitlement uses the larger confirmed or projected usage value", asyn
     summary.availablePlans.map((plan) => plan.annualPriceUsd),
     [0, 99, 199, 499],
   );
-  assert.equal(summary.usage.usedGiBHours, 1);
+  assert.equal(summary.plan.runtimeQuotaGiBHours, 4);
+  assert.equal(summary.usage.usedGiBHours, 4);
   assert.equal(summary.usage.exhausted, true);
   assert.equal(
     summary.usage.periodStartsAt,
@@ -157,6 +158,10 @@ test("free entitlement uses the larger confirmed or projected usage value", asyn
   );
   assert.equal(summary.customerPortalAvailable, true);
   assert.equal(summary.usageSource, "sandbox0-sdk");
+  assert.deepEqual(await service.environmentCreationPolicy(account.userId), {
+    environmentLimit: 1,
+    fixedSandboxMemoryMiB: 2 * 1024,
+  });
 });
 
 test("active paid entitlement has a fixed weekly quota period", async () => {
@@ -274,7 +279,7 @@ test("free users cannot resize memory or run outside plan limits", async () => {
 
   store.position = 1;
   store.usage.projectedMiBMilliseconds =
-    MIB_MILLISECONDS_PER_GIB_HOUR;
+    4 * MIB_MILLISECONDS_PER_GIB_HOUR;
   await assert.rejects(
     service.assertEnvironmentRuntimeAllowed("environment-one"),
     (error) =>
@@ -284,7 +289,7 @@ test("free users cannot resize memory or run outside plan limits", async () => {
   );
 });
 
-test("background enforcement checks Sandbox0 before returning running violations", async () => {
+test("background enforcement reconciles fixed memory and pauses only running violations", async () => {
   const store = new FakeQuotaStore();
   store.candidates = [
     {
@@ -293,6 +298,7 @@ test("background enforcement checks Sandbox0 before returning running violations
       userId: account.userId,
       position: 1,
       environmentCount: 2,
+      sandboxMemoryMiB: 1024,
     },
     {
       environmentId: "environment-two",
@@ -300,17 +306,22 @@ test("background enforcement checks Sandbox0 before returning running violations
       userId: account.userId,
       position: 2,
       environmentCount: 2,
+      sandboxMemoryMiB: 2 * 1024,
     },
   ];
   const runtime = new FakeLifecycleReader();
   runtime.states.set("sandbox-two", "paused");
   const service = quotaService(store, stripeBilling, runtime);
 
-  assert.deepEqual(await service.runningEnvironmentViolations(), []);
+  assert.deepEqual(await service.environmentPlanEnforcement(), {
+    pauseEnvironmentIds: [],
+    reconcileMemoryEnvironmentIds: ["environment-one"],
+  });
 
   runtime.states.set("sandbox-two", "running");
 
-  assert.deepEqual(await service.runningEnvironmentViolations(), [
-    "environment-two",
-  ]);
+  assert.deepEqual(await service.environmentPlanEnforcement(), {
+    pauseEnvironmentIds: ["environment-two"],
+    reconcileMemoryEnvironmentIds: ["environment-one"],
+  });
 });

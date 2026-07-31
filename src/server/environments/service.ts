@@ -6,6 +6,7 @@ import type {
   SandpiBootstrap,
   SandpiDeploymentSummary,
 } from "@/lib/types";
+import { ENVIRONMENT_SANDBOX_MEMORY_DEFAULT_MIB } from "@/lib/environment-resources";
 import { conflict, HttpError } from "@/server/http-error";
 import type { RuntimeAdapter } from "@/server/runtime/types";
 import { SandpiStore } from "@/server/store";
@@ -152,10 +153,13 @@ export class EnvironmentService {
     userId: string;
     name: string;
   }) {
-    const environmentLimit = await this.quota?.environmentLimit(input.userId);
+    const policy = await this.quota?.environmentCreationPolicy(input.userId);
     const environment = await this.store.createEnvironmentMetadata({
       ...input,
-      environmentLimit,
+      environmentLimit: policy?.environmentLimit,
+      sandboxMemoryMiB:
+        policy?.fixedSandboxMemoryMiB ??
+        ENVIRONMENT_SANDBOX_MEMORY_DEFAULT_MIB,
     });
     // The logical Environment exists before its Workspace Volume is ready.
     // Return immediately so native harness login can run in an Auth Runner
@@ -175,6 +179,13 @@ export class EnvironmentService {
     );
     void this.reconcilePending();
     return this.authoritativeEnvironment(environment);
+  }
+
+  async reconcilePlanMemory(environmentId: string) {
+    return this.waitForLifecycleLock(environmentId, async (store) => {
+      const environment = await store.getEnvironmentById(environmentId);
+      return this.reconcilePlanMemoryWhileLocked(store, environment);
+    });
   }
 
   async update(
@@ -384,13 +395,17 @@ export class EnvironmentService {
   ) {
     let resources: Parameters<RuntimeAdapter["deleteEnvironmentResources"]>[0] = {};
     try {
-      const environment = await store.getEnvironmentById(environmentId);
+      let environment = await store.getEnvironmentById(environmentId);
       if (
         !["updating", "error"].includes(environment.status) ||
         (environment.workspaceVolumeId && environment.sandboxId)
       ) {
         return environment;
       }
+      environment = await this.reconcilePlanMemoryWhileLocked(
+        store,
+        environment,
+      );
       await this.runtimeQuotaGate?.assertEnvironmentRuntimeAllowed(
         environmentId,
       );
@@ -431,6 +446,40 @@ export class EnvironmentService {
       await store.markEnvironmentFailed(environmentId, errorMessage(error));
       throw error;
     }
+  }
+
+  private async reconcilePlanMemoryWhileLocked<T extends Environment>(
+    store: SandpiStore,
+    environment: T,
+  ): Promise<T> {
+    const policy = await this.quota?.environmentCreationPolicy(
+      environment.ownerId,
+    );
+    const fixedMemoryMiB = policy?.fixedSandboxMemoryMiB;
+    if (
+      fixedMemoryMiB == null ||
+      environment.sandboxMemoryMiB === fixedMemoryMiB
+    ) {
+      return environment;
+    }
+
+    if (environment.status === "ready" && environment.sandboxId) {
+      const runtime = await store.getEnvironmentRuntime(
+        environment.ownerId,
+        environment.id,
+      );
+      if (runtime.desiredState === "terminated") return environment;
+      await this.runtime.updateEnvironmentMemory(runtime, fixedMemoryMiB);
+    }
+    await store.updateEnvironmentSandboxMemory(
+      environment.id,
+      fixedMemoryMiB,
+    );
+    return {
+      ...environment,
+      sandboxMemoryMiB: fixedMemoryMiB,
+      revision: environment.revision + 1,
+    };
   }
 }
 

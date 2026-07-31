@@ -18,21 +18,26 @@ import { SidebarAccountSummary } from "@/components/sidebar-primitives";
 import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
 import { loggedOutHomeUrl } from "@/lib/auth-navigation";
 import {
-  formatGiBHours,
+  formatRuntimeQuantity,
+  formatUsageResetTime,
+  runtimeUsageDisplay,
   type SandpiBillingSummary,
 } from "@/lib/billing";
 import { SANDPI_GITHUB_REPOSITORY_URL } from "@/lib/help-feedback";
 import { getOperationUiCopy, type OperationLanguage } from "@/lib/operation-ui";
+import { unixTimestampToIso } from "@/lib/time";
 import type { SandpiUser } from "@/lib/types";
 
 interface SidebarAccountFooterProps {
   language: OperationLanguage;
+  timeZone: string;
   viewer: SandpiUser;
   showPreferences?: boolean;
 }
 
 export function SidebarAccountFooter({
   language,
+  timeZone,
   viewer,
   showPreferences = true,
 }: SidebarAccountFooterProps) {
@@ -153,6 +158,9 @@ export function SidebarAccountFooter({
     billingSummary?.usage.percentUsed == null
       ? undefined
       : Math.min(100, Math.max(0, billingSummary.usage.percentUsed));
+  const runtimeUsage = billingSummary
+    ? runtimeUsageDisplay(billingSummary.plan, billingSummary.usage)
+    : undefined;
 
   return (
     <>
@@ -215,15 +223,15 @@ export function SidebarAccountFooter({
               </span>
               {billingSummary ? <small>{billingSummary.plan.name}</small> : null}
             </div>
-            {billingSummary ? (
+            {billingSummary && runtimeUsage ? (
               <>
                 <strong>
-                  {formatGiBHours(billingSummary.usage.usedGiBHours)}
-                  {billingSummary.usage.limitGiBHours == null
-                    ? ` ${ui.gibHoursUsed}`
-                    : ` / ${formatGiBHours(
-                        billingSummary.usage.limitGiBHours,
-                      )} ${ui.gibHours}`}
+                  {formatRuntimeQuantity(runtimeUsage.used)}
+                  {runtimeUsage.limit == null
+                    ? ` ${runtimeUsage.unit === "hours" ? ui.hoursUsed : ui.gibHoursUsed}`
+                    : ` / ${formatRuntimeQuantity(
+                        runtimeUsage.limit,
+                      )} ${runtimeUsage.unit === "hours" ? ui.hours : ui.gibHours}`}
                 </strong>
                 {usagePercent == null ? (
                   <div
@@ -241,6 +249,23 @@ export function SidebarAccountFooter({
                   >
                     <span style={{ width: `${usagePercent}%` }} />
                   </div>
+                )}
+                {runtimeUsage.limit == null ? null : (
+                  <small className="sidebar-account-usage-reset">
+                    {ui.resets}
+                    {language === "zh-CN" ? null : " "}
+                    <time
+                      dateTime={unixTimestampToIso(
+                        billingSummary.usage.periodEndsAt,
+                      )}
+                    >
+                      {formatUsageResetTime(
+                        billingSummary.usage.periodEndsAt,
+                        language,
+                        timeZone,
+                      )}
+                    </time>
+                  </small>
                 )}
               </>
             ) : (

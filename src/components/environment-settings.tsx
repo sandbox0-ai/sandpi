@@ -33,7 +33,10 @@ import {
 import { EnvironmentEgressCredentials } from "@/components/environment-egress-credentials";
 import { EnvironmentSchedules } from "@/components/environment-schedules";
 import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
-import type { SandpiBillingSummary } from "@/lib/billing";
+import {
+  SANDPI_FREE_SANDBOX_MEMORY_MIB,
+  type SandpiBillingSummary,
+} from "@/lib/billing";
 import { copyTextToClipboard } from "@/lib/clipboard";
 import {
   idlePauseTimeoutSecondsFromMinutesInput,
@@ -1446,7 +1449,9 @@ export function EnvironmentSettings({
                   {billingSummary?.plan.memoryConfigurable === false ? (
                     <small className="settings-plan-notice">
                       The {billingSummary.plan.name} plan keeps Sandbox memory
-                      fixed at its current allocation.{" "}
+                      {billingSummary.plan.id === "free"
+                        ? ` fixed at ${SANDPI_FREE_SANDBOX_MEMORY_MIB / 1024}\u00a0GiB. `
+                        : " fixed at its current allocation. "}
                       <a href="/preferences/?billing=plan">
                         Review plans
                         <ExternalLink size={11} aria-hidden="true" />

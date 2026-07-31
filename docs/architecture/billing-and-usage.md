@@ -51,8 +51,8 @@ segments provide timely admission and Sandbox0 remains usage truth.
 
 ## Entitlement periods
 
-- Free: one account-anchored month, 1 GiB-hour, one Environment, no memory
-  changes.
+- Free: one account-anchored month, two runtime hours on one fixed 2 GiB
+  Sandbox (4 GiB-hours), and one Environment.
 - Plus: $99 billed annually, fixed seven-day periods from first paid
   activation, 125 GiB-hours per period, three Environments.
 - Pro: $199 billed annually, fixed seven-day periods from first paid
@@ -77,6 +77,11 @@ process restart or invoice webhook timing.
 Environment creation holds a user-scoped PostgreSQL advisory transaction lock,
 recounts non-archived Environments and inserts only when the plan still permits
 it. This prevents concurrent requests from exceeding the count.
+
+Free Environment creation writes the fixed 2 GiB allocation explicitly. The
+usage worker also reconciles existing or downgraded Free Environments under the
+Environment lifecycle lock, applying the Sandbox0 memory update before saving
+the new desired allocation.
 
 The runtime entitlement gate is shared by:
 

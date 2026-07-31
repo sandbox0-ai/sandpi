@@ -13,15 +13,19 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
 import {
-  formatGiBHours,
+  formatRuntimeQuantity,
+  formatUsageResetTime,
   isSandpiPaidPlanId,
+  runtimeUsageDisplay,
+  SANDPI_FREE_RUNTIME_HOURS,
+  SANDPI_FREE_SANDBOX_MEMORY_MIB,
   type SandpiAccountPlan,
   type SandpiBillingSummary,
   type SandpiCheckoutResult,
   type SandpiPaidPlanId,
 } from "@/lib/billing";
 import { createId } from "@/lib/id";
-import { formatUnixTimestamp } from "@/lib/time";
+import { formatUnixTimestamp, unixTimestampToIso } from "@/lib/time";
 import type { SandpiPreferences } from "@/lib/types";
 
 import styles from "./billing-settings.module.css";
@@ -163,6 +167,8 @@ export function BillingSettings({
     );
   }
 
+  const runtimeUsage = runtimeUsageDisplay(summary.plan, summary.usage);
+
   return (
     <div className={styles.root}>
       <section className={styles.overview}>
@@ -190,10 +196,18 @@ export function BillingSettings({
               {text("Sandbox runtime", "Sandbox 运行额度")}
             </span>
             <strong>
-              {formatGiBHours(summary.usage.usedGiBHours)}
-              {summary.usage.limitGiBHours == null
-                ? ` ${text("GiB-hours used", "GiB 小时已用")}`
-                : ` / ${formatGiBHours(summary.usage.limitGiBHours)} ${text("GiB-hours", "GiB 小时")}`}
+              {formatRuntimeQuantity(runtimeUsage.used)}
+              {runtimeUsage.limit == null
+                ? ` ${
+                    runtimeUsage.unit === "hours"
+                      ? text("hours used", "小时已用")
+                      : text("GiB-hours used", "GiB 小时已用")
+                  }`
+                : ` / ${formatRuntimeQuantity(runtimeUsage.limit)} ${
+                    runtimeUsage.unit === "hours"
+                      ? text("hours", "小时")
+                      : text("GiB-hours", "GiB 小时")
+                  }`}
             </strong>
           </div>
           {summary.usage.percentUsed != null ? (
@@ -219,20 +233,27 @@ export function BillingSettings({
             <div className={styles.unlimitedLine} />
           )}
           <small>
-            {summary.usage.limitGiBHours == null
-              ? text(
-                  "This deployment does not enforce a runtime allowance.",
-                  "当前部署不限制运行额度。",
-                )
-              : text("Resets ", "重置时间：")}
-            {summary.usage.limitGiBHours == null
-              ? null
-              : formatUnixTimestamp(
-                  summary.usage.periodEndsAt,
-                  language,
-                  timeZone,
-                  { dateStyle: "medium", timeStyle: "short" },
-                )}
+            {runtimeUsage.limit == null ? (
+              text(
+                "This deployment does not enforce a runtime allowance.",
+                "当前部署不限制运行额度。",
+              )
+            ) : (
+              <>
+                {text("Resets ", "重置时间：")}
+                <time
+                  dateTime={unixTimestampToIso(
+                    summary.usage.periodEndsAt,
+                  )}
+                >
+                  {formatUsageResetTime(
+                    summary.usage.periodEndsAt,
+                    language,
+                    timeZone,
+                  )}
+                </time>
+              </>
+            )}
           </small>
         </div>
       </section>
@@ -249,7 +270,12 @@ export function BillingSettings({
         <Entitlement
           label={text("Sandbox memory", "Sandbox 内存")}
           value={
-            summary.plan.memoryConfigurable
+            summary.plan.id === "free"
+              ? text(
+                  `${SANDPI_FREE_SANDBOX_MEMORY_MIB / 1024}\u00a0GiB fixed`,
+                  `固定 ${SANDPI_FREE_SANDBOX_MEMORY_MIB / 1024}\u00a0GiB`,
+                )
+              : summary.plan.memoryConfigurable
               ? text("Configurable", "可配置")
               : text("Fixed", "不可修改")
           }
@@ -437,9 +463,14 @@ function PlanCard({
               )}
         </li>
         <li>
-          {plan.runtimeQuotaGiBHours == null
+          {plan.id === "free"
+            ? `${SANDPI_FREE_RUNTIME_HOURS} ${text(
+                "runtime hours",
+                "小时",
+              )} / ${text("month", "月")}`
+            : plan.runtimeQuotaGiBHours == null
             ? text("Unlimited runtime", "运行额度不限")
-            : `${formatGiBHours(plan.runtimeQuotaGiBHours)} ${text(
+            : `${formatRuntimeQuantity(plan.runtimeQuotaGiBHours)} ${text(
                 "GiB-hours",
                 "GiB 小时",
               )} / ${
@@ -451,7 +482,12 @@ function PlanCard({
         <li>
           {plan.memoryConfigurable
             ? text("Configurable memory", "可配置内存")
-            : text("Fixed memory", "内存不可修改")}
+            : plan.id === "free"
+              ? text(
+                  `Fixed ${SANDPI_FREE_SANDBOX_MEMORY_MIB / 1024}\u00a0GiB memory`,
+                  `固定 ${SANDPI_FREE_SANDBOX_MEMORY_MIB / 1024}\u00a0GiB 内存`,
+                )
+              : text("Fixed memory", "内存不可修改")}
         </li>
       </ul>
       <button

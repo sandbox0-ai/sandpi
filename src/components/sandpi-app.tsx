@@ -1002,6 +1002,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
   const sidebar = (
     <Sidebar
       language={preferences.general.language}
+      timeZone={preferences.general.timeZone}
       viewer={initialData.viewer}
       environments={environments}
       sessions={sessions}

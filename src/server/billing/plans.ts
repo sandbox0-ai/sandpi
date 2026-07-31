@@ -1,17 +1,24 @@
-import type {
-  SandpiAccountPlan,
-  SandpiPaidPlanId,
-  SandpiPlanId,
-  SandpiSubscriptionStatus,
+import {
+  SANDPI_FREE_RUNTIME_HOURS,
+  SANDPI_FREE_SANDBOX_MEMORY_MIB,
+  type SandpiAccountPlan,
+  type SandpiPaidPlanId,
+  type SandpiPlanId,
+  type SandpiSubscriptionStatus,
 } from "@/lib/billing";
 
 export const MIB_MILLISECONDS_PER_GIB_HOUR = 1024 * 60 * 60 * 1000;
 export const PAST_DUE_GRACE_MS = 72 * 60 * 60 * 1000;
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
-export interface PlanDefinition extends SandpiAccountPlan {
+export interface PlanDefinition
+  extends Omit<SandpiAccountPlan, "memoryConfigurable"> {
+  fixedSandboxMemoryMiB: number | null;
   runtimeQuotaMiBMilliseconds: number | null;
 }
+
+const FREE_RUNTIME_QUOTA_GIB_HOURS =
+  (SANDPI_FREE_SANDBOX_MEMORY_MIB / 1024) * SANDPI_FREE_RUNTIME_HOURS;
 
 export const PLAN_DEFINITIONS = {
   deployment: {
@@ -19,7 +26,7 @@ export const PLAN_DEFINITIONS = {
     name: "Self-hosted",
     annualPriceUsd: null,
     environmentLimit: null,
-    memoryConfigurable: true,
+    fixedSandboxMemoryMiB: null,
     runtimeQuotaGiBHours: null,
     runtimeQuotaMiBMilliseconds: null,
     quotaPeriod: "unlimited",
@@ -29,9 +36,10 @@ export const PLAN_DEFINITIONS = {
     name: "Free",
     annualPriceUsd: 0,
     environmentLimit: 1,
-    memoryConfigurable: false,
-    runtimeQuotaGiBHours: 1,
-    runtimeQuotaMiBMilliseconds: MIB_MILLISECONDS_PER_GIB_HOUR,
+    fixedSandboxMemoryMiB: SANDPI_FREE_SANDBOX_MEMORY_MIB,
+    runtimeQuotaGiBHours: FREE_RUNTIME_QUOTA_GIB_HOURS,
+    runtimeQuotaMiBMilliseconds:
+      FREE_RUNTIME_QUOTA_GIB_HOURS * MIB_MILLISECONDS_PER_GIB_HOUR,
     quotaPeriod: "account-month",
   },
   plus: {
@@ -39,7 +47,7 @@ export const PLAN_DEFINITIONS = {
     name: "Plus",
     annualPriceUsd: 99,
     environmentLimit: 3,
-    memoryConfigurable: true,
+    fixedSandboxMemoryMiB: null,
     runtimeQuotaGiBHours: 125,
     runtimeQuotaMiBMilliseconds: 125 * MIB_MILLISECONDS_PER_GIB_HOUR,
     quotaPeriod: "fixed-week",
@@ -49,7 +57,7 @@ export const PLAN_DEFINITIONS = {
     name: "Pro",
     annualPriceUsd: 199,
     environmentLimit: 10,
-    memoryConfigurable: true,
+    fixedSandboxMemoryMiB: null,
     runtimeQuotaGiBHours: 250,
     runtimeQuotaMiBMilliseconds: 250 * MIB_MILLISECONDS_PER_GIB_HOUR,
     quotaPeriod: "fixed-week",
@@ -59,7 +67,7 @@ export const PLAN_DEFINITIONS = {
     name: "Ultra",
     annualPriceUsd: 499,
     environmentLimit: 25,
-    memoryConfigurable: true,
+    fixedSandboxMemoryMiB: null,
     runtimeQuotaGiBHours: 625,
     runtimeQuotaMiBMilliseconds: 625 * MIB_MILLISECONDS_PER_GIB_HOUR,
     quotaPeriod: "fixed-week",

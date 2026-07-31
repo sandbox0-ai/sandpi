@@ -1,4 +1,10 @@
-import type { UnixTimestamp } from "./time";
+import {
+  formatUnixTimestamp,
+  type UnixTimestamp,
+} from "./time";
+
+export const SANDPI_FREE_SANDBOX_MEMORY_MIB = 2 * 1024;
+export const SANDPI_FREE_RUNTIME_HOURS = 2;
 
 export const SANDPI_PAID_PLAN_IDS = ["plus", "pro", "ultra"] as const;
 export type SandpiPaidPlanId = (typeof SANDPI_PAID_PLAN_IDS)[number];
@@ -68,10 +74,50 @@ export interface SandpiCheckoutResult {
   url?: string;
 }
 
-export function formatGiBHours(value: number) {
+export interface SandpiRuntimeUsageDisplay {
+  used: number;
+  limit: number | null;
+  unit: "hours" | "gib-hours";
+}
+
+export function formatRuntimeQuantity(value: number) {
   return new Intl.NumberFormat("en-US", {
     maximumFractionDigits: value < 10 ? 2 : 1,
   }).format(value);
+}
+
+export function runtimeUsageDisplay(
+  plan: SandpiAccountPlan,
+  usage: SandpiUsageSummary,
+): SandpiRuntimeUsageDisplay {
+  if (plan.id !== "free") {
+    return {
+      used: usage.usedGiBHours,
+      limit: usage.limitGiBHours,
+      unit: "gib-hours",
+    };
+  }
+
+  const memoryGiB = SANDPI_FREE_SANDBOX_MEMORY_MIB / 1024;
+  return {
+    used: usage.usedGiBHours / memoryGiB,
+    limit:
+      usage.limitGiBHours == null
+        ? null
+        : usage.limitGiBHours / memoryGiB,
+    unit: "hours",
+  };
+}
+
+export function formatUsageResetTime(
+  periodEndsAt: UnixTimestamp,
+  language: string,
+  timeZone: string,
+) {
+  return formatUnixTimestamp(periodEndsAt, language, timeZone, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
 }
 
 export function isSandpiPaidPlanId(value: string): value is SandpiPaidPlanId {
