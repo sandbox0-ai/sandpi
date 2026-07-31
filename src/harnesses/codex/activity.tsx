@@ -344,11 +344,13 @@ export function CodexFileChangeActivity({
 }: {
   activity: CodexFileChangeActivityView;
   language: OperationLanguage;
-  onOpenFiles: () => void;
+  onOpenFiles: (path?: string) => void;
   compact?: boolean;
   evidence?: CodexRolloutToolActivity[];
 }) {
   const ui = getCodexUiCopy(language).conversation;
+  const firstChange = activity.changes[0];
+  const firstChangedPath = firstChange?.movePath ?? firstChange?.file;
   const totalAdditions = activity.changes.reduce(
     (total, change) => total + change.additions,
     0,
@@ -425,7 +427,7 @@ export function CodexFileChangeActivity({
               <button
                 type="button"
                 className="codex-open-files"
-                onClick={onOpenFiles}
+                onClick={() => onOpenFiles(firstChangedPath)}
               >
                 {ui.openChangedFiles}
               </button>
@@ -476,7 +478,11 @@ export function CodexFileChangeActivity({
         {activity.changes.length > 8 ? (
           <small className="codex-output-note">+{activity.changes.length - 8} files</small>
         ) : null}
-        <button type="button" className="codex-open-files" onClick={onOpenFiles}>
+        <button
+          type="button"
+          className="codex-open-files"
+          onClick={() => onOpenFiles(firstChangedPath)}
+        >
           {ui.openChangedFiles}
         </button>
       </div>

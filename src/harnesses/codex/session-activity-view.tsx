@@ -39,7 +39,7 @@ interface CodexSessionActivityViewProps {
   rolloutActivity?: CodexRolloutActivityFeed;
   loading: boolean;
   error: string;
-  onOpenFiles: () => void;
+  onOpenFiles: (path?: string) => void;
 }
 
 function formatActivityTime(
@@ -68,7 +68,7 @@ function ActivityEntry({
   item: CodexSessionActivityItem;
   language: OperationLanguage;
   timeZone: string;
-  onOpenFiles: () => void;
+  onOpenFiles: (path?: string) => void;
 }) {
   const { entry } = item;
   const evidence = item.relatedEntries.filter(

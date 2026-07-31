@@ -61,7 +61,7 @@ interface CodexAgentThreadsDialogProps {
   onSelectedThreadChange: (threadId?: string) => void;
   onOpenWorkspacePath: (path: string) => void;
   onOpenBrowserUrl: (url: string) => void;
-  onOpenFiles: () => void;
+  onOpenFiles: (path?: string) => void;
   onClose: () => void;
 }
 
@@ -123,7 +123,7 @@ function AgentThreadTranscript({
   language: OperationLanguage;
   onOpenWorkspacePath: (path: string) => void;
   onOpenBrowserUrl: (url: string) => void;
-  onOpenFiles: () => void;
+  onOpenFiles: (path?: string) => void;
 }) {
   const projection = useMemo(() => projectCodexTimeline(thread), [thread]);
   const turns = useMemo(

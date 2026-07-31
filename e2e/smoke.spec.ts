@@ -4043,6 +4043,8 @@ test("keeps an optimistic prompt ahead of Activity and folds it for the streamed
   const nativeTurnId = "turn-e2e-optimistic-order";
   const prompt = "Keep this prompt ahead of its Activity.";
   const now = Date.now() / 1_000;
+  const changedFilePath = "/workspace/app/page.tsx";
+  const openedFilePaths: string[] = [];
   const snapshot: CodexNativeSnapshot = {
     protocol: "codex-app-server",
     nativeSessionId: nativeThreadId,
@@ -4167,11 +4169,67 @@ test("keeps an optimistic prompt ahead of Activity and folds it for the streamed
           data: [
             {
               name: "page.tsx",
-              path: "/workspace/app/page.tsx",
+              path: changedFilePath,
               kind: "file",
             },
           ],
           meta: { source: "sandbox0", root: "/workspace" },
+        },
+      });
+    },
+  );
+  await page.route(
+    (url) =>
+      url.pathname ===
+      `/api/v1/environments/${encodeURIComponent(environment.id)}/ide`,
+    async (route) => {
+      await route.fulfill({
+        json: {
+          data: {
+            refreshedAt: now,
+            files: [
+              {
+                id: "workspace",
+                name: "workspace",
+                path: "/workspace",
+                kind: "folder",
+                children: [
+                  {
+                    id: "app",
+                    name: "app",
+                    path: "/workspace/app",
+                    kind: "folder",
+                  },
+                ],
+              },
+            ],
+            git: { repositories: [] },
+          } satisfies WorkspaceIdeSnapshot,
+        },
+      });
+    },
+  );
+  await page.route(
+    `**/api/v1/environments/${encodeURIComponent(environment.id)}/ide/file?*`,
+    async (route) => {
+      const filePath = new URL(route.request().url()).searchParams.get("path");
+      if (filePath !== changedFilePath) {
+        await route.fulfill({ status: 404 });
+        return;
+      }
+      openedFilePaths.push(filePath);
+      await route.fulfill({
+        json: {
+          data: {
+            path: filePath,
+            name: "page.tsx",
+            revision: `sha256:${"a".repeat(43)}`,
+            encoding: "base64",
+            content: Buffer.from("new page\n").toString("base64"),
+            kind: "text",
+            editable: true,
+            lineChanges: [],
+          } satisfies WorkspaceIdeFile,
         },
       });
     },
@@ -4265,7 +4323,7 @@ test("keeps an optimistic prompt ahead of Activity and folds it for the streamed
   };
   const liveFileChanges: CodexFileUpdateChange[] = [
     {
-      path: "/workspace/app/page.tsx",
+      path: changedFilePath,
       kind: { type: "update", move_path: null },
       diff: "-old page\n+new page",
     },
@@ -4341,6 +4399,26 @@ test("keeps an optimistic prompt ahead of Activity and folds it for the streamed
   await expect(activityDetails).toContainText("Editing 2 files");
   await expect(activityDetails).toContainText("app/page.tsx");
   await expect(activityDetails).toContainText("app/theme.css");
+  await activityDetails
+    .getByRole("button", { name: "Open changed files" })
+    .click();
+  await expect(
+    page.getByRole("navigation", { name: "Inspector views" }),
+  ).toBeVisible();
+  await expect
+    .poll(() => new URL(page.url()).searchParams.get("path"))
+    .toBe(changedFilePath);
+  await expect(
+    page.getByText("workspace / app/page.tsx", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByTestId("workspace-source-preview")).toContainText(
+    "new page",
+  );
+  await expect.poll(() => openedFilePaths).toContain(changedFilePath);
+  await page
+    .getByRole("complementary", { name: "Environment inspector" })
+    .getByRole("button", { name: "Close inspector" })
+    .click();
   await emitControlledEvent(
     page,
     eventPath,
