@@ -577,6 +577,9 @@ already exists:
   metadata remains harness-owned. Bare `/rename` opens the same product
   operation in a dialog. `/archive`
   updates product Session metadata.
+- User-managed completion is also product Session metadata. It only changes
+  attention treatment in Session navigation; it neither archives the Session
+  nor changes the harness-native runtime status.
 - `/mention`, `/diff`, `/skills`, `/mcp [verbose]` and `/permissions` open the
   corresponding composer, Inspector or Environment settings surface. MCP
   verbose requests full native status and renders server tools, resources and

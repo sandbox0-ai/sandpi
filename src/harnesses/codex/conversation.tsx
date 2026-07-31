@@ -185,6 +185,7 @@ interface ConversationProps {
     request: EnvironmentBrowserNavigationRequest,
   ) => void;
   onSessionChange: (session: CodexSession) => void;
+  onToggleSessionCompleted: (sessionId: string) => void;
   onDerivedSessionCreated: (session: CodexSession) => void;
 }
 
@@ -276,6 +277,7 @@ export function CodexConversation({
   browserNavigationRequest,
   onBrowserNavigationHandled,
   onSessionChange,
+  onToggleSessionCompleted,
   onDerivedSessionCreated,
 }: ConversationProps) {
   const ui = getCodexUiCopy(language).conversation;
@@ -2304,6 +2306,17 @@ export function CodexConversation({
           </div>
 
           <div className="conversation-header-actions">
+            <button
+              type="button"
+              className={`header-action-button ${session.completed ? "is-active" : ""}`}
+              aria-label={session.completed ? ui.markIncomplete : ui.markComplete}
+              aria-pressed={session.completed}
+              title={session.completed ? ui.markIncomplete : ui.markComplete}
+              onClick={() => onToggleSessionCompleted(session.id)}
+            >
+              <Check size={15} aria-hidden="true" />
+              <span>{session.completed ? ui.completed : ui.markComplete}</span>
+            </button>
             <button
               type="button"
               className="header-action-button"

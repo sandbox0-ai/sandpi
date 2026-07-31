@@ -878,6 +878,8 @@ components:
           type: boolean
         pinned:
           type: boolean
+        completed:
+          type: boolean
         archived:
           type: boolean
         harness:
@@ -960,6 +962,7 @@ components:
         - status
         - unread
         - pinned
+        - completed
         - archived
         - harness
         - harnessLabel
@@ -7514,6 +7517,8 @@ paths:
                   minLength: 1
                   maxLength: 200
                 pinned:
+                  type: boolean
+                completed:
                   type: boolean
                 archived:
                   type: boolean

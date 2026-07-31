@@ -287,6 +287,7 @@ export const codingSessionSchema = component(
     status: z.enum(["running", "waiting", "paused", "completed", "failed"]),
     unread: z.boolean(),
     pinned: z.boolean(),
+    completed: z.boolean(),
     archived: z.boolean(),
     harness: z.enum(["codex", "claude-code", "opencode", "pi"]),
     harnessLabel: z.string(),

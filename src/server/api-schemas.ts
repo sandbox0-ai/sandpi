@@ -248,6 +248,7 @@ export const sessionMetadataSchema = z
   .object({
     title: z.string().trim().min(1).max(200).optional(),
     pinned: z.boolean().optional(),
+    completed: z.boolean().optional(),
     archived: z.boolean().optional(),
     unread: z.boolean().optional(),
   })

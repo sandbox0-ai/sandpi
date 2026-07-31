@@ -19,6 +19,9 @@ const copy = {
                 ? "Failed"
                 : "Completed",
       environmentRevision: (revision: number) => `Environment r${revision}`,
+      markComplete: "Mark complete",
+      markIncomplete: "Mark incomplete",
+      completed: "Completed",
       terminal: "Terminal",
       openAgentsFile: "Open AGENTS.md",
       openAgentsFileFailed: "Could not open AGENTS.md.",
@@ -367,6 +370,9 @@ const copy = {
                 ? "失败"
                 : "已完成",
       environmentRevision: (revision: number) => `环境 r${revision}`,
+      markComplete: "标记完成",
+      markIncomplete: "标记未完成",
+      completed: "已完成",
       terminal: "终端",
       openAgentsFile: "打开 AGENTS.md",
       openAgentsFileFailed: "无法打开 AGENTS.md。",

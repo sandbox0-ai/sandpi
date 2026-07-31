@@ -584,6 +584,16 @@ pre {
   background: var(--selected);
 }
 
+.session-row.is-completed:not(.is-selected) {
+  color: color-mix(in srgb, var(--ink-faint) 72%, transparent);
+}
+
+.session-row.is-completed:not(.is-selected):hover,
+.session-row.is-completed:not(.is-selected):focus-within {
+  background: color-mix(in srgb, var(--hover) 58%, transparent);
+  color: var(--ink-soft);
+}
+
 .session-main-button {
   display: flex;
   min-width: 0;
@@ -1204,6 +1214,12 @@ pre {
   border-color: var(--line);
   background: var(--panel);
   color: var(--ink);
+}
+
+.header-action-button.is-active {
+  border-color: var(--line);
+  background: var(--panel);
+  color: var(--ink-soft);
 }
 
 .header-action-button:disabled {

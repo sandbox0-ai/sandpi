@@ -65,6 +65,7 @@
 }
 
 .header p {
+  max-width: none;
   margin: 6px 0 0;
   color: var(--ink-soft, #62615c);
   font-size: 11.5px;
@@ -465,7 +466,7 @@
   }
 
   .header p {
-    max-width: 36ch;
+    white-space: nowrap;
   }
 
   .content {

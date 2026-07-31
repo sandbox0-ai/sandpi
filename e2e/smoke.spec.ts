@@ -6897,6 +6897,90 @@ test("keeps pinned Session markers compact and removes sidebar shortcuts", async
   ).toHaveCount(0);
 });
 
+test("marks a Session complete independently from archiving and quiets its sidebar row", async ({
+  page,
+}) => {
+  const bootstrap = getMockBootstrap();
+  useEnglishUi(bootstrap);
+  const session = bootstrap.sessions.find(
+    (candidate) => candidate.status === "waiting" && !candidate.archived,
+  );
+  expect(session).toBeTruthy();
+  if (!session) return;
+  session.completed = false;
+  session.unread = true;
+  bootstrap.selectedEnvironmentId = session.environmentId;
+  bootstrap.selectedSessionId = session.id;
+
+  await page.route(
+    (url) => url.pathname === "/api/v1/bootstrap",
+    async (route) => {
+      await route.fulfill({ json: { data: bootstrap } });
+    },
+  );
+  await page.route(
+    (url) =>
+      url.pathname ===
+      `/api/v1/sessions/${encodeURIComponent(session.id)}/metadata`,
+    async (route) => {
+      const metadata = route.request().postDataJSON() as {
+        completed?: boolean;
+        unread?: boolean;
+      };
+      Object.assign(session, metadata);
+      await route.fulfill({ json: { data: session } });
+    },
+  );
+
+  await page.goto(
+    `/?environment=${encodeURIComponent(session.environmentId)}&session=${encodeURIComponent(session.id)}`,
+  );
+  const sessionRow = page
+    .locator(".session-row")
+    .filter({ hasText: session.title });
+  await page.getByRole("button", { name: "Mark complete" }).click();
+
+  await expect(page.getByRole("button", { name: "Mark incomplete" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await expect(sessionRow).toHaveClass(/is-completed/);
+  await expect(sessionRow.locator(".session-state-indicator")).toHaveCount(0);
+  expect(session.archived).toBe(false);
+  expect(session.completed).toBe(true);
+});
+
+test("keeps the New Environment summary on one mobile line", async ({ page }) => {
+  const bootstrap = getMockBootstrap();
+  useEnglishUi(bootstrap);
+  await page.route(
+    (url) => url.pathname === "/api/v1/bootstrap",
+    async (route) => {
+      await route.fulfill({ json: { data: bootstrap } });
+    },
+  );
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Open navigation" }).click();
+  await page.getByRole("button", { name: "New environment" }).click();
+
+  const summary = page.getByText(
+    "A shared workspace for all your Sessions.",
+    { exact: true },
+  );
+  await expect(summary).toBeVisible();
+  const metrics = await summary.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return {
+      height: element.getBoundingClientRect().height,
+      lineHeight: Number.parseFloat(style.lineHeight),
+      whiteSpace: style.whiteSpace,
+    };
+  });
+  expect(metrics.whiteSpace).toBe("nowrap");
+  expect(metrics.height).toBeLessThanOrEqual(metrics.lineHeight + 1);
+});
+
 test("paginates each Environment Session list from six in batches of ten", async ({
   page,
 }) => {

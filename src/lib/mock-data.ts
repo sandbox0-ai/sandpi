@@ -280,6 +280,7 @@ const primarySession: CodexSession = {
   status: "running",
   unread: false,
   pinned: false,
+  completed: false,
   archived: false,
   harness: "codex",
   harnessLabel: "Codex",

@@ -785,6 +785,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
         title?: string;
         pinned?: boolean;
         archived?: boolean;
+        completed?: boolean;
         unread?: boolean;
       },
     ) => {
@@ -824,6 +825,19 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
         pinned: !session.pinned,
       }).catch((error) => {
         console.error("Unable to update pinned Session", error);
+      });
+    },
+    [persistSessionMetadata, sessions],
+  );
+
+  const handleToggleSessionCompleted = useCallback(
+    (sessionId: string) => {
+      const session = sessions.find((candidate) => candidate.id === sessionId);
+      if (!session) return;
+      void persistSessionMetadata(sessionId, {
+        completed: !session.completed,
+      }).catch((error) => {
+        console.error("Unable to update Session completion", error);
       });
     },
     [persistSessionMetadata, sessions],
@@ -1136,6 +1150,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
           browserNavigationRequest={browserNavigationRequest}
           onBrowserNavigationHandled={handleBrowserNavigationHandled}
           onSessionChange={handleSessionChange}
+          onToggleSessionCompleted={handleToggleSessionCompleted}
           onDerivedSessionCreated={handleSessionCreated}
         />
       ) : (
