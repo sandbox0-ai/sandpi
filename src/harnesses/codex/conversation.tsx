@@ -2028,6 +2028,14 @@ export function CodexConversation({
     }
   }
 
+  function openChangedFile(path?: string) {
+    if (path) {
+      onOpenWorkspacePath(path);
+      return;
+    }
+    onOpenInspector("files");
+  }
+
   function renderTimelineEntry(entry: CodexTimelineEntry) {
     if (entry.kind === "command") {
       return (
@@ -2044,7 +2052,7 @@ export function CodexConversation({
           key={entry.id}
           activity={entry}
           language={language}
-          onOpenFiles={() => onOpenInspector("files")}
+          onOpenFiles={openChangedFile}
         />
       );
     }
@@ -2710,9 +2718,9 @@ export function CodexConversation({
             closeAgentThreads();
             onOpenBrowserUrl(url);
           }}
-          onOpenFiles={() => {
+          onOpenFiles={(path) => {
             closeAgentThreads();
-            onOpenInspector("files");
+            openChangedFile(path);
           }}
           onClose={closeAgentThreads}
         />
@@ -2750,7 +2758,7 @@ export function CodexConversation({
                 rolloutActivity={nativeSnapshot?.activity}
                 loading={nativeHistoryLoading}
                 error={nativeHistoryError}
-                onOpenFiles={() => onOpenInspector("files")}
+                onOpenFiles={openChangedFile}
               />
             ),
           }}
