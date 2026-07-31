@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { Pool, PoolClient, QueryResultRow } from "pg";
 
 import type { CodexHarnessState } from "@/harnesses/codex/types";
@@ -52,6 +52,17 @@ export interface TurnSubmissionCoordinates {
   requestId: string;
   clientMessageId: string;
   stableInputId: string;
+}
+
+export interface IdempotentResourceState {
+  status: "processing" | "completed" | "failed";
+  resourceId: string;
+  responseStatus?: number;
+  responseBody?: Record<string, unknown>;
+}
+
+export interface IdempotentResourceClaim extends IdempotentResourceState {
+  claimed: boolean;
 }
 
 export interface StoredEnvironmentRuntime extends EnvironmentRuntimeRecord {
@@ -205,6 +216,14 @@ interface SessionRow extends QueryResultRow {
   owner_email: string | null;
   owner_name: string | null;
   owner_avatar_initials: string | null;
+}
+
+interface IdempotencyKeyRow extends QueryResultRow {
+  request_hash: Buffer;
+  status: IdempotentResourceState["status"];
+  resource_id: string | null;
+  response_status: number | null;
+  response_body: Record<string, unknown> | null;
 }
 
 interface EnvironmentRuntimeRow extends QueryResultRow {
@@ -2279,12 +2298,153 @@ export class SandpiStore {
     return sessionFromRow(row);
   }
 
+  async claimIdempotentResource(input: {
+    userId: string;
+    operation: string;
+    key: string;
+    requestFingerprint: string;
+    resourceId: string;
+    expiresAt: Date;
+  }): Promise<IdempotentResourceClaim> {
+    const keyHash = sha256Buffer(input.key);
+    const requestHash = sha256Buffer(input.requestFingerprint);
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        "DELETE FROM idempotency_keys WHERE expires_at <= NOW()",
+      );
+      const inserted = await client.query(
+        `INSERT INTO idempotency_keys (
+           user_id, operation, key_hash, request_hash, resource_id, expires_at
+         ) VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT (user_id, operation, key_hash) DO NOTHING
+         RETURNING id`,
+        [
+          input.userId,
+          input.operation,
+          keyHash,
+          requestHash,
+          input.resourceId,
+          input.expiresAt,
+        ],
+      );
+      const current = await client.query<IdempotencyKeyRow>(
+        `SELECT request_hash, status, resource_id,
+                response_status, response_body
+         FROM idempotency_keys
+         WHERE user_id = $1 AND operation = $2 AND key_hash = $3
+         FOR UPDATE`,
+        [input.userId, input.operation, keyHash],
+      );
+      const row = current.rows[0];
+      if (!row) {
+        throw new Error("The idempotency claim disappeared during creation.");
+      }
+      assertIdempotencyRequestHash(row, requestHash);
+      const state = idempotentResourceState(row);
+      await client.query("COMMIT");
+      return { ...state, claimed: Boolean(inserted.rowCount) };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async readIdempotentResource(input: {
+    userId: string;
+    operation: string;
+    key: string;
+    requestFingerprint: string;
+  }): Promise<IdempotentResourceState> {
+    const requestHash = sha256Buffer(input.requestFingerprint);
+    const result = await this.pool.query<IdempotencyKeyRow>(
+      `SELECT request_hash, status, resource_id,
+              response_status, response_body
+       FROM idempotency_keys
+       WHERE user_id = $1 AND operation = $2 AND key_hash = $3
+         AND expires_at > NOW()`,
+      [input.userId, input.operation, sha256Buffer(input.key)],
+    );
+    const row = result.rows[0];
+    if (!row) {
+      throw conflict(
+        "idempotency_key_expired",
+        "This Session creation request can no longer be resumed.",
+      );
+    }
+    assertIdempotencyRequestHash(row, requestHash);
+    return idempotentResourceState(row);
+  }
+
+  async completeIdempotentResource(input: {
+    userId: string;
+    operation: string;
+    key: string;
+    requestFingerprint: string;
+    resourceId: string;
+  }) {
+    const result = await this.pool.query(
+      `UPDATE idempotency_keys
+       SET status = 'completed', response_status = 201,
+           response_body = jsonb_build_object('resourceId', resource_id),
+           updated_at = NOW()
+       WHERE user_id = $1 AND operation = $2 AND key_hash = $3
+         AND request_hash = $4 AND resource_id = $5
+         AND status = 'processing' AND expires_at > NOW()
+       RETURNING id`,
+      [
+        input.userId,
+        input.operation,
+        sha256Buffer(input.key),
+        sha256Buffer(input.requestFingerprint),
+        input.resourceId,
+      ],
+    );
+    if (!result.rowCount) {
+      throw new Error("The idempotent Session creation could not be completed.");
+    }
+  }
+
+  async failIdempotentResource(input: {
+    userId: string;
+    operation: string;
+    key: string;
+    requestFingerprint: string;
+    resourceId: string;
+    responseStatus: number;
+    responseBody: Record<string, unknown>;
+  }) {
+    const result = await this.pool.query(
+      `UPDATE idempotency_keys
+       SET status = 'failed', response_status = $6,
+           response_body = $7::JSONB, updated_at = NOW()
+       WHERE user_id = $1 AND operation = $2 AND key_hash = $3
+         AND request_hash = $4 AND resource_id = $5
+         AND status = 'processing' AND expires_at > NOW()
+       RETURNING id`,
+      [
+        input.userId,
+        input.operation,
+        sha256Buffer(input.key),
+        sha256Buffer(input.requestFingerprint),
+        input.resourceId,
+        input.responseStatus,
+        JSON.stringify(input.responseBody),
+      ],
+    );
+    return Boolean(result.rowCount);
+  }
+
   async createSessionMetadata(input: {
     userId: string;
     environment: Environment;
     title: string;
     modelId?: string;
     reasoningEffort?: string;
+    sessionId?: string;
   }) {
     return this.insertSessionMetadata({ ...input, kind: "environment" });
   }
@@ -2409,12 +2569,13 @@ export class SandpiStore {
     title: string;
     modelId?: string;
     reasoningEffort?: string;
+    sessionId?: string;
     kind: "environment" | "session" | "turn";
     originLabel?: string;
     sourceSessionId?: string;
     sourceNativeItemId?: string;
   }) {
-    const id = `session_${randomUUID()}`;
+    const id = input.sessionId ?? `session_${randomUUID()}`;
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
@@ -3774,6 +3935,35 @@ function sessionRuntimeFromRow(row: SessionRuntimeRow): StoredSessionRuntime {
       row.status === "provisioning"
         ? "provisioning"
         : publicSessionStatus(row.status),
+  };
+}
+
+function sha256Buffer(value: string) {
+  return createHash("sha256").update(value).digest();
+}
+
+function assertIdempotencyRequestHash(
+  row: IdempotencyKeyRow,
+  expected: Buffer,
+) {
+  if (row.request_hash.equals(expected)) return;
+  throw conflict(
+    "idempotency_key_reused",
+    "This idempotency key was already used for a different request.",
+  );
+}
+
+function idempotentResourceState(
+  row: IdempotencyKeyRow,
+): IdempotentResourceState {
+  if (!row.resource_id) {
+    throw new Error("The idempotency record is missing its resource id.");
+  }
+  return {
+    status: row.status,
+    resourceId: row.resource_id,
+    responseStatus: row.response_status ?? undefined,
+    responseBody: row.response_body ?? undefined,
   };
 }
 

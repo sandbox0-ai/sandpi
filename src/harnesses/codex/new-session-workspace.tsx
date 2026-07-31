@@ -66,6 +66,12 @@ import {
   type CodexNativeDialogMode,
 } from "@/harnesses/codex/native-command-dialog";
 import { parseCodexTokenUsageView } from "@/harnesses/codex/token-usage";
+import {
+  beginSessionCreation,
+  failSessionCreation,
+  isDefinitiveSessionCreationFailure,
+  type SessionCreationGate,
+} from "@/harnesses/codex/session-creation";
 import { ensureWorkspaceAgentsFile } from "@/harnesses/codex/workspace-agents";
 import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
 import { consumePendingGuestPrompt } from "@/lib/auth-navigation";
@@ -153,6 +159,7 @@ export function CodexNewSessionWorkspace({
   const [images, setImages] = useState<CodexComposerImage[]>([]);
   const [localImages, setLocalImages] = useState<CodexComposerLocalImage[]>([]);
   const promptRef = useRef<HTMLTextAreaElement>(null);
+  const creationGateRef = useRef<SessionCreationGate>({ active: false });
   const selectedModel = modelOptions.find(
     (model) => model.id === selectedModelId,
   );
@@ -496,6 +503,34 @@ export function CodexNewSessionWorkspace({
       return;
     }
 
+    const requestInput = {
+      environmentId: environment.id,
+      ...(initialTitle?.trim() ? { title: initialTitle.trim() } : {}),
+      ...(sessionStartSource ? { sessionStartSource } : {}),
+      prompt: instruction,
+      images: images.map(encodeCodexComposerImage),
+      localImages: encodeCodexComposerLocalImages(localImages),
+      modelId: selectedModel.id,
+      ...(selectedReasoningEffort
+        ? { reasoningEffort: selectedReasoningEffort }
+        : {}),
+      ...((options.collaborationMode ?? (planMode ? "plan" : undefined))
+        ? {
+            collaborationMode:
+              options.collaborationMode ??
+              (planMode ? ("plan" as const) : undefined),
+          }
+        : {}),
+      ...(fastMode && selectedModel.fastServiceTier
+        ? { serviceTier: selectedModel.fastServiceTier.id }
+        : {}),
+    };
+    const fingerprint = JSON.stringify(requestInput);
+    const idempotencyKey = beginSessionCreation(
+      creationGateRef.current,
+      fingerprint,
+    );
+    if (!idempotencyKey) return;
     setCreating(true);
     setError("");
     setCommandNotice(null);
@@ -505,31 +540,17 @@ export function CodexNewSessionWorkspace({
         {
           method: "POST",
           body: JSON.stringify({
-            environmentId: environment.id,
-            ...(initialTitle?.trim() ? { title: initialTitle.trim() } : {}),
-            ...(sessionStartSource ? { sessionStartSource } : {}),
-            prompt: instruction,
-            images: images.map(encodeCodexComposerImage),
-            localImages: encodeCodexComposerLocalImages(localImages),
-            modelId: selectedModel.id,
-            ...(selectedReasoningEffort
-              ? { reasoningEffort: selectedReasoningEffort }
-              : {}),
-            ...((options.collaborationMode ?? (planMode ? "plan" : undefined))
-              ? {
-                  collaborationMode:
-                    options.collaborationMode ??
-                    (planMode ? ("plan" as const) : undefined),
-                }
-              : {}),
-            ...(fastMode && selectedModel.fastServiceTier
-              ? { serviceTier: selectedModel.fastServiceTier.id }
-              : {}),
+            ...requestInput,
+            idempotencyKey,
           }),
         },
       );
       onCreated(response.data);
     } catch (cause) {
+      failSessionCreation(
+        creationGateRef.current,
+        isDefinitiveSessionCreationFailure(cause),
+      );
       setError(cause instanceof Error ? cause.message : ui.startFailed);
       if (options.restorePrompt) {
         setComposerPrompt(options.restorePrompt);

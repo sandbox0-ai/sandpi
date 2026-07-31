@@ -6870,6 +6870,10 @@ paths:
                 environmentId:
                   type: string
                   minLength: 1
+                idempotencyKey:
+                  type: string
+                  minLength: 16
+                  maxLength: 128
                 prompt:
                   default: ""
                   type: string

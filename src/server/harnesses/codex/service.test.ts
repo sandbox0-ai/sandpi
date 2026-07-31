@@ -14,6 +14,7 @@ import { HttpError } from "@/server/http-error";
 import {
   WORKSPACE_RESTORE_UNAVAILABLE_SESSION_ERROR,
   type CodexControlTransition,
+  type IdempotentResourceState,
   type SandpiStore,
   type StoredEnvironmentRuntime,
   type StoredSessionRuntime,
@@ -445,6 +446,10 @@ function fixture(
     sandboxRestarted: false,
   };
   let newSessionSequence = 0;
+  const idempotentResources = new Map<
+    string,
+    { fingerprint: string; state: IdempotentResourceState }
+  >();
   let childSequence = 0;
   let eventSequence = input.initialEventSequence ?? 0;
   let lastStartedThreadId: string | undefined;
@@ -812,12 +817,100 @@ function fixture(
     async sessionIdsForEnvironment() {
       return [...sessions.keys()];
     },
+    async claimIdempotentResource(options: {
+      userId: string;
+      operation: string;
+      key: string;
+      requestFingerprint: string;
+      resourceId: string;
+    }) {
+      const key = `${options.userId}\0${options.operation}\0${options.key}`;
+      const existing = idempotentResources.get(key);
+      if (existing) {
+        if (existing.fingerprint !== options.requestFingerprint) {
+          throw new HttpError(
+            409,
+            "idempotency_key_reused",
+            "This idempotency key was already used for a different request.",
+          );
+        }
+        return { ...existing.state, claimed: false };
+      }
+      const state: IdempotentResourceState = {
+        status: "processing",
+        resourceId: options.resourceId,
+      };
+      idempotentResources.set(key, {
+        fingerprint: options.requestFingerprint,
+        state,
+      });
+      return { ...state, claimed: true };
+    },
+    async readIdempotentResource(options: {
+      userId: string;
+      operation: string;
+      key: string;
+      requestFingerprint: string;
+    }) {
+      const key = `${options.userId}\0${options.operation}\0${options.key}`;
+      const existing = idempotentResources.get(key);
+      assert.ok(existing, `missing idempotency resource ${key}`);
+      if (existing.fingerprint !== options.requestFingerprint) {
+        throw new HttpError(
+          409,
+          "idempotency_key_reused",
+          "This idempotency key was already used for a different request.",
+        );
+      }
+      return existing.state;
+    },
+    async completeIdempotentResource(options: {
+      userId: string;
+      operation: string;
+      key: string;
+      requestFingerprint: string;
+      resourceId: string;
+    }) {
+      const key = `${options.userId}\0${options.operation}\0${options.key}`;
+      const existing = idempotentResources.get(key);
+      assert.ok(existing, `missing idempotency resource ${key}`);
+      assert.equal(existing.fingerprint, options.requestFingerprint);
+      assert.equal(existing.state.resourceId, options.resourceId);
+      existing.state = {
+        status: "completed",
+        resourceId: options.resourceId,
+        responseStatus: 201,
+      };
+    },
+    async failIdempotentResource(options: {
+      userId: string;
+      operation: string;
+      key: string;
+      requestFingerprint: string;
+      resourceId: string;
+      responseStatus: number;
+      responseBody: Record<string, unknown>;
+    }) {
+      const key = `${options.userId}\0${options.operation}\0${options.key}`;
+      const existing = idempotentResources.get(key);
+      assert.ok(existing, `missing idempotency resource ${key}`);
+      assert.equal(existing.fingerprint, options.requestFingerprint);
+      assert.equal(existing.state.resourceId, options.resourceId);
+      existing.state = {
+        status: "failed",
+        resourceId: options.resourceId,
+        responseStatus: options.responseStatus,
+        responseBody: options.responseBody,
+      };
+      return true;
+    },
     async createSessionMetadata(options: {
       title: string;
       modelId?: string;
       reasoningEffort?: string;
+      sessionId?: string;
     }) {
-      const id = `session-new-${++newSessionSequence}`;
+      const id = options.sessionId ?? `session-new-${++newSessionSequence}`;
       sessions.set(id, session(id, "", "paused"));
       sessions.set(id, {
         ...sessions.get(id)!,
@@ -2495,6 +2588,72 @@ test("starts the first Turn on a newly created loaded Thread without resume", as
   }
 });
 
+test("creates one Session and first Turn for concurrent idempotent requests", async () => {
+  let releaseWrite: (() => void) | undefined;
+  const blockedWrite = new Promise<void>((resolve) => {
+    releaseWrite = resolve;
+  });
+  const context = fixture({ writeDelays: { "thread/start": blockedWrite } });
+  const input = {
+    userId: "user",
+    environment,
+    title: "One native Session",
+    prompt: "Create this once",
+    images: [],
+    modelId: "gpt-test",
+    idempotencyKey: "session-create-idempotency-key",
+  };
+  const first = context.service.createSession(input);
+  let replay: Promise<string> | undefined;
+
+  try {
+    await eventually(
+      () =>
+        context.writes.some(({ message }) => message.method === "thread/start"),
+      "first Session creation did not reach thread/start",
+    );
+    await assert.rejects(
+      context.service.createSession({
+        ...input,
+        prompt: "A different request",
+      }),
+      (error: unknown) =>
+        error instanceof HttpError && error.code === "idempotency_key_reused",
+    );
+
+    replay = context.service.createSession(input);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.equal(context.sessions.size, 3);
+    assert.equal(
+      context.writes.filter(({ message }) => message.method === "thread/start")
+        .length,
+      1,
+    );
+
+    releaseWrite?.();
+    const [firstSessionId, replaySessionId] = await Promise.all([
+      first,
+      replay,
+    ]);
+    assert.equal(replaySessionId, firstSessionId);
+    assert.equal(context.sessions.get(firstSessionId)?.title, input.title);
+    assert.equal(
+      context.writes.filter(({ message }) => message.method === "thread/start")
+        .length,
+      1,
+    );
+    assert.equal(
+      context.writes.filter(({ message }) => message.method === "turn/start")
+        .length,
+      1,
+    );
+  } finally {
+    releaseWrite?.();
+    await Promise.allSettled(replay ? [first, replay] : [first]);
+    await context.close();
+  }
+});
+
 test("passes native Plan collaboration settings to a new Thread and its first Turn", async () => {
   const context = fixture();
   try {
@@ -3451,6 +3610,172 @@ test("delivers the conversation snapshot before persisted rollout Activity", asy
     );
     assert.equal((await read.supplement).activity.availability, "available");
   } finally {
+    await context.close();
+  }
+});
+
+test("keeps a newly accepted Turn active across a stale interrupted snapshot", async () => {
+  const context = fixture({
+    sessions: [
+      {
+        id: "session-start-race",
+        nativeSessionId: "thread-start-race",
+        status: "running",
+        activeNativeTurnId: "turn-start-race",
+        activeTurnAttemptId: "attempt-environment-test",
+        activeTurnRuntimeGeneration: 1,
+        pendingTurnPhase: "accepted",
+        pendingTurnNativeTurnId: "turn-start-race",
+        pendingTurnStartedAt: new Date(),
+        pendingTurnAttemptId: "attempt-environment-test",
+        pendingTurnRuntimeGeneration: 1,
+      },
+    ],
+    onRequest(message) {
+      if (message.method !== "thread/read") return undefined;
+      return {
+        id: message.id,
+        result: {
+          thread: {
+            id: "thread-start-race",
+            status: { type: "idle" },
+            turns: [interruptedTurn("turn-start-race")],
+          },
+        },
+      };
+    },
+  });
+
+  try {
+    const read = await context.service.readNativeSnapshotWithCursor(
+      "user",
+      "session-start-race",
+    );
+
+    assert.deepEqual(read.snapshot.thread.status, {
+      type: "active",
+      activeFlags: [],
+    });
+    assert.deepEqual(read.snapshot.thread.turns[0], {
+      ...interruptedTurn("turn-start-race"),
+      status: "inProgress",
+      completedAt: null,
+      durationMs: null,
+    });
+    assert.equal(read.snapshot.sessionStatus, "running");
+    assert.deepEqual(read.snapshot.forkableTurnIds, []);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.equal(context.exceptionalCandidateQueryCount(), 0);
+    assert.equal(
+      context.writes.filter(({ message }) => message.method === "thread/read")
+        .length,
+      1,
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("preserves an explicit interrupt during the accepted Turn grace window", async () => {
+  const context = fixture({
+    sessions: [
+      {
+        id: "session-explicit-interrupt",
+        nativeSessionId: "thread-explicit-interrupt",
+        status: "running",
+        activeNativeTurnId: "turn-explicit-interrupt",
+        activeTurnAttemptId: "attempt-environment-test",
+        activeTurnRuntimeGeneration: 1,
+        pendingTurnPhase: "accepted",
+        pendingTurnNativeTurnId: "turn-explicit-interrupt",
+        pendingTurnStartedAt: new Date(),
+        pendingTurnAttemptId: "attempt-environment-test",
+        pendingTurnRuntimeGeneration: 1,
+        interruptRequestedNativeTurnId: "turn-explicit-interrupt",
+      },
+    ],
+    onRequest(message) {
+      if (message.method !== "thread/read") return undefined;
+      return {
+        id: message.id,
+        result: {
+          thread: {
+            id: "thread-explicit-interrupt",
+            status: { type: "idle" },
+            turns: [interruptedTurn("turn-explicit-interrupt")],
+          },
+        },
+      };
+    },
+  });
+
+  try {
+    const read = await context.service.readNativeSnapshotWithCursor(
+      "user",
+      "session-explicit-interrupt",
+    );
+
+    assert.deepEqual(read.snapshot.thread.status, { type: "idle" });
+    assert.equal(read.snapshot.thread.turns[0]?.status, "interrupted");
+    assert.deepEqual(read.snapshot.forkableTurnIds, [
+      "turn-explicit-interrupt",
+    ]);
+  } finally {
+    await context.close();
+  }
+});
+
+test("shares an in-flight native snapshot read across SSE subscribers", async () => {
+  let releaseWrite: (() => void) | undefined;
+  const blockedWrite = new Promise<void>((resolve) => {
+    releaseWrite = resolve;
+  });
+  const context = fixture({ writeDelays: { "thread/read": blockedWrite } });
+  const firstController = new AbortController();
+
+  try {
+    const first = context.service.readNativeSnapshotWithCursor(
+      "user",
+      "session-one",
+      firstController.signal,
+    );
+    const second = context.service.readNativeSnapshotWithCursor(
+      "user",
+      "session-one",
+    );
+    await eventually(
+      () =>
+        context.writes.some(({ message }) => message.method === "thread/read"),
+      "shared native snapshot read was not submitted",
+    );
+    assert.equal(
+      context.writes.filter(({ message }) => message.method === "thread/read")
+        .length,
+      1,
+    );
+
+    const firstRejected = assert.rejects(
+      first,
+      (error: unknown) => error instanceof Error && error.name === "AbortError",
+    );
+    firstController.abort();
+    await firstRejected;
+    assert.equal(
+      context.writes.filter(({ message }) => message.method === "thread/read")
+        .length,
+      1,
+    );
+
+    releaseWrite?.();
+    const read = await second;
+    assert.equal(read.snapshot.thread.id, "thread-one");
+    assert.equal(
+      context.writes.filter(({ message }) => message.method === "thread/read")
+        .length,
+      1,
+    );
+  } finally {
+    releaseWrite?.();
     await context.close();
   }
 });

@@ -6,7 +6,7 @@ import { Pool } from "pg";
 import { SandpiStore } from "./store";
 
 test(
-  "runtime control SQL binds against PostgreSQL column types",
+  "runtime control and idempotency SQL bind against PostgreSQL column types",
   { skip: !process.env.DATABASE_URL },
   async (context) => {
     const database = new Pool({
@@ -62,6 +62,22 @@ test(
         recovery_attempt_count INTEGER NOT NULL DEFAULT 0,
         runtime_error_code TEXT,
         version BIGINT NOT NULL
+      );
+      CREATE TEMP TABLE idempotency_keys (
+        id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        operation TEXT NOT NULL,
+        key_hash BYTEA NOT NULL,
+        request_hash BYTEA NOT NULL,
+        status TEXT NOT NULL DEFAULT 'processing'
+          CHECK (status IN ('processing', 'completed', 'failed')),
+        response_status INTEGER,
+        response_body JSONB,
+        resource_id TEXT,
+        expires_at TIMESTAMPTZ NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (user_id, operation, key_hash)
       );
     `);
     await client.query(
@@ -165,6 +181,49 @@ test(
     assert.equal(
       interrupted.rows[0]?.interrupt_requested_native_turn_id,
       "turn-current",
+    );
+
+    const idempotencyInput = {
+      userId: "user-one",
+      operation: "session.create",
+      key: "session-create-idempotency-key",
+      requestFingerprint: "request-one",
+      resourceId: "session-reserved",
+      expiresAt: new Date(Date.now() + 60_000),
+    };
+    assert.deepEqual(await store.claimIdempotentResource(idempotencyInput), {
+      claimed: true,
+      status: "processing",
+      resourceId: "session-reserved",
+      responseStatus: undefined,
+      responseBody: undefined,
+    });
+    assert.deepEqual(await store.claimIdempotentResource(idempotencyInput), {
+      claimed: false,
+      status: "processing",
+      resourceId: "session-reserved",
+      responseStatus: undefined,
+      responseBody: undefined,
+    });
+    await assert.rejects(
+      store.claimIdempotentResource({
+        ...idempotencyInput,
+        requestFingerprint: "request-two",
+      }),
+      (error: unknown) =>
+        error instanceof Error &&
+        "code" in error &&
+        error.code === "idempotency_key_reused",
+    );
+    await store.completeIdempotentResource(idempotencyInput);
+    assert.deepEqual(
+      await store.readIdempotentResource(idempotencyInput),
+      {
+        status: "completed",
+        resourceId: "session-reserved",
+        responseStatus: 201,
+        responseBody: { resourceId: "session-reserved" },
+      },
     );
   },
 );
