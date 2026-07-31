@@ -71,6 +71,11 @@ interface ResolvedEntitlement {
   period: { startsAt: Date; endsAt: Date };
 }
 
+export interface EnvironmentPlanEnforcement {
+  pauseEnvironmentIds: string[];
+  reconcileMemoryEnvironmentIds: string[];
+}
+
 export class BillingQuotaService
   implements EnvironmentQuotaPolicy, RuntimeQuotaGate
 {
@@ -238,63 +243,74 @@ export class BillingQuotaService
     }
   }
 
-  async runningEnvironmentViolations() {
-    if (this.billing.mode === "disabled") return [];
-    const candidates = (
-      await Promise.all(
-        (await this.store.runningEnvironmentCandidates()).map(
-          async (candidate) =>
-            (await this.runtime.getEnvironmentSandboxState(
-              candidate.sandboxId,
-            )) === "running"
-              ? candidate
-              : undefined,
-        ),
-      )
-    ).filter(
-      (candidate): candidate is RunningEnvironmentCandidate =>
-        candidate !== undefined,
-    );
+  async environmentPlanEnforcement(): Promise<EnvironmentPlanEnforcement> {
+    if (this.billing.mode === "disabled") {
+      return {
+        pauseEnvironmentIds: [],
+        reconcileMemoryEnvironmentIds: [],
+      };
+    }
     const entitlementByUser = new Map<
       string,
-      Promise<{
-        entitlement: ResolvedEntitlement;
-        usage: UsageTotals;
-      }>
+      Promise<ResolvedEntitlement>
     >();
-    return (
-      await Promise.all(
-        candidates.map(async (candidate) => {
-          let resolved = entitlementByUser.get(candidate.userId);
-          if (!resolved) {
-            resolved = this.resolveEntitlement(candidate.userId).then(
-              async (entitlement) => ({
-                entitlement,
-                usage: await this.store.usageTotals(
-                  candidate.userId,
-                  entitlement.period.startsAt,
-                  entitlement.period.endsAt,
-                ),
-              }),
-            );
-            entitlementByUser.set(candidate.userId, resolved);
+    const usageByUser = new Map<string, Promise<UsageTotals>>();
+    const actions = await Promise.all(
+      (await this.store.runningEnvironmentCandidates()).map(
+        async (candidate) => {
+          let entitlement = entitlementByUser.get(candidate.userId);
+          if (!entitlement) {
+            entitlement = this.resolveEntitlement(candidate.userId);
+            entitlementByUser.set(candidate.userId, entitlement);
           }
-          const { entitlement, usage } = await resolved;
+          const resolved = await entitlement;
+          const reconcileMemory =
+            resolved.plan.fixedSandboxMemoryMiB != null &&
+            candidate.sandboxMemoryMiB !==
+              resolved.plan.fixedSandboxMemoryMiB;
+          const running =
+            (await this.runtime.getEnvironmentSandboxState(
+              candidate.sandboxId,
+            )) === "running";
+          if (!running) {
+            return { candidate, pause: false, reconcileMemory };
+          }
+
+          let usage = usageByUser.get(candidate.userId);
+          if (!usage) {
+            usage = this.store.usageTotals(
+              candidate.userId,
+              resolved.period.startsAt,
+              resolved.period.endsAt,
+            );
+            usageByUser.set(candidate.userId, usage);
+          }
+          const totals = await usage;
           const environmentViolation =
-            entitlement.plan.environmentLimit != null &&
-            candidate.position > entitlement.plan.environmentLimit;
+            resolved.plan.environmentLimit != null &&
+            candidate.position > resolved.plan.environmentLimit;
           const runtimeViolation =
-            entitlement.plan.runtimeQuotaMiBMilliseconds != null &&
+            resolved.plan.runtimeQuotaMiBMilliseconds != null &&
             Math.max(
-              usage.confirmedMiBMilliseconds,
-              usage.projectedMiBMilliseconds,
-            ) >= entitlement.plan.runtimeQuotaMiBMilliseconds;
-          return environmentViolation || runtimeViolation
-            ? candidate.environmentId
-            : undefined;
-        }),
-      )
-    ).filter((value): value is string => Boolean(value));
+              totals.confirmedMiBMilliseconds,
+              totals.projectedMiBMilliseconds,
+            ) >= resolved.plan.runtimeQuotaMiBMilliseconds;
+          return {
+            candidate,
+            pause: environmentViolation || runtimeViolation,
+            reconcileMemory,
+          };
+        },
+      ),
+    );
+    return {
+      pauseEnvironmentIds: actions
+        .filter((action) => action.pause)
+        .map((action) => action.candidate.environmentId),
+      reconcileMemoryEnvironmentIds: actions
+        .filter((action) => action.reconcileMemory)
+        .map((action) => action.candidate.environmentId),
+    };
   }
 
   private async resolveEntitlement(

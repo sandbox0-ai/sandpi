@@ -24,10 +24,12 @@ test("imports attributed Sandbox0 windows through the runtime SDK and enforces q
       windows: readonly UsageWindowImport[];
     }>;
     pauses: string[];
+    memoryReconciliations: string[];
   } = {
     cursors: [],
     imports: [],
     pauses: [],
+    memoryReconciliations: [],
   };
   const repository = {
     async usageCursor(source: string) {
@@ -77,8 +79,11 @@ test("imports attributed Sandbox0 windows through the runtime SDK and enforces q
     },
   } as unknown as RuntimeAdapter;
   const quota = {
-    async runningEnvironmentViolations() {
-      return ["environment-one"];
+    async environmentPlanEnforcement() {
+      return {
+        pauseEnvironmentIds: ["environment-one"],
+        reconcileMemoryEnvironmentIds: ["environment-two"],
+      };
     },
   } as unknown as BillingQuotaService;
   const service = new SandboxUsageService(
@@ -90,6 +95,9 @@ test("imports attributed Sandbox0 windows through the runtime SDK and enforces q
   );
   service.setPauseForQuota(async (environmentId) => {
     calls.pauses.push(environmentId);
+  });
+  service.setReconcilePlanMemory(async (environmentId) => {
+    calls.memoryReconciliations.push(environmentId);
   });
 
   await service.runOnce();
@@ -103,6 +111,7 @@ test("imports attributed Sandbox0 windows through the runtime SDK and enforces q
     ["window-one"],
   );
   assert.deepEqual(calls.pauses, ["environment-one"]);
+  assert.deepEqual(calls.memoryReconciliations, ["environment-two"]);
 });
 
 test("does not query usage when the Sandbox0 runtime SDK is unconfigured", async () => {
@@ -120,8 +129,11 @@ test("does not query usage when the Sandbox0 runtime SDK is unconfigured", async
     },
   } as unknown as RuntimeAdapter;
   const quota = {
-    async runningEnvironmentViolations() {
-      return [];
+    async environmentPlanEnforcement() {
+      return {
+        pauseEnvironmentIds: [],
+        reconcileMemoryEnvironmentIds: [],
+      };
     },
   } as unknown as BillingQuotaService;
   const service = new SandboxUsageService(
@@ -151,8 +163,11 @@ test("still enforces projected usage while the SDK query is unavailable", async 
     },
   } as unknown as RuntimeAdapter;
   const quota = {
-    async runningEnvironmentViolations() {
-      return ["environment-one"];
+    async environmentPlanEnforcement() {
+      return {
+        pauseEnvironmentIds: ["environment-one"],
+        reconcileMemoryEnvironmentIds: [],
+      };
     },
   } as unknown as BillingQuotaService;
   const service = new SandboxUsageService(

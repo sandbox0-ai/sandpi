@@ -84,6 +84,30 @@ test("persists the plan-selected Sandbox memory during Environment creation", as
   ]);
 });
 
+test("reconciles plan-fixed Sandbox memory without replacing other settings", async () => {
+  const queries: Array<{ sql: string; values?: readonly unknown[] }> = [];
+  const store = new SandpiStore({
+    async query(sql: string, values?: readonly unknown[]) {
+      queries.push({ sql, values });
+      return { rowCount: 1, rows: [] };
+    },
+  } as unknown as Pool);
+
+  await store.updateEnvironmentSandboxMemory(
+    "environment-user",
+    2 * 1024,
+  );
+
+  assert.equal(queries.length, 1);
+  assert.match(queries[0]!.sql, /SET sandbox_memory_mib = \$2/);
+  assert.match(queries[0]!.sql, /revision = revision \+ 1/);
+  assert.match(queries[0]!.sql, /sandbox_memory_mib <> \$2/);
+  assert.deepEqual(queries[0]!.values, [
+    "environment-user",
+    2 * 1024,
+  ]);
+});
+
 test("scopes Environments and Sessions to the owning user", async () => {
   const queries: string[] = [];
   const now = new Date("2026-07-21T00:00:00.000Z");

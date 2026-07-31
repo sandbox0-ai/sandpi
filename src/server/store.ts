@@ -1052,6 +1052,18 @@ export class SandpiStore {
     return this.getManageableEnvironment(userId, environmentId);
   }
 
+  async updateEnvironmentSandboxMemory(
+    environmentId: string,
+    sandboxMemoryMiB: number,
+  ) {
+    await this.pool.query(
+      `UPDATE environments
+       SET sandbox_memory_mib = $2, revision = revision + 1
+       WHERE id = $1 AND sandbox_memory_mib <> $2`,
+      [environmentId, sandboxMemoryMiB],
+    );
+  }
+
   async prepareEnvironmentDeletion(userId: string, environmentId: string) {
     const environment = await this.getManageableEnvironment(
       userId,

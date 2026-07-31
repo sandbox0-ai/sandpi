@@ -260,6 +260,9 @@ export async function createSandpiServer(
   sandboxUsage?.setPauseForQuota((environmentId) =>
     lifecycle.pauseForQuota(environmentId),
   );
+  sandboxUsage?.setReconcilePlanMemory(async (environmentId) => {
+    await environments.reconcilePlanMemory(environmentId);
+  });
   workspaceBackups.setRestoreHooks({
     before: async (environmentId) => {
       await codex.flushEnvironmentCredentials(environmentId);

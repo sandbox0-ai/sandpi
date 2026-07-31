@@ -20,6 +20,7 @@ export class SandboxUsageService {
   private running?: Promise<void>;
   private closed = false;
   private pauseForQuota?: (environmentId: string) => Promise<void>;
+  private reconcilePlanMemory?: (environmentId: string) => Promise<void>;
 
   constructor(
     private readonly repository: BillingRepository,
@@ -31,6 +32,12 @@ export class SandboxUsageService {
 
   setPauseForQuota(handler: (environmentId: string) => Promise<void>) {
     this.pauseForQuota = handler;
+  }
+
+  setReconcilePlanMemory(
+    handler: (environmentId: string) => Promise<void>,
+  ) {
+    this.reconcilePlanMemory = handler;
   }
 
   start() {
@@ -52,7 +59,7 @@ export class SandboxUsageService {
     } catch (error) {
       importError = error;
     }
-    await this.enforceQuota();
+    await this.enforcePlan();
     if (importError) throw importError;
   }
 
@@ -122,11 +129,21 @@ export class SandboxUsageService {
     }
   }
 
-  private async enforceQuota() {
-    if (!this.pauseForQuota) return;
-    const environmentIds =
-      await this.quota.runningEnvironmentViolations();
-    for (const environmentId of environmentIds) {
+  private async enforcePlan() {
+    const enforcement = await this.quota.environmentPlanEnforcement();
+    for (const environmentId of enforcement.reconcileMemoryEnvironmentIds) {
+      if (!this.reconcilePlanMemory) break;
+      try {
+        await this.reconcilePlanMemory(environmentId);
+      } catch (error) {
+        this.logger.warn(
+          { err: error, environmentId },
+          "Failed to reconcile plan-fixed Sandbox memory",
+        );
+      }
+    }
+    for (const environmentId of enforcement.pauseEnvironmentIds) {
+      if (!this.pauseForQuota) break;
       try {
         await this.pauseForQuota(environmentId);
       } catch (error) {

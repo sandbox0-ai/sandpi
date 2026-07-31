@@ -181,6 +181,13 @@ export class EnvironmentService {
     return this.authoritativeEnvironment(environment);
   }
 
+  async reconcilePlanMemory(environmentId: string) {
+    return this.waitForLifecycleLock(environmentId, async (store) => {
+      const environment = await store.getEnvironmentById(environmentId);
+      return this.reconcilePlanMemoryWhileLocked(store, environment);
+    });
+  }
+
   async update(
     userId: string,
     environmentId: string,
@@ -388,13 +395,17 @@ export class EnvironmentService {
   ) {
     let resources: Parameters<RuntimeAdapter["deleteEnvironmentResources"]>[0] = {};
     try {
-      const environment = await store.getEnvironmentById(environmentId);
+      let environment = await store.getEnvironmentById(environmentId);
       if (
         !["updating", "error"].includes(environment.status) ||
         (environment.workspaceVolumeId && environment.sandboxId)
       ) {
         return environment;
       }
+      environment = await this.reconcilePlanMemoryWhileLocked(
+        store,
+        environment,
+      );
       await this.runtimeQuotaGate?.assertEnvironmentRuntimeAllowed(
         environmentId,
       );
@@ -435,6 +446,40 @@ export class EnvironmentService {
       await store.markEnvironmentFailed(environmentId, errorMessage(error));
       throw error;
     }
+  }
+
+  private async reconcilePlanMemoryWhileLocked<T extends Environment>(
+    store: SandpiStore,
+    environment: T,
+  ): Promise<T> {
+    const policy = await this.quota?.environmentCreationPolicy(
+      environment.ownerId,
+    );
+    const fixedMemoryMiB = policy?.fixedSandboxMemoryMiB;
+    if (
+      fixedMemoryMiB == null ||
+      environment.sandboxMemoryMiB === fixedMemoryMiB
+    ) {
+      return environment;
+    }
+
+    if (environment.status === "ready" && environment.sandboxId) {
+      const runtime = await store.getEnvironmentRuntime(
+        environment.ownerId,
+        environment.id,
+      );
+      if (runtime.desiredState === "terminated") return environment;
+      await this.runtime.updateEnvironmentMemory(runtime, fixedMemoryMiB);
+    }
+    await store.updateEnvironmentSandboxMemory(
+      environment.id,
+      fixedMemoryMiB,
+    );
+    return {
+      ...environment,
+      sandboxMemoryMiB: fixedMemoryMiB,
+      revision: environment.revision + 1,
+    };
   }
 }
 
