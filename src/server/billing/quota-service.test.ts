@@ -136,7 +136,7 @@ test("free entitlement adds the live Sandbox0 allocation to closed usage", async
   const store = new FakeQuotaStore();
   store.customerId = "cus_one";
   store.usage = {
-    confirmedMiBMilliseconds: 2 * MIB_MILLISECONDS_PER_GIB_HOUR,
+    confirmedMiBMilliseconds: 6 * MIB_MILLISECONDS_PER_GIB_HOUR,
   };
   store.candidates = [
     {
@@ -167,11 +167,11 @@ test("free entitlement adds the live Sandbox0 allocation to closed usage", async
     summary.availablePlans.map((plan) => plan.annualPriceUsd),
     [0, 99, 199, 499],
   );
-  assert.equal(summary.plan.runtimeQuotaGiBHours, 4);
-  assert.equal(summary.usage.usedGiBHours, 4);
+  assert.equal(summary.plan.runtimeQuotaGiBHours, 8);
+  assert.equal(summary.usage.usedGiBHours, 8);
   assert.equal(
     summary.usage.projectedMiBMilliseconds,
-    4 * MIB_MILLISECONDS_PER_GIB_HOUR,
+    8 * MIB_MILLISECONDS_PER_GIB_HOUR,
   );
   assert.equal(summary.usage.exhausted, true);
   assert.equal(
@@ -267,7 +267,7 @@ test("active paid entitlement has a fixed weekly quota period", async () => {
   const summary = await service.summary(account.userId);
 
   assert.equal(summary.plan.id, "plus");
-  assert.equal(summary.plan.runtimeQuotaGiBHours, 125);
+  assert.equal(summary.plan.runtimeQuotaGiBHours, 250);
   assert.equal(
     summary.usage.periodStartsAt,
     Date.parse("2026-07-22T00:00:00.000Z") / 1_000,
@@ -294,7 +294,7 @@ test("Ultra entitlement exposes its weekly runtime and Environment limits", asyn
   const summary = await service.summary(account.userId);
 
   assert.equal(summary.plan.id, "ultra");
-  assert.equal(summary.plan.runtimeQuotaGiBHours, 625);
+  assert.equal(summary.plan.runtimeQuotaGiBHours, 1_250);
   assert.equal(summary.plan.environmentLimit, 25);
 });
 
@@ -366,14 +366,14 @@ test("free users cannot resize memory or run outside plan limits", async () => {
 
   store.position = 1;
   store.usage.confirmedMiBMilliseconds =
-    4 * MIB_MILLISECONDS_PER_GIB_HOUR;
+    8 * MIB_MILLISECONDS_PER_GIB_HOUR;
   await assert.rejects(
     service.assertEnvironmentRuntimeAllowed("environment-one"),
     (error) =>
       error instanceof HttpError &&
       error.statusCode === 429 &&
       error.code === "sandbox_runtime_quota_exhausted" &&
-      (error.details as { usedGiBHours?: number }).usedGiBHours === 4,
+      (error.details as { usedGiBHours?: number }).usedGiBHours === 8,
   );
 });
 
@@ -420,7 +420,7 @@ test("background enforcement reconciles fixed memory and pauses only running vio
 test("background enforcement pauses live runtime as soon as open usage reaches quota", async () => {
   const store = new FakeQuotaStore();
   store.usage.confirmedMiBMilliseconds =
-    3 * MIB_MILLISECONDS_PER_GIB_HOUR;
+    7 * MIB_MILLISECONDS_PER_GIB_HOUR;
   store.candidates = [
     {
       environmentId: "environment-one",

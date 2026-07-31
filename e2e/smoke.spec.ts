@@ -3322,7 +3322,7 @@ test("shows account usage and submits only a server-owned plan id", async ({
               annualPriceUsd: 0,
               environmentLimit: 1,
               memoryConfigurable: false,
-              runtimeQuotaGiBHours: 4,
+              runtimeQuotaGiBHours: 8,
               quotaPeriod: "account-month",
             },
             availablePlans: [
@@ -3332,7 +3332,7 @@ test("shows account usage and submits only a server-owned plan id", async ({
                 annualPriceUsd: 0,
                 environmentLimit: 1,
                 memoryConfigurable: false,
-                runtimeQuotaGiBHours: 4,
+                runtimeQuotaGiBHours: 8,
                 quotaPeriod: "account-month",
               },
               {
@@ -3341,7 +3341,7 @@ test("shows account usage and submits only a server-owned plan id", async ({
                 annualPriceUsd: 99,
                 environmentLimit: 3,
                 memoryConfigurable: true,
-                runtimeQuotaGiBHours: 125,
+                runtimeQuotaGiBHours: 250,
                 quotaPeriod: "fixed-week",
               },
               {
@@ -3350,7 +3350,7 @@ test("shows account usage and submits only a server-owned plan id", async ({
                 annualPriceUsd: 199,
                 environmentLimit: 10,
                 memoryConfigurable: true,
-                runtimeQuotaGiBHours: 250,
+                runtimeQuotaGiBHours: 500,
                 quotaPeriod: "fixed-week",
               },
               {
@@ -3359,7 +3359,7 @@ test("shows account usage and submits only a server-owned plan id", async ({
                 annualPriceUsd: 499,
                 environmentLimit: 25,
                 memoryConfigurable: true,
-                runtimeQuotaGiBHours: 625,
+                runtimeQuotaGiBHours: 1_250,
                 quotaPeriod: "fixed-week",
               },
             ],
@@ -3369,11 +3369,11 @@ test("shows account usage and submits only a server-owned plan id", async ({
               confirmedMiBMilliseconds: 1_843_200_000,
               projectedMiBMilliseconds: 3_686_400_000,
               usedMiBMilliseconds: 3_686_400_000,
-              limitMiBMilliseconds: 14_745_600_000,
-              remainingMiBMilliseconds: 11_059_200_000,
+              limitMiBMilliseconds: 29_491_200_000,
+              remainingMiBMilliseconds: 25_804_800_000,
               usedGiBHours: 1,
-              limitGiBHours: 4,
-              percentUsed: 25,
+              limitGiBHours: 8,
+              percentUsed: 12.5,
               exhausted: false,
             },
             environmentCount: 1,
@@ -3416,7 +3416,7 @@ test("shows account usage and submits only a server-owned plan id", async ({
   ).toHaveClass(/lucide-chevron-down/);
   const accountMenu = page.getByRole("menu", { name: "Account actions" });
   await expect(accountMenu.getByText("Sandbox runtime")).toBeVisible();
-  await expect(accountMenu.getByText("0.5 / 2 hours")).toBeVisible();
+  await expect(accountMenu.getByText("0.5 / 4 hours")).toBeVisible();
   await expect(
     accountMenu.getByText("Resets Aug 1, 2026, 8:00 AM"),
   ).toBeVisible();
@@ -3441,7 +3441,7 @@ test("shows account usage and submits only a server-owned plan id", async ({
   await expect(
     page.getByRole("heading", { name: "Billing & usage" }),
   ).toBeVisible();
-  await expect(page.getByText("0.5 / 2 hours")).toBeVisible();
+  await expect(page.getByText("0.5 / 4 hours")).toBeVisible();
   await expect(
     page.getByText("Resets Aug 1, 2026, 8:00 AM"),
   ).toBeVisible();
@@ -3453,7 +3453,7 @@ test("shows account usage and submits only a server-owned plan id", async ({
   const freePlan = page
     .getByRole("article")
     .filter({ hasText: "Free" });
-  await expect(freePlan.getByText("2 runtime hours / month")).toBeVisible();
+  await expect(freePlan.getByText("8 GiB-hours / month")).toBeVisible();
   await expect(freePlan.getByText("Fixed 2 GiB memory")).toBeVisible();
   const plusPlan = page
     .getByRole("article")

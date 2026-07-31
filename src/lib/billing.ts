@@ -4,7 +4,7 @@ import {
 } from "./time";
 
 export const SANDPI_FREE_SANDBOX_MEMORY_MIB = 2 * 1024;
-export const SANDPI_FREE_RUNTIME_HOURS = 2;
+export const SANDPI_FREE_RUNTIME_HOURS = 4;
 
 export const SANDPI_PAID_PLAN_IDS = ["plus", "pro", "ultra"] as const;
 export type SandpiPaidPlanId = (typeof SANDPI_PAID_PLAN_IDS)[number];

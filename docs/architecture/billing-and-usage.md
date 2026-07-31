@@ -62,14 +62,14 @@ under-counting usage.
 
 ## Entitlement periods
 
-- Free: one account-anchored month, two runtime hours on one fixed 2 GiB
-  Sandbox (4 GiB-hours), and one Environment.
+- Free: one account-anchored month, four runtime hours on one fixed 2 GiB
+  Sandbox (8 GiB-hours), and one Environment.
 - Plus: $99 billed annually, fixed seven-day periods from first paid
-  activation, 125 GiB-hours per period, three Environments.
+  activation, 250 GiB-hours per period, three Environments.
 - Pro: $199 billed annually, fixed seven-day periods from first paid
-  activation, 250 GiB-hours per period, ten Environments.
+  activation, 500 GiB-hours per period, ten Environments.
 - Ultra: $499 billed annually, fixed seven-day periods from first paid
-  activation, 625 GiB-hours per period, 25 Environments.
+  activation, 1,250 GiB-hours per period, 25 Environments.
 - Disabled billing: unlimited deployment entitlement with no usage polling.
 
 The conversion is exact:
