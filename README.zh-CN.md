@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <a href="https://sandpi.ai">打开 Sandpi</a> · <a href="https://github.com/sandbox0-ai/sandbox0">Sandbox0</a>
+  <a href="https://sandpi.ai">打开 Sandpi</a> · <a href="https://sandbox0.ai">Sandbox0</a>
 </p>
 
 Sandpi 是 [Sandbox0](https://github.com/sandbox0-ai/sandbox0) 的开源 side
