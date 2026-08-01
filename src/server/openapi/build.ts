@@ -44,7 +44,8 @@ const TAGS: OpenAPIV3.TagObject[] = [
   { name: "Schedules", description: "Durable Environment automations." },
   {
     name: "Webhooks",
-    description: "Signed external triggers for durable Environment automations.",
+    description:
+      "Authenticated external triggers for durable Environment automations.",
   },
   {
     name: "Codex",

@@ -145,7 +145,6 @@ const environmentWebhookConditionSchema = z
 export const environmentWebhookSchema = z
   .object({
     name: z.string().trim().min(1).max(80),
-    provider: z.enum(["github", "alertmanager", "slack", "custom"]),
     secret: z.string().trim().min(16).max(1_000).optional(),
     prompt: z.string().trim().min(1).max(50_000),
     triggerPolicy: z

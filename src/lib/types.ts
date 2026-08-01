@@ -154,12 +154,6 @@ export interface EnvironmentScheduleRun {
   updatedAt: UnixTimestamp;
 }
 
-export type EnvironmentWebhookProvider =
-  | "github"
-  | "alertmanager"
-  | "slack"
-  | "custom";
-
 export type EnvironmentWebhookTarget = EnvironmentScheduleTarget;
 
 export interface EnvironmentWebhookCondition {
@@ -199,13 +193,12 @@ export type EnvironmentWebhookDeliveryStatus =
   | "suppressed"
   | "duplicate";
 
-/** A provider-aware external trigger whose verified deliveries remain in Sandpi. */
+/** An authenticated external trigger whose deliveries remain in Sandpi. */
 export interface EnvironmentWebhook {
   id: string;
   environmentId: string;
   endpointUrl: string;
   name: string;
-  provider: EnvironmentWebhookProvider;
   prompt: string;
   triggerPolicy: EnvironmentWebhookTriggerPolicy;
   cooldownPolicy: EnvironmentWebhookCooldownPolicy;
@@ -230,7 +223,7 @@ export interface EnvironmentWebhook {
 
 export interface EnvironmentWebhookSetup {
   webhook: EnvironmentWebhook;
-  /** Returned only when a new provider signing or bearer secret was created. */
+  /** Returned only when a new bearer secret was created. */
   setupSecret?: string;
 }
 

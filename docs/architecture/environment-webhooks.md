@@ -7,10 +7,10 @@ using Sandbox Functions as an HTTP control plane.
 ## Data flow and authority
 
 ```text
-external provider
+external event source
       |
       v
-public Sandpi endpoint + provider signature verification
+public Sandpi endpoint + bearer-token authentication
       |
       v
 PostgreSQL delivery ledger -> trigger policy -> cooldown bucket
@@ -23,41 +23,36 @@ native Thread remains conversation authority
 ```
 
 The endpoint is public only with respect to Sandpi's browser login. Every
-request must still pass the Webhook's own cryptographic or bearer-token check.
+request must still pass the Webhook's own bearer-token check.
 The encrypted secret, definition, delivery ledger, cooldown buckets and run
 ledger stay in Sandpi PostgreSQL. A Sandbox does not receive database or
-provider credentials.
+Webhook credentials.
 
 The run ledger stores delivery and recovery coordinates, not the resulting
 conversation transcript. After a Turn is accepted, the native coding-agent
 Thread remains the source of truth for messages, tool calls, reasoning and
 output, just as it does for Schedules and interactive input.
 
-## Provider adapters
+## Request authentication and event envelope
 
-One internal normalized event model lets policies work consistently while each
-provider keeps its native authentication and event vocabulary:
+Environment Webhooks are a generic ingress rather than provider integrations.
+They accept JSON, form or text payloads authenticated with `Authorization:
+Bearer <token>`. The `?token=` fallback exists for senders that cannot configure
+headers, but query strings may be retained by upstream access logs.
 
-| Provider | Verification | Normalized event type | Default grouping |
-| --- | --- | --- | --- |
-| GitHub | `X-Hub-Signature-256` HMAC-SHA256 over the raw body | `X-GitHub-Event`, with `.action` when present, such as `issues.opened` | repository plus issue, pull request, ref or event |
-| Alertmanager | `Authorization: Bearer` or `?token=` | top-level `status`, normally `firing` or `resolved` | Alertmanager `groupKey` |
-| Slack | `X-Slack-Signature` HMAC-SHA256 plus a five-minute timestamp window | Events API event type or `slash_command` | team, channel and thread or actor |
-| Custom | `Authorization: Bearer` or `?token=` | `X-Sandpi-Event`, then `type`, `event` or `kind` | `custom`, unless a policy overrides it |
+Each accepted request is normalized into one internal event model:
 
-GitHub uses `X-GitHub-Delivery` for deduplication. Slack uses `event_id` or
-`trigger_id`. Alertmanager and Custom accept `Idempotency-Key` or provider
-request identifiers. When a source has no stable identifier, Sandpi derives one
-from the body within a five-minute retry window. Slack URL verification is
-answered synchronously after signature validation.
+- `X-Sandpi-Event`, then top-level `type`, `event` or `kind`, names the event;
+- `Idempotency-Key`, `X-Sandpi-Delivery` or `X-Request-ID` identifies a delivery;
+- when no stable identifier is supplied, Sandpi derives one from the body within
+  a five-minute retry window;
+- the default group is `default`; `groupKeyPath` can select a payload-specific
+  value;
+- the original parsed payload remains available under `/payload`.
 
-Bearer authorization is preferred for Alertmanager and Custom integrations;
-the query-token fallback exists for senders that cannot configure headers, but
-query strings may be retained by upstream access logs.
-
-The built-in adapters intentionally stop at webhook setup. They do not require
-a Sandpi-owned GitHub App or Slack OAuth installation. Providers not listed
-above use Custom and may name an event with `X-Sandpi-Event`.
+GitHub Apps, Slack Apps and other installation-based products require a
+separate account connection and resource-binding model. They must not be
+represented as protocol options on a generic Webhook definition.
 
 ## Trigger policy
 
@@ -69,14 +64,14 @@ Trigger policy is evaluated only after verification and deduplication:
 - `mode=every` accepts every matching delivery;
 - `mode=stateChange` accepts a group only when the configured state value
   differs from its last observed value;
-- `groupKeyPath` and `statePath` may override provider defaults by reading the
+- `groupKeyPath` and `statePath` may override envelope defaults by reading the
   normalized envelope, including `/payload/...` paths.
 
 State comparisons are durable and scoped by Webhook plus group key. Filtered
 deliveries remain visible in the delivery ledger so a policy can be debugged
-without storing anything in conversation history. Changing the provider or
-trigger policy resets the saved comparison state atomically, so the revised
-policy evaluates its first matching delivery from a clean baseline.
+without storing anything in conversation history. Changing the trigger policy
+resets the saved comparison state atomically, so the revised policy evaluates
+its first matching delivery from a clean baseline.
 
 ## Cooldown policy
 
@@ -98,7 +93,7 @@ A bucket snapshots its mode, duration, behavior and execution configuration.
 New deliveries still pass the current trigger policy before joining an open
 bucket, but edits cannot move its deadline or change how its accepted input will
 run. The revised cooldown and execution settings take full effect after that
-bucket closes. Every generated prompt clearly wraps provider content as
+bucket closes. Every generated prompt clearly wraps event-source content as
 untrusted external data rather than instructions.
 
 ## Run admission and recovery
@@ -141,12 +136,11 @@ Each definition receives one unguessable ingress URL:
 POST /api/v1/webhooks/{endpointId}
 ```
 
-Creating GitHub, Alertmanager or Custom Webhooks without a supplied secret
-returns a generated setup secret once. Slack requires the App signing secret.
-Supplied secrets must contain at least 16 characters. Secrets are encrypted
-with `SANDPI_SECRET_KEY`; creating or rotating a Webhook fails closed when
-credential encryption is not configured.
+Creating a Webhook without a supplied secret returns a generated bearer token
+once. Supplied secrets must contain at least 16 characters. Secrets are
+encrypted with `SANDPI_SECRET_KEY`; creating or rotating a Webhook fails closed
+when credential encryption is not configured.
 
-The Environment Settings UI provides provider instructions, one-time secret
-copying, trigger and cooldown editors, run admission controls, and recent
+The Environment Settings UI provides generic sender instructions, one-time
+token copying, trigger and cooldown editors, run admission controls, and recent
 delivery and run history.

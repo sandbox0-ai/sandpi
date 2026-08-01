@@ -84,8 +84,8 @@ coding-agent harness remain authoritative within their respective boundaries.
   backups and restore.
 - Durable one-time and recurring coding-agent Schedules with run history and
   overlap protection.
-- Verified GitHub, Alertmanager, Slack, and custom Environment Webhooks with
-  trigger filters, cooldown policies, delivery history, and bounded run queues.
+- Authenticated custom Environment Webhooks with trigger filters, cooldown
+  policies, delivery history, and bounded run queues.
 - Sandpi owns users, Environment attribution, native Session references, and
   optional product entitlements. Sandbox0 owns Sandbox lifecycle, Volumes,
   network enforcement, credential injection, and usage truth.

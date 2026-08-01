@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import test from "node:test";
+import { Pool } from "pg";
 import {
   loadMigrations,
+  migrateDatabase,
   migrationChecksum,
   migrationVersion,
 } from "./migrate";
@@ -85,6 +88,7 @@ test("migration history contains every durable Sandpi boundary", async () => {
       "0058_session_completion",
       "0059_add_ultra_subscription_plan",
       "0060_environment_webhooks",
+      "0061_retire_webhook_provider_adapters",
     ],
   );
 
@@ -228,6 +232,20 @@ test("migration history contains every durable Sandpi boundary", async () => {
   );
   assert.match(environmentWebhooksSql, /secret_ciphertext BYTEA NOT NULL/);
   assert.doesNotMatch(environmentWebhooksSql, /secret_plaintext/i);
+
+  const retireWebhookProviderAdaptersSql = migrations[60]?.sql ?? "";
+  assert.match(
+    retireWebhookProviderAdaptersSql,
+    /SET enabled = FALSE[\s\S]+WHERE provider <> 'custom'/,
+  );
+  assert.match(
+    retireWebhookProviderAdaptersSql,
+    /ALTER TABLE environment_webhooks[\s\S]+DROP COLUMN provider/,
+  );
+  assert.match(
+    retireWebhookProviderAdaptersSql,
+    /ALTER TABLE environment_webhook_deliveries[\s\S]+RENAME COLUMN provider_delivery_id TO source_delivery_id/,
+  );
 
   const sandbox0LifecycleTruthSql = migrations[53]?.sql ?? "";
   assert.match(
@@ -851,3 +869,119 @@ test("migration history contains every durable Sandpi boundary", async () => {
     /\b(?:code|verifier|session_token)\s+(?:TEXT|BYTEA)\b/i,
   );
 });
+
+test(
+  "retiring Webhook provider adapters disables legacy definitions before dropping the discriminator",
+  { skip: !process.env.DATABASE_URL },
+  async (context) => {
+    const schema = `sandpi_webhook_migration_${randomUUID().replaceAll("-", "")}`;
+    const administration = new Pool({
+      connectionString: process.env.DATABASE_URL,
+      application_name: "sandpi-webhook-migration-test-administration",
+      max: 1,
+    });
+    await administration.query(`CREATE SCHEMA "${schema}"`);
+    const database = new Pool({
+      connectionString: process.env.DATABASE_URL,
+      application_name: "sandpi-webhook-migration-test",
+      options: `-c search_path=${schema}`,
+      max: 2,
+    });
+    context.after(async () => {
+      await database.end();
+      await administration.query(`DROP SCHEMA "${schema}" CASCADE`);
+      await administration.end();
+    });
+    await database.query(`
+      CREATE TABLE environment_webhooks (
+        id TEXT PRIMARY KEY,
+        provider TEXT NOT NULL,
+        enabled BOOLEAN NOT NULL,
+        last_error TEXT,
+        revision BIGINT NOT NULL,
+        deleted_at TIMESTAMPTZ
+      );
+      CREATE TABLE environment_webhook_deliveries (
+        id TEXT PRIMARY KEY,
+        webhook_id TEXT NOT NULL,
+        provider_delivery_id TEXT NOT NULL,
+        UNIQUE (webhook_id, provider_delivery_id)
+      );
+      INSERT INTO environment_webhooks
+        (id, provider, enabled, revision)
+      VALUES
+        ('legacy-github', 'github', TRUE, 1),
+        ('generic', 'custom', TRUE, 1);
+      INSERT INTO environment_webhook_deliveries
+        (id, webhook_id, provider_delivery_id)
+      VALUES ('delivery', 'webhook', 'source-id');
+    `);
+
+    const migration = (await loadMigrations()).find(
+      (candidate) =>
+        candidate.version === "0061_retire_webhook_provider_adapters",
+    );
+    assert.ok(migration);
+    await migrateDatabase(database, [migration]);
+
+    const definitions = await database.query<{
+      id: string;
+      enabled: boolean;
+      last_error: string | null;
+      revision: string;
+    }>(
+      `SELECT id, enabled, last_error, revision::TEXT
+       FROM environment_webhooks ORDER BY id`,
+    );
+    assert.deepEqual(definitions.rows, [
+      {
+        id: "generic",
+        enabled: true,
+        last_error: null,
+        revision: "1",
+      },
+      {
+        id: "legacy-github",
+        enabled: false,
+        last_error:
+          "The built-in github adapter was removed. Rotate the secret and configure this definition as a generic Webhook before enabling it.",
+        revision: "2",
+      },
+    ]);
+    const columns = await database.query<{ column_name: string }>(
+      `SELECT column_name
+       FROM information_schema.columns
+       WHERE table_schema = $1
+         AND table_name IN (
+           'environment_webhooks',
+           'environment_webhook_deliveries'
+         )`,
+      [schema],
+    );
+    const names = new Set(columns.rows.map((row) => row.column_name));
+    assert.equal(names.has("provider"), false);
+    assert.equal(names.has("provider_delivery_id"), false);
+    assert.equal(names.has("source_delivery_id"), true);
+    const constraints = await database.query<{ conname: string }>(
+      `SELECT constraint_row.conname
+       FROM pg_constraint constraint_row
+       JOIN pg_class relation ON relation.oid = constraint_row.conrelid
+       JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
+       WHERE namespace.nspname = $1
+         AND relation.relname = 'environment_webhook_deliveries'`,
+      [schema],
+    );
+    assert.equal(
+      constraints.rows.some((row) => row.conname.includes("provider")),
+      false,
+    );
+    assert.equal(
+      constraints.rows.some(
+        (row) =>
+          row.conname ===
+          "environment_webhook_deliveries_source_delivery_key",
+      ),
+      true,
+    );
+  },
+);

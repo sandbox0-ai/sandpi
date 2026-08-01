@@ -3156,7 +3156,6 @@ function environmentWebhookConfiguration(
 ): EnvironmentWebhookConfiguration {
   return {
     name: input.name,
-    provider: input.provider,
     ...(input.secret ? { secret: input.secret } : {}),
     prompt: input.prompt,
     triggerPolicy: input.triggerPolicy,
