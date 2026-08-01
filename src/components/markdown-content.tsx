@@ -12,7 +12,7 @@ import ReactMarkdown, {
 } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-import { sandboxLoopbackUrl } from "@/lib/environment-browser";
+import { sandboxPreviewUrl } from "@/lib/environment-preview";
 import { resolveWorkspaceMarkdownPath } from "@/lib/workspace-file-presentation";
 
 interface MarkdownContentProps {
@@ -20,7 +20,7 @@ interface MarkdownContentProps {
   variant?: "message" | "document";
   baseWorkspacePath?: string;
   onOpenWorkspacePath?: (path: string) => void;
-  onOpenBrowserUrl?: (url: string) => void;
+  onOpenPreviewUrl?: (url: string) => void;
   renderWorkspaceImage?: (path: string, alt: string) => ReactNode;
 }
 
@@ -54,7 +54,7 @@ function markdownUrlTransform(
   key: string,
   allowLoopbackLinks: boolean,
 ) {
-  if (allowLoopbackLinks && key === "href" && sandboxLoopbackUrl(value)) {
+  if (allowLoopbackLinks && key === "href" && sandboxPreviewUrl(value)) {
     return value;
   }
   return defaultUrlTransform(value);
@@ -66,7 +66,7 @@ function MarkdownContentView({
   variant = "message",
   baseWorkspacePath,
   onOpenWorkspacePath,
-  onOpenBrowserUrl,
+  onOpenPreviewUrl,
   renderWorkspaceImage,
 }: MarkdownContentProps) {
   const components = useMemo<Components>(
@@ -98,15 +98,15 @@ function MarkdownContentView({
             </code>
           );
         }
-        const browserUrl = sandboxLoopbackUrl(href);
-        if (browserUrl && onOpenBrowserUrl) {
+        const previewUrl = sandboxPreviewUrl(href);
+        if (previewUrl && onOpenPreviewUrl) {
           return (
             <button
               type="button"
-              className="markdown-browser-link"
-              title={title ?? browserUrl}
-              data-browser-url={browserUrl}
-              onClick={() => onOpenBrowserUrl(browserUrl)}
+              className="markdown-preview-link"
+              title={title ?? previewUrl}
+              data-preview-url={previewUrl}
+              onClick={() => onOpenPreviewUrl(previewUrl)}
             >
               {children}
             </button>
@@ -166,15 +166,15 @@ function MarkdownContentView({
     }),
     [
       baseWorkspacePath,
-      onOpenBrowserUrl,
+      onOpenPreviewUrl,
       onOpenWorkspacePath,
       renderWorkspaceImage,
     ],
   );
   const transformUrl = useCallback(
     (value: string, key: string) =>
-      markdownUrlTransform(value, key, Boolean(onOpenBrowserUrl)),
-    [onOpenBrowserUrl],
+      markdownUrlTransform(value, key, Boolean(onOpenPreviewUrl)),
+    [onOpenPreviewUrl],
   );
 
   return (

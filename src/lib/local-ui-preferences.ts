@@ -9,17 +9,13 @@ import {
   normalizeFileBrowserSidebarWidth,
   normalizeInspectorWidthRatio,
 } from "./workspace-layout";
-import {
-  DEFAULT_BROWSER_DASHBOARD_VIEWPORT_MODE,
-  type BrowserDashboardViewportMode,
-} from "./environment-browser";
 
 export const LOCAL_UI_PREFERENCES_STORAGE_KEY =
   "sandpi.local-ui-preferences.v1";
 export const LOCAL_UI_PREFERENCES_CHANGED_EVENT =
   "sandpi:local-ui-preferences-changed";
 
-export type LocalInspectorTab = "files" | "browser" | "activity" | "metrics";
+export type LocalInspectorTab = "files" | "preview" | "activity" | "metrics";
 export type LocalCodexSessionActivityFilter =
   "all" | "issues" | "external" | "commands" | "files" | "agents" | "system";
 
@@ -40,7 +36,6 @@ export interface SandpiLocalUiPreferences {
     inspectorWidthRatio: number;
     fileBrowserSidebarCollapsed: boolean;
     fileBrowserSidebarWidth: number;
-    browserViewportMode: BrowserDashboardViewportMode;
     metricsRangeSeconds: EnvironmentMetricRangeSeconds;
     terminalHeight: number;
   };
@@ -58,7 +53,6 @@ export const DEFAULT_LOCAL_UI_PREFERENCES: SandpiLocalUiPreferences = {
     inspectorWidthRatio: DEFAULT_INSPECTOR_WIDTH_RATIO,
     fileBrowserSidebarCollapsed: false,
     fileBrowserSidebarWidth: DEFAULT_FILE_BROWSER_SIDEBAR_WIDTH,
-    browserViewportMode: DEFAULT_BROWSER_DASHBOARD_VIEWPORT_MODE,
     metricsRangeSeconds: DEFAULT_ENVIRONMENT_METRIC_RANGE_SECONDS,
     terminalHeight: 320,
   },
@@ -71,12 +65,7 @@ export const DEFAULT_LOCAL_UI_PREFERENCES: SandpiLocalUiPreferences = {
 let cachedRawPreferences: string | null | undefined;
 let cachedPreferences = DEFAULT_LOCAL_UI_PREFERENCES;
 
-const INSPECTOR_TABS = ["files", "browser", "activity", "metrics"] as const;
-const BROWSER_VIEWPORT_MODES = [
-  "desktop",
-  "responsive",
-  "mobile",
-] as const;
+const INSPECTOR_TABS = ["files", "preview", "activity", "metrics"] as const;
 const CODEX_SESSION_ACTIVITY_FILTERS = [
   "all",
   "issues",
@@ -225,7 +214,9 @@ export function normalizeLocalUiPreferences(
           : DEFAULT_LOCAL_UI_PREFERENCES.workspace.inspectorOpen,
       inspectorTab: oneOf(
         INSPECTOR_TABS,
-        workspace.inspectorTab,
+        workspace.inspectorTab === "browser"
+          ? "preview"
+          : workspace.inspectorTab,
         DEFAULT_LOCAL_UI_PREFERENCES.workspace.inspectorTab,
       ),
       inspectorWidthRatio: normalizeInspectorWidthRatio(
@@ -238,11 +229,6 @@ export function normalizeLocalUiPreferences(
               .fileBrowserSidebarCollapsed,
       fileBrowserSidebarWidth: normalizeFileBrowserSidebarWidth(
         workspace.fileBrowserSidebarWidth,
-      ),
-      browserViewportMode: oneOf(
-        BROWSER_VIEWPORT_MODES,
-        workspace.browserViewportMode,
-        DEFAULT_LOCAL_UI_PREFERENCES.workspace.browserViewportMode,
       ),
       metricsRangeSeconds: isEnvironmentMetricRangeSeconds(metricsRangeSeconds)
         ? metricsRangeSeconds

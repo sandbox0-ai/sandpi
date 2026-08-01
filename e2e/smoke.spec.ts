@@ -26,7 +26,6 @@ import type {
   CodexTurn,
 } from "../src/harnesses/codex/types";
 import { PENDING_GUEST_PROMPT_STORAGE_KEY } from "../src/lib/auth-navigation";
-import { BROWSER_DASHBOARD_SESSION_READY_MESSAGE } from "../src/lib/environment-browser";
 import {
   getMockBootstrap,
   mockEnvironmentMetrics,
@@ -2341,7 +2340,7 @@ test("waits for native New Session models and scopes reasoning effort by model",
   expect(browserErrors).toEqual([]);
 });
 
-test("keeps New Session header operations aligned with the conversation", async ({
+test("keeps New Session header operations aligned with isolated Preview", async ({
   page,
 }) => {
   const bootstrap = getMockBootstrap();
@@ -2350,6 +2349,17 @@ test("keeps New Session header operations aligned with the conversation", async 
   bootstrap.selectedEnvironmentId = environment.id;
   bootstrap.selectedSessionId = "";
 
+  await page.addInitScript(
+    ({ storageKey }) => {
+      window.localStorage.setItem(
+        storageKey,
+        JSON.stringify({
+          workspace: { inspectorOpen: true, inspectorTab: "browser" },
+        }),
+      );
+    },
+    { storageKey: LOCAL_UI_PREFERENCES_STORAGE_KEY },
+  );
   await page.route(
     (url) => url.pathname === "/api/v1/bootstrap",
     async (route) => {
@@ -2375,120 +2385,33 @@ test("keeps New Session header operations aligned with the conversation", async 
       });
     },
   );
+
+  const previewOrigin =
+    "https://p3000-aaaaaaaaaaaaaaaaaaaa.preview.sandpi.test";
+  const previewRequests: unknown[] = [];
+  let previewLoads = 0;
   await page.route(
-    `**/api/v1/environments/${encodeURIComponent(environment.id)}/ide`,
+    `**/api/v1/environments/${encodeURIComponent(environment.id)}/preview/session`,
     async (route) => {
+      previewRequests.push(route.request().postDataJSON());
       await route.fulfill({
         json: {
           data: {
-            files: [],
-            git: { repositories: [] },
-            refreshedAt: Date.now() / 1_000,
+            target: "http://localhost:3000/app",
+            url: `${previewOrigin}/app?__sandpi_ticket=e2e-ticket`,
           },
         },
       });
     },
   );
-  await page.routeWebSocket(
-    (url) =>
-      url.pathname ===
-      `/api/v1/environments/${encodeURIComponent(environment.id)}/ide/events`,
-    (socket) => {
-      socket.send(JSON.stringify({ type: "ready", at: Date.now() / 1_000 }));
-    },
-  );
-  let browserSessionStarts = 0;
-  const browserViewports: Array<{ width: number; height: number }> = [];
-  await page.route(
-    (url) =>
-      url.pathname.startsWith(
-        `/api/v1/environments/${encodeURIComponent(environment.id)}/browser`,
-      ),
-    async (route) => {
-      if (route.request().url().endsWith("/browser/session")) {
-        browserSessionStarts += 1;
-        await route.fulfill({ status: 204 });
-        return;
-      }
-      if (route.request().url().endsWith("/browser/viewport")) {
-        browserViewports.push(
-          route.request().postDataJSON() as {
-            width: number;
-            height: number;
-          },
-        );
-        await route.fulfill({ status: 204 });
-        return;
-      }
-      await route.fulfill({
-        status: 200,
-        contentType: "text/html",
-        body: `<!doctype html>
-          <p>Official Playwright Dashboard fixture</p>
-          <script>
-            let tabs = [{
-              index: 0,
-              title: "Fixture tab",
-              url: "https://example.test/",
-              selected: true,
-            }];
-            const post = (message) => parent.postMessage(message, "*");
-            const postTabs = () => post({
-              type: "sandpi:browser-dashboard-tabs",
-              integrated: true,
-              tabs,
-            });
-            const finishActivity = () => setTimeout(() => post({
-              type: "sandpi:browser-dashboard-loading",
-              loading: false,
-            }), 400);
-            addEventListener("message", (event) => {
-              const message = event.data;
-              if (message?.type === "sandpi:browser-dashboard-viewport-mode") {
-                const viewport = message.mode === "mobile"
-                  ? { width: 390, height: 844 }
-                  : message.mode === "responsive"
-                    ? { width: 640, height: 700 }
-                    : { width: 1280, height: 800 };
-                post({
-                  type: "sandpi:browser-dashboard-viewport",
-                  ...viewport,
-                });
-              }
-              if (message?.type !== "sandpi:browser-dashboard-command") return;
-              post({
-                type: "sandpi:browser-dashboard-loading",
-                loading: true,
-              });
-              if (message.action === "new") {
-                tabs = tabs.map((tab) => ({ ...tab, selected: false }));
-                tabs.push({
-                  index: tabs.length,
-                  title: "New Tab",
-                  url: "about:blank",
-                  selected: true,
-                });
-              } else if (message.action === "select") {
-                tabs = tabs.map((tab) => ({
-                  ...tab,
-                  selected: tab.index === message.index,
-                }));
-              } else if (message.action === "close" && tabs.length > 1) {
-                const selected = tabs[message.index]?.selected;
-                tabs.splice(message.index, 1);
-                tabs = tabs.map((tab, index) => ({ ...tab, index }));
-                if (selected) tabs[0].selected = true;
-              }
-              postTabs();
-              finishActivity();
-            });
-            post({ type: "sandpi:browser-dashboard-ready" });
-            post({ type: "sandpi:browser-dashboard-session-ready" });
-            postTabs();
-          </script>`,
-      });
-    },
-  );
+  await page.route(`${previewOrigin}/**`, async (route) => {
+    previewLoads += 1;
+    await route.fulfill({
+      status: 200,
+      contentType: "text/html",
+      body: "<!doctype html><p>Environment Preview fixture</p>",
+    });
+  });
 
   await page.goto(
     `/?environment=${encodeURIComponent(environment.id)}&new=1`,
@@ -2498,155 +2421,65 @@ test("keeps New Session header operations aligned with the conversation", async 
   ).toBeVisible();
 
   const header = page.locator("#conversation > header");
-  await expect(
-    header.getByRole("button", { name: "Terminal" }),
-  ).toBeVisible();
-  const inspectorToggle = header.getByRole("button", {
-    name: "Open inspector",
-  });
-  await expect(inspectorToggle).toBeVisible();
-  await expect(
-    header.getByRole("button", { name: `${environment.name} settings` }),
-  ).toHaveCount(0);
-
-  await inspectorToggle.click();
-  const inspectorViews = page.getByRole("navigation", {
-    name: "Inspector views",
-  });
-  await expect(inspectorViews).toBeVisible();
-  await expect(
-    inspectorViews.getByRole("button", { name: "Files", exact: true }),
-  ).toHaveClass(/is-active/);
-  await expect(
-    inspectorViews.getByRole("button", { name: "Metrics", exact: true }),
-  ).toBeVisible();
-  const browserView = inspectorViews.getByRole("button", {
-    name: "Browser",
-    exact: true,
-  });
-  await expect(browserView).toBeVisible();
-  await expect(
-    inspectorViews.getByRole("button", { name: "Activity", exact: true }),
-  ).toHaveCount(0);
+  await expect(header.getByRole("button", { name: "Terminal" })).toBeVisible();
   await expect(
     header.getByRole("button", { name: "Close inspector" }),
   ).toHaveAttribute("aria-pressed", "true");
 
-  await browserView.click();
+  const inspectorViews = page.getByRole("navigation", {
+    name: "Inspector views",
+  });
+  const previewView = inspectorViews.getByRole("button", {
+    name: "Preview",
+    exact: true,
+  });
+  await expect(previewView).toHaveClass(/is-active/);
+  await expect(
+    inspectorViews.getByRole("button", { name: "Metrics", exact: true }),
+  ).toBeVisible();
+  await expect(
+    inspectorViews.getByRole("button", { name: "Activity", exact: true }),
+  ).toHaveCount(0);
+
+  const address = page.getByRole("textbox", {
+    name: "Local Preview address",
+  });
+  await address.fill("localhost:3000/app");
+  await page
+    .getByRole("button", { name: "Open Preview", exact: true })
+    .click();
+  await expect.poll(() => previewRequests).toEqual([
+    { url: "http://localhost:3000/app" },
+  ]);
+  const previewFrame = page.locator('iframe[title="Environment Preview"]');
   await expect(
     page
-      .frameLocator('iframe[title="Shared Environment browser"]')
-      .getByText("Official Playwright Dashboard fixture"),
+      .frameLocator('iframe[title="Environment Preview"]')
+      .getByText("Environment Preview fixture"),
   ).toBeVisible();
-  expect(browserSessionStarts).toBe(0);
-  await expect(
-    page.getByRole("tab", { name: "Fixture tab", exact: true }),
-  ).toHaveAttribute("aria-selected", "true");
-  await expect(
-    page.getByRole("combobox", { name: "Browser viewport" }),
-  ).toHaveValue("desktop");
-  await expect.poll(() => browserViewports.at(-1)).toEqual({
-    width: 1280,
-    height: 800,
-  });
+  await expect(address).toHaveValue("http://localhost:3000/app");
+  await expect(previewFrame).toHaveCount(1);
+  await expect.poll(() => previewLoads).toBe(1);
+  await expect(page.getByRole("tab")).toHaveCount(0);
+  await expect(page.getByRole("combobox", { name: /viewport/i })).toHaveCount(0);
 
-  const browserFrame = page.locator(
-    'iframe[title="Shared Environment browser"]',
-  );
-  const browserPanel = page.locator(".browser-panel");
-  const filesPanel = page.locator(".files-panel");
-  await expect(browserFrame).toHaveCount(1);
-  await expect(browserPanel).toBeVisible();
-  await expect(filesPanel).toBeHidden();
+  const loadsBeforeReload = previewLoads;
+  await page.getByRole("button", { name: "Reload Preview" }).click();
+  await expect.poll(() => previewLoads).toBeGreaterThan(loadsBeforeReload);
+
   await inspectorViews
     .getByRole("button", { name: "Files", exact: true })
     .click();
-  await expect(browserFrame).toHaveCount(1);
-  await expect(browserFrame).toBeHidden();
-  await expect(browserPanel).toBeHidden();
-  await expect(filesPanel).toBeVisible();
-  await browserView.click();
-  await expect(browserFrame).toBeVisible();
-  await expect(browserPanel).toBeVisible();
-  await expect(filesPanel).toBeHidden();
-  expect(browserSessionStarts).toBe(0);
-
-  await page.getByRole("button", { name: "New tab", exact: true }).click();
-  await expect(page.getByRole("tab", { name: "New Tab" })).toHaveAttribute(
-    "aria-selected",
-    "true",
-  );
-  await expect(page.locator(".environment-browser-toolbar")).toHaveClass(
-    /is-loading/,
-  );
-  await page.getByRole("tab", { name: "Fixture tab", exact: true }).click();
-  await expect(
-    page.getByRole("tab", { name: "Fixture tab", exact: true }),
-  ).toHaveAttribute("aria-selected", "true");
-  await page.getByRole("button", { name: "Close New Tab" }).click();
-  await expect(page.getByRole("tab", { name: "New Tab" })).toHaveCount(0);
-
-  await page
-    .getByRole("combobox", { name: "Browser viewport" })
-    .selectOption("responsive");
-  await expect.poll(() => browserViewports.at(-1)).toEqual({
-    width: 640,
-    height: 700,
-  });
-  await expect
-    .poll(() =>
-      page.evaluate(
-        (key) =>
-          JSON.parse(window.localStorage.getItem(key) ?? "{}").workspace
-            ?.browserViewportMode,
-        LOCAL_UI_PREFERENCES_STORAGE_KEY,
-      ),
-    )
-    .toBe("responsive");
+  await expect(previewFrame).toHaveCount(0);
+  await expect(page.locator(".preview-panel")).toBeHidden();
+  await previewView.click();
+  await expect(previewFrame).toHaveCount(1);
+  await expect(page.locator(".preview-panel")).toBeVisible();
 
   await header.getByRole("button", { name: "Close inspector" }).click();
   await expect(inspectorViews).toBeHidden();
-  await expect(
-    header.getByRole("button", { name: "Open inspector" }),
-  ).toHaveAttribute("aria-pressed", "false");
-  await expect(browserFrame).toHaveCount(1);
-  await expect(browserFrame).toBeHidden();
-
   await header.getByRole("button", { name: "Open inspector" }).click();
-  await expect(browserFrame).toBeVisible();
-  expect(browserSessionStarts).toBe(0);
-
-  await page.setViewportSize({ width: 390, height: 844 });
-  await expect(inspectorViews).toBeHidden();
-  await header.getByRole("button", { name: "Open inspector" }).click();
-  await expect(inspectorViews).toBeVisible();
-  const panelColor = await page.evaluate(() =>
-    getComputedStyle(document.documentElement)
-      .getPropertyValue("--panel")
-      .trim(),
-  );
-  await expect(
-    page.locator('meta[name="sandpi-native-top-color"]'),
-  ).toHaveAttribute("content", panelColor);
-  await expect(
-    page.locator('meta[name="sandpi-native-bottom-color"]'),
-  ).toHaveAttribute("content", panelColor);
-
-  await page
-    .getByRole("complementary", { name: "Inspector" })
-    .getByRole("button", { name: "Close inspector" })
-    .click();
-  const canvasColor = await page.evaluate(() =>
-    getComputedStyle(document.documentElement)
-      .getPropertyValue("--canvas")
-      .trim(),
-  );
-  await expect(
-    page.locator('meta[name="sandpi-native-top-color"]'),
-  ).toHaveAttribute("content", canvasColor);
-  await expect(
-    page.locator('meta[name="sandpi-native-bottom-color"]'),
-  ).toHaveAttribute("content", canvasColor);
+  await expect(previewFrame).toHaveCount(1);
 });
 
 test("refreshes the Codex account and live limits after device login", async ({
@@ -5179,7 +5012,7 @@ test("opens line-qualified Environment file and loopback links in their native i
   const directoryListingsReleased = new Promise<void>((resolve) => {
     releaseDirectoryListings = resolve;
   });
-  let browserOpenBody: unknown;
+  let previewSessionBody: unknown;
   const browserErrors: string[] = [];
   page.on("console", (message) => {
     if (message.type() === "error") browserErrors.push(message.text());
@@ -5397,21 +5230,27 @@ test("opens line-qualified Environment file and loopback links in their native i
   );
   await page.route(
     (url) =>
-      url.pathname.startsWith(
-        `/api/v1/environments/${encodeURIComponent(environment.id)}/browser`,
-      ),
+      url.pathname ===
+      `/api/v1/environments/${encodeURIComponent(environment.id)}/preview/session`,
     async (route) => {
-      if (route.request().url().endsWith("/browser/open")) {
-        browserOpenBody = route.request().postDataJSON();
-        await route.fulfill({ status: 204 });
-        return;
-      }
+      previewSessionBody = route.request().postDataJSON();
+      await route.fulfill({
+        json: {
+          data: {
+            target: "http://localhost:3000/preview",
+            url: "https://p3000-bbbbbbbbbbbbbbbbbbbb.preview.sandpi.test/preview?__sandpi_ticket=e2e-ticket",
+          },
+        },
+      });
+    },
+  );
+  await page.route(
+    "https://p3000-bbbbbbbbbbbbbbbbbbbb.preview.sandpi.test/**",
+    async (route) => {
       await route.fulfill({
         status: 200,
         contentType: "text/html",
-        body: `<!doctype html><p>Shared Browser fixture</p><script>window.parent.postMessage({type:${JSON.stringify(
-          BROWSER_DASHBOARD_SESSION_READY_MESSAGE,
-        )}}, "*")</script>`,
+        body: "<!doctype html><p>Environment Preview fixture</p>",
       });
     },
   );
@@ -5563,18 +5402,18 @@ test("opens line-qualified Environment file and loopback links in their native i
   ).toBeFocused();
 
   await page
-    .locator('[data-browser-url="http://localhost:3000/preview"]')
+    .locator('[data-preview-url="http://localhost:3000/preview"]')
     .click();
-  await expect.poll(() => browserOpenBody).toEqual({
+  await expect.poll(() => previewSessionBody).toEqual({
     url: "http://localhost:3000/preview",
   });
   await expect(
-    inspectorViews.getByRole("button", { name: "Browser", exact: true }),
+    inspectorViews.getByRole("button", { name: "Preview", exact: true }),
   ).toHaveClass(/is-active/);
   await expect(
     page
-      .frameLocator('iframe[title="Shared Environment browser"]')
-      .getByText("Shared Browser fixture"),
+      .frameLocator('iframe[title="Environment Preview"]')
+      .getByText("Environment Preview fixture"),
   ).toBeVisible();
 
   const fileRequestsBeforeTabRoundTrip = fileRequests.length;

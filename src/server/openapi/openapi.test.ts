@@ -24,7 +24,7 @@ test("OpenAPI publishes every supported operation with a unique id", async () =>
   const operations = allOperations(document);
   const operationIds = operations.map((operation) => operation.operationId);
 
-  assert.equal(operations.length, 106);
+  assert.equal(operations.length, 101);
   assert.ok(operationIds.every(Boolean));
   assert.equal(new Set(operationIds).size, operationIds.length);
   assert.ok(Object.keys(document.paths).every((path) => !path.includes(":")));
@@ -44,24 +44,23 @@ test("OpenAPI publishes every supported operation with a unique id", async () =>
   }
 });
 
-test("OpenAPI preserves the shared Browser and streaming semantics", async () => {
+test("OpenAPI preserves isolated Preview and streaming semantics", async () => {
   const { document } = await builtOpenApi;
   const cloudSync = operation(document, "/api/v1/sync", "get");
   assert.equal(cloudSync.responses["304"] !== undefined, true);
   assert.match(cloudSync.description ?? "", /database-only/i);
 
-  const browserOpen = operation(
+  const previewSession = operation(
     document,
-    "/api/v1/environments/{environmentId}/browser/open",
+    "/api/v1/environments/{environmentId}/preview/session",
     "post",
   );
-  assert.equal(browserOpen["x-sandpi-shared-browser"], true);
-  assert.match(browserOpen.description ?? "", /human and the agent/i);
-  assert.match(browserOpen.description ?? "", /sign-in/i);
-  assert.match(browserOpen.description ?? "", /inside the Environment sandbox/i);
+  assert.equal(previewSession["x-sandpi-preview-origin"], "isolated");
+  assert.match(previewSession.description ?? "", /human's browser/i);
+  assert.match(previewSession.description ?? "", /independent.*Playwright CLI/i);
+  assert.match(previewSession.description ?? "", /inside the Environment Sandbox/i);
 
   for (const [path, method] of [
-    ["/api/v1/environments/{environmentId}/browser/session", "post"],
     ["/api/v1/sessions/{sessionId}/review", "post"],
     ["/api/v1/sessions/{sessionId}/fork", "post"],
     [
@@ -86,12 +85,11 @@ test("OpenAPI preserves the shared Browser and streaming semantics", async () =>
 
   for (const path of [
     "/api/v1/environments/{environmentId}/ide/events",
-    "/api/v1/environments/{environmentId}/browser/ws/{dashboardSocketId}",
     "/api/v1/environments/{environmentId}/terminal",
   ]) {
     assert.ok(operation(document, path, "get")["x-sandpi-websocket"]);
   }
-  const ideClientMessages = (
+  const ideClientMessagesValue = (
     operation(
       document,
       "/api/v1/environments/{environmentId}/ide/events",
@@ -100,6 +98,7 @@ test("OpenAPI preserves the shared Browser and streaming semantics", async () =>
       clientMessages?: OpenAPIV3.SchemaObject;
     }
   ).clientMessages;
+  const ideClientMessages = resolveSchema(document, ideClientMessagesValue);
   assert.ok(ideClientMessages);
   assert.deepEqual(ideClientMessages.required, ["type", "paths"]);
   assert.deepEqual(ideClientMessages.properties?.type, {
@@ -121,6 +120,18 @@ function allOperations(document: OpenAPIV3.Document) {
       return operation ? [operation] : [];
     }),
   );
+}
+
+function resolveSchema(
+  document: OpenAPIV3.Document,
+  value: OpenAPIV3.SchemaObject | OpenAPIV3.ReferenceObject | undefined,
+) {
+  if (!value || !("$ref" in value)) return value;
+  const prefix = "#/components/schemas/";
+  assert.ok(value.$ref.startsWith(prefix));
+  return document.components?.schemas?.[value.$ref.slice(prefix.length)] as
+    | OpenAPIV3.SchemaObject
+    | undefined;
 }
 
 function operation(

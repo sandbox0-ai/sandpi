@@ -40,7 +40,7 @@ OpenAPI describes HTTP request/response operations directly. Sandpi retains the
 same paths for its non-JSON transports and adds explicit extensions:
 
 - `x-sandpi-sse` lists the named events on the native Session event stream.
-- `x-sandpi-websocket` describes Workspace IDE, Browser dashboard and terminal
+- `x-sandpi-websocket` describes Workspace IDE and terminal
   WebSocket message directions.
 - `x-sandpi-native-schema` marks payloads whose extensible fields remain owned
   by the pinned native harness protocol.
@@ -51,23 +51,17 @@ currently expanded shallow directories. The server always watches
 clients treat server change messages as invalidations, not as a durable
 file-event log.
 
-The Browser dashboard HTTP and WebSocket bodies are an opaque, authenticated
-proxy protocol. They are not normalized into a second Sandpi browser model.
-The built-in Browser is one Playwright session and profile shared by the human
-and the agent. A human can take over the embedded tab to complete an
-interactive login, then the agent continues in that same authenticated
-profile. URLs using `localhost`, `127.0.0.1`, or `::1` resolve inside the
-Environment sandbox, never on the client device. The contract marks these
-operations with `x-sandpi-shared-browser`.
+`POST /api/v1/environments/{environmentId}/preview/session` is the only public
+Preview control operation. It accepts a constrained HTTP loopback target and
+returns a short-lived URL on the deployment's isolated wildcard Preview
+origin. `x-sandpi-loopback-scope: environment` identifies where loopback
+resolves and `x-sandpi-preview-origin: isolated` records the browser security
+boundary. The proxied application protocol itself is host-routed transport,
+not a second JSON API or Playwright model, and is therefore not published as a
+set of OpenAPI paths. Preview session responses remain `no-store`.
 
-Dashboard HTML, redirects and control responses remain `no-store`.
-Fingerprint-named Dashboard assets use a bounded private immutable cache, and
-Sandpi preserves their explicit cache policy through the final response hook.
-The embedded Browser remains mounted for a short grace period after the
-Inspector closes, while large unmodified assets stream through the proxy
-instead of being buffered in full. Sandpi's own content-addressed Next assets
-are public immutable resources; stable HTML and Monaco loader paths retain
-revalidation semantics.
+Sandpi's content-addressed Next assets are public immutable resources; stable
+HTML and Monaco loader paths retain revalidation semantics.
 
 ## Authentication
 

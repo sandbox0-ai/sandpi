@@ -1,4 +1,5 @@
 import path from "node:path";
+import { isIP } from "node:net";
 import { fileURLToPath } from "node:url";
 
 import { z } from "zod";
@@ -32,6 +33,7 @@ const environmentSchema = z.object({
   SANDPI_HOST: z.string().min(1).default("172.16.100.2"),
   SANDPI_PORT: z.coerce.number().int().min(1).max(65_535).default(3000),
   SANDPI_PUBLIC_URL: optionalUrl,
+  SANDPI_PREVIEW_URL: optionalUrl,
   SANDPI_WEB_DIR: z.string().min(1).optional(),
   SANDPI_AUTH_MODE: z.enum(["admin", "oidc"]).default("admin"),
   SANDPI_COOKIE_SECRET: z.string().min(32).optional(),
@@ -70,6 +72,8 @@ export interface SandpiConfig {
   host: string;
   port: number;
   publicUrl: URL;
+  /** Root origin beneath which each Environment/port receives one host. */
+  previewUrl: URL;
   webDir: string;
   logLevel: "fatal" | "error" | "warn" | "info" | "debug" | "trace" | "silent";
   auth:
@@ -107,6 +111,29 @@ export function loadConfig(
   const publicUrl = new URL(
     value.SANDPI_PUBLIC_URL ?? `http://${value.SANDPI_HOST}:${value.SANDPI_PORT}`,
   );
+  if (value.NODE_ENV === "production" && !value.SANDPI_PREVIEW_URL) {
+    throw new Error(
+      "SANDPI_PREVIEW_URL is required in production because Preview needs dedicated wildcard DNS and TLS.",
+    );
+  }
+  const previewUrl = new URL(
+    value.SANDPI_PREVIEW_URL ?? defaultPreviewUrl(publicUrl).toString(),
+  );
+  if (
+    !["http:", "https:"].includes(previewUrl.protocol) ||
+    previewUrl.username ||
+    previewUrl.password ||
+    previewUrl.pathname !== "/" ||
+    previewUrl.search ||
+    previewUrl.hash ||
+    previewUrl.origin === publicUrl.origin ||
+    isIP(previewUrl.hostname) !== 0 ||
+    (publicUrl.protocol === "https:" && previewUrl.protocol !== "https:")
+  ) {
+    throw new Error(
+      "SANDPI_PREVIEW_URL must be a dedicated HTTP(S) hostname origin without credentials, path, query or fragment; HTTPS deployments require HTTPS Preview.",
+    );
+  }
   const apiHost = value.SANDBOX0_API_HOST ?? value.SANDBOX0_BASE_URL;
   const apiKey = value.SANDBOX0_API_KEY ?? value.SANDBOX0_TOKEN;
   const stripeSecretKey =
@@ -196,6 +223,7 @@ export function loadConfig(
     host: value.SANDPI_HOST,
     port: value.SANDPI_PORT,
     publicUrl,
+    previewUrl,
     webDir: value.SANDPI_WEB_DIR
       ? path.resolve(value.SANDPI_WEB_DIR)
       : fileURLToPath(new URL("../../out/", import.meta.url)),
@@ -205,4 +233,25 @@ export function loadConfig(
     sandbox0: apiHost && apiKey ? { apiHost, apiKey } : undefined,
     billing,
   };
+}
+
+function defaultPreviewUrl(publicUrl: URL) {
+  const previewUrl = new URL(publicUrl);
+  if (publicUrl.hostname === "localhost" || publicUrl.hostname === "127.0.0.1") {
+    previewUrl.hostname = "preview.localhost";
+  } else if (isIP(publicUrl.hostname) === 4) {
+    // sslip.io makes the private fusion-network address resolvable from the
+    // developer's browser. Production must always configure its own domain.
+    previewUrl.hostname = `preview.${publicUrl.hostname}.sslip.io`;
+  } else if (isIP(publicUrl.hostname) !== 0) {
+    throw new Error(
+      "SANDPI_PREVIEW_URL is required when SANDPI_PUBLIC_URL uses IPv6.",
+    );
+  } else {
+    previewUrl.hostname = `preview.${publicUrl.hostname}`;
+  }
+  previewUrl.pathname = "/";
+  previewUrl.search = "";
+  previewUrl.hash = "";
+  return previewUrl;
 }

@@ -26,10 +26,7 @@ export class UnconfiguredRuntime implements RuntimeAdapter {
   deleteEnvironmentCredentialSource = unavailable;
   updateEnvironmentMemory = unavailable;
   ensureEnvironmentMcpOAuthCallbackService = unavailable;
-  ensureEnvironmentBrowserDashboard = unavailable;
-  ensureEnvironmentBrowserSession = unavailable;
-  openEnvironmentBrowserUrl = unavailable;
-  resizeEnvironmentBrowserViewport = unavailable;
+  ensureEnvironmentPreviewProxy = unavailable;
   createEnvironmentWorkspaceBackup = unavailable;
   deleteEnvironmentWorkspaceBackup = unavailable;
   restoreEnvironmentWorkspaceBackup = unavailable;

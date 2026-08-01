@@ -60,7 +60,7 @@ interface CodexAgentThreadsDialogProps {
   selectedThreadId?: string;
   onSelectedThreadChange: (threadId?: string) => void;
   onOpenWorkspacePath: (path: string) => void;
-  onOpenBrowserUrl: (url: string) => void;
+  onOpenPreviewUrl: (url: string) => void;
   onOpenFiles: (path?: string) => void;
   onClose: () => void;
 }
@@ -113,7 +113,7 @@ function AgentThreadTranscript({
   harnessLabel,
   language,
   onOpenWorkspacePath,
-  onOpenBrowserUrl,
+  onOpenPreviewUrl,
   onOpenFiles,
 }: {
   thread: CodexThread;
@@ -122,7 +122,7 @@ function AgentThreadTranscript({
   harnessLabel: string;
   language: OperationLanguage;
   onOpenWorkspacePath: (path: string) => void;
-  onOpenBrowserUrl: (url: string) => void;
+  onOpenPreviewUrl: (url: string) => void;
   onOpenFiles: (path?: string) => void;
 }) {
   const projection = useMemo(() => projectCodexTimeline(thread), [thread]);
@@ -232,7 +232,7 @@ function AgentThreadTranscript({
           <MarkdownContent
             content={entry.content}
             onOpenWorkspacePath={onOpenWorkspacePath}
-            onOpenBrowserUrl={onOpenBrowserUrl}
+            onOpenPreviewUrl={onOpenPreviewUrl}
           />
         ) : entry.streaming ? (
           <span className={styles.streaming}>
@@ -306,7 +306,7 @@ export function CodexAgentThreadsDialog({
   selectedThreadId,
   onSelectedThreadChange,
   onOpenWorkspacePath,
-  onOpenBrowserUrl,
+  onOpenPreviewUrl,
   onOpenFiles,
   onClose,
 }: CodexAgentThreadsDialogProps) {
@@ -660,7 +660,7 @@ export function CodexAgentThreadsDialog({
                   harnessLabel={harnessLabel}
                   language={language}
                   onOpenWorkspacePath={onOpenWorkspacePath}
-                  onOpenBrowserUrl={onOpenBrowserUrl}
+                  onOpenPreviewUrl={onOpenPreviewUrl}
                   onOpenFiles={onOpenFiles}
                 />
               ) : null}

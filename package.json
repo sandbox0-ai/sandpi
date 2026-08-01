@@ -30,7 +30,7 @@
   },
   "scripts": {
     "dev": "concurrently -k -n server,web -c cyan,magenta \"npm:dev:server\" \"npm:dev:web\"",
-    "dev:server": "SANDPI_HOST=172.16.100.2 SANDPI_PORT=3001 SANDPI_PUBLIC_URL=http://172.16.100.2:3000 tsx watch src/server/index.ts",
+    "dev:server": "SANDPI_HOST=172.16.100.2 SANDPI_PORT=3001 SANDPI_PUBLIC_URL=http://172.16.100.2:3000 SANDPI_PREVIEW_URL=http://preview.172.16.100.2.sslip.io:3001 tsx watch src/server/index.ts",
     "prepare:monaco": "node scripts/copy-monaco-assets.mjs",
     "dev:web": "npm run prepare:monaco && next dev --hostname 172.16.100.2 --port 3000",
     "build": "npm run build:web && npm run build:server",

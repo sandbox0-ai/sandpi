@@ -22,7 +22,8 @@ Sandpi 客户端继续同一个 coding session。
 
 Web 应用与 iOS、iPadOS、Android、OpenHarmony、Windows 和 macOS 第一方原生客户端
 共用同一套 Sandpi 产品 UI 和 API。所有客户端都保持轻量：coding-agent harness、
-终端、文件和共享 Playwright 浏览器都在云端运行，并挂载持久化 Workspace Volume。
+终端、文件和 runtime 都在云端运行，并挂载持久化 Workspace Volume。Agent
+可以在 Sandbox 内独立使用 Playwright，Human 则通过隔离的 Preview 查看 loopback Web 服务。
 你可以关闭电脑、切换设备或断开客户端，而不会结束 coding session。
 
 目前第一个支持的 coding agent 是 Codex。
@@ -30,10 +31,6 @@ Web 应用与 iOS、iPadOS、Android、OpenHarmony、Windows 和 macOS 第一方
 ![Sandpi 中的 Codex Session 和 Workspace 文件浏览器](./docs/images/sandpi-session-files.png)
 
 <p align="center"><sub>Codex Session 与持久化 Workspace 文件并排显示。</sub></p>
-
-![Sandpi 中的 Codex Session 和共享 Browser](./docs/images/sandpi-session-browser.png)
-
-<p align="center"><sub>Human 与 coding agent 使用同一个云端 Browser。</sub></p>
 
 ![Sandpi Environment Settings](./docs/images/sandpi-environment-settings.png)
 
@@ -49,7 +46,7 @@ Web 应用与 iOS、iPadOS、Android、OpenHarmony、Windows 和 macOS 第一方
 | 持久化 Session | 原生 Session 状态和 Workspace 不在浏览器里。页面刷新、客户端断线和 runtime 恢复都不会让 Session 消失。 |
 | 更专注的隔离 | 可以按项目、任务或关注点创建独立 Environment。每个 Environment 都有自己的 Sandbox、Workspace、coding-agent 账号、网络策略和凭证。 |
 | 多个 coding plan | 不同 Environment 可以连接不同的 Codex/ChatGPT 订阅账号；即使使用同一个账号，也可以把不同工作彼此隔离。 |
-| 人与 Agent 共享浏览器 | Human 和 coding agent 使用同一个官方 Playwright browser session，共享 tab 和登录 profile。 |
+| 快速预览应用 | 通过轻量、隔离的 Human Preview 打开 Sandbox `localhost` 或 `127.0.0.1` 上的 HTTP 服务；Agent 的 Playwright 自动化保持独立。 |
 | 可控的出站访问 | 按目标限制 Sandbox 出站流量，并只向匹配的请求注入受支持的凭证，避免把服务密钥放进仓库或浏览器。 |
 | Workspace 防丢失 | 通过 Sandbox0 Volume snapshot 手动或定时备份 Workspace，设置保留数量并按需恢复。 |
 | 持久化数据加密 | Sandbox0 在写入对象存储前，对 Environment rootfs checkpoint 对象和默认 S0FS Workspace Volume 对象做应用层加密。 |
@@ -62,7 +59,7 @@ Environment
 ├── Sandbox 和持久化 Workspace Volume
 ├── 一个原生 coding-agent harness 和 provider 账号
 ├── 网络策略和出站凭证
-├── runtime 资源、终端、共享 Browser 和指标
+├── runtime 资源、终端、Preview 和指标
 ├── 持久化 Automation Schedules
 └── 多个原生 coding-agent Session
 ```
@@ -103,8 +100,8 @@ Environment。如果多个 Session 本来就应该共享文件、工具和执行
 - 以预览为主的实时 Workspace 文件浏览器，支持可调整宽度、可折叠的文件树和明确的
   刷新反馈，提供快速源码、GitHub 风格 Markdown、CSV 视图，图片、音频、视频、
   PDF、PPTX 预览，按需加载的 Monaco 编辑器，以及 Git 变更
-- Human 与 coding agent 共用的官方 Playwright Browser，支持多 Tab、加载反馈以及
-  本地持久化的桌面自适应、响应式和移动端 viewport 模式
+- 针对 Sandbox `localhost` 和 `127.0.0.1` HTTP 服务的隔离 Human
+  Preview，以及独立的 Agent 本地 Playwright CLI 自动化
 - Environment 终端、runtime 指标、可配置 idle pause，以及用于故障恢复的
   Sandbox 手动 pause/restart 控制
 - Environment Schedules，支持一次性或易读的周期设置、高级 Cron、IANA
@@ -190,7 +187,7 @@ Kubernetes 部署请参阅
 ## OpenAPI 契约
 
 生成的 [OpenAPI 3.0.3 契约](./openapi.yaml) 覆盖 Sandpi 的 HTTP、SSE、
-WebSocket 和内置 Browser 接口。使用以下命令生成并校验：
+WebSocket 和 Preview 控制接口。使用以下命令生成并校验：
 
 ```bash
 npm run openapi:generate
@@ -233,17 +230,17 @@ Sandpi server ───────── PostgreSQL
 Sandbox0
     ├── Sandbox + 原生 Codex app-server
     ├── 持久化 Workspace Volume
-    ├── 官方 Playwright CLI、Dashboard 和共享 profile
+    ├── Agent 本地官方 Playwright CLI
+    ├── 轻量 HTTP/WebSocket Preview proxy
     ├── 终端和 runtime 指标
     ├── 网络策略和凭证注入
     └── Workspace snapshot
 ```
 
 - Sandpi 客户端只与 Sandpi 通信，不会收到 Sandbox0 deployment API key，也不会直接
-  访问 Sandbox0 endpoint。对于 Web 应用，Sandpi 会对官方 Playwright Dashboard 的
-  HTTP 和 WebSocket 流量进行鉴权与代理。内置 tab 与 agent 共享同一个 Playwright
-  profile：human 可以在其中完成交互式登录，然后把同一份已登录 Browser 交还给
-  agent 继续操作。Browser 中的 loopback URL 解析到 Environment sandbox 内部。
+  访问 Sandbox0 endpoint。Human Preview 使用按 Environment/port 隔离的 origin，
+  经过 Sandpi 授权和受保护的 Sandbox0 AppService 后才访问 Sandbox loopback。
+  Agent Playwright session 与 Preview 独立，不会通过 Preview 暴露给 Human。
 - Sandpi 只通过官方 JavaScript SDK 使用 Sandbox0，不读取 Sandbox0 数据库、内部
   metering endpoint 或 ClickHouse 凭证。
 - Sandbox0 负责 Sandbox 生命周期、Volume、网络执行、凭证注入和 usage truth。
@@ -266,8 +263,9 @@ Sandbox0
   不会在可能改变网络策略或凭证边界的情况下静默新建替代 Sandbox。
 - 同一个 Environment 中的 Session 共享可变 Workspace 和 harness 账号，它们不是互相
   隔离的 checkout。工作之间不能互相影响时，请创建不同 Environment。
-- Browser 依赖当前 Sandbox0 `coding-agent` image。旧 Environment 需要重新创建，
-  才能获得 Playwright CLI 和 Chromium 依赖。
+- Preview 仅支持 Sandbox `localhost` 或 `127.0.0.1` 上的 HTTP；它不是通用
+  Browser，也不是 Human/Agent 共享登录 profile。Agent 浏览器自动化仍需要
+  Sandbox image 内的 Playwright CLI 和 Chromium。
 - 内置管理员模式只适用于受信任的单用户部署。公开或多用户部署应使用 OIDC，并配置
   正确的网络与 TLS 边界。
 - `/api/v1` 已经版本化，但 pre-1.0 版本之间仍可能调整契约。

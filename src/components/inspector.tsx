@@ -28,9 +28,9 @@ import {
   type MetricChartSeries,
 } from "@/components/metric-chart";
 import {
-  EnvironmentBrowser,
-  type EnvironmentBrowserNavigationRequest,
-} from "@/components/environment-browser";
+  EnvironmentPreview,
+  type EnvironmentPreviewNavigationRequest,
+} from "@/components/environment-preview";
 import {
   WorkspaceIde,
   type WorkspaceFileNavigationRequest,
@@ -58,7 +58,7 @@ import type {
   RuntimeMetricSeries,
 } from "@/lib/types";
 
-export type InspectorTab = "files" | "browser" | "activity" | "metrics";
+export type InspectorTab = "files" | "preview" | "activity" | "metrics";
 export const INSPECTOR_KEEP_ALIVE_MS = 30_000;
 
 export interface InspectorSessionActivity {
@@ -78,9 +78,9 @@ interface InspectorProps {
   onWorkspaceNavigationHandled?: (
     request: WorkspaceFileNavigationRequest,
   ) => void;
-  browserNavigationRequest?: EnvironmentBrowserNavigationRequest;
-  onBrowserNavigationHandled?: (
-    request: EnvironmentBrowserNavigationRequest,
+  previewNavigationRequest?: EnvironmentPreviewNavigationRequest;
+  onPreviewNavigationHandled?: (
+    request: EnvironmentPreviewNavigationRequest,
   ) => void;
   activeTab: InspectorTab;
   onTabChange: (tab: InspectorTab) => void;
@@ -329,8 +329,8 @@ export function Inspector({
   sessionActivity,
   workspaceNavigationRequest,
   onWorkspaceNavigationHandled,
-  browserNavigationRequest,
-  onBrowserNavigationHandled,
+  previewNavigationRequest,
+  onPreviewNavigationHandled,
   activeTab,
   onTabChange,
   widthRatio,
@@ -345,8 +345,8 @@ export function Inspector({
   const resizePointerRef = useRef<number | null>(null);
   const resizeRatioRef = useRef(widthRatio);
   const [resizing, setResizing] = useState(false);
-  const [mountedBrowserEnvironmentId, setMountedBrowserEnvironmentId] =
-    useState(activeTab === "browser" ? environment.id : "");
+  const [mountedPreviewEnvironmentId, setMountedPreviewEnvironmentId] =
+    useState(activeTab === "preview" ? environment.id : "");
   const [mountedFilesEnvironmentId, setMountedFilesEnvironmentId] = useState(
     activeTab === "files" ? environment.id : "",
   );
@@ -422,8 +422,8 @@ export function Inspector({
   }, [activeTab, onTabChange, sessionActivity]);
 
   useEffect(() => {
-    if (activeTab === "browser") {
-      setMountedBrowserEnvironmentId(environment.id);
+    if (activeTab === "preview") {
+      setMountedPreviewEnvironmentId(environment.id);
     }
   }, [activeTab, environment.id]);
 
@@ -602,10 +602,10 @@ export function Inspector({
           </button>
           <button
             type="button"
-            className={activeTab === "browser" ? "is-active" : ""}
-            onClick={() => onTabChange("browser")}
+            className={activeTab === "preview" ? "is-active" : ""}
+            onClick={() => onTabChange("preview")}
           >
-            <Globe2 size={14} /> {ui.browser}
+            <Globe2 size={14} /> {ui.preview}
           </button>
           {sessionActivity ? (
             <button
@@ -660,31 +660,28 @@ export function Inspector({
         ? sessionActivity.content
         : null}
 
-      {activeTab === "browser" ||
-      mountedBrowserEnvironmentId === environment.id ? (
+      {activeTab === "preview" ||
+      mountedPreviewEnvironmentId === environment.id ? (
         <div
-          className="inspector-panel browser-panel"
-          hidden={activeTab !== "browser"}
+          className="inspector-panel preview-panel"
+          hidden={activeTab !== "preview"}
         >
-          <EnvironmentBrowser
+          <EnvironmentPreview
             key={environment.id}
             environmentId={environment.id}
-            navigationRequest={browserNavigationRequest}
-            onNavigationHandled={onBrowserNavigationHandled}
+            active={activeTab === "preview"}
+            navigationRequest={previewNavigationRequest}
+            onNavigationHandled={onPreviewNavigationHandled}
             copy={{
-              title: ui.browserTitle,
-              starting: ui.browserStarting,
-              unavailable: ui.browserUnavailable,
-              retry: ui.browserRetry,
-              tabs: ui.browserTabs,
-              newTab: ui.browserNewTab,
-              closeTab: ui.browserCloseTab,
-              untitledTab: ui.browserUntitledTab,
-              loading: ui.browserLoading,
-              viewport: ui.browserViewport,
-              viewportDesktop: ui.browserViewportDesktop,
-              viewportResponsive: ui.browserViewportResponsive,
-              viewportMobile: ui.browserViewportMobile,
+              title: ui.previewTitle,
+              address: ui.previewAddress,
+              open: ui.previewOpen,
+              reload: ui.previewReload,
+              openNewTab: ui.previewOpenNewTab,
+              empty: ui.previewEmpty,
+              loading: ui.previewLoading,
+              invalid: ui.previewInvalid,
+              unavailable: ui.previewUnavailable,
             }}
           />
         </div>

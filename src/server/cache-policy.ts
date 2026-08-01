@@ -10,21 +10,17 @@ const API_NO_STORE_PATHS = [
   "/schedules",
   "/egress-credentials",
   "/billing",
+  "/preview/",
 ] as const;
 
-/**
- * Sensitive API responses are never stored implicitly. Browser Dashboard
- * handlers own their cache policy because HTML/control responses are private
- * and uncacheable while fingerprinted assets are safe to retain.
- */
+/** Sensitive API responses are never stored implicitly. */
 export function shouldApplyApiNoStore(
   requestUrl: string,
-  hasExplicitCacheControl: boolean,
 ) {
   if (API_NO_STORE_PATHS.some((candidate) => requestUrl.includes(candidate))) {
     return true;
   }
-  return requestUrl.includes("/browser") && !hasExplicitCacheControl;
+  return false;
 }
 
 /**

@@ -41,7 +41,7 @@ import {
   UserAvatar,
 } from "@/components/identity-avatar";
 import { MarkdownContent } from "@/components/markdown-content";
-import type { EnvironmentBrowserNavigationRequest } from "@/components/environment-browser";
+import type { EnvironmentPreviewNavigationRequest } from "@/components/environment-preview";
 import type { WorkspaceFileNavigationRequest } from "@/components/workspace-ide";
 import {
   CodexComposer,
@@ -177,13 +177,13 @@ interface ConversationProps {
   onOpenInspector: (tab: InspectorTab) => void;
   workspaceNavigationRequest?: WorkspaceFileNavigationRequest;
   onOpenWorkspacePath: (path: string) => void;
-  onOpenBrowserUrl: (url: string) => void;
+  onOpenPreviewUrl: (url: string) => void;
   onWorkspaceNavigationHandled: (
     request: WorkspaceFileNavigationRequest,
   ) => void;
-  browserNavigationRequest?: EnvironmentBrowserNavigationRequest;
-  onBrowserNavigationHandled: (
-    request: EnvironmentBrowserNavigationRequest,
+  previewNavigationRequest?: EnvironmentPreviewNavigationRequest;
+  onPreviewNavigationHandled: (
+    request: EnvironmentPreviewNavigationRequest,
   ) => void;
   onSessionChange: (session: CodexSession) => void;
   onToggleSessionCompleted: (sessionId: string) => Promise<void>;
@@ -268,10 +268,10 @@ export function CodexConversation({
   onOpenInspector,
   workspaceNavigationRequest,
   onOpenWorkspacePath,
-  onOpenBrowserUrl,
+  onOpenPreviewUrl,
   onWorkspaceNavigationHandled,
-  browserNavigationRequest,
-  onBrowserNavigationHandled,
+  previewNavigationRequest,
+  onPreviewNavigationHandled,
   onSessionChange,
   onToggleSessionCompleted,
   onDerivedSessionCreated,
@@ -2132,7 +2132,7 @@ export function CodexConversation({
             <MarkdownContent
               content={message.content}
               onOpenWorkspacePath={onOpenWorkspacePath}
-              onOpenBrowserUrl={onOpenBrowserUrl}
+              onOpenPreviewUrl={onOpenPreviewUrl}
             />
           ) : message.streaming ? (
             <div
@@ -2714,9 +2714,9 @@ export function CodexConversation({
             closeAgentThreads();
             onOpenWorkspacePath(path);
           }}
-          onOpenBrowserUrl={(url) => {
+          onOpenPreviewUrl={(url) => {
             closeAgentThreads();
-            onOpenBrowserUrl(url);
+            onOpenPreviewUrl(url);
           }}
           onOpenFiles={(path) => {
             closeAgentThreads();
@@ -2737,8 +2737,8 @@ export function CodexConversation({
           widthRatio={inspectorWidthRatio}
           workspaceNavigationRequest={workspaceNavigationRequest}
           onWorkspaceNavigationHandled={onWorkspaceNavigationHandled}
-          browserNavigationRequest={browserNavigationRequest}
-          onBrowserNavigationHandled={onBrowserNavigationHandled}
+          previewNavigationRequest={previewNavigationRequest}
+          onPreviewNavigationHandled={onPreviewNavigationHandled}
           onTabChange={onInspectorTabChange}
           onWidthRatioChange={onInspectorWidthRatioChange}
           onOpenEnvironmentSettings={() =>

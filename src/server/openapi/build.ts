@@ -56,9 +56,8 @@ const TAGS: OpenAPIV3.TagObject[] = [
     description: "Cross-client editor snapshots, mutations and invalidations.",
   },
   {
-    name: "Browser",
-    description:
-      "The embedded, shared human-and-agent Playwright Browser session.",
+    name: "Preview",
+    description: "Isolated access to HTTP services on Environment loopback.",
   },
   { name: "Metrics", description: "Environment runtime metrics." },
   { name: "Terminal", description: "The shared Environment terminal." },
@@ -102,7 +101,7 @@ export async function buildOpenApi(): Promise<BuiltOpenApi> {
         title: "Sandpi API",
         version: packageJson.version,
         description:
-          "The public Sandpi server contract. JSON endpoints use a data envelope and errors use an error envelope. Unix timestamps are seconds. Browser-cookie authentication is deployment-scoped; native harness payloads and opaque Browser dashboard frames are identified explicitly.",
+          "The public Sandpi server contract. JSON endpoints use a data envelope and errors use an error envelope. Unix timestamps are seconds. Browser-cookie authentication is deployment-scoped; Environment Preview uses an isolated wildcard origin and native harness payloads remain explicit.",
         license: {
           name: "Apache-2.0",
           url: "https://www.apache.org/licenses/LICENSE-2.0",
@@ -195,7 +194,6 @@ function normalizeMethods(method: string | string[]): string[] {
 
 function finalizeOpenApi(document: OpenAPIV3.Document): OpenAPIV3.Document {
   normalizeTransportResponses(document);
-  addBrowserAssetProxy(document);
   pruneUnusedSchemas(document);
   sortOpenApiCollections(document);
   return document;
@@ -222,21 +220,6 @@ function normalizeTransportResponses(document: OpenAPIV3.Document) {
       ) {
         operation.requestBody.required = false;
       }
-      const defaultResponse = operation.responses.default;
-      if (
-        extendedOperation["x-sandpi-proxy-protocol"] ===
-          "opaque-playwright-dashboard" &&
-        defaultResponse &&
-        !("$ref" in defaultResponse)
-      ) {
-        defaultResponse.description =
-          "Opaque dashboard response or Sandpi error.";
-        defaultResponse.content = {
-          "*/*": {
-            schema: { type: "string", format: "binary" },
-          },
-        };
-      }
       for (const status of ["101", "204", "302"]) {
         const response = operation.responses[status];
         if (response && !("$ref" in response)) delete response.content;
@@ -261,74 +244,9 @@ function normalizeTransportResponses(document: OpenAPIV3.Document) {
             schema: { type: "string" },
           },
         };
-      } else if (
-        extendedOperation["x-sandpi-content-type"] === "text/html"
-      ) {
-        success.content = {
-          "text/html": {
-            schema: { type: "string" },
-          },
-        };
       }
     }
   }
-}
-
-function addBrowserAssetProxy(document: OpenAPIV3.Document) {
-  const operation: OpenAPIV3.OperationObject & Record<string, unknown> = {
-    operationId: "getEnvironmentBrowserDashboardAsset",
-    summary: "Load an embedded Browser dashboard asset",
-    description:
-      "Transparent, authenticated proxy for the built-in shared Playwright Browser dashboard. The asset protocol is owned by the pinned dashboard and is not a JSON application API.",
-    tags: ["Browser"],
-    parameters: [
-      {
-        name: "environmentId",
-        in: "path",
-        required: true,
-        schema: { type: "string", minLength: 1 },
-      },
-      {
-        name: "assetPath",
-        in: "path",
-        required: true,
-        description: "A slash-containing dashboard asset path.",
-        schema: { type: "string", minLength: 1 },
-        "x-sandpi-greedy": true,
-      } as OpenAPIV3.ParameterObject,
-    ],
-    responses: {
-      "200": {
-        description: "Dashboard asset.",
-        content: {
-          "application/octet-stream": {
-            schema: { type: "string", format: "binary" },
-          },
-        },
-      },
-      "3XX": {
-        description: "Dashboard-relative redirect.",
-        headers: {
-          Location: {
-            schema: { type: "string" },
-          },
-        },
-      },
-      default: {
-        description: "Opaque dashboard response or Sandpi error.",
-        content: {
-          "*/*": {
-            schema: { type: "string", format: "binary" },
-          },
-        },
-      },
-    },
-    "x-sandpi-shared-browser": true,
-    "x-sandpi-proxy-protocol": "opaque-playwright-dashboard",
-  };
-  document.paths[
-    "/api/v1/environments/{environmentId}/browser/{assetPath}"
-  ] = { get: operation };
 }
 
 function pruneUnusedSchemas(document: OpenAPIV3.Document) {

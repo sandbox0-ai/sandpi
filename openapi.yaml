@@ -4,8 +4,8 @@ info:
   version: 0.1.0
   description: The public Sandpi server contract. JSON endpoints use a data
     envelope and errors use an error envelope. Unix timestamps are seconds.
-    Browser-cookie authentication is deployment-scoped; native harness payloads
-    and opaque Browser dashboard frames are identified explicitly.
+    Browser-cookie authentication is deployment-scoped; Environment Preview uses
+    an isolated wildcard origin and native harness payloads remain explicit.
   license:
     name: Apache-2.0
     url: https://www.apache.org/licenses/LICENSE-2.0
@@ -3676,265 +3676,6 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
-  /api/v1/environments/{environmentId}/browser:
-    get:
-      operationId: getEnvironmentBrowserDashboard
-      summary: Load the embedded shared Browser dashboard
-      tags:
-        - Browser
-      description: Sandpi's built-in Browser is one shared Playwright browser session
-        for the human and the agent. The human can take over the embedded tab to
-        complete an interactive sign-in, then hand the same authenticated
-        profile back to the agent. Browser localhost and loopback URLs resolve
-        inside the Environment sandbox, not on the client device.
-      parameters:
-        - schema:
-            type: string
-            enum:
-              - "1"
-          in: query
-          name: embed
-          required: false
-        - schema:
-            type: string
-            minLength: 1
-          in: path
-          name: environmentId
-          required: true
-      x-sandpi-content-type: text/html
-      x-sandpi-proxy-protocol: opaque-playwright-dashboard
-      x-sandpi-shared-browser: true
-      responses:
-        "200":
-          description: Successful response.
-          content:
-            text/html:
-              schema:
-                type: string
-        "302":
-          description: Redirect.
-        default:
-          description: Sandpi error.
-          content:
-            "*/*":
-              schema:
-                type: string
-                format: binary
-  /api/v1/environments/{environmentId}/browser/open:
-    post:
-      operationId: openEnvironmentBrowserUrl
-      summary: Open a loopback URL in the shared Browser
-      tags:
-        - Browser
-      description: Sandpi's built-in Browser is one shared Playwright browser session
-        for the human and the agent. The human can take over the embedded tab to
-        complete an interactive sign-in, then hand the same authenticated
-        profile back to the agent. Browser localhost and loopback URLs resolve
-        inside the Environment sandbox, not on the client device.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                url:
-                  type: string
-                  minLength: 1
-                  maxLength: 8192
-                  description: HTTP or HTTPS URL on localhost, 127.0.0.1, or ::1 inside the
-                    Environment sandbox.
-              required:
-                - url
-              additionalProperties: false
-      parameters:
-        - schema:
-            type: string
-            minLength: 1
-          in: path
-          name: environmentId
-          required: true
-      x-sandpi-loopback-scope: environment
-      x-sandpi-shared-browser: true
-      responses:
-        "204":
-          description: No content.
-        default:
-          description: Sandpi error.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-  /api/v1/environments/{environmentId}/browser/session:
-    post:
-      operationId: ensureEnvironmentBrowserSession
-      summary: Ensure the shared Environment Browser session
-      tags:
-        - Browser
-      description: Sandpi's built-in Browser is one shared Playwright browser session
-        for the human and the agent. The human can take over the embedded tab to
-        complete an interactive sign-in, then hand the same authenticated
-        profile back to the agent. Browser localhost and loopback URLs resolve
-        inside the Environment sandbox, not on the client device.
-      requestBody:
-        required: false
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                force:
-                  type: boolean
-              additionalProperties: false
-      parameters:
-        - schema:
-            type: string
-            minLength: 1
-          in: path
-          name: environmentId
-          required: true
-      x-sandpi-optional-request-body: true
-      x-sandpi-shared-browser: true
-      responses:
-        "204":
-          description: No content.
-        default:
-          description: Sandpi error.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-  /api/v1/environments/{environmentId}/browser/viewport:
-    post:
-      operationId: resizeEnvironmentBrowserViewport
-      summary: Resize the shared Browser viewport
-      tags:
-        - Browser
-      description: Sandpi's built-in Browser is one shared Playwright browser session
-        for the human and the agent. The human can take over the embedded tab to
-        complete an interactive sign-in, then hand the same authenticated
-        profile back to the agent. Browser localhost and loopback URLs resolve
-        inside the Environment sandbox, not on the client device.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                width:
-                  type: integer
-                  minimum: 320
-                  maximum: 3840
-                height:
-                  type: integer
-                  minimum: 240
-                  maximum: 2160
-              required:
-                - width
-                - height
-              additionalProperties: false
-      parameters:
-        - schema:
-            type: string
-            minLength: 1
-          in: path
-          name: environmentId
-          required: true
-      x-sandpi-shared-browser: true
-      responses:
-        "204":
-          description: No content.
-        default:
-          description: Sandpi error.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-  /api/v1/environments/{environmentId}/browser/ws/{dashboardSocketId}:
-    get:
-      operationId: connectEnvironmentBrowserDashboard
-      summary: Connect the embedded Browser dashboard WebSocket
-      tags:
-        - Browser
-      description: Sandpi's built-in Browser is one shared Playwright browser session
-        for the human and the agent. The human can take over the embedded tab to
-        complete an interactive sign-in, then hand the same authenticated
-        profile back to the agent. Browser localhost and loopback URLs resolve
-        inside the Environment sandbox, not on the client device.
-      parameters:
-        - schema:
-            type: string
-            minLength: 1
-          in: path
-          name: environmentId
-          required: true
-        - schema:
-            type: string
-            minLength: 1
-          in: path
-          name: dashboardSocketId
-          required: true
-      x-sandpi-websocket:
-        protocol: opaque-playwright-dashboard
-        direction: bidirectional
-      x-sandpi-shared-browser: true
-      responses:
-        "101":
-          description: Switching protocols.
-        default:
-          description: Sandpi error.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-  /api/v1/environments/{environmentId}/browser/{assetPath}:
-    get:
-      operationId: getEnvironmentBrowserDashboardAsset
-      summary: Load an embedded Browser dashboard asset
-      description: Transparent, authenticated proxy for the built-in shared Playwright
-        Browser dashboard. The asset protocol is owned by the pinned dashboard
-        and is not a JSON application API.
-      tags:
-        - Browser
-      parameters:
-        - name: environmentId
-          in: path
-          required: true
-          schema:
-            type: string
-            minLength: 1
-        - name: assetPath
-          in: path
-          required: true
-          description: A slash-containing dashboard asset path.
-          schema:
-            type: string
-            minLength: 1
-          x-sandpi-greedy: true
-      responses:
-        "200":
-          description: Dashboard asset.
-          content:
-            application/octet-stream:
-              schema:
-                type: string
-                format: binary
-        3XX:
-          description: Dashboard-relative redirect.
-          headers:
-            Location:
-              schema:
-                type: string
-        default:
-          description: Opaque dashboard response or Sandpi error.
-          content:
-            "*/*":
-              schema:
-                type: string
-                format: binary
-      x-sandpi-shared-browser: true
-      x-sandpi-proxy-protocol: opaque-playwright-dashboard
   /api/v1/environments/{environmentId}/egress-credentials:
     get:
       operationId: listEnvironmentEgressCredentials
@@ -6135,6 +5876,70 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /api/v1/environments/{environmentId}/preview/session:
+    post:
+      operationId: createEnvironmentPreviewSession
+      summary: Create an isolated loopback Preview session
+      tags:
+        - Preview
+      description: Creates a short-lived URL on Sandpi's isolated Preview origin for
+        an HTTP service listening on localhost or 127.0.0.1 inside the
+        Environment Sandbox. Preview renders in the human's browser and is
+        independent from the agent's Playwright CLI sessions.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                url:
+                  type: string
+                  minLength: 1
+                  maxLength: 8192
+                  description: HTTP URL on localhost or 127.0.0.1 inside the Environment Sandbox.
+              required:
+                - url
+              additionalProperties: false
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+          in: path
+          name: environmentId
+          required: true
+      x-sandpi-loopback-scope: environment
+      x-sandpi-preview-origin: isolated
+      responses:
+        "200":
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      url:
+                        type: string
+                        format: uri
+                      target:
+                        type: string
+                        format: uri
+                    required:
+                      - url
+                      - target
+                    additionalProperties: false
+                required:
+                  - data
+                additionalProperties: false
+        default:
+          description: Sandpi error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /api/v1/environments/{environmentId}/provisioning:
     put:
       operationId: retryEnvironmentProvisioning
@@ -6187,8 +5992,8 @@ paths:
       tags:
         - Environments
       description: Explicitly pauses the shared Sandbox under the Environment
-        lifecycle lock. Workspace and browser profile data remain durable, while
-        live processes and connections stop.
+        lifecycle lock. Workspace data remains durable, while live processes,
+        agent-local Playwright sessions and Preview connections stop.
       parameters:
         - schema:
             type: string
@@ -6223,7 +6028,8 @@ paths:
         - Environments
       description: Performs one committed pause and resume under the Environment
         lifecycle lock so Sandbox0 advances the runtime generation. Persistent
-        Workspace and browser profile data are retained.
+        Workspace data is retained; live processes, agent-local Playwright
+        sessions and Preview connections are replaced.
       parameters:
         - schema:
             type: string
@@ -8309,8 +8115,8 @@ tags:
     description: Harness-neutral Workspace file access.
   - name: Workspace IDE
     description: Cross-client editor snapshots, mutations and invalidations.
-  - name: Browser
-    description: The embedded, shared human-and-agent Playwright Browser session.
+  - name: Preview
+    description: Isolated access to HTTP services on Environment loopback.
   - name: Metrics
     description: Environment runtime metrics.
   - name: Terminal

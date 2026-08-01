@@ -272,7 +272,7 @@ test("claims exactly one Environment Sandbox around its shared Workspace Volume"
       .services as Array<Record<string, unknown>>
   );
   assert.equal(provisionedServices.length, 1);
-  assert.equal(provisionedServices[0]?.id, "sandpi-browser-dashboard");
+  assert.equal(provisionedServices[0]?.id, "sandpi-preview-proxy");
   assert.deepEqual(
     (provisionedServices[0]?.runtime as { command: string[] }).command.slice(
       0,
@@ -280,6 +280,7 @@ test("claims exactly one Environment Sandbox around its shared Workspace Volume"
     ),
     ["sh", "-c"],
   );
+  assert.doesNotMatch(JSON.stringify(provisionedServices[0]), /playwright|chromium/i);
   assert.deepEqual(allocations, [
     {
       sandboxId: "sandbox-environment",
@@ -672,6 +673,7 @@ test("does not expose server-only credential source refs in control errors", asy
 
 test("disables Environment TTLs and executes Sandpi-owned pause and resume", async () => {
   const updates: unknown[] = [];
+  const serviceUpdates: Array<Array<Record<string, unknown>>> = [];
   let paused = false;
   let resumes = 0;
   const runtime = runtimeWithClient({
@@ -695,6 +697,36 @@ test("disables Environment TTLs and executes Sandpi-owned pause and resume", asy
         paused = false;
         return { status: "running", paused: false, runtimeGeneration: 2 };
       },
+      sandbox(sandboxId: string) {
+        assert.equal(sandboxId, "sandbox-environment");
+        return {
+          async getServices() {
+            return {
+              sandboxId,
+              services: [
+                {
+                  id: "sandpi-browser-dashboard",
+                  displayName: "Retired Browser",
+                  port: 43_420,
+                  runtime: { type: "manual" },
+                  ingress: { _public: true, routes: [] },
+                  publicUrl: "https://browser.example.invalid",
+                },
+              ],
+            };
+          },
+          async updateServices(services: Array<Record<string, unknown>>) {
+            serviceUpdates.push(services);
+            return {
+              sandboxId,
+              services: services.map((service) => ({
+                ...service,
+                publicUrl: "https://preview-proxy.example.invalid",
+              })),
+            };
+          },
+        };
+      },
     },
   });
   const coordinates: EnvironmentRuntimeRecord = {
@@ -713,6 +745,11 @@ test("disables Environment TTLs and executes Sandpi-owned pause and resume", asy
   assert.deepEqual(updates, [
     { config: { ttl: 0, hardTtl: 0, autoResume: true } },
   ]);
+  assert.equal(serviceUpdates.length, 1);
+  assert.deepEqual(
+    serviceUpdates[0]?.map((service) => service.id),
+    ["sandpi-preview-proxy"],
+  );
   await runtime.pauseEnvironment(coordinates);
   assert.equal(paused, true);
   await runtime.resumeEnvironment(coordinates);
@@ -1131,22 +1168,31 @@ test("preserves unrelated services and installs a constrained MCP OAuth callback
   assert.equal(JSON.stringify(replacement).includes("publishable"), false);
 });
 
-test("publishes the official Dashboard behind a server-only hashed header", async () => {
+test("publishes a lightweight Preview proxy and removes the legacy Browser service", async () => {
   let replacement: Array<Record<string, unknown>> = [];
   let serviceUpdates = 0;
   let loseFirstUpdateResponse = true;
   let currentServices: Array<Record<string, unknown>> = [
     {
-      id: "preview",
-      displayName: "Preview",
+      id: "unrelated",
+      displayName: "Unrelated service",
       port: 3000,
       runtime: { type: "manual" },
       ingress: {
         _public: true,
-        routes: [{ id: "preview", pathPrefix: "/", resume: true }],
+        routes: [{ id: "unrelated", pathPrefix: "/", resume: true }],
       },
       publishable: true,
-      publicUrl: "https://preview.example.invalid",
+      publicUrl: "https://unrelated.example.invalid",
+    },
+    {
+      id: "sandpi-browser-dashboard",
+      displayName: "Retired Browser",
+      port: 43_420,
+      runtime: { type: "manual" },
+      ingress: { _public: true, routes: [] },
+      publishable: true,
+      publicUrl: "https://browser.example.invalid",
     },
   ];
   const runtime = runtimeWithClient({
@@ -1155,47 +1201,44 @@ test("publishes the official Dashboard behind a server-only hashed header", asyn
         assert.equal(sandboxId, "sandbox-environment");
         return {
           async getServices() {
-            return {
-              sandboxId,
-              services: currentServices,
-            };
+            return { sandboxId, services: currentServices };
           },
           async updateServices(services: Array<Record<string, unknown>>) {
             serviceUpdates += 1;
             replacement = services;
             currentServices = services.map((service) => ({
-                ...service,
-                healthCheck: undefined,
-                runtime: service.runtime
-                  ? {
-                      ...(service.runtime as Record<string, unknown>),
-                      _function: undefined,
-                    }
-                  : undefined,
-                ingress: {
-                  ...(service.ingress as Record<string, unknown>),
-                  routes: (
-                    (service.ingress as {
-                      routes?: Array<Record<string, unknown>>;
-                    }).routes ?? []
-                  ).map((route) => ({
-                    ...route,
-                    rewritePrefix: undefined,
-                    timeoutSeconds: undefined,
-                    auth: route.auth
-                      ? {
-                          ...(route.auth as Record<string, unknown>),
-                          bearerTokenSha256: undefined,
-                        }
-                      : undefined,
-                  })),
-                },
-                publishable: true,
-                publicUrl:
-                  service.id === "sandpi-browser-dashboard"
-                    ? "https://browser.example.invalid"
-                    : "https://preview.example.invalid",
-              }));
+              ...service,
+              healthCheck: undefined,
+              runtime: service.runtime
+                ? {
+                    ...(service.runtime as Record<string, unknown>),
+                    _function: undefined,
+                  }
+                : undefined,
+              ingress: {
+                ...(service.ingress as Record<string, unknown>),
+                routes: (
+                  (service.ingress as {
+                    routes?: Array<Record<string, unknown>>;
+                  }).routes ?? []
+                ).map((route) => ({
+                  ...route,
+                  rewritePrefix: undefined,
+                  timeoutSeconds: undefined,
+                  auth: route.auth
+                    ? {
+                        ...(route.auth as Record<string, unknown>),
+                        bearerTokenSha256: undefined,
+                      }
+                    : undefined,
+                })),
+              },
+              publishable: true,
+              publicUrl:
+                service.id === "sandpi-preview-proxy"
+                  ? "https://preview-proxy.example.invalid"
+                  : "https://unrelated.example.invalid",
+            }));
             if (loseFirstUpdateResponse) {
               loseFirstUpdateResponse = false;
               throw new APIError({
@@ -1222,14 +1265,18 @@ test("publishes the official Dashboard behind a server-only hashed header", asyn
     },
   };
 
-  const dashboard =
-    await runtime.ensureEnvironmentBrowserDashboard(coordinates);
+  const proxy = await runtime.ensureEnvironmentPreviewProxy(coordinates);
 
-  assert.equal(dashboard.publicUrl, "https://browser.example.invalid");
-  const requestToken = dashboard.requestHeaders["X-Sandpi-Browser-Proxy"];
-  assert.ok(requestToken);
+  assert.equal(proxy.publicUrl, "https://preview-proxy.example.invalid");
+  const ingressToken =
+    proxy.requestHeaders["X-Sandpi-Preview-AppService"];
+  const applicationToken =
+    proxy.requestHeaders["X-Sandpi-Preview-Proxy"];
+  assert.ok(ingressToken);
+  assert.ok(applicationToken);
+  assert.notEqual(ingressToken, applicationToken);
   const service = replacement.find(
-    (candidate) => candidate.id === "sandpi-browser-dashboard",
+    (candidate) => candidate.id === "sandpi-preview-proxy",
   ) as {
     port: number;
     runtime: {
@@ -1253,305 +1300,54 @@ test("publishes the official Dashboard behind a server-only hashed header", asyn
   };
   assert.equal(service.port, 43_420);
   assert.deepEqual(service.runtime.command.slice(0, 2), ["sh", "-c"]);
-  assert.match(
-    service.runtime.command[2] ?? "",
-    /recover_stale_profiles\(\).*node -e.*recovery_status.*ensure_browser\(\).*recover_stale_profiles && return 0.*playwright-cli open about:blank.*node -e.*playwright-cli open about:blank/,
-  );
   assert.doesNotMatch(
-    service.runtime.command[2] ?? "",
-    /playwright-cli tab-list/,
-  );
-  assert.match(
-    service.runtime.command[2] ?? "",
-    /wait_for_dashboard\(\).*SANDPI_PLAYWRIGHT_DASHBOARD_READY_SCRIPT_BASE64.*\(wait_for_dashboard 43420 && ensure_browser; while :; do sleep 15; ensure_browser; done\) & exec playwright-cli show --host 0\.0\.0\.0 --port 43420/,
-  );
-  assert.equal(
-    spawnSync("sh", ["-n", "-c", service.runtime.command[2] ?? ""]).status,
-    0,
+    JSON.stringify(service),
+    /playwright-cli|chromium|browser-dashboard/i,
   );
   assert.equal(service.runtime.cwd, "/workspace");
-  assert.equal(service.runtime.envVars.PLAYWRIGHT_MCP_BROWSER, "chromium");
-  assert.equal(service.runtime.envVars.PLAYWRIGHT_MCP_ISOLATED, "false");
-  assert.equal(service.runtime.envVars.PLAYWRIGHT_MCP_SANDBOX, "false");
-  assert.equal(service.runtime.envVars.NO_UPDATE_NOTIFIER, "1");
+  const proxyScript = Buffer.from(
+    service.runtime.envVars.SANDPI_PREVIEW_PROXY_SCRIPT_BASE64,
+    "base64",
+  ).toString("utf8");
   assert.equal(
-    spawnSync(process.execPath, ["--check"], {
-      input: Buffer.from(
-        service.runtime.envVars
-          .SANDPI_PLAYWRIGHT_DASHBOARD_READY_SCRIPT_BASE64,
-        "base64",
-      ).toString("utf8"),
-    }).status,
+    spawnSync(process.execPath, ["--check"], { input: proxyScript }).status,
     0,
   );
-  assert.match(
-    Buffer.from(
-      service.runtime.envVars
-        .SANDPI_PLAYWRIGHT_LOCK_RECOVERY_SCRIPT_BASE64,
-      "base64",
-    ).toString("utf8"),
-    /SingletonLock/,
+  assert.match(proxyScript, /createServer/);
+  assert.match(proxyScript, /server\.on\("upgrade"/);
+  assert.match(proxyScript, /hostname: "127\.0\.0\.1"/);
+  assert.equal(
+    service.runtime.envVars.SANDPI_PREVIEW_PROXY_TOKEN,
+    applicationToken,
   );
-  assert.ok(
-    [...service.runtime.command, ...Object.values(service.runtime.envVars)]
-      .reduce((bytes, value) => bytes + Buffer.byteLength(value), 0) <
-      8 * 1024,
-  );
-  assert.equal(service.runtime.envVars.SANDPI_BROWSER_SESSION_REVISION, "0");
   assert.equal(service.ingress._public, true);
-  assert.deepEqual(service.ingress.routes[0]?.methods, ["GET"]);
+  assert.deepEqual(service.ingress.routes[0]?.methods, [
+    "DELETE",
+    "GET",
+    "HEAD",
+    "OPTIONS",
+    "PATCH",
+    "POST",
+    "PUT",
+  ]);
   assert.equal(service.ingress.routes[0]?.resume, true);
   assert.deepEqual(service.ingress.routes[0]?.auth, {
     mode: "header",
-    headerName: "X-Sandpi-Browser-Proxy",
+    headerName: "X-Sandpi-Preview-AppService",
     headerValueSha256: createHash("sha256")
-      .update(requestToken, "utf8")
+      .update(ingressToken, "utf8")
       .digest("hex"),
   });
-  assert.equal(JSON.stringify(replacement).includes(requestToken), false);
-  assert.equal(replacement[0]?.id, "preview");
-
-  const reused = await runtime.ensureEnvironmentBrowserDashboard(coordinates);
-  assert.equal(reused.publicUrl, dashboard.publicUrl);
-  assert.equal(serviceUpdates, 1);
-
-  await runtime.ensureEnvironmentBrowserDashboard(coordinates, true);
-  assert.equal(serviceUpdates, 2);
-  const restarted = replacement.find(
-    (candidate) => candidate.id === "sandpi-browser-dashboard",
-  ) as {
-    runtime: { envVars: Record<string, string> };
-  };
-  assert.equal(restarted.runtime.envVars.SANDPI_BROWSER_SESSION_REVISION, "1");
-});
-
-test("uses only official Playwright CLI commands for the shared browser", async () => {
-  const commands: Array<{
-    alias: string;
-    command: string[];
-    cwd: string;
-    envVars: Record<string, string>;
-  }> = [];
-  let browserOpen = false;
-  const runtime = runtimeWithClient({
-    sandboxes: {
-      sandbox() {
-        return {
-          async cmd(
-            alias: string,
-            options: {
-              command: string[];
-              cwd: string;
-              envVars: Record<string, string>;
-            },
-          ) {
-            commands.push({ alias, ...options });
-            const operation = options.command[1];
-            if (operation === "tab-list") {
-              return {
-                exitCode: browserOpen ? 0 : 1,
-                stdout: "",
-                stderr: browserOpen
-                  ? ""
-                  : "Error: Browser 'default' is not open.",
-              };
-            }
-            if (operation === "open") browserOpen = true;
-            return { exitCode: 0, stdout: "", stderr: "" };
-          },
-        };
-      },
-    },
-  });
-  const coordinates: EnvironmentRuntimeRecord = {
-    id: environment.id,
-    sandboxId: environment.sandboxId,
-    workspaceVolumeId: environment.workspaceVolumeId,
-    runtimeGeneration: 1,
-    decoder: {
-      supervisorCursor: 0,
-      tailBase64: "",
-      runtimeGeneration: 1,
-    },
-  };
-
+  assert.equal(JSON.stringify(replacement).includes(ingressToken), false);
+  assert.equal(replacement[0]?.id, "unrelated");
   assert.equal(
-    await runtime.ensureEnvironmentBrowserSession(coordinates),
-    true,
-  );
-  assert.equal(
-    await runtime.openEnvironmentBrowserUrl(
-      coordinates,
-      "http://localhost:3000/",
-    ),
+    replacement.some((candidate) => candidate.id === "sandpi-browser-dashboard"),
     false,
   );
-  await runtime.resizeEnvironmentBrowserViewport(coordinates, {
-    width: 519,
-    height: 759,
-  });
 
-  assert.deepEqual(
-    commands.map((entry) => entry.command),
-    [
-      ["playwright-cli", "tab-list"],
-      [
-        "playwright-cli",
-        "open",
-        "about:blank",
-        "--browser",
-        "chromium",
-        "--persistent",
-      ],
-      ["playwright-cli", "tab-new", "http://localhost:3000/"],
-      ["playwright-cli", "resize", "519", "759"],
-    ],
-  );
-  for (const command of commands) {
-    assert.equal(command.alias, "playwright-cli");
-    assert.equal(command.cwd, "/workspace");
-    assert.equal(command.envVars.HOME, "/workspace");
-    assert.equal(command.envVars.PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD, "1");
-  }
-});
-
-test("recovers one stale persistent browser profile lock", async () => {
-  const commands: Array<{ alias: string; command: string[] }> = [];
-  let openAttempts = 0;
-  const profilePath =
-    "/workspace/.cache/ms-playwright/daemon/8af22c44f40455cc/ud-default-chrome-for-testing";
-  const runtime = runtimeWithClient({
-    sandboxes: {
-      sandbox() {
-        return {
-          async cmd(alias: string, options: { command: string[] }) {
-            commands.push({ alias, command: options.command });
-            if (options.command[0] === "node") {
-              assert.equal(options.command.at(-1), profilePath);
-              return { exitCode: 0, stdout: "", stderr: "" };
-            }
-            const operation = options.command[1];
-            if (operation === "tab-list") {
-              return {
-                exitCode: 1,
-                stdout: "",
-                stderr: "Error: Browser 'default' is not open.",
-              };
-            }
-            if (operation === "open" && openAttempts++ === 0) {
-              return {
-                exitCode: 1,
-                stdout: "",
-                stderr: `Error: Browser is already in use for ${profilePath}, use --isolated`,
-              };
-            }
-            return { exitCode: 0, stdout: "", stderr: "" };
-          },
-        };
-      },
-    },
-  });
-  const coordinates: EnvironmentRuntimeRecord = {
-    id: environment.id,
-    sandboxId: environment.sandboxId,
-    workspaceVolumeId: environment.workspaceVolumeId,
-    runtimeGeneration: 1,
-    decoder: {
-      supervisorCursor: 0,
-      tailBase64: "",
-      runtimeGeneration: 1,
-    },
-  };
-
-  assert.equal(
-    await runtime.ensureEnvironmentBrowserSession(coordinates),
-    true,
-  );
-
-  assert.deepEqual(
-    commands.map(({ alias, command }) => [alias, command[0], command[1]]),
-    [
-      ["playwright-cli", "playwright-cli", "tab-list"],
-      ["playwright-cli", "playwright-cli", "open"],
-      ["playwright-profile-lock-recovery", "node", "-e"],
-      ["playwright-cli", "playwright-cli", "open"],
-    ],
-  );
-});
-
-test("distinguishes missing Playwright dependencies from failed recovery", async () => {
-  const coordinates: EnvironmentRuntimeRecord = {
-    id: environment.id,
-    sandboxId: environment.sandboxId,
-    workspaceVolumeId: environment.workspaceVolumeId,
-    runtimeGeneration: 1,
-    decoder: {
-      supervisorCursor: 0,
-      tailBase64: "",
-      runtimeGeneration: 1,
-    },
-  };
-  const missing = runtimeWithClient({
-    sandboxes: {
-      sandbox() {
-        return {
-          async cmd() {
-            return {
-              exitCode: 127,
-              stdout: "",
-              stderr: "playwright-cli: command not found",
-            };
-          },
-        };
-      },
-    },
-  });
-  await assert.rejects(
-    missing.ensureEnvironmentBrowserSession(coordinates),
-    (error) =>
-      error instanceof HttpError &&
-      error.code === "environment_browser_dependency_unavailable",
-  );
-
-  const profilePath =
-    "/workspace/.cache/ms-playwright/daemon/8af22c44f40455cc/ud-default-chrome-for-testing";
-  const unrecoverable = runtimeWithClient({
-    sandboxes: {
-      sandbox() {
-        return {
-          async cmd(
-            alias: string,
-            options: { command: string[] },
-          ) {
-            if (alias === "playwright-profile-lock-recovery") {
-              return { exitCode: 12, stdout: "", stderr: "" };
-            }
-            if (options.command[1] === "tab-list") {
-              return {
-                exitCode: 1,
-                stdout: "",
-                stderr: "Error: Browser 'default' is not open.",
-              };
-            }
-            if (options.command[1] === "open") {
-              return {
-                exitCode: 1,
-                stdout: "",
-                stderr: `Error: Browser is already in use for ${profilePath}, use --isolated`,
-              };
-            }
-            return { exitCode: 0, stdout: "", stderr: "" };
-          },
-        };
-      },
-    },
-  });
-  await assert.rejects(
-    unrecoverable.ensureEnvironmentBrowserSession(coordinates),
-    (error) =>
-      error instanceof HttpError &&
-      error.code === "environment_browser_recovery_failed",
-  );
+  const reused = await runtime.ensureEnvironmentPreviewProxy(coordinates);
+  assert.equal(reused.publicUrl, proxy.publicUrl);
+  assert.equal(serviceUpdates, 1);
 });
 
 test("creates, restores and deletes native snapshots for the Environment Workspace Volume", async () => {

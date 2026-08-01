@@ -15,7 +15,6 @@ import type {
   EnvironmentCredentialResolverKind,
   EnvironmentEgressCredential,
 } from "@/lib/environment-credentials";
-import type { BrowserDashboardViewport } from "@/lib/environment-browser";
 import type { UnixTimestamp } from "@/lib/time";
 import type {
   CodexDecoderState,
@@ -46,10 +45,10 @@ export interface RuntimeMcpOAuthCallbackService {
 }
 
 /**
- * Server-only connection details for the official Playwright Dashboard.
+ * Server-only connection details for the Environment Preview proxy.
  * Sandpi API handlers must never serialize the protected upstream headers.
  */
-export interface RuntimeBrowserDashboard {
+export interface RuntimePreviewProxy {
   publicUrl: string;
   requestHeaders: Record<string, string>;
 }
@@ -202,21 +201,9 @@ export interface RuntimeAdapter {
     runtime: EnvironmentRuntimeRecord,
     input: { port: number },
   ): Promise<RuntimeMcpOAuthCallbackService>;
-  ensureEnvironmentBrowserDashboard(
+  ensureEnvironmentPreviewProxy(
     runtime: EnvironmentRuntimeRecord,
-    restart?: boolean,
-  ): Promise<RuntimeBrowserDashboard>;
-  ensureEnvironmentBrowserSession(
-    runtime: EnvironmentRuntimeRecord,
-  ): Promise<boolean>;
-  openEnvironmentBrowserUrl(
-    runtime: EnvironmentRuntimeRecord,
-    url: string,
-  ): Promise<boolean>;
-  resizeEnvironmentBrowserViewport(
-    runtime: EnvironmentRuntimeRecord,
-    viewport: BrowserDashboardViewport,
-  ): Promise<void>;
+  ): Promise<RuntimePreviewProxy>;
   createEnvironmentWorkspaceBackup(
     runtime: EnvironmentRuntimeRecord,
     input: { name: string; description: string },

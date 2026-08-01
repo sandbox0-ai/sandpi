@@ -32,17 +32,20 @@ test("loads the release-owned Sandpi Environment skill and interface", () => {
   );
 });
 
-test("keeps the public guide aligned with shared Browser and lifecycle invariants", () => {
+test("keeps the public guide aligned with Preview and lifecycle invariants", () => {
   const guide = readFileSync(
     new URL("../../../public/llms.txt", import.meta.url),
     "utf8",
   );
 
-  assert.match(guide, /human-agent shared Environment Browser/i);
-  assert.match(guide, /Playwright `default` session/);
+  assert.match(guide, /Environment Preview and agent browser automation/i);
+  assert.match(guide, /not shared with the coding agent/i);
+  assert.match(guide, /HTTP services listening on\n  `localhost` or `127\.0\.0\.1`/);
+  assert.match(guide, /not included in Workspace backups/);
   assert.match(guide, /soft TTL and hard TTL to zero/);
   assert.match(guide, /does not idle-pause an Environment while/);
-  assert.match(guide, /Process memory, sockets, live Browser pages/);
+  assert.match(guide, /Process memory,\n  sockets, Preview frames/);
+  assert.doesNotMatch(guide, /human-agent shared Environment Browser/i);
   assert.doesNotMatch(guide, /30-day|30 day|another full month/i);
 });
 

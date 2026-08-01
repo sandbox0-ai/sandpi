@@ -1,7 +1,8 @@
 import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { Buffer, isUtf8 } from "node:buffer";
-import { Readable, Transform } from "node:stream";
+import { request as httpRequest } from "node:http";
+import { request as httpsRequest } from "node:https";
 
 import fastifyCompress from "@fastify/compress";
 import fastifyCookie from "@fastify/cookie";
@@ -19,7 +20,6 @@ import WebSocket, { type RawData } from "ws";
 import { ZodError, z } from "zod";
 
 import type { SandpiDeploymentSummary } from "@/lib/types";
-import { sandboxLoopbackUrl } from "@/lib/environment-browser";
 import { BillingQuotaService } from "@/server/billing/quota-service";
 import { BillingRepository } from "@/server/billing/repository";
 import { StripeBillingService } from "@/server/billing/stripe-service";
@@ -48,17 +48,15 @@ import { EnvironmentService } from "@/server/environments/service";
 import { EnvironmentLifecycleService } from "@/server/environments/lifecycle-service";
 import { EnvironmentRuntimeAccessService } from "@/server/environments/runtime-access-service";
 import {
-  EnvironmentBrowserService,
-  dashboardAssetCacheControl,
-  dashboardProxyPrefix,
-  dashboardRedirectLocation,
-  rewriteDashboardCss,
-  rewriteDashboardHtml,
-} from "@/server/environments/browser-service";
+  previewDownstreamHeaders,
+  previewUpstreamHeaders,
+} from "@/server/environments/preview-http-proxy";
 import {
-  BrowserWebSocketDownstreamRelay,
-  websocketRawDataSize,
-} from "@/server/environments/browser-websocket-relay";
+  environmentPreviewHostConstraint,
+  EnvironmentPreviewService,
+  PREVIEW_TICKET_QUERY,
+  previewSigningKey,
+} from "@/server/environments/preview-service";
 import {
   EnvironmentScheduleService,
   type EnvironmentScheduleConfiguration,
@@ -100,8 +98,6 @@ import { SandpiStore } from "@/server/store";
 import { TerminalInputQueue } from "@/server/terminal-input-queue";
 import {
   billingCheckoutSchema,
-  browserOpenSchema,
-  browserSessionSchema,
   codexComposerUploadSchema,
   codexHookUpdateSchema,
   codexMcpServerEnabledSchema,
@@ -109,7 +105,7 @@ import {
   codexPersonalitySelectionSchema,
   codexRateLimitResetSchema,
   codexSkillConfigurationSchema,
-  environmentBrowserViewportSchema,
+  environmentPreviewSessionSchema,
   environmentCreateSchema,
   environmentOrderSchema,
   environmentProvisioningSchema,
@@ -141,6 +137,7 @@ const CODEX_IMAGE_BODY_LIMIT_BYTES = 36 * 1024 * 1024;
 const CODEX_UPLOAD_BODY_LIMIT_BYTES =
   MAX_CODEX_COMPOSER_UPLOAD_BASE64_LENGTH + 64 * 1024;
 const WORKSPACE_FILE_BODY_LIMIT_BYTES = 7 * 1024 * 1024;
+const ENVIRONMENT_PREVIEW_ROUTE_PREFIX = "/__sandpi_environment_preview__";
 export interface SandpiServerOptions {
   config?: SandpiConfig;
   pool?: Pool;
@@ -160,6 +157,7 @@ export async function createSandpiServer(
 ): Promise<SandpiServer> {
   const config = options.config ?? loadConfig();
   const runtime = options.runtime ?? createRuntime(config);
+  const previewHost = environmentPreviewHostConstraint(config.previewUrl);
   validateBillingRuntime(config.billing, runtime);
   const ownsPool = !options.pool;
   const pool =
@@ -185,6 +183,12 @@ export async function createSandpiServer(
     requestIdHeader: "x-request-id",
     genReqId: (request) =>
       request.headers["x-request-id"]?.toString() || randomUUID(),
+    rewriteUrl: (request) =>
+      rewriteEnvironmentPreviewUrl(
+        previewHost,
+        request.headers.host,
+        request.url ?? "/",
+      ),
   });
   const store = new SandpiStore(pool, advisoryLockPool);
   const billingRepository = new BillingRepository(pool);
@@ -230,7 +234,12 @@ export async function createSandpiServer(
   const runtimeAccess = new EnvironmentRuntimeAccessService(store, runtime, {
     quotaGate: billingQuota,
   });
-  const browser = new EnvironmentBrowserService(runtimeAccess, runtime);
+  const preview = new EnvironmentPreviewService(runtimeAccess, runtime, {
+    publicUrl: config.previewUrl,
+    signingKey: previewSigningKey(
+      config.secretKey ?? config.auth.cookieSecret,
+    ),
+  });
   const codex = new CodexService(store, runtime, app.log, codexAuth, {
     runtimeQuotaGate: billingQuota,
   });
@@ -255,7 +264,7 @@ export async function createSandpiServer(
   lifecycle.setBeforePause(async (environmentId) => {
     await codex.flushEnvironmentCredentials(environmentId);
     codex.suspendEnvironmentWorker(environmentId);
-    browser.invalidate(environmentId);
+    preview.invalidate(environmentId);
   });
   sandboxUsage?.setPauseForQuota((environmentId) =>
     lifecycle.pauseForQuota(environmentId),
@@ -274,6 +283,7 @@ export async function createSandpiServer(
   environments.setBeforeDelete(async (userId, environmentId) => {
     await codex.flushEnvironmentCredentials(environmentId);
     codex.suspendEnvironmentWorker(environmentId);
+    preview.invalidate(environmentId);
     await codexAuth.cancelEnvironmentDeviceLogin(userId, environmentId);
   });
   environments.setAfterRuntimeDelete(
@@ -300,13 +310,21 @@ export async function createSandpiServer(
     hook: "onRequest",
   });
   await app.register(fastifyCors, {
-    credentials: true,
-    origin: (origin, callback) => {
-      if (!origin || allowedOrigins(config).has(origin)) {
-        callback(null, true);
+    delegator: (request, callback) => {
+      if (preview.isPreviewHost(request.headers.host)) {
+        callback(null, { origin: false, credentials: false, preflight: false });
         return;
       }
-      callback(new Error("Origin is not allowed by Sandpi."), false);
+      callback(null, {
+        credentials: true,
+        origin: (origin, originCallback) => {
+          if (!origin || allowedOrigins(config).has(origin)) {
+            originCallback(null, true);
+            return;
+          }
+          originCallback(new Error("Origin is not allowed by Sandpi."), false);
+        },
+      });
     },
   });
   await app.register(fastifyWebsocket, {
@@ -346,6 +364,7 @@ export async function createSandpiServer(
   });
 
   app.addHook("onRequest", async (request) => {
+    if (preview.isPreviewHost(request.headers.host)) return;
     if (!request.url.startsWith("/api/v1") || publicAuthPath(request.url)) {
       return;
     }
@@ -354,13 +373,14 @@ export async function createSandpiServer(
   });
 
   registerHealthRoutes(app, pool, runtime);
+  registerEnvironmentPreviewRoutes(app, preview, runtimeAccess);
   registerAuthRoutes(app, config, environments, nativeAuth, oidcIdentity);
   registerApiRoutes(app, {
     config,
     store,
     runtime,
     runtimeAccess,
-    browser,
+    preview,
     codex,
     codexAuth,
     environments,
@@ -600,7 +620,7 @@ export function registerApiRoutes(
     store: SandpiStore;
     runtime: RuntimeAdapter;
     runtimeAccess: EnvironmentRuntimeAccessService;
-    browser: EnvironmentBrowserService;
+    preview: EnvironmentPreviewService;
     codex: CodexService;
     codexAuth: CodexEnvironmentAuthService;
     environments: EnvironmentService;
@@ -653,10 +673,7 @@ export function registerApiRoutes(
   };
   app.addHook("onSend", async (request, reply, payload) => {
     if (
-      shouldApplyApiNoStore(
-        request.url,
-        reply.hasHeader("Cache-Control"),
-      )
+      shouldApplyApiNoStore(request.url)
     ) {
       reply.header("Cache-Control", "no-store");
     }
@@ -1941,98 +1958,17 @@ export function registerApiRoutes(
     },
   );
   app.post<{ Params: { environmentId: string }; Body: unknown }>(
-    "/api/v1/environments/:environmentId/browser/session",
-    async (request, reply) => {
-      const input = browserSessionSchema.parse(request.body ?? {});
-      await services.browser.ensureSession(
-        request.principal.userId,
-        request.params.environmentId,
-        input.force ?? false,
-      );
-      return reply.status(204).send();
+    "/api/v1/environments/:environmentId/preview/session",
+    async (request) => {
+      const input = environmentPreviewSessionSchema.parse(request.body);
+      return {
+        data: await services.preview.createSession(
+          request.principal.userId,
+          request.params.environmentId,
+          input.url,
+        ),
+      };
     },
-  );
-  app.post<{ Params: { environmentId: string }; Body: unknown }>(
-    "/api/v1/environments/:environmentId/browser/open",
-    async (request, reply) => {
-      const input = browserOpenSchema.parse(request.body);
-      const url = sandboxLoopbackUrl(input.url);
-      if (!url) {
-        throw new HttpError(
-          400,
-          "invalid_environment_browser_url",
-          "Browser links must use HTTP or HTTPS on localhost, 127.0.0.1 or ::1.",
-        );
-      }
-      await services.browser.openUrl(
-        request.principal.userId,
-        request.params.environmentId,
-        url,
-      );
-      return reply.status(204).send();
-    },
-  );
-  app.post<{ Params: { environmentId: string }; Body: unknown }>(
-    "/api/v1/environments/:environmentId/browser/viewport",
-    async (request, reply) => {
-      const viewport = environmentBrowserViewportSchema.parse(request.body);
-      await services.browser.resizeViewport(
-        request.principal.userId,
-        request.params.environmentId,
-        viewport,
-      );
-      return reply.status(204).send();
-    },
-  );
-  app.get<{
-    Params: { environmentId: string; dashboardSocketId: string };
-  }>(
-    "/api/v1/environments/:environmentId/browser/ws/:dashboardSocketId",
-    { websocket: true },
-    async (socket, request) => {
-      await proxyEnvironmentBrowserWebSocket(
-        socket,
-        request,
-        services.browser,
-        () =>
-          services.runtimeAccess.touchRunningRuntimeActivity(
-            request.params.environmentId,
-          ),
-      );
-    },
-  );
-  // Next's development rewrite can remove the trailing slash before proxying
-  // this request. Serve both root spellings directly so the iframe cannot loop
-  // between the frontend proxy and a permanent slash redirect.
-  app.get<{ Params: { environmentId: string } }>(
-    "/api/v1/environments/:environmentId/browser",
-    async (request, reply) =>
-      proxyEnvironmentBrowserAsset(
-        services.browser,
-        request,
-        reply,
-        undefined,
-      ),
-  );
-  app.get<{ Params: { environmentId: string } }>(
-    "/api/v1/environments/:environmentId/browser/",
-    async (request, reply) =>
-      proxyEnvironmentBrowserAsset(
-        services.browser,
-        request,
-        reply,
-        undefined,
-      ),
-  );
-  app.get<{ Params: { environmentId: string; "*": string } }>(
-    "/api/v1/environments/:environmentId/browser/*",
-    async (request, reply) =>
-      proxyEnvironmentBrowserAsset(
-        services.browser,
-        request,
-        reply,
-        request.params["*"],
-      ),
   );
   app.get<{ Params: { environmentId: string } }>(
     "/api/v1/environments/:environmentId/metrics/current",
@@ -2509,243 +2445,227 @@ async function streamHarnessEvents(
   if (!reply.raw.destroyed) reply.raw.end();
 }
 
-const BROWSER_DASHBOARD_PROXY_TIMEOUT_MS = 130_000;
-const BROWSER_DASHBOARD_MAX_ASSET_BYTES = 8 * 1024 * 1024;
-const BROWSER_DASHBOARD_MAX_QUEUED_CLIENT_WS_BYTES = 1024 * 1024;
-const BROWSER_DASHBOARD_MAX_QUEUED_DOWNSTREAM_WS_BYTES = 8 * 1024 * 1024;
+const PREVIEW_PROXY_CONNECT_TIMEOUT_MS = 130_000;
+const PREVIEW_PROXY_MAX_QUEUED_CLIENT_WS_BYTES = 1024 * 1024;
+const PREVIEW_PROXY_MAX_QUEUED_DOWNSTREAM_WS_BYTES = 8 * 1024 * 1024;
 
-async function proxyEnvironmentBrowserAsset(
-  browser: EnvironmentBrowserService,
-  request: FastifyRequest<{ Params: { environmentId: string } }>,
-  reply: FastifyReply,
-  assetPath: string | undefined,
+export function registerEnvironmentPreviewRoutes(
+  app: FastifyInstance,
+  preview: EnvironmentPreviewService,
+  runtimeAccess: EnvironmentRuntimeAccessService,
 ) {
-  const environmentId = request.params.environmentId;
-  let upstream = await browser.httpUpstream(
-    request.principal.userId,
-    environmentId,
-    assetPath,
-  );
-  let response = await fetchBrowserDashboardAsset(upstream);
-  if (response.status === 401 || response.status === 403) {
-    browser.invalidate(environmentId);
-    upstream = await browser.httpUpstream(
-      request.principal.userId,
-      environmentId,
-      assetPath,
+  void app.register(async (previewApp) => {
+    // The proxy must preserve JSON, form, text and binary request bytes. Keep
+    // this parser encapsulated so Sandpi's JSON API retains normal validation.
+    previewApp.removeAllContentTypeParsers();
+    previewApp.addContentTypeParser(
+      "*",
+      { parseAs: "buffer", bodyLimit: 16 * 1024 * 1024 },
+      (_request, body, done) => done(null, body),
     );
-    response = await fetchBrowserDashboardAsset(upstream);
-  }
 
-  const prefix = dashboardProxyPrefix(environmentId);
-  if (response.status >= 300 && response.status < 400) {
-    const location = dashboardRedirectLocation(
-      response.headers.get("location"),
-      prefix,
-    );
-    if (!location) {
-      throw new HttpError(
-        502,
-        "environment_browser_proxy_invalid",
-        "The Playwright Dashboard returned an invalid redirect.",
-      );
+    const host = preview.hostConstraint();
+    const handler = (request: FastifyRequest, reply: FastifyReply) =>
+      proxyEnvironmentPreviewHttp(preview, request, reply);
+    const wsHandler = (socket: WebSocket, request: FastifyRequest) =>
+      proxyEnvironmentPreviewWebSocket(preview, runtimeAccess, socket, request);
+
+    for (const url of [
+      ENVIRONMENT_PREVIEW_ROUTE_PREFIX,
+      `${ENVIRONMENT_PREVIEW_ROUTE_PREFIX}/*`,
+    ]) {
+      previewApp.route({
+        method: "GET",
+        url,
+        constraints: { host },
+        bodyLimit: 16 * 1024 * 1024,
+        handler,
+        wsHandler,
+      });
+      previewApp.route({
+        method: ["DELETE", "OPTIONS", "PATCH", "POST", "PUT"],
+        url,
+        constraints: { host },
+        bodyLimit: 16 * 1024 * 1024,
+        handler,
+      });
     }
-    return reply
-      .status(response.status)
-      .header("Cache-Control", "private, no-store")
-      .header("Location", location)
-      .send();
-  }
-
-  const contentLength = Number(response.headers.get("content-length") ?? 0);
-  if (
-    Number.isFinite(contentLength) &&
-    contentLength > BROWSER_DASHBOARD_MAX_ASSET_BYTES
-  ) {
-    throw new HttpError(
-      502,
-      "environment_browser_asset_too_large",
-      "The Playwright Dashboard asset is too large.",
-    );
-  }
-  const contentType = response.headers.get("content-type");
-  if (contentType) reply.header("Content-Type", contentType);
-  reply.header(
-    "Cache-Control",
-    response.ok
-      ? dashboardAssetCacheControl(
-          assetPath,
-          response.headers.get("cache-control"),
-        )
-      : "private, no-store",
-  );
-  const normalizedAssetPath = assetPath?.replace(/^\/+|\/+$/g, "");
-  if (
-    normalizedAssetPath === "index.html" ||
-    normalizedAssetPath?.endsWith(".css")
-  ) {
-    const body = await readBrowserDashboardBody(response);
-    const payload =
-      normalizedAssetPath === "index.html"
-        ? rewriteDashboardHtml(body.toString("utf8"), prefix)
-        : rewriteDashboardCss(body.toString("utf8"), prefix);
-    return reply.status(response.status).send(payload);
-  }
-
-  if (!response.body) {
-    return reply.status(response.status).send();
-  }
-  let streamedBytes = 0;
-  const bounded = new Transform({
-    transform(chunk: Buffer, _encoding, callback) {
-      streamedBytes += chunk.byteLength;
-      if (streamedBytes > BROWSER_DASHBOARD_MAX_ASSET_BYTES) {
-        callback(
-          new HttpError(
-            502,
-            "environment_browser_asset_too_large",
-            "The Playwright Dashboard asset is too large.",
-          ),
-        );
-        return;
-      }
-      callback(null, chunk);
-    },
   });
-  return reply
-    .status(response.status)
-    .send(
-      Readable.fromWeb(
-        response.body as unknown as import("node:stream/web").ReadableStream,
-      ).pipe(bounded),
-    );
 }
 
-async function readBrowserDashboardBody(response: Response) {
-  const body = Buffer.from(await response.arrayBuffer());
-  if (body.byteLength > BROWSER_DASHBOARD_MAX_ASSET_BYTES) {
-    throw new HttpError(
-      502,
-      "environment_browser_asset_too_large",
-      "The Playwright Dashboard asset is too large.",
-    );
-  }
-  return body;
-}
-
-async function fetchBrowserDashboardAsset(upstream: {
-  url: string;
-  headers: Record<string, string>;
-}) {
-  try {
-    return await fetch(upstream.url, {
-      method: "GET",
-      headers: upstream.headers,
-      redirect: "manual",
-      signal: AbortSignal.timeout(BROWSER_DASHBOARD_PROXY_TIMEOUT_MS),
-    });
-  } catch {
-    throw new HttpError(
-      502,
-      "environment_browser_proxy_unavailable",
-      "The Playwright Dashboard is temporarily unavailable.",
-    );
-  }
-}
-
-async function proxyEnvironmentBrowserWebSocket(
-  socket: WebSocket,
-  request: FastifyRequest<{
-    Params: { environmentId: string; dashboardSocketId: string };
-  }>,
-  browser: EnvironmentBrowserService,
-  touchRuntime: () => Promise<boolean>,
+async function proxyEnvironmentPreviewHttp(
+  preview: EnvironmentPreviewService,
+  request: FastifyRequest,
+  reply: FastifyReply,
 ) {
+  const host = request.headers.host ?? "";
+  const requestUrl = new URL(request.originalUrl, preview.previewOrigin(host));
+  const ticket = requestUrl.searchParams.get(PREVIEW_TICKET_QUERY);
+  if (ticket) {
+    const exchanged = preview.exchangeTicket(host, ticket);
+    requestUrl.searchParams.delete(PREVIEW_TICKET_QUERY);
+    reply
+      .header("Cache-Control", "private, no-store")
+      .header("Referrer-Policy", "no-referrer")
+      .setCookie(
+        preview.cookieName(),
+        exchanged.token,
+        preview.cookieOptions(exchanged.expiresAt),
+      );
+    return reply.redirect(`${requestUrl.pathname}${requestUrl.search}`, 302);
+  }
+
+  const session = preview.authorize(
+    host,
+    request.cookies[preview.cookieName()],
+  );
+  const upstream = await preview.upstream(session, request.originalUrl);
+  const previewOrigin = preview.previewOrigin(host);
+  const headers = previewUpstreamHeaders(
+    request.headers,
+    upstream.headers,
+    session,
+    previewOrigin,
+    preview.cookieName(),
+  );
+  const body = Buffer.isBuffer(request.rawBody)
+    ? request.rawBody
+    : Buffer.isBuffer(request.body)
+      ? request.body
+      : undefined;
+  const transport = upstream.url.protocol === "https:" ? httpsRequest : httpRequest;
+
+  reply.hijack();
+  let responseStarted = false;
+  const proxyRequest = transport(
+    upstream.url,
+    { method: request.method, headers },
+    (proxyResponse) => {
+      responseStarted = true;
+      clearTimeout(connectTimeout);
+      const downstreamHeaders = previewDownstreamHeaders(
+        proxyResponse.headers,
+        session,
+        previewOrigin,
+        preview.cookieName(),
+      );
+      if (proxyResponse.statusMessage) {
+        reply.raw.writeHead(
+          proxyResponse.statusCode ?? 502,
+          proxyResponse.statusMessage,
+          downstreamHeaders,
+        );
+      } else {
+        reply.raw.writeHead(proxyResponse.statusCode ?? 502, downstreamHeaders);
+      }
+      proxyResponse.pipe(reply.raw);
+    },
+  );
+  const connectTimeout = setTimeout(() => {
+    proxyRequest.destroy(new Error("Preview upstream connection timed out"));
+  }, PREVIEW_PROXY_CONNECT_TIMEOUT_MS);
+  connectTimeout.unref();
+  proxyRequest.once("error", (error) => {
+    clearTimeout(connectTimeout);
+    request.log.debug({ err: error }, "Environment Preview HTTP upstream failed");
+    if (!responseStarted && !reply.raw.headersSent) {
+      reply.raw.writeHead(502, {
+        "Content-Type": "text/plain; charset=utf-8",
+        "Cache-Control": "no-store",
+      });
+      reply.raw.end("The local Preview service is unavailable.\n");
+    } else {
+      reply.raw.destroy();
+    }
+  });
+  reply.raw.once("close", () => proxyRequest.destroy());
+  if (body) proxyRequest.end(body);
+  else proxyRequest.end();
+}
+
+async function proxyEnvironmentPreviewWebSocket(
+  preview: EnvironmentPreviewService,
+  runtimeAccess: EnvironmentRuntimeAccessService,
+  socket: WebSocket,
+  request: FastifyRequest,
+) {
+  const host = request.headers.host ?? "";
+  let session;
+  try {
+    session = preview.authorize(host, request.cookies[preview.cookieName()]);
+  } catch {
+    socket.close(1008, "Preview authorization required");
+    return;
+  }
+  const heartbeat = new RuntimeWebSocketHeartbeat(
+    socket,
+    () => runtimeAccess.touchRunningRuntimeActivity(session.environmentId),
+    {
+      pingIntervalMs: 30_000,
+      activityTouchIntervalMs: 30_000,
+      onActivityTouchError: (error) => {
+        request.log.debug(
+          { err: error, environmentId: session.environmentId },
+          "Environment Preview activity could not extend idle access",
+        );
+      },
+    },
+  );
+  heartbeat.start();
+
   const queued: Array<{ data: RawData; isBinary: boolean }> = [];
   let queuedBytes = 0;
   let upstream: WebSocket | undefined;
-  let downstreamClosed = false;
-  const downstreamRelay = new BrowserWebSocketDownstreamRelay({
-    maxQueuedBytes: BROWSER_DASHBOARD_MAX_QUEUED_DOWNSTREAM_WS_BYTES,
-    send(data, isBinary, callback) {
-      if (socket.readyState !== WebSocket.OPEN) {
-        callback(new Error("Dashboard downstream is closed"));
-        return;
-      }
-      socket.send(data, { binary: isBinary }, callback);
-    },
-    onOverflow() {
-      if (socket.readyState === WebSocket.OPEN) {
-        socket.close(1009, "Dashboard downstream queue exceeded");
-      }
-    },
-    onSendError(error) {
-      request.log.debug(
-        { err: error, environmentId: request.params.environmentId },
-        "Playwright Dashboard downstream send failed",
-      );
-      upstream?.terminate();
-      if (socket.readyState === WebSocket.OPEN) {
-        socket.close(1011, "Dashboard downstream unavailable");
-      }
-    },
-  });
-  const heartbeat = new RuntimeWebSocketHeartbeat(socket, touchRuntime, {
-    pingIntervalMs: 30_000,
-    activityTouchIntervalMs: 30_000,
-    onActivityTouchError: (error) => {
-      request.log.debug(
-        { err: error, environmentId: request.params.environmentId },
-        "Environment browser activity could not extend idle access",
-      );
-    },
-  });
-  heartbeat.start();
-
+  let closed = false;
   socket.on("message", (data, isBinary) => {
+    heartbeat.markActivity();
     if (upstream?.readyState === WebSocket.OPEN) {
-      heartbeat.markActivity();
       upstream.send(data, { binary: isBinary });
       return;
     }
     queuedBytes += websocketRawDataSize(data);
-    if (queuedBytes > BROWSER_DASHBOARD_MAX_QUEUED_CLIENT_WS_BYTES) {
-      socket.close(1009, "Dashboard connection queue exceeded");
+    if (queuedBytes > PREVIEW_PROXY_MAX_QUEUED_CLIENT_WS_BYTES) {
+      socket.close(1009, "Preview connection queue exceeded");
       return;
     }
     queued.push({ data, isBinary });
-    heartbeat.markActivity();
   });
   socket.once("close", () => {
-    downstreamClosed = true;
+    closed = true;
     heartbeat.stop();
-    downstreamRelay.close();
-    request.log.debug(
-      {
-        environmentId: request.params.environmentId,
-        ...downstreamRelay.stats(),
-      },
-      "Playwright Dashboard downstream relay closed",
-    );
     upstream?.close();
   });
   socket.once("error", () => {
     heartbeat.stop();
-    downstreamRelay.close();
     upstream?.terminate();
   });
 
   try {
-    const target = await browser.websocketUpstream(
-      request.principal.userId,
-      request.params.environmentId,
-      request.params.dashboardSocketId,
+    const target = await preview.upstream(session, request.originalUrl);
+    if (closed) return;
+    const previewOrigin = preview.previewOrigin(host);
+    const headers = previewUpstreamHeaders(
+      request.headers,
+      target.headers,
+      session,
+      previewOrigin,
+      preview.cookieName(),
+      true,
     );
-    if (downstreamClosed) return;
-    upstream = new WebSocket(target.url, {
-      headers: target.headers,
-      handshakeTimeout: BROWSER_DASHBOARD_PROXY_TIMEOUT_MS,
-    });
+    const protocolHeader = request.headers["sec-websocket-protocol"];
+    const protocols = (Array.isArray(protocolHeader)
+      ? protocolHeader.join(",")
+      : protocolHeader ?? "")
+      .split(",")
+      .map((protocol) => protocol.trim())
+      .filter(Boolean);
+    const options = {
+      headers,
+      handshakeTimeout: PREVIEW_PROXY_CONNECT_TIMEOUT_MS,
+    };
+    upstream = protocols.length > 0
+      ? new WebSocket(target.url, protocols, options)
+      : new WebSocket(target.url, options);
     upstream.once("open", () => {
       for (const message of queued) {
         if (upstream?.readyState !== WebSocket.OPEN) break;
@@ -2755,38 +2675,52 @@ async function proxyEnvironmentBrowserWebSocket(
       queuedBytes = 0;
     });
     upstream.on("message", (data, isBinary) => {
-      downstreamRelay.enqueue(data, isBinary);
+      if (
+        socket.readyState !== WebSocket.OPEN ||
+        socket.bufferedAmount + websocketRawDataSize(data) >
+          PREVIEW_PROXY_MAX_QUEUED_DOWNSTREAM_WS_BYTES
+      ) {
+        socket.close(1009, "Preview downstream queue exceeded");
+        upstream?.terminate();
+        return;
+      }
+      socket.send(data, { binary: isBinary }, (error) => {
+        if (error) upstream?.terminate();
+      });
     });
     upstream.once("close", (code, reason) => {
       heartbeat.stop();
-      downstreamRelay.close();
       if (socket.readyState === WebSocket.OPEN) {
         socket.close(websocketCloseCode(code), reason.toString().slice(0, 123));
       }
     });
     upstream.once("error", (error) => {
       heartbeat.stop();
-      // HTTP auth failures and runtime-generation fencing refresh stale
-      // coordinates. A transient socket failure must not force the next
-      // Browser mount through another regional control API lookup.
-      request.log.warn(
-        { err: error, environmentId: request.params.environmentId },
-        "Playwright Dashboard WebSocket upstream failed",
+      request.log.debug(
+        { err: error, environmentId: session.environmentId },
+        "Environment Preview WebSocket upstream failed",
       );
       if (socket.readyState === WebSocket.OPEN) {
-        socket.close(1011, "Dashboard upstream unavailable");
+        socket.close(1011, "Preview upstream unavailable");
       }
     });
   } catch (error) {
     heartbeat.stop();
-    request.log.warn(
-      { err: error, environmentId: request.params.environmentId },
-      "Playwright Dashboard WebSocket setup failed",
+    request.log.debug(
+      { err: error, environmentId: session.environmentId },
+      "Environment Preview WebSocket setup failed",
     );
     if (socket.readyState === WebSocket.OPEN) {
-      socket.close(1011, "Dashboard unavailable");
+      socket.close(1011, "Preview unavailable");
     }
   }
+}
+
+function websocketRawDataSize(data: RawData) {
+  if (Array.isArray(data)) {
+    return data.reduce((total, chunk) => total + chunk.byteLength, 0);
+  }
+  return data.byteLength;
 }
 
 function websocketCloseCode(code: number) {
@@ -2795,6 +2729,15 @@ function websocketCloseCode(code: number) {
     ![1_004, 1_005, 1_006, 1_015].includes(code)
     ? code
     : 1_011;
+}
+
+export function rewriteEnvironmentPreviewUrl(
+  hostConstraint: RegExp,
+  host: string | undefined,
+  url: string,
+) {
+  if (!host || !hostConstraint.test(host)) return url;
+  return `${ENVIRONMENT_PREVIEW_ROUTE_PREFIX}${url.startsWith("/") ? url : `/${url}`}`;
 }
 
 async function authenticateRequest(

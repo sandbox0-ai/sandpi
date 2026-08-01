@@ -27,6 +27,7 @@ services:
       SANDPI_HOST: 0.0.0.0
       SANDPI_PORT: 3000
       SANDPI_PUBLIC_URL: ${SANDPI_PUBLIC_URL:-http://localhost:3000}
+      SANDPI_PREVIEW_URL: ${SANDPI_PREVIEW_URL:-http://preview.localhost:3000}
     ports:
       - "3000:3000"
     depends_on:

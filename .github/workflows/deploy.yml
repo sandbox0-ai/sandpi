@@ -57,6 +57,7 @@ jobs:
       SANDPI_AUTH_MODE: ${{ vars.SANDPI_AUTH_MODE }}
       SANDPI_BILLING_MODE: ${{ vars.SANDPI_BILLING_MODE }}
       SANDPI_COOKIE_SECRET: ${{ secrets.SANDPI_COOKIE_SECRET }}
+      SANDPI_DNS_API_TOKEN: ${{ secrets.SANDPI_DNS_API_TOKEN }}
       SANDPI_INGRESS_IP: ${{ vars.SANDPI_INGRESS_IP }}
       SANDPI_KUBE_CONFIG: ${{ secrets.SANDPI_KUBE_CONFIG }}
       SANDPI_OIDC_CLIENT_ID: ${{ vars.SANDPI_OIDC_CLIENT_ID }}
@@ -66,6 +67,7 @@ jobs:
       SANDPI_OIDC_TOKEN_ENDPOINT_AUTH_METHOD: ${{ vars.SANDPI_OIDC_TOKEN_ENDPOINT_AUTH_METHOD }}
       SANDPI_POSTGRES_PASSWORD: ${{ secrets.SANDPI_POSTGRES_PASSWORD }}
       SANDPI_PUBLIC_URL: ${{ vars.SANDPI_PUBLIC_URL }}
+      SANDPI_PREVIEW_URL: ${{ vars.SANDPI_PREVIEW_URL }}
       NEXT_PUBLIC_CLARITY_PROJECT_ID: ${{ vars.NEXT_PUBLIC_CLARITY_PROJECT_ID }}
       NEXT_PUBLIC_GA_MEASUREMENT_ID: ${{ vars.NEXT_PUBLIC_GA_MEASUREMENT_ID }}
       SANDPI_SECRET_KEY: ${{ secrets.SANDPI_SECRET_KEY }}
@@ -85,6 +87,7 @@ jobs:
             "SANDBOX0_API_KEY",
             "SANDPI_BILLING_MODE",
             "SANDPI_COOKIE_SECRET",
+            "SANDPI_DNS_API_TOKEN",
             "SANDPI_INGRESS_IP",
             "SANDPI_KUBE_CONFIG",
             "SANDPI_OIDC_CLIENT_ID",
@@ -94,6 +97,7 @@ jobs:
             "SANDPI_OIDC_TOKEN_ENDPOINT_AUTH_METHOD",
             "SANDPI_POSTGRES_PASSWORD",
             "SANDPI_PUBLIC_URL",
+            "SANDPI_PREVIEW_URL",
             "SANDPI_SECRET_KEY",
             "SANDPI_STRIPE_PLUS_PRICE_ID",
             "SANDPI_STRIPE_PRO_PRICE_ID",
@@ -113,6 +117,7 @@ jobs:
           for (const name of [
             "SANDBOX0_API_HOST",
             "SANDPI_OIDC_ISSUER",
+            "SANDPI_PREVIEW_URL",
             "SANDPI_PUBLIC_URL",
           ]) {
             const value = new URL(process.env[name]);
@@ -122,6 +127,9 @@ jobs:
           }
           if (new URL(process.env.SANDPI_PUBLIC_URL).origin !== "https://sandpi.ai") {
             throw new Error("SANDPI_PUBLIC_URL must be https://sandpi.ai.");
+          }
+          if (new URL(process.env.SANDPI_PREVIEW_URL).origin !== "https://preview.sandpi.ai") {
+            throw new Error("SANDPI_PREVIEW_URL must be https://preview.sandpi.ai.");
           }
           if (!process.env.SANDPI_OIDC_SCOPES.split(/\s+/).includes("openid")) {
             throw new Error("SANDPI_OIDC_SCOPES must include openid.");
@@ -186,6 +194,7 @@ jobs:
           export KUBECONFIG="${kubeconfig_path}"
           kubectl auth can-i patch secret/sandpi-runtime --namespace sandpi | grep -Fx yes
           kubectl auth can-i patch secret/sandpi-postgres --namespace sandpi | grep -Fx yes
+          kubectl auth can-i patch secret/sandpi-dns --namespace sandpi | grep -Fx yes
           kubectl auth can-i create certificates.cert-manager.io --namespace sandpi | grep -Fx yes
           kubectl auth can-i create issuers.cert-manager.io --namespace sandpi | grep -Fx yes
           if kubectl auth can-i create namespaces --quiet; then
@@ -227,6 +236,17 @@ jobs:
               --type merge \
               --patch-file /dev/stdin
 
+          node --input-type=module <<'NODE' |
+          const token = process.env.SANDPI_DNS_API_TOKEN;
+          if (!token) throw new Error("SANDPI_DNS_API_TOKEN is not set.");
+          process.stdout.write(JSON.stringify({
+            data: { "access-token": Buffer.from(token).toString("base64") },
+          }));
+          NODE
+            kubectl --namespace sandpi patch secret sandpi-dns \
+              --type merge \
+              --patch-file /dev/stdin
+
           render_secret_patch \
             DATABASE_URL \
             NODE_ENV \
@@ -243,6 +263,7 @@ jobs:
             SANDPI_OIDC_SCOPES \
             SANDPI_OIDC_TOKEN_ENDPOINT_AUTH_METHOD \
             SANDPI_PORT \
+            SANDPI_PREVIEW_URL \
             SANDPI_PUBLIC_URL \
             SANDPI_SECRET_KEY \
             SANDPI_STRIPE_PLUS_PRICE_ID \
@@ -272,9 +293,10 @@ jobs:
           fi
           if ! kubectl --namespace sandpi wait \
             --for=condition=Ready \
-            certificate/sandpi \
+            certificate/sandpi certificate/sandpi-preview \
             --timeout=8m; then
             kubectl --namespace sandpi describe certificate/sandpi || true
+            kubectl --namespace sandpi describe certificate/sandpi-preview || true
             kubectl --namespace sandpi get certificaterequests.cert-manager.io -o wide || true
             kubectl --namespace sandpi get orders.acme.cert-manager.io -o wide || true
             kubectl --namespace sandpi get challenges.acme.cert-manager.io -o wide || true
@@ -310,6 +332,17 @@ jobs:
               http://sandpi.ai/health/ready
           )"
           test "${redirect_location}" = "https://sandpi.ai/health/ready"
+
+          preview_status="$(
+            curl \
+              --output /dev/null \
+              --show-error \
+              --silent \
+              --write-out '%{http_code}' \
+              --resolve "p3000-00000000000000000000.preview.sandpi.ai:443:${SANDPI_INGRESS_IP}" \
+              https://p3000-00000000000000000000.preview.sandpi.ai/
+          )"
+          test "${preview_status}" = "401"
       - name: Log out of GHCR
         if: always()
         run: docker logout ghcr.io

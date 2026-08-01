@@ -17,7 +17,7 @@ import {
   type EnvironmentSettingsOpenOptions,
   type EnvironmentSettingsTab,
 } from "@/components/environment-settings";
-import type { EnvironmentBrowserNavigationRequest } from "@/components/environment-browser";
+import type { EnvironmentPreviewNavigationRequest } from "@/components/environment-preview";
 import {
   Inspector,
   INSPECTOR_KEEP_ALIVE_MS,
@@ -133,8 +133,8 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
   );
   const [workspaceNavigationRequest, setWorkspaceNavigationRequest] =
     useState<WorkspaceFileNavigationRequest>();
-  const [browserNavigationRequest, setBrowserNavigationRequest] =
-    useState<EnvironmentBrowserNavigationRequest>();
+  const [previewNavigationRequest, setPreviewNavigationRequest] =
+    useState<EnvironmentPreviewNavigationRequest>();
   const localUiPreferences = useLocalUiPreferences();
   const inspectorTab = localUiPreferences.workspace.inspectorTab;
   const sidebarCollapsed = localUiPreferences.workspace.sidebarCollapsed;
@@ -146,7 +146,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
     storedInspectorWidthRatio,
   );
   const workspaceNavigationRequestIdRef = useRef(0);
-  const browserNavigationRequestIdRef = useRef(0);
+  const previewNavigationRequestIdRef = useRef(0);
   const environmentOrderRequestIdRef = useRef(0);
   const restoredWorkspaceNavigationRef = useRef(false);
   const restoredEnvironmentSettingsRef = useRef(false);
@@ -454,12 +454,12 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
     [],
   );
 
-  const openBrowserUrl = useCallback(
+  const openPreviewUrl = useCallback(
     (url: string) => {
       if (!selectedEnvironment) return;
-      browserNavigationRequestIdRef.current += 1;
-      setBrowserNavigationRequest({
-        id: browserNavigationRequestIdRef.current,
+      previewNavigationRequestIdRef.current += 1;
+      setPreviewNavigationRequest({
+        id: previewNavigationRequestIdRef.current,
         environmentId: selectedEnvironment.id,
         url,
       });
@@ -468,7 +468,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
         workspace: {
           ...current.workspace,
           inspectorOpen: true,
-          inspectorTab: "browser",
+          inspectorTab: "preview",
         },
       }));
       setInspectorOpen(true);
@@ -476,9 +476,9 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
     [selectedEnvironment],
   );
 
-  const handleBrowserNavigationHandled = useCallback(
-    (handled: EnvironmentBrowserNavigationRequest) => {
-      setBrowserNavigationRequest((current) =>
+  const handlePreviewNavigationHandled = useCallback(
+    (handled: EnvironmentPreviewNavigationRequest) => {
+      setPreviewNavigationRequest((current) =>
         current?.environmentId === handled.environmentId &&
         current.id === handled.id
           ? undefined
@@ -492,7 +492,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
     setWorkspaceNavigationRequest((current) =>
       current?.environmentId === selectedEnvironment?.id ? current : undefined,
     );
-    setBrowserNavigationRequest((current) =>
+    setPreviewNavigationRequest((current) =>
       current?.environmentId === selectedEnvironment?.id ? current : undefined,
     );
   }, [selectedEnvironment?.id]);
@@ -1176,10 +1176,10 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
           }}
           workspaceNavigationRequest={workspaceNavigationRequest}
           onOpenWorkspacePath={openWorkspacePath}
-          onOpenBrowserUrl={openBrowserUrl}
+          onOpenPreviewUrl={openPreviewUrl}
           onWorkspaceNavigationHandled={handleWorkspaceNavigationHandled}
-          browserNavigationRequest={browserNavigationRequest}
-          onBrowserNavigationHandled={handleBrowserNavigationHandled}
+          previewNavigationRequest={previewNavigationRequest}
+          onPreviewNavigationHandled={handlePreviewNavigationHandled}
           onSessionChange={handleSessionChange}
           onToggleSessionCompleted={handleToggleSessionCompleted}
           onDerivedSessionCreated={handleSessionCreated}
@@ -1219,8 +1219,8 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
           hidden={!showInspector}
           workspaceNavigationRequest={workspaceNavigationRequest}
           onWorkspaceNavigationHandled={handleWorkspaceNavigationHandled}
-          browserNavigationRequest={browserNavigationRequest}
-          onBrowserNavigationHandled={handleBrowserNavigationHandled}
+          previewNavigationRequest={previewNavigationRequest}
+          onPreviewNavigationHandled={handlePreviewNavigationHandled}
           activeTab={inspectorTab === "activity" ? "files" : inspectorTab}
           onTabChange={handleInspectorTabChange}
           widthRatio={inspectorWidthRatio}

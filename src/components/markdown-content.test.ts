@@ -10,7 +10,7 @@ function render(content: string) {
     createElement(MarkdownContent, {
       content,
       onOpenWorkspacePath: () => undefined,
-      onOpenBrowserUrl: () => undefined,
+      onOpenPreviewUrl: () => undefined,
     }),
   );
 }
@@ -103,13 +103,13 @@ test("delegates relative Workspace images to a safe file renderer", () => {
   assert.match(html, />Chart<\/span>/);
 });
 
-test("routes sandbox loopback links into the shared Environment browser", () => {
+test("routes Sandbox loopback links into Preview", () => {
   const html = render(
     "[Next.js](http://localhost:3000/dashboard) [API](127.0.0.1:8080/health)",
   );
 
-  assert.match(html, /data-browser-url="http:\/\/localhost:3000\/dashboard"/);
-  assert.match(html, /data-browser-url="http:\/\/127\.0\.0\.1:8080\/health"/);
+  assert.match(html, /data-preview-url="http:\/\/localhost:3000\/dashboard"/);
+  assert.match(html, /data-preview-url="http:\/\/127\.0\.0\.1:8080\/health"/);
   assert.doesNotMatch(html, /data-sandpi-external-link/);
   assert.doesNotMatch(html, /target="_blank"/);
 });
@@ -122,7 +122,7 @@ test("marks external image destinations for native system browsers", () => {
   assert.match(html, /href="https:\/\/example\.com\/diagram\.png"/);
 });
 
-test("does not preserve scheme-less loopback targets without a Browser handler", () => {
+test("does not preserve scheme-less loopback targets without a Preview handler", () => {
   const html = renderToStaticMarkup(
     createElement(MarkdownContent, {
       content: "[App](localhost:3000)",
@@ -130,7 +130,7 @@ test("does not preserve scheme-less loopback targets without a Browser handler",
   );
 
   assert.match(html, /<a href="">App<\/a>/);
-  assert.doesNotMatch(html, /data-browser-url/);
+  assert.doesNotMatch(html, /data-preview-url/);
 });
 
 test("renders raw HTML from a harness message as inert text", () => {

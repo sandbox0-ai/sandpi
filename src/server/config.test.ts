@@ -7,6 +7,7 @@ const oidcEnvironment = {
   NODE_ENV: "test",
   SANDPI_AUTH_MODE: "oidc",
   SANDPI_PUBLIC_URL: "https://sandpi.example.com",
+  SANDPI_PREVIEW_URL: "https://preview.sandpi.example.com",
   SANDPI_COOKIE_SECRET: "cookie-secret-with-at-least-32-characters",
   SANDPI_SECRET_KEY: "deployment-secret-with-at-least-32-characters",
   SANDPI_OIDC_ISSUER: "https://identity.example.com/",
@@ -80,9 +81,51 @@ test("requires the openid scope for OIDC", () => {
 });
 
 test("keeps self-hosted billing disabled by default", () => {
-  assert.deepEqual(loadConfig({ NODE_ENV: "test" }).billing, {
+  const config = loadConfig({ NODE_ENV: "test" });
+  assert.deepEqual(config.billing, {
     mode: "disabled",
   });
+  assert.equal(
+    config.previewUrl.toString(),
+    "http://preview.172.16.100.2.sslip.io:3000/",
+  );
+});
+
+test("requires an isolated Preview origin for production", () => {
+  assert.throws(
+    () =>
+      loadConfig({
+        NODE_ENV: "production",
+        SANDPI_PUBLIC_URL: "https://sandpi.example.com",
+      }),
+    /SANDPI_PREVIEW_URL is required in production/,
+  );
+  assert.throws(
+    () =>
+      loadConfig({
+        NODE_ENV: "production",
+        SANDPI_PUBLIC_URL: "https://sandpi.example.com",
+        SANDPI_PREVIEW_URL: "https://sandpi.example.com",
+      }),
+    /dedicated HTTP\(S\) hostname origin/,
+  );
+  assert.throws(
+    () =>
+      loadConfig({
+        NODE_ENV: "production",
+        SANDPI_PUBLIC_URL: "https://sandpi.example.com",
+        SANDPI_PREVIEW_URL: "http://preview.sandpi.example.com",
+      }),
+    /HTTPS deployments require HTTPS Preview/,
+  );
+  assert.equal(
+    loadConfig({
+      NODE_ENV: "production",
+      SANDPI_PUBLIC_URL: "https://sandpi.example.com",
+      SANDPI_PREVIEW_URL: "https://preview.sandpi.example.com",
+    }).previewUrl.toString(),
+    "https://preview.sandpi.example.com/",
+  );
 });
 
 test("requires a complete server-side Stripe configuration", () => {

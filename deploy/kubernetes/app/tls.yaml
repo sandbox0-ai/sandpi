@@ -48,3 +48,42 @@ spec:
     rotationPolicy: Always
     size: 256
   secretName: sandpi-tls
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: letsencrypt-dns
+  labels:
+    app.kubernetes.io/name: sandpi
+    app.kubernetes.io/part-of: sandpi
+spec:
+  acme:
+    privateKeySecretRef:
+      name: sandpi-letsencrypt-dns-account
+    server: https://acme-v02.api.letsencrypt.org/directory
+    solvers:
+      - dns01:
+          digitalocean:
+            tokenSecretRef:
+              key: access-token
+              name: sandpi-dns
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: sandpi-preview
+  labels:
+    app.kubernetes.io/name: sandpi
+    app.kubernetes.io/part-of: sandpi
+spec:
+  dnsNames:
+    - "*.preview.sandpi.ai"
+  issuerRef:
+    group: cert-manager.io
+    kind: Issuer
+    name: letsencrypt-dns
+  privateKey:
+    algorithm: ECDSA
+    rotationPolicy: Always
+    size: 256
+  secretName: sandpi-preview-tls

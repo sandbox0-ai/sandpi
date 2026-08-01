@@ -67,6 +67,13 @@ test("the ingress preserves streaming and terminates Sandpi TLS", async () => {
     manifest,
     /tls:\n    - hosts:\n        - sandpi\.ai\n      secretName: sandpi-tls/,
   );
+  assert.match(manifest, /- "\*\.preview\.sandpi\.ai"/);
+  assert.match(manifest, /secretName: sandpi-preview-tls/);
+  assert.match(manifest, /host: "\*\.preview\.sandpi\.ai"/);
+  assert.match(
+    manifest,
+    /nginx\.ingress\.kubernetes\.io\/proxy-request-buffering: "off"/,
+  );
   assert.match(
     manifest,
     /nginx\.ingress\.kubernetes\.io\/ssl-redirect: "true"/,
@@ -74,7 +81,7 @@ test("the ingress preserves streaming and terminates Sandpi TLS", async () => {
   assert.doesNotMatch(manifest, /sandbox0-ai-wildcard-tls/);
 });
 
-test("the Sandpi certificate uses a namespaced production ACME issuer", async () => {
+test("Sandpi certificates use namespaced HTTP and DNS ACME issuers", async () => {
   const manifest = await deploymentFile("app/tls.yaml");
 
   assert.match(manifest, /kind: Issuer/);
@@ -89,6 +96,13 @@ test("the Sandpi certificate uses a namespaced production ACME issuer", async ()
   assert.match(manifest, /algorithm: ECDSA/);
   assert.match(manifest, /rotationPolicy: Always/);
   assert.match(manifest, /secretName: sandpi-tls/);
+  assert.match(manifest, /name: letsencrypt-dns/);
+  assert.match(
+    manifest,
+    /dns01:\n          digitalocean:\n            tokenSecretRef:\n              key: access-token\n              name: sandpi-dns/,
+  );
+  assert.match(manifest, /dnsNames:\n    - "\*\.preview\.sandpi\.ai"/);
+  assert.match(manifest, /secretName: sandpi-preview-tls/);
 });
 
 test("the shared certificate controller has bounded bootstrap resources", async () => {
@@ -105,7 +119,7 @@ test("the CI identity cannot manage cluster-scoped or unrelated secrets", async 
 
   assert.match(
     bootstrap,
-    /resourceNames:\n      - sandpi-postgres\n      - sandpi-runtime\n    resources:\n      - secrets/,
+    /resourceNames:\n      - sandpi-postgres\n      - sandpi-dns\n      - sandpi-runtime\n    resources:\n      - secrets/,
   );
   assert.match(
     bootstrap,
@@ -127,10 +141,22 @@ test("the deploy workflow checks kubectl's native authorization result", async (
     workflow,
     /can-i patch secret\/sandpi-postgres[\s\S]*?\| grep -Fx yes/,
   );
+  assert.match(
+    workflow,
+    /can-i patch secret\/sandpi-dns[\s\S]*?\| grep -Fx yes/,
+  );
   assert.doesNotMatch(workflow, /can-i .*\| grep -Fx true/);
-  assert.match(workflow, /--for=condition=Ready[\s\S]*certificate\/sandpi/);
+  assert.match(
+    workflow,
+    /--for=condition=Ready[\s\S]*certificate\/sandpi certificate\/sandpi-preview/,
+  );
   assert.match(
     workflow,
     /--resolve "sandpi\.ai:443:\$\{SANDPI_INGRESS_IP\}"/,
   );
+  assert.match(
+    workflow,
+    /--resolve "p3000-00000000000000000000\.preview\.sandpi\.ai:443:\$\{SANDPI_INGRESS_IP\}"/,
+  );
+  assert.match(workflow, /SANDPI_PREVIEW_URL/);
 });

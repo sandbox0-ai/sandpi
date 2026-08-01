@@ -4,8 +4,6 @@ import { ENVIRONMENT_METRIC_RANGES_SECONDS } from "@/lib/environment-metrics";
 import { WORKSPACE_ROOT } from "@/lib/workspace-path-policy";
 import {
   billingCheckoutSchema,
-  browserOpenSchema,
-  browserSessionSchema,
   codexComposerUploadSchema,
   codexHookUpdateSchema,
   codexMcpServerEnabledSchema,
@@ -13,7 +11,7 @@ import {
   codexPersonalitySelectionSchema,
   codexRateLimitResetSchema,
   codexSkillConfigurationSchema,
-  environmentBrowserViewportSchema,
+  environmentPreviewSessionSchema,
   environmentCreateSchema,
   environmentOrderSchema,
   environmentProvisioningSchema,
@@ -176,8 +174,8 @@ const workspaceRawFile = z.object({
   kind: z.enum(["binary", "text"]),
 });
 
-const browserDescription =
-  "Sandpi's built-in Browser is one shared Playwright browser session for the human and the agent. The human can take over the embedded tab to complete an interactive sign-in, then hand the same authenticated profile back to the agent. Browser localhost and loopback URLs resolve inside the Environment sandbox, not on the client device.";
+const previewDescription =
+  "Creates a short-lived URL on Sandpi's isolated Preview origin for an HTTP service listening on localhost or 127.0.0.1 inside the Environment Sandbox. Preview renders in the human's browser and is independent from the agent's Playwright CLI sessions.";
 
 export const openApiRouteContracts: readonly OpenApiRouteContract[] = [
   defineContract({
@@ -486,7 +484,7 @@ export const openApiRouteContracts: readonly OpenApiRouteContract[] = [
       operationId: "pauseEnvironmentSandbox",
       summary: "Pause an Environment Sandbox",
       description:
-        "Explicitly pauses the shared Sandbox under the Environment lifecycle lock. Workspace and browser profile data remain durable, while live processes and connections stop.",
+        "Explicitly pauses the shared Sandbox under the Environment lifecycle lock. Workspace data remains durable, while live processes, agent-local Playwright sessions and Preview connections stop.",
       tags: ["Environments"],
       response: { 200: dataEnvelope(environmentSchema) },
     },
@@ -498,7 +496,7 @@ export const openApiRouteContracts: readonly OpenApiRouteContract[] = [
       operationId: "restartEnvironmentSandbox",
       summary: "Restart an Environment Sandbox",
       description:
-        "Performs one committed pause and resume under the Environment lifecycle lock so Sandbox0 advances the runtime generation. Persistent Workspace and browser profile data are retained.",
+        "Performs one committed pause and resume under the Environment lifecycle lock so Sandbox0 advances the runtime generation. Persistent Workspace data is retained; live processes, agent-local Playwright sessions and Preview connections are replaced.",
       tags: ["Environments"],
       response: { 200: dataEnvelope(environmentSchema) },
     },
@@ -1343,85 +1341,24 @@ export const openApiRouteContracts: readonly OpenApiRouteContract[] = [
   }),
   defineContract({
     method: "POST",
-    url: "/api/v1/environments/:environmentId/browser/session",
+    url: "/api/v1/environments/:environmentId/preview/session",
     schema: {
-      operationId: "ensureEnvironmentBrowserSession",
-      summary: "Ensure the shared Environment Browser session",
-      description: browserDescription,
-      tags: ["Browser"],
-      body: browserSessionSchema,
-      response: { 204: noContent },
-      "x-sandpi-optional-request-body": true,
-      "x-sandpi-shared-browser": true,
-    },
-  }),
-  defineContract({
-    method: "POST",
-    url: "/api/v1/environments/:environmentId/browser/open",
-    schema: {
-      operationId: "openEnvironmentBrowserUrl",
-      summary: "Open a loopback URL in the shared Browser",
-      description: browserDescription,
-      tags: ["Browser"],
-      body: browserOpenSchema,
-      response: { 204: noContent },
-      "x-sandpi-loopback-scope": "environment",
-      "x-sandpi-shared-browser": true,
-    },
-  }),
-  defineContract({
-    method: "POST",
-    url: "/api/v1/environments/:environmentId/browser/viewport",
-    schema: {
-      operationId: "resizeEnvironmentBrowserViewport",
-      summary: "Resize the shared Browser viewport",
-      description: browserDescription,
-      tags: ["Browser"],
-      body: environmentBrowserViewportSchema,
-      response: { 204: noContent },
-      "x-sandpi-shared-browser": true,
-    },
-  }),
-  defineContract({
-    method: "GET",
-    url: "/api/v1/environments/:environmentId/browser/ws/:dashboardSocketId",
-    schema: {
-      operationId: "connectEnvironmentBrowserDashboard",
-      summary: "Connect the embedded Browser dashboard WebSocket",
-      description: browserDescription,
-      tags: ["Browser"],
-      response: { 101: noContent },
-      "x-sandpi-websocket": {
-        protocol: "opaque-playwright-dashboard",
-        direction: "bidirectional",
+      operationId: "createEnvironmentPreviewSession",
+      summary: "Create an isolated loopback Preview session",
+      description: previewDescription,
+      tags: ["Preview"],
+      body: environmentPreviewSessionSchema,
+      response: {
+        200: dataEnvelope(
+          z.object({
+            url: z.url(),
+            target: z.url(),
+          }),
+        ),
       },
-      "x-sandpi-shared-browser": true,
+      "x-sandpi-loopback-scope": "environment",
+      "x-sandpi-preview-origin": "isolated",
     },
-  }),
-  defineContract({
-    method: "GET",
-    url: "/api/v1/environments/:environmentId/browser",
-    schema: {
-      operationId: "getEnvironmentBrowserDashboard",
-      summary: "Load the embedded shared Browser dashboard",
-      description: browserDescription,
-      tags: ["Browser"],
-      querystring: z.looseObject({ embed: z.literal("1").optional() }),
-      response: { 200: z.string(), 302: redirect },
-      "x-sandpi-content-type": "text/html",
-      "x-sandpi-proxy-protocol": "opaque-playwright-dashboard",
-      "x-sandpi-shared-browser": true,
-    },
-  }),
-  defineContract({
-    method: "GET",
-    url: "/api/v1/environments/:environmentId/browser/",
-    schema: { hide: true },
-  }),
-  defineContract({
-    method: "GET",
-    url: "/api/v1/environments/:environmentId/browser/*",
-    schema: { hide: true },
   }),
   defineContract({
     method: "GET",

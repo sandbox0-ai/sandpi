@@ -13,7 +13,9 @@ remain in Sandbox0 rather than this cluster.
 limited to application resources in that namespace. The GHCR pull secret is
 also bootstrapped by an operator and is intentionally not stored in Git.
 
-TLS is issued and renewed through a namespace-scoped Let's Encrypt `Issuer`.
+TLS is issued and renewed through namespace-scoped Let's Encrypt `Issuer`
+resources. The apex certificate uses HTTP-01. The wildcard Preview certificate
+uses DigitalOcean DNS-01 because ACME HTTP-01 cannot authorize a wildcard.
 The shared cluster has cert-manager `v1.21.0` installed once from its official
 OCI Helm chart with the resource settings in `cert-manager-values.yaml`:
 
@@ -31,9 +33,10 @@ KUBECONFIG=/root/.kube/do-config helm upgrade --install cert-manager \
 Every push to `main` runs tests, builds an immutable
 `ghcr.io/sandbox0-ai/sandpi:<commit>` image, patches the two pre-created
 Kubernetes secrets, renders `app/` with that exact image, and waits for both
-rollouts and the production TLS certificate. It then verifies HTTPS health and
-the HTTP-to-HTTPS redirect through the ingress address. Pull requests run the
-same code and manifest validation without receiving deployment credentials.
+rollouts and both production TLS certificates. It then verifies HTTPS health,
+the HTTP-to-HTTPS redirect, and wildcard Preview routing through the ingress
+address. Pull requests run the same code and manifest validation without
+receiving deployment credentials.
 
 Required repository variables:
 
@@ -46,6 +49,7 @@ Required repository variables:
 - `SANDPI_OIDC_SCOPES`
 - `SANDPI_OIDC_TOKEN_ENDPOINT_AUTH_METHOD`
 - `SANDPI_PUBLIC_URL`
+- `SANDPI_PREVIEW_URL`
 - `SANDPI_STRIPE_PLUS_PRICE_ID`
 - `SANDPI_STRIPE_PRO_PRICE_ID`
 - `SANDPI_STRIPE_ULTRA_PRICE_ID`
@@ -54,6 +58,7 @@ Required repository secrets:
 
 - `SANDBOX0_API_KEY`
 - `SANDPI_COOKIE_SECRET`
+- `SANDPI_DNS_API_TOKEN`
 - `SANDPI_KUBE_CONFIG`
 - `SANDPI_OIDC_CLIENT_SECRET`
 - `SANDPI_POSTGRES_PASSWORD`
@@ -86,6 +91,17 @@ Before enabling Stripe mode, publish and install a Sandbox0 JavaScript SDK
 release that exposes `client.usage.listWindows()`. Sandpi deliberately fails
 startup with an older SDK instead of bypassing the public SDK boundary.
 
-The apex `sandpi.ai` DNS record must be an A record for the ingress address in
-`SANDPI_INGRESS_IP`. No AAAA record is published while the ingress has no IPv6
-address.
+The apex `sandpi.ai` record and wildcard `*.preview.sandpi.ai` record must be A
+records for the ingress address in `SANDPI_INGRESS_IP`. No AAAA record is
+published while the ingress has no IPv6 address. Set
+`SANDPI_PREVIEW_URL=https://preview.sandpi.ai`; Preview allocates exactly one
+additional label beneath that root for each Environment/port origin.
+Keep the Preview root on the same registrable site as `SANDPI_PUBLIC_URL` so its
+host-only session cookie remains available inside the embedded Preview frame.
+
+`SANDPI_DNS_API_TOKEN` is a DigitalOcean token with DNS write access used only
+by cert-manager's `letsencrypt-dns` Issuer. The operator must apply the updated
+`bootstrap.yaml` before enabling this deployment so the namespace contains the
+empty `sandpi-dns` Secret and the GitHub deployer can patch only that named
+Secret. cert-manager reads its `access-token` key to complete DNS-01; the
+application Deployment never mounts it.

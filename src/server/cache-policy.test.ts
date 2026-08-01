@@ -6,23 +6,13 @@ import {
   staticWebCacheControl,
 } from "./cache-policy";
 
-test("preserves explicit Browser asset caching while protecting control responses", () => {
-  const browser =
-    "/api/v1/environments/env-1/browser/assets/index-CyWAfh-p.js";
-  assert.equal(shouldApplyApiNoStore(browser, true), false);
-  assert.equal(shouldApplyApiNoStore(browser, false), true);
+test("protects Preview sessions and other sensitive API responses", () => {
   assert.equal(
-    shouldApplyApiNoStore(
-      "/api/v1/environments/env-1/browser/session",
-      false,
-    ),
+    shouldApplyApiNoStore("/api/v1/environments/env-1/preview/session"),
     true,
   );
   assert.equal(
-    shouldApplyApiNoStore(
-      "/api/v1/environments/env-1/workspace-backups",
-      true,
-    ),
+    shouldApplyApiNoStore("/api/v1/environments/env-1/workspace-backups"),
     true,
   );
 });

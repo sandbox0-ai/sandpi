@@ -10,6 +10,7 @@ metadata:
     nginx.ingress.kubernetes.io/proxy-buffering: "off"
     nginx.ingress.kubernetes.io/proxy-http-version: "1.1"
     nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
 spec:
@@ -18,8 +19,21 @@ spec:
     - hosts:
         - sandpi.ai
       secretName: sandpi-tls
+    - hosts:
+        - "*.preview.sandpi.ai"
+      secretName: sandpi-preview-tls
   rules:
     - host: sandpi.ai
+      http:
+        paths:
+          - backend:
+              service:
+                name: sandpi
+                port:
+                  name: http
+            path: /
+            pathType: Prefix
+    - host: "*.preview.sandpi.ai"
       http:
         paths:
           - backend:
