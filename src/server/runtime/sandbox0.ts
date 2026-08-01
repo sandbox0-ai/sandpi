@@ -102,7 +102,9 @@ import {
 } from "./playwright-browser-recovery";
 import { reconcileTerminalReplayCursor } from "./terminal-replay";
 import {
+  terminalCommandUpdate,
   terminalEnvironmentUpdate,
+  terminalSessionCommand,
   terminalSessionEnvironment,
 } from "./terminal-environment";
 
@@ -2722,7 +2724,7 @@ export class Sandbox0Runtime implements RuntimeAdapter {
       terminal = await sandbox.createSession(
         {
           name: "sandpi-terminal",
-          command: ["/bin/bash", "-l"],
+          command: terminalSessionCommand(),
           cwd: "/workspace",
           env: terminalSessionEnvironment(),
           io: {
@@ -2763,12 +2765,18 @@ export class Sandbox0Runtime implements RuntimeAdapter {
       terminal.spec.env,
       terminalStopped,
     );
-    if (retentionNeedsUpdate || environmentUpdate) {
+    const commandUpdate = terminalCommandUpdate(
+      terminal.spec.command,
+      terminalStopped,
+    );
+    if (retentionNeedsUpdate || environmentUpdate || commandUpdate) {
       // Sandbox0 replaces a running attempt when its process environment
-      // changes. Apply that migration only after an explicit shell exit; a
-      // browser reconnect must never interrupt Vim or another active TUI.
+      // or command changes. Apply that migration only after an explicit shell
+      // exit; a browser reconnect must never interrupt Vim or another active
+      // TUI.
       terminal = await sandbox.updateSession(terminal.id, {
         ...terminal.spec,
+        ...(commandUpdate ? { command: commandUpdate } : {}),
         ...(environmentUpdate ? { env: environmentUpdate } : {}),
         eventRetention: terminalRetention,
       });

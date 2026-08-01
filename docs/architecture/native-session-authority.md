@@ -239,6 +239,15 @@ changes its long-running conversation status after two seconds to explain that
 an idle checkpoint may be restoring and that Files and Terminal remain
 independently available.
 
+The shared Terminal starts interactive Bash in `/workspace`. Its managed init
+loads the system profile, applies `# ` only as the unconfigured fallback, and
+then loads the first readable user login file, or `.bashrc` when no login file
+exists. User startup files therefore remain authoritative for Bash themes and
+may replace Bash with zsh; Sandpi does not disable zsh rc loading or export its
+fallback prompt into child shells. A changed terminal bootstrap is migrated
+only after the current shell exits, so a browser reconnect cannot interrupt an
+active TUI.
+
 The Web IDE runs its automatic Workspace synchronization only while the page
 is visible. Moving the page to the background closes the native file-watch
 WebSocket and cancels polling, reconnect, and event-refresh timers; URL-driven
