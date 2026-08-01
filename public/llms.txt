@@ -50,54 +50,6 @@ This file describes the current Sandpi product contract. It is documentation, no
 
 Codex and the Web client are the currently implemented harness and client. Sandpi is pre-1.0, so discover exact native capabilities from the running harness instead of assuming every newer feature exists in an older deployment.
 
-## Install the Sandpi CLI
-
-Latest checksummed Linux or macOS binary:
-
-```bash
-curl -fsSL https://github.com/sandbox0-ai/sandpi/releases/latest/download/install.sh | sh
-```
-
-Latest checksummed Windows binary from PowerShell:
-
-```powershell
-Invoke-WebRequest https://github.com/sandbox0-ai/sandpi/releases/latest/download/install.ps1 -OutFile install.ps1
-.\install.ps1
-Remove-Item .\install.ps1
-```
-
-- Pin automation with `install.sh --version X.Y.Z` or `install.ps1 -Version X.Y.Z`; both installers verify the selected archive against the release `checksums.txt` before replacing a binary.
-- Go 1.22 or newer can install from source with `go install github.com/sandbox0-ai/sandpi/cli/cmd/sandpi@latest`.
-- Run `sandpi auth login --no-open` for a non-interactive terminal. Open the printed URL and paste the resulting `sandpi://auth/callback` URL into the waiting CLI.
-- CLI authentication signs into Sandpi only. The CLI has no Codex login, Codex `auth.json` import, or provider-account migration command.
-- Successful command output is JSON. Use `--compact`, `SANDPI_ENDPOINT`, and explicit version pinning for repeatable agent workflows.
-
-## Migrate local coding-agent configuration
-
-- Migration is resource-oriented. The user or local coding agent inventories the source, inspects the target Environment, decides what to merge, and applies only selected resources. There is no `migrate-all` archive and no whole-Workspace upload.
-- Before writing, run `sandpi environment list`. For an existing target, read `agents`, `skill`, `mcp`, `memory`, and `credential` state first. Preserve unrelated remote resources and do not run deletes by default.
-- For an empty target, use `sandpi environment create`, wait for readiness with `sandpi environment wait`, and then apply selected resources individually. Environment creation never happens implicitly during a resource write.
-- Each Environment has exactly one root instruction file at `/workspace/AGENTS.md`. Existing content requires a revision-aware read, human or agent merge, and `sandpi agents set --base-revision`; a stale revision fails instead of silently replacing newer instructions.
-- `sandpi skill put` replaces one named user-owned Skill. The client rejects symlinks and non-regular files, preserves executable state, and Sandpi asks native Codex to discover staged bytes before replacing the requested name.
-- `sandpi mcp put` writes one typed native user-layer server. Managed and project layers remain authoritative. Convert servers one at a time and remove static secrets from the definition.
-- Native Codex exposes memory policy and reset but no supported memory-content import contract. Migrate policy only; do not copy or edit Codex private Git or SQLite memory state. Merge durable guidance into `/workspace/AGENTS.md` instead.
-- Egress credential material is write-only. Re-enter selected secrets through `sandpi credential create` or `rotate`, preferably over stdin or a protected temporary file. Never place secrets in MCP JSON, Skills, `AGENTS.md`, shell history, or command-line arguments.
-- Workspace source code should move through its normal Git or artifact workflow, independently from coding-agent configuration migration.
-- The low-level `sandpi api METHOD /api/v1/...` command exposes current JSON APIs but does not broaden the migration scope or authorize hidden overwrites.
-
-Recommended existing-target inventory:
-
-```bash
-sandpi environment get "$ENVIRONMENT_ID"
-sandpi agents get --environment "$ENVIRONMENT_ID"
-sandpi skill list --environment "$ENVIRONMENT_ID" --force
-sandpi mcp list --environment "$ENVIRONMENT_ID" --full
-sandpi memory get --environment "$ENVIRONMENT_ID"
-sandpi credential list --environment "$ENVIRONMENT_ID"
-```
-
-After migration, re-read every changed named resource, verify credential destination rules and memory policy, and start a new Sandpi Session that exercises the migrated instructions and tools. Keep the local source configuration until the target has been verified.
-
 ## Canonical references
 
 - Project overview and current capabilities: https://github.com/sandbox0-ai/sandpi
