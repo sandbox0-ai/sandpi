@@ -186,7 +186,7 @@ test("free entitlement adds the live Sandbox0 allocation to closed usage", async
   assert.equal(summary.usageSource, "sandbox0-sdk");
   assert.deepEqual(await service.environmentCreationPolicy(account.userId), {
     environmentLimit: 1,
-    fixedSandboxMemoryMiB: 2 * 1024,
+    fixedSandboxMemoryMiB: 4 * 1024,
   });
 });
 
@@ -202,7 +202,7 @@ test("live projection starts after the latest imported Sandbox0 window", async (
       userId: account.userId,
       position: 1,
       environmentCount: 1,
-      sandboxMemoryMiB: 2 * 1024,
+      sandboxMemoryMiB: 4 * 1024,
       lastUsageWindowEndsAt: new Date(NOW.getTime() - 30 * 60 * 1_000),
     },
   ];
@@ -222,7 +222,7 @@ test("live projection starts after the latest imported Sandbox0 window", async (
     summary.usage.confirmedMiBMilliseconds,
     MIB_MILLISECONDS_PER_GIB_HOUR,
   );
-  assert.equal(summary.usage.usedGiBHours, 2);
+  assert.equal(summary.usage.usedGiBHours, 3);
 });
 
 test("active Sandbox projection without claimed_at fails quota admission closed", async () => {
@@ -234,7 +234,7 @@ test("active Sandbox projection without claimed_at fails quota admission closed"
       userId: account.userId,
       position: 1,
       environmentCount: 1,
-      sandboxMemoryMiB: 2 * 1024,
+      sandboxMemoryMiB: 4 * 1024,
     },
   ];
   const runtime = new FakeLifecycleReader();
@@ -394,7 +394,7 @@ test("background enforcement reconciles fixed memory and pauses only running vio
       userId: account.userId,
       position: 2,
       environmentCount: 2,
-      sandboxMemoryMiB: 2 * 1024,
+      sandboxMemoryMiB: 4 * 1024,
     },
   ];
   const runtime = new FakeLifecycleReader();
@@ -428,7 +428,7 @@ test("background enforcement pauses live runtime as soon as open usage reaches q
       userId: account.userId,
       position: 1,
       environmentCount: 1,
-      sandboxMemoryMiB: 2 * 1024,
+      sandboxMemoryMiB: 4 * 1024,
     },
   ];
   const runtime = new FakeLifecycleReader();
@@ -459,7 +459,7 @@ test("background enforcement pauses active runtime when its allocation start is 
       userId: account.userId,
       position: 1,
       environmentCount: 1,
-      sandboxMemoryMiB: 2 * 1024,
+      sandboxMemoryMiB: 4 * 1024,
     },
   ];
   const runtime = new FakeLifecycleReader();
