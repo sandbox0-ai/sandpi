@@ -163,7 +163,6 @@ const webhookIngressResult = z.object({
   deliveryId: z.string(),
   runId: z.string().optional(),
 });
-const webhookChallenge = z.object({ challenge: z.string() });
 const modelPage = z.object({ data: z.array(z.unknown()) });
 const modelMeta = z.object({
   availability: z.enum(["available", "runtime-unavailable"]),
@@ -686,9 +685,9 @@ export const openApiRouteContracts: readonly OpenApiRouteContract[] = [
     public: true,
     schema: {
       operationId: "receiveEnvironmentWebhook",
-      summary: "Receive a signed Environment webhook delivery",
+      summary: "Receive an authenticated Environment webhook delivery",
       description:
-        "Accepts GitHub, Alertmanager, Slack, or custom payloads. Authentication is provider-specific and uses request signatures or a bearer/query token.",
+        "Accepts JSON, form, or text payloads authenticated with a bearer or query token.",
       tags: ["Webhooks"],
       "x-sandpi-request-content-types": [
         "application/json",
@@ -697,11 +696,6 @@ export const openApiRouteContracts: readonly OpenApiRouteContract[] = [
       ],
       headers: z.object({
         authorization: z.string().optional(),
-        "x-hub-signature-256": z.string().optional(),
-        "x-github-delivery": z.string().optional(),
-        "x-github-event": z.string().optional(),
-        "x-slack-request-timestamp": z.string().optional(),
-        "x-slack-signature": z.string().optional(),
         "idempotency-key": z.string().optional(),
         "x-request-id": z.string().optional(),
         "x-sandpi-delivery": z.string().optional(),
@@ -710,7 +704,7 @@ export const openApiRouteContracts: readonly OpenApiRouteContract[] = [
       querystring: z.object({ token: z.string().optional() }),
       body: z.unknown(),
       response: {
-        200: z.union([webhookIngressResult, webhookChallenge]),
+        200: webhookIngressResult,
         202: webhookIngressResult,
       },
     },

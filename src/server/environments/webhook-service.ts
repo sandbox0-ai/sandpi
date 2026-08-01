@@ -14,10 +14,9 @@ import { HttpError } from "@/server/http-error";
 import type { SecretBox } from "@/server/secrets";
 import type { SandpiStore } from "@/server/store";
 import {
-  adaptWebhookRequest,
-  type EnvironmentWebhookProvider,
+  normalizeAuthenticatedWebhookRequest,
   type NormalizedWebhookEvent,
-} from "./webhook-adapters";
+} from "./webhook-ingress";
 import {
   EnvironmentWebhookStore,
   publicEnvironmentWebhook,
@@ -119,7 +118,7 @@ export class EnvironmentWebhookService {
       environmentId,
       input,
     );
-    const secret = configuredSecret(configuration.provider, input.secret);
+    const secret = configuredSecret(input.secret);
     const webhook = await this.webhooks.create({
       id,
       endpointId: `hook_${randomUUID()}`,
@@ -148,8 +147,8 @@ export class EnvironmentWebhookService {
     );
     let setupSecret: string | undefined;
     let encryptedSecret;
-    if (input.secret || current.provider !== configuration.provider) {
-      const secret = configuredSecret(configuration.provider, input.secret);
+    if (input.secret) {
+      const secret = configuredSecret(input.secret);
       encryptedSecret = this.requireSecretBox().encrypt(
         secret.value,
         secretAssociatedData(current.id),
@@ -163,9 +162,8 @@ export class EnvironmentWebhookService {
       expectedRevision: current.revision,
       configuration,
       resetTriggerState:
-        current.provider !== configuration.provider ||
         triggerPolicyFingerprint(current.triggerPolicy) !==
-          triggerPolicyFingerprint(configuration.triggerPolicy),
+        triggerPolicyFingerprint(configuration.triggerPolicy),
       ...(encryptedSecret ? { secret: encryptedSecret } : {}),
     });
     this.wake();
@@ -182,7 +180,7 @@ export class EnvironmentWebhookService {
     suppliedSecret?: string,
   ): Promise<EnvironmentWebhookSetup> {
     const current = await this.webhooks.get(userId, environmentId, webhookId);
-    const secret = configuredSecret(current.provider, suppliedSecret);
+    const secret = configuredSecret(suppliedSecret);
     const webhook = await this.webhooks.update({
       userId,
       environmentId,
@@ -242,20 +240,18 @@ export class EnvironmentWebhookService {
         webhook.secret,
         secretAssociatedData(webhook.id),
       );
-      const adapted = adaptWebhookRequest({
-        provider: webhook.provider,
-        secret,
-        rawBody: input.rawBody,
-        headers: input.headers,
-        contentType: input.contentType,
-        queryToken: input.queryToken,
-        now: this.now(),
-      });
-      if (adapted.kind === "challenge") {
-        return { statusCode: adapted.statusCode, body: adapted.body };
-      }
       const event = boundedWebhookEvent(
-        configuredEventCoordinates(webhook, adapted.event),
+        configuredEventCoordinates(
+          webhook,
+          normalizeAuthenticatedWebhookRequest({
+            secret,
+            rawBody: input.rawBody,
+            headers: input.headers,
+            contentType: input.contentType,
+            queryToken: input.queryToken,
+            now: this.now(),
+          }),
+        ),
       );
       const match = webhookEventMatches(webhook.triggerPolicy, event);
       const result = await this.webhooks.ingestDelivery({
@@ -272,9 +268,7 @@ export class EnvironmentWebhookService {
       this.wake();
       return {
         statusCode:
-          webhook.provider === "slack" || result.kind === "duplicate"
-            ? 200
-            : 202,
+          result.kind === "duplicate" ? 200 : 202,
         body: {
           status: result.kind,
           deliveryId: event.deliveryId,
@@ -324,11 +318,10 @@ export class EnvironmentWebhookService {
     }
     const statePath =
       input.triggerPolicy.mode === "stateChange"
-        ? input.triggerPolicy.statePath?.trim() || "/stateValue"
+        ? input.triggerPolicy.statePath?.trim() || "/payload/status"
         : input.triggerPolicy.statePath?.trim();
     return {
       name: input.name.trim(),
-      provider: input.provider,
       prompt: input.prompt.trim(),
       triggerPolicy: {
         mode: input.triggerPolicy.mode,
@@ -595,21 +588,8 @@ function triggerPolicyFingerprint(policy: EnvironmentWebhookTriggerPolicy) {
   });
 }
 
-function configuredSecret(
-  provider: EnvironmentWebhookProvider,
-  supplied: string | undefined,
-) {
+function configuredSecret(supplied: string | undefined) {
   const value = supplied?.trim();
-  if (provider === "slack") {
-    if (!value) {
-      throw new HttpError(
-        400,
-        "environment_webhook_secret_required",
-        "Slack requires the App signing secret.",
-      );
-    }
-    return { value, generated: false };
-  }
   if (value) return { value, generated: false };
   return { value: randomBytes(32).toString("base64url"), generated: true };
 }

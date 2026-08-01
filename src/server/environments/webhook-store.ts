@@ -8,7 +8,6 @@ import type {
   EnvironmentWebhookCooldownPolicy,
   EnvironmentWebhookDelivery,
   EnvironmentWebhookDeliveryStatus,
-  EnvironmentWebhookProvider,
   EnvironmentWebhookRun,
   EnvironmentWebhookRunStatus,
   EnvironmentWebhookTarget,
@@ -18,7 +17,7 @@ import { toUnixTimestamp } from "@/lib/time";
 import { HttpError, conflict, notFound } from "@/server/http-error";
 import type { EncryptedValue } from "@/server/secrets";
 import type { TurnSubmissionCoordinates } from "@/server/store";
-import type { NormalizedWebhookEvent } from "./webhook-adapters";
+import type { NormalizedWebhookEvent } from "./webhook-ingress";
 
 export interface StoredEnvironmentWebhook {
   id: string;
@@ -26,7 +25,6 @@ export interface StoredEnvironmentWebhook {
   createdByUserId?: string;
   endpointId: string;
   name: string;
-  provider: EnvironmentWebhookProvider;
   secret: EncryptedValue;
   prompt: string;
   triggerPolicy: EnvironmentWebhookTriggerPolicy;
@@ -105,7 +103,6 @@ interface EnvironmentWebhookRow extends QueryResultRow {
   created_by_user_id: string | null;
   endpoint_id: string;
   name: string;
-  provider: EnvironmentWebhookProvider;
   secret_ciphertext: Buffer;
   secret_initialization_vector: Buffer;
   secret_authentication_tag: Buffer;
@@ -255,7 +252,7 @@ export class EnvironmentWebhookStore {
     const config = input.configuration;
     await this.pool.query(
       `INSERT INTO environment_webhooks (
-         id, environment_id, created_by_user_id, endpoint_id, name, provider,
+         id, environment_id, created_by_user_id, endpoint_id, name,
          secret_ciphertext, secret_initialization_vector,
          secret_authentication_tag, secret_algorithm, secret_key_id,
          prompt, trigger_mode, event_types, conditions, state_path,
@@ -265,9 +262,9 @@ export class EnvironmentWebhookStore {
          collaboration_mode, service_tier
        )
        SELECT
-         $1, environment.id, $2, $4, $5, $6, $7, $8, $9, $10, $11,
-         $12, $13, $14::JSONB, $15::JSONB, $16, $17, $18, $19, $20,
-         $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31
+         $1, environment.id, $2, $4, $5, $6, $7, $8, $9, $10,
+         $11, $12, $13::JSONB, $14::JSONB, $15, $16, $17, $18, $19,
+         $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30
        FROM environments environment
        WHERE environment.id = $3 AND environment.created_by_user_id = $2`,
       webhookMutationValues(input, config),
@@ -290,20 +287,20 @@ export class EnvironmentWebhookStore {
       await client.query("BEGIN");
       const result = await client.query(
         `UPDATE environment_webhooks webhook
-       SET name = $5, provider = $6, prompt = $7, trigger_mode = $8,
-           event_types = $9::JSONB, conditions = $10::JSONB,
-           state_path = $11, group_key_path = $12, cooldown_mode = $13,
-           cooldown_seconds = $14, cooldown_behavior = $15,
-           target_kind = $16, target_session_id = $17,
-           overlap_policy = $18, max_concurrent_runs = $19,
-           max_pending_runs = $20, enabled = $21, title = $22,
-           model_id = $23, reasoning_effort = $24,
-           collaboration_mode = $25, service_tier = $26,
-           secret_ciphertext = COALESCE($27, secret_ciphertext),
-           secret_initialization_vector = COALESCE($28, secret_initialization_vector),
-           secret_authentication_tag = COALESCE($29, secret_authentication_tag),
-           secret_algorithm = COALESCE($30, secret_algorithm),
-           secret_key_id = COALESCE($31, secret_key_id),
+       SET name = $5, prompt = $6, trigger_mode = $7,
+           event_types = $8::JSONB, conditions = $9::JSONB,
+           state_path = $10, group_key_path = $11, cooldown_mode = $12,
+           cooldown_seconds = $13, cooldown_behavior = $14,
+           target_kind = $15, target_session_id = $16,
+           overlap_policy = $17, max_concurrent_runs = $18,
+           max_pending_runs = $19, enabled = $20, title = $21,
+           model_id = $22, reasoning_effort = $23,
+           collaboration_mode = $24, service_tier = $25,
+           secret_ciphertext = COALESCE($26, secret_ciphertext),
+           secret_initialization_vector = COALESCE($27, secret_initialization_vector),
+           secret_authentication_tag = COALESCE($28, secret_authentication_tag),
+           secret_algorithm = COALESCE($29, secret_algorithm),
+           secret_key_id = COALESCE($30, secret_key_id),
            last_error = NULL, revision = webhook.revision + 1
        FROM environments environment
        WHERE webhook.id = $3 AND webhook.environment_id = $2
@@ -317,7 +314,6 @@ export class EnvironmentWebhookStore {
           input.webhookId,
           input.expectedRevision,
           config.name,
-          config.provider,
           config.prompt,
           databaseTriggerMode(config.triggerPolicy.mode),
           JSON.stringify(config.triggerPolicy.eventTypes),
@@ -498,7 +494,7 @@ export class EnvironmentWebhookStore {
       }
       const duplicate = await client.query(
         `SELECT 1 FROM environment_webhook_deliveries
-         WHERE webhook_id = $1 AND provider_delivery_id = $2`,
+         WHERE webhook_id = $1 AND source_delivery_id = $2`,
         [input.webhook.id, input.event.deliveryId],
       );
       if (duplicate.rowCount) {
@@ -1022,7 +1018,6 @@ export class EnvironmentWebhookStore {
 
 export interface WebhookMutableConfiguration {
   name: string;
-  provider: EnvironmentWebhookProvider;
   prompt: string;
   triggerPolicy: EnvironmentWebhookTriggerPolicy;
   cooldownPolicy: EnvironmentWebhookCooldownPolicy;
@@ -1054,7 +1049,6 @@ function webhookMutationValues(
     input.environmentId,
     input.endpointId,
     config.name,
-    config.provider,
     input.secret.ciphertext,
     input.secret.initializationVector,
     input.secret.authenticationTag,
@@ -1101,7 +1095,7 @@ async function insertDelivery(
 ) {
   await client.query(
     `INSERT INTO environment_webhook_deliveries (
-       id, webhook_id, provider_delivery_id, event_type, group_key,
+       id, webhook_id, source_delivery_id, event_type, group_key,
        status, normalized_event, run_id, reason, received_at
      ) VALUES ($1, $2, $3, $4, $5, $6, $7::JSONB, $8, $9, $10)`,
     [
@@ -1382,7 +1376,6 @@ function webhookFromRow(row: EnvironmentWebhookRow): StoredEnvironmentWebhook {
       : {}),
     endpointId: row.endpoint_id,
     name: row.name,
-    provider: row.provider,
     secret: {
       ciphertext: row.secret_ciphertext,
       initializationVector: row.secret_initialization_vector,
@@ -1506,7 +1499,6 @@ export function publicEnvironmentWebhook(
     environmentId: webhook.environmentId,
     endpointUrl,
     name: webhook.name,
-    provider: webhook.provider,
     prompt: webhook.prompt,
     triggerPolicy: webhook.triggerPolicy,
     cooldownPolicy: webhook.cooldownPolicy,

@@ -9,7 +9,7 @@ import {
   validateBillingRuntime,
 } from "./server";
 
-test("only signed webhook and browser-auth entry routes bypass authentication", () => {
+test("only authenticated webhook and browser-auth entry routes bypass authentication", () => {
   assert.equal(publicAuthPath("/api/v1/auth/login"), true);
   assert.equal(publicAuthPath("/api/v1/auth/callback?code=example"), true);
   assert.equal(publicAuthPath("/api/v1/auth/native/prepare"), true);

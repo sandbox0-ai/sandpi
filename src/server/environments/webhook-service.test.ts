@@ -1,12 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { NormalizedWebhookEvent } from "./webhook-adapters";
+import type { NormalizedWebhookEvent } from "./webhook-ingress";
 import { webhookEventMatches } from "./webhook-service";
 import { renderWebhookPrompt } from "./webhook-store";
 
 const event: NormalizedWebhookEvent = {
-  provider: "github",
   deliveryId: "delivery-one",
   eventType: "pull_request.synchronize",
   groupKey: "sandbox0-ai/sandpi:61",
