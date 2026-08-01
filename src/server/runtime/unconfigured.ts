@@ -52,6 +52,8 @@ export class UnconfiguredRuntime implements RuntimeAdapter {
   listPersistentWorkspaceFiles = unavailable;
   searchFiles = unavailable;
   writeCodexComposerUpload = unavailable;
+  replaceCodexEnvironmentSkill = unavailable;
+  deleteCodexEnvironmentSkill = unavailable;
   readFile = unavailable;
   readPersistentWorkspaceFile = unavailable;
   getWorkspaceGitState = unavailable;

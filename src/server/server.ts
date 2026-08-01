@@ -109,11 +109,13 @@ import {
   browserSessionSchema,
   codexComposerUploadSchema,
   codexHookUpdateSchema,
+  codexMcpServerConfigurationSchema,
   codexMcpServerEnabledSchema,
   codexMemoriesSettingsSchema,
   codexPersonalitySelectionSchema,
   codexRateLimitResetSchema,
   codexSkillConfigurationSchema,
+  codexSkillPutSchema,
   environmentBrowserViewportSchema,
   environmentCreateSchema,
   environmentOrderSchema,
@@ -148,6 +150,7 @@ const CODEX_IMAGE_BODY_LIMIT_BYTES = 36 * 1024 * 1024;
 const CODEX_UPLOAD_BODY_LIMIT_BYTES =
   MAX_CODEX_COMPOSER_UPLOAD_BASE64_LENGTH + 64 * 1024;
 const WORKSPACE_FILE_BODY_LIMIT_BYTES = 7 * 1024 * 1024;
+const CODEX_SKILL_BODY_LIMIT_BYTES = 14 * 1024 * 1024;
 export interface SandpiServerOptions {
   config?: SandpiConfig;
   pool?: Pool;
@@ -766,6 +769,15 @@ export function registerApiRoutes(
   app.get("/api/v1/environments", async (request) => ({
     data: await services.environments.list(request.principal.userId),
   }));
+  app.get<{ Params: { environmentId: string } }>(
+    "/api/v1/environments/:environmentId",
+    async (request) => ({
+      data: await services.environments.get(
+        request.principal.userId,
+        request.params.environmentId,
+      ),
+    }),
+  );
   app.post("/api/v1/environments", async (request, reply) => {
     const body = environmentCreateSchema.parse(request.body);
     const environment = await services.environments.create({
@@ -802,6 +814,16 @@ export function registerApiRoutes(
       data: await services.egressCredentials.list(
         request.principal.userId,
         request.params.environmentId,
+      ),
+    }),
+  );
+  app.get<{ Params: { environmentId: string; credentialId: string } }>(
+    "/api/v1/environments/:environmentId/egress-credentials/:credentialId",
+    async (request) => ({
+      data: await services.egressCredentials.get(
+        request.principal.userId,
+        request.params.environmentId,
+        request.params.credentialId,
       ),
     }),
   );
@@ -1343,6 +1365,36 @@ export function registerApiRoutes(
       };
     },
   );
+  app.put<{ Params: { environmentId: string; name: string }; Body: unknown }>(
+    "/api/v1/environments/:environmentId/harnesses/codex/skills/:name",
+    { bodyLimit: CODEX_SKILL_BODY_LIMIT_BYTES },
+    async (request) => {
+      const body = codexSkillPutSchema.parse(request.body);
+      return {
+        data: await services.codex.putEnvironmentSkill({
+          userId: request.principal.userId,
+          environmentId: request.params.environmentId,
+          name: request.params.name,
+          enabled: body.enabled,
+          files: body.files.map((file) => ({
+            path: file.path,
+            content: Buffer.from(file.contentBase64, "base64"),
+            executable: file.executable,
+          })),
+        }),
+      };
+    },
+  );
+  app.delete<{ Params: { environmentId: string; name: string } }>(
+    "/api/v1/environments/:environmentId/harnesses/codex/skills/:name",
+    async (request) => ({
+      data: await services.codex.deleteEnvironmentSkill({
+        userId: request.principal.userId,
+        environmentId: request.params.environmentId,
+        name: request.params.name,
+      }),
+    }),
+  );
   app.get<{ Params: { environmentId: string } }>(
     "/api/v1/environments/:environmentId/harnesses/codex/mcp-servers",
     async (request) => ({
@@ -1368,6 +1420,27 @@ export function registerApiRoutes(
         }),
       };
     },
+  );
+  app.put<{ Params: { environmentId: string; name: string }; Body: unknown }>(
+    "/api/v1/environments/:environmentId/harnesses/codex/mcp-servers/:name",
+    async (request) => ({
+      data: await services.codex.putEnvironmentMcpServer({
+        userId: request.principal.userId,
+        environmentId: request.params.environmentId,
+        name: request.params.name,
+        configuration: codexMcpServerConfigurationSchema.parse(request.body),
+      }),
+    }),
+  );
+  app.delete<{ Params: { environmentId: string; name: string } }>(
+    "/api/v1/environments/:environmentId/harnesses/codex/mcp-servers/:name",
+    async (request) => ({
+      data: await services.codex.deleteEnvironmentMcpServer({
+        userId: request.principal.userId,
+        environmentId: request.params.environmentId,
+        name: request.params.name,
+      }),
+    }),
   );
   app.post<{ Params: { environmentId: string; name: string } }>(
     "/api/v1/environments/:environmentId/harnesses/codex/mcp-servers/:name/oauth/login",

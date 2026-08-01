@@ -48,6 +48,20 @@ export class EnvironmentEgressCredentialService {
     return credentials.map(publicEnvironmentCredential);
   }
 
+  async get(
+    userId: string,
+    environmentId: string,
+    credentialId: string,
+  ): Promise<EnvironmentEgressCredential> {
+    return publicEnvironmentCredential(
+      await this.store.getEnvironmentEgressCredential(
+        userId,
+        environmentId,
+        credentialId,
+      ),
+    );
+  }
+
   async create(
     userId: string,
     environmentId: string,

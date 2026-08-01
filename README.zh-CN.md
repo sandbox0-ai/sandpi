@@ -71,6 +71,12 @@ Environment
 Environment。如果多个 Session 本来就应该共享文件、工具和执行上下文，则把它们放在
 同一个 Environment 中。
 
+## CLI 与本地环境迁移
+
+仓库内的 Go `sandpi` CLI 可以操作 Sandpi，并支持把选定的本地 coding-agent
+配置迁移到全新或已经使用过的 Sandpi Environment。完整流程请参阅
+[将本地 coding-agent 环境迁移到 Sandpi](./docs/local-environment-migration.md)。
+
 ## 设计原则
 
 1. **不侵入 coding-agent harness。** Sandpi 的设计目标是不 fork、不 patch、
@@ -277,6 +283,8 @@ Sandbox0
 ## 文档
 
 - [Coding agent Environment 指南（`/llms.txt`）](./public/llms.txt)
+- [本地 coding-agent 环境迁移](./docs/local-environment-migration.md)
+- [CLI 架构与 API 边界](./docs/architecture/cli.md)
 - [OpenAPI 契约](./docs/architecture/openapi-contract.md)
 - [原生 Session authority 与恢复](./docs/architecture/native-session-authority.md)
 - [Environment Schedules](./docs/architecture/environment-schedules.md)
@@ -292,6 +300,7 @@ Sandbox0
 npm run lint
 npm run typecheck
 npm test
+npm run test:cli
 npm run build
 npm run test:e2e
 ```

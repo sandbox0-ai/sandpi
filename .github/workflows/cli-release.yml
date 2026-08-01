@@ -1,0 +1,121 @@
+name: Release Sandpi CLI
+
+on:
+  push:
+    tags:
+      - "cli/v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            archive: tar.gz
+            extension: ""
+          - goos: linux
+            goarch: arm64
+            archive: tar.gz
+            extension: ""
+          - goos: darwin
+            goarch: amd64
+            archive: tar.gz
+            extension: ""
+          - goos: darwin
+            goarch: arm64
+            archive: tar.gz
+            extension: ""
+          - goos: windows
+            goarch: amd64
+            archive: zip
+            extension: .exe
+          - goos: windows
+            goarch: arm64
+            archive: zip
+            extension: .exe
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: cli/go.mod
+          cache-dependency-path: cli/go.sum
+      - name: Test CLI
+        run: go test ./...
+        working-directory: cli
+      - name: Build release archive
+        env:
+          TARGET_GOOS: ${{ matrix.goos }}
+          TARGET_GOARCH: ${{ matrix.goarch }}
+          TARGET_ARCHIVE: ${{ matrix.archive }}
+          TARGET_EXTENSION: ${{ matrix.extension }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF_TYPE}" == "tag" && "${GITHUB_REF_NAME}" == cli/v* ]]; then
+            version="${GITHUB_REF_NAME#cli/}"
+            asset_version="${version#v}"
+            if [[ ! "${asset_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
+              echo "CLI release tag must use cli/vX.Y.Z SemVer syntax."
+              exit 1
+            fi
+          else
+            version="dev-${GITHUB_SHA:0:12}"
+            asset_version="${version}"
+          fi
+          asset="sandpi_${asset_version}_${TARGET_GOOS}_${TARGET_GOARCH}"
+          package_dir="${RUNNER_TEMP}/${asset}"
+          mkdir -p "${package_dir}" dist
+          cp LICENSE cli/README.md "${package_dir}/"
+          CGO_ENABLED=0 GOOS="${TARGET_GOOS}" GOARCH="${TARGET_GOARCH}" \
+            go -C cli build -trimpath \
+              -ldflags "-s -w -X main.version=${version}" \
+              -o "${package_dir}/sandpi${TARGET_EXTENSION}" \
+              ./cmd/sandpi
+          if [[ "${TARGET_ARCHIVE}" == "zip" ]]; then
+            (cd "${package_dir}" && zip -q -r "${GITHUB_WORKSPACE}/dist/${asset}.zip" .)
+          else
+            tar -C "${package_dir}" -czf "dist/${asset}.tar.gz" \
+              LICENSE README.md sandpi
+          fi
+      - uses: actions/upload-artifact@v7
+        with:
+          name: sandpi-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/cli/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: sandpi-*
+          path: dist
+          merge-multiple: true
+      - name: Publish checksummed GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cp cli/install.sh cli/install.ps1 dist/
+          printf '%s\n' "${GITHUB_REF_NAME#cli/v}" > dist/version.txt
+          (cd dist && sha256sum sandpi_*.tar.gz sandpi_*.zip install.sh install.ps1 version.txt > checksums.txt)
+          release_channel=(--latest)
+          if [[ "${GITHUB_REF_NAME#cli/v}" == *-* ]]; then
+            release_channel=(--prerelease)
+          fi
+          gh release create "${GITHUB_REF_NAME}" dist/* \
+            --verify-tag \
+            --generate-notes \
+            "${release_channel[@]}" \
+            --title "Sandpi CLI ${GITHUB_REF_NAME#cli/}"

@@ -73,6 +73,12 @@ Use separate Environments when you want isolation or a different provider
 account. Use multiple Sessions inside one Environment when they should share the
 same files, tools and execution context.
 
+## CLI and local environment migration
+
+The Go `sandpi` CLI operates Sandpi and supports migrating selected local
+coding-agent configuration into a new or existing Sandpi Environment. See
+[Migrate a local coding-agent environment to Sandpi](./docs/local-environment-migration.md).
+
 ## Design principles
 
 1. **No invasive harness changes.** Sandpi is designed to run the official
@@ -317,6 +323,8 @@ Sandbox0
 ## Documentation
 
 - [Coding-agent Environment guide (`/llms.txt`)](./public/llms.txt)
+- [Local coding-agent environment migration](./docs/local-environment-migration.md)
+- [CLI architecture and API boundaries](./docs/architecture/cli.md)
 - [OpenAPI contract](./docs/architecture/openapi-contract.md)
 - [Native Session authority and recovery](./docs/architecture/native-session-authority.md)
 - [Environment Schedules](./docs/architecture/environment-schedules.md)
@@ -332,6 +340,7 @@ Sandbox0
 npm run lint
 npm run typecheck
 npm test
+npm run test:cli
 npm run build
 npm run test:e2e
 ```

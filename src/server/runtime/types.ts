@@ -45,6 +45,12 @@ export interface RuntimeMcpOAuthCallbackService {
   publicUrl: string;
 }
 
+export interface RuntimeCodexSkillFile {
+  path: string;
+  content: Uint8Array;
+  executable: boolean;
+}
+
 /**
  * Server-only connection details for the official Playwright Dashboard.
  * Sandpi API handlers must never serialize the protected upstream headers.
@@ -318,6 +324,17 @@ export interface RuntimeAdapter {
     runtime: EnvironmentRuntimeRecord,
     path: string,
     content: Uint8Array,
+  ): Promise<void>;
+  /** Atomically replaces one user-owned skill below /workspace/.agents/skills. */
+  replaceCodexEnvironmentSkill(
+    runtime: EnvironmentRuntimeRecord,
+    name: string,
+    files: RuntimeCodexSkillFile[],
+  ): Promise<void>;
+  /** Deletes one user-owned skill below /workspace/.agents/skills. */
+  deleteCodexEnvironmentSkill(
+    runtime: EnvironmentRuntimeRecord,
+    name: string,
   ): Promise<void>;
   readFile(
     runtime: EnvironmentRuntimeRecord,
