@@ -1463,6 +1463,10 @@ export function EnvironmentSettings({
                       derives CPU capacity from the configured memory ratio.
                     </small>
                   )}
+                  <small>
+                    We recommend at least 1 GiB for non-coding agents and 4 GiB
+                    for coding agents.
+                  </small>
                   {billingSummaryError ? (
                     <small className="settings-inline-error" role="alert">
                       {billingSummaryError}

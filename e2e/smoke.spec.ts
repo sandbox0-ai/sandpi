@@ -1808,6 +1808,11 @@ test("replaces the Environment idle timeout after clearing the number input", as
     .getByRole("button", { name: `${environment.name} settings` })
     .click();
   await page.getByRole("button", { name: "Sandbox", exact: true }).click();
+  await expect(
+    page.getByText(
+      "We recommend at least 1 GiB for non-coding agents and 4 GiB for coding agents.",
+    ),
+  ).toBeVisible();
 
   const idleInput = page.getByRole("spinbutton", {
     name: "Environment auto-pause timeout in minutes",
