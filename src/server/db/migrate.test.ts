@@ -92,6 +92,7 @@ test("migration history contains every durable Sandpi boundary", async () => {
       "0061_retire_webhook_provider_adapters",
       "0062_github_webhook_sources",
       "0063_simplify_environment_webhooks",
+      "0064_default_environment_memory_4_gib",
     ],
   );
 
@@ -418,6 +419,12 @@ test("migration history contains every durable Sandpi boundary", async () => {
   );
   assert.match(sandboxMemorySql, /sandbox_memory_mib >= 128/);
   assert.match(sandboxMemorySql, /sandbox_memory_mib <= 8192/);
+
+  const fourGiBEnvironmentMemoryDefaultSql = migrations[63]?.sql ?? "";
+  assert.match(
+    fourGiBEnvironmentMemoryDefaultSql,
+    /ALTER COLUMN sandbox_memory_mib SET DEFAULT 4096/,
+  );
 
   const removedEnvironmentHardTtlSql = migrations[40]?.sql ?? "";
   assert.match(

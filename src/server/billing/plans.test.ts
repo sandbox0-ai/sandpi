@@ -34,9 +34,9 @@ test("defines exact runtime quota conversions", () => {
   );
 });
 
-test("defines the Free plan as two hours at a fixed 2 GiB", () => {
-  assert.equal(SANDPI_FREE_SANDBOX_MEMORY_MIB, 2 * 1024);
-  assert.equal(SANDPI_FREE_RUNTIME_HOURS, 2);
+test("defines the Free plan as one hour at a fixed 4 GiB", () => {
+  assert.equal(SANDPI_FREE_SANDBOX_MEMORY_MIB, 4 * 1024);
+  assert.equal(SANDPI_FREE_RUNTIME_HOURS, 1);
   assert.equal(
     PLAN_DEFINITIONS.free.fixedSandboxMemoryMiB,
     SANDPI_FREE_SANDBOX_MEMORY_MIB,
@@ -56,7 +56,7 @@ test("defines annual paid plan prices and Environment limits", () => {
       plan.environmentLimit,
     ]),
     [
-      [99, 3],
+      [99, 1],
       [199, 10],
       [499, 25],
     ],

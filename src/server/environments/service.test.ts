@@ -19,7 +19,7 @@ const environment = {
   },
 } as unknown as Environment;
 
-test("creates a Free Environment with the plan's fixed 2 GiB memory", async () => {
+test("creates a Free Environment with the plan's fixed 4 GiB memory", async () => {
   let createInput:
     | Parameters<SandpiStore["createEnvironmentMetadata"]>[0]
     | undefined;
@@ -42,7 +42,7 @@ test("creates a Free Environment with the plan's fixed 2 GiB memory", async () =
     async environmentCreationPolicy() {
       return {
         environmentLimit: 1,
-        fixedSandboxMemoryMiB: 2 * 1024,
+        fixedSandboxMemoryMiB: 4 * 1024,
       };
     },
     async assertMemoryConfigurationAllowed() {},
@@ -60,22 +60,22 @@ test("creates a Free Environment with the plan's fixed 2 GiB memory", async () =
   });
   await service.reconcilePending();
 
-  assert.equal(created.sandboxMemoryMiB, 2 * 1024);
+  assert.equal(created.sandboxMemoryMiB, 4 * 1024);
   assert.deepEqual(createInput, {
     userId: "user-test",
     name: "Free Environment",
     environmentLimit: 1,
-    sandboxMemoryMiB: 2 * 1024,
+    sandboxMemoryMiB: 4 * 1024,
   });
 });
 
-test("reconciles an existing Free Sandbox to the fixed 2 GiB memory", async () => {
+test("reconciles an existing Free Sandbox to the fixed 4 GiB memory", async () => {
   const steps: string[] = [];
   const existing = {
     ...environment,
     revision: 4,
     sandboxId: "sandbox-test",
-    sandboxMemoryMiB: 4 * 1024,
+    sandboxMemoryMiB: 2 * 1024,
   };
   const store = {
     async withEnvironmentLifecycleLock(
@@ -99,13 +99,13 @@ test("reconciles an existing Free Sandbox to the fixed 2 GiB memory", async () =
       memoryMiB: number,
     ) {
       assert.equal(environmentId, environment.id);
-      assert.equal(memoryMiB, 2 * 1024);
+      assert.equal(memoryMiB, 4 * 1024);
       steps.push("store");
     },
   } as unknown as SandpiStore;
   const runtime = {
     async updateEnvironmentMemory(_runtime: unknown, memoryMiB: number) {
-      assert.equal(memoryMiB, 2 * 1024);
+      assert.equal(memoryMiB, 4 * 1024);
       steps.push("runtime");
     },
   } as unknown as RuntimeAdapter;
@@ -113,7 +113,7 @@ test("reconciles an existing Free Sandbox to the fixed 2 GiB memory", async () =
     async environmentCreationPolicy() {
       return {
         environmentLimit: 1,
-        fixedSandboxMemoryMiB: 2 * 1024,
+        fixedSandboxMemoryMiB: 4 * 1024,
       };
     },
     async assertMemoryConfigurationAllowed() {},
@@ -127,7 +127,7 @@ test("reconciles an existing Free Sandbox to the fixed 2 GiB memory", async () =
 
   const reconciled = await service.reconcilePlanMemory(environment.id);
 
-  assert.equal(reconciled.sandboxMemoryMiB, 2 * 1024);
+  assert.equal(reconciled.sandboxMemoryMiB, 4 * 1024);
   assert.equal(reconciled.revision, 5);
   assert.deepEqual(steps, ["lock", "runtime", "store"]);
 });

@@ -34,8 +34,8 @@ test("presents the Free GiB-hour allowance as fixed-memory runtime hours", () =>
   } satisfies SandpiAccountPlan;
 
   assert.deepEqual(runtimeUsageDisplay(plan, usage), {
-    used: 0.5,
-    limit: 2,
+    used: 0.25,
+    limit: 1,
     unit: "hours",
   });
 });
@@ -45,7 +45,7 @@ test("keeps configurable-memory plans in GiB-hours", () => {
     id: "plus",
     name: "Plus",
     annualPriceUsd: 99,
-    environmentLimit: 3,
+    environmentLimit: 1,
     memoryConfigurable: true,
     runtimeQuotaGiBHours: 250,
     quotaPeriod: "fixed-week",

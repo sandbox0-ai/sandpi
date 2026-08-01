@@ -62,10 +62,10 @@ under-counting usage.
 
 ## Entitlement periods
 
-- Free: one account-anchored month, two runtime hours on one fixed 2 GiB
+- Free: one account-anchored month, one runtime hour on one fixed 4 GiB
   Sandbox (4 GiB-hours), and one Environment.
 - Plus: $99 billed annually, fixed seven-day periods from first paid
-  activation, 250 GiB-hours per period, three Environments.
+  activation, 250 GiB-hours per period, one Environment.
 - Pro: $199 billed annually, fixed seven-day periods from first paid
   activation, 500 GiB-hours per period, ten Environments.
 - Ultra: $499 billed annually, fixed seven-day periods from first paid
@@ -89,7 +89,7 @@ Environment creation holds a user-scoped PostgreSQL advisory transaction lock,
 recounts non-archived Environments and inserts only when the plan still permits
 it. This prevents concurrent requests from exceeding the count.
 
-Free Environment creation writes the fixed 2 GiB allocation explicitly. The
+Free Environment creation writes the fixed 4 GiB allocation explicitly. The
 usage worker also reconciles existing or downgraded Free Environments under the
 Environment lifecycle lock, applying the Sandbox0 memory update before saving
 the new desired allocation.
