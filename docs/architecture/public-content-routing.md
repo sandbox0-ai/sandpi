@@ -38,6 +38,10 @@ application rather than editorial content. The product-owned
 with the application release. It remains public and contains no deployment,
 Environment, identity or credential data.
 
+The separately bundled `sandpi-cli` Skill links directly to the canonical CLI
+reference and migration guide in this repository. CLI commands therefore do
+not need a second copy in `/llms.txt`.
+
 `robots.txt` is host-scoped, so the production content deployment owns the
 single root file and the aggregate sitemap. Application-only pages such as the
 Web IDE and Preferences declare page-level `noindex` metadata instead of being

@@ -57,7 +57,7 @@ import { toSandbox0NetworkPolicy } from "./network-policy";
 import {
   CODEX_ENVIRONMENT_CREDENTIAL_PATH,
   CODEX_MCP_OAUTH_CALLBACK_BASE_PATH,
-  SANDPI_ENVIRONMENT_SKILL_ROOT,
+  SANDPI_MANAGED_SKILL_ROOT,
   type EnsureCodexEnvironmentRuntimeOptions,
   type CodexAuthRuntime,
   type EnvironmentRuntimeRecord,
@@ -80,10 +80,7 @@ import {
   type Sandbox0AppServiceView,
   type Sandbox0NetworkPolicy,
 } from "./types";
-import {
-  SANDPI_ENVIRONMENT_SKILL_ASSETS,
-  SANDPI_ENVIRONMENT_SKILL_NAME,
-} from "./sandpi-environment-skill";
+import { SANDPI_MANAGED_SKILL_ASSETS } from "./sandpi-managed-skills";
 import {
   gitRepositoryRootsFromMarkers,
   lineChangesFromDiff,
@@ -3121,26 +3118,50 @@ function codexRuntimeEpochChanged(
   return new HttpError(409, "codex_runtime_epoch_changed", message);
 }
 
+/** Encodes release-owned skills and renders one shared Workspace reconciler. */
+function managedSkillPreparation() {
+  const envVars: Record<string, string> = {};
+  const installCommands = SANDPI_MANAGED_SKILL_ASSETS.map((asset, index) => {
+    const skillVariable = `SANDPI_MANAGED_SKILL_${index}_SKILL_BASE64`;
+    const interfaceVariable =
+      `SANDPI_MANAGED_SKILL_${index}_OPENAI_YAML_BASE64`;
+    envVars[skillVariable] = Buffer.from(asset.skill, "utf8").toString(
+      "base64",
+    );
+    envVars[interfaceVariable] = Buffer.from(
+      asset.interfaceYaml,
+      "utf8",
+    ).toString("base64");
+    const skillReference = `$${skillVariable}`;
+    const interfaceReference = `$${interfaceVariable}`;
+    return `managed_skill="$skills/${asset.name}"
+managed_skill_agents="$managed_skill/agents"
+test ! -L "$managed_skill"
+test ! -L "$managed_skill_agents"
+install -d -m 700 "$managed_skill" "$managed_skill_agents"
+install_managed_file "$managed_skill/SKILL.md" "${skillReference}"
+install_managed_file "$managed_skill_agents/openai.yaml" "${interfaceReference}"`;
+  }).join("\n");
+  return { envVars, installCommands };
+}
+
 async function prepareEnvironmentCodexHome(
   sandbox: ReturnType<Client["sandboxes"]["sandbox"]>,
 ) {
+  const managedSkills = managedSkillPreparation();
   const command = `set -eu
 internal=${WORKSPACE_INTERNAL_ROOT}
 harnesses=/workspace/.sandpi/harnesses
 home=${ENVIRONMENT_CODEX_HOME}
 marker=${WORKSPACE_CODEX_LAYOUT_MARKER}
 browser=/workspace/.sandpi/browser
-skills=${SANDPI_ENVIRONMENT_SKILL_ROOT}
-sandpi_skill="$skills/${SANDPI_ENVIRONMENT_SKILL_NAME}"
-sandpi_skill_agents="$sandpi_skill/agents"
+skills=${SANDPI_MANAGED_SKILL_ROOT}
 playwright_skill_marker=${PLAYWRIGHT_AGENT_SKILL_VERSION_MARKER}
 test ! -L "$internal"
 test ! -L "$harnesses"
 test ! -L "$browser"
 test ! -L "$skills"
-test ! -L "$sandpi_skill"
-test ! -L "$sandpi_skill_agents"
-install -d -m 700 "$internal" "$harnesses" "$browser" "$skills" "$sandpi_skill" "$sandpi_skill_agents"
+install -d -m 700 "$internal" "$harnesses" "$browser" "$skills"
 test ! -L "$home"
 install -d -m 700 "$home"
 install_managed_file() {
@@ -3159,8 +3180,7 @@ install_managed_file() {
     mv -f "$temporary" "$target"
   fi
 }
-install_managed_file "$sandpi_skill/SKILL.md" "$SANDPI_ENVIRONMENT_SKILL_MD_BASE64"
-install_managed_file "$sandpi_skill_agents/openai.yaml" "$SANDPI_ENVIRONMENT_SKILL_OPENAI_YAML_BASE64"
+${managedSkills.installCommands}
 if [ -f "$marker" ]; then
   test "$(cat "$marker")" = environment_v1
 else
@@ -3190,16 +3210,7 @@ sync -f /workspace 2>/dev/null || sync`;
   const result = await sandbox.cmd("prepare-environment-codex-home", {
     command: ["/bin/sh", "-lc", command],
     cwd: "/workspace",
-    envVars: {
-      SANDPI_ENVIRONMENT_SKILL_MD_BASE64: Buffer.from(
-        SANDPI_ENVIRONMENT_SKILL_ASSETS.skill,
-        "utf8",
-      ).toString("base64"),
-      SANDPI_ENVIRONMENT_SKILL_OPENAI_YAML_BASE64: Buffer.from(
-        SANDPI_ENVIRONMENT_SKILL_ASSETS.interfaceYaml,
-        "utf8",
-      ).toString("base64"),
-    },
+    envVars: managedSkills.envVars,
     ttlSec: 60,
   });
   if (result.exitCode !== undefined && result.exitCode !== 0) {

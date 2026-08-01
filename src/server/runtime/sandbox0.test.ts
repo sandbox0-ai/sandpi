@@ -13,7 +13,7 @@ import type {
 import type { Environment } from "@/lib/types";
 import { HttpError } from "@/server/http-error";
 import { createSandbox0FetchWithRetry, Sandbox0Runtime } from "./sandbox0";
-import { SANDPI_ENVIRONMENT_SKILL_ASSETS } from "./sandpi-environment-skill";
+import { SANDPI_MANAGED_SKILL_ASSETS } from "./sandpi-managed-skills";
 import {
   CODEX_MCP_OAUTH_CALLBACK_BASE_PATH,
   CODEX_MCP_OAUTH_CALLBACK_PORT,
@@ -2584,20 +2584,34 @@ test("starts one Environment-scoped Codex app-server without unsupported plugin 
   const preparation = commands.find(
     (command) => command.name === "prepare-environment-codex-home",
   );
+  const preparationCommand = String(preparation?.command?.at(-1));
   assert.equal(
-    Buffer.from(
-      preparation?.envVars?.SANDPI_ENVIRONMENT_SKILL_MD_BASE64 ?? "",
-      "base64",
-    ).toString("utf8"),
-    SANDPI_ENVIRONMENT_SKILL_ASSETS.skill,
+    Object.keys(preparation?.envVars ?? {}).length,
+    SANDPI_MANAGED_SKILL_ASSETS.length * 2,
   );
-  assert.equal(
-    Buffer.from(
-      preparation?.envVars?.SANDPI_ENVIRONMENT_SKILL_OPENAI_YAML_BASE64 ?? "",
-      "base64",
-    ).toString("utf8"),
-    SANDPI_ENVIRONMENT_SKILL_ASSETS.interfaceYaml,
-  );
+  for (const [index, asset] of SANDPI_MANAGED_SKILL_ASSETS.entries()) {
+    assert.equal(
+      Buffer.from(
+        preparation?.envVars?.[
+          `SANDPI_MANAGED_SKILL_${index}_SKILL_BASE64`
+        ] ?? "",
+        "base64",
+      ).toString("utf8"),
+      asset.skill,
+    );
+    assert.equal(
+      Buffer.from(
+        preparation?.envVars?.[
+          `SANDPI_MANAGED_SKILL_${index}_OPENAI_YAML_BASE64`
+        ] ?? "",
+        "base64",
+      ).toString("utf8"),
+      asset.interfaceYaml,
+    );
+    assert.ok(
+      preparationCommand.includes(`managed_skill="$skills/${asset.name}"`),
+    );
+  }
   assert.ok(
     commands.some(
       (command) =>
@@ -2608,12 +2622,7 @@ test("starts one Environment-scoped Codex app-server without unsupported plugin 
           ?.includes("skills=/workspace/.sandpi/skills") &&
         command.command
           ?.at(-1)
-          ?.includes('sandpi_skill="$skills/sandpi-environment"') &&
-        command.command
-          ?.at(-1)
-          ?.includes(
-            'install_managed_file "$sandpi_skill/SKILL.md"',
-          ) &&
+          ?.includes('install_managed_file "$managed_skill/SKILL.md"') &&
         command.command
           ?.at(-1)
           ?.includes("playwright-cli install --skills=agents") &&

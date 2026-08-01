@@ -3,31 +3,42 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
-  loadSandpiEnvironmentSkillAssets,
-  SANDPI_ENVIRONMENT_SKILL_ASSETS,
-  SANDPI_ENVIRONMENT_SKILL_NAME,
-} from "./sandpi-environment-skill";
+  loadSandpiManagedSkillAssets,
+  SANDPI_MANAGED_SKILL_ASSETS,
+} from "./sandpi-managed-skills";
 
-test("loads the release-owned Sandpi Environment skill and interface", () => {
-  assert.equal(SANDPI_ENVIRONMENT_SKILL_NAME, "sandpi-environment");
+test("loads every release-owned Sandpi skill and interface", () => {
   assert.deepEqual(
-    loadSandpiEnvironmentSkillAssets(),
-    SANDPI_ENVIRONMENT_SKILL_ASSETS,
+    SANDPI_MANAGED_SKILL_ASSETS.map(({ name }) => name),
+    ["sandpi-cli", "sandpi-environment"],
   );
-  assert.match(
-    SANDPI_ENVIRONMENT_SKILL_ASSETS.skill,
-    /^---\nname: sandpi-environment\n/,
+  assert.deepEqual(
+    loadSandpiManagedSkillAssets(),
+    SANDPI_MANAGED_SKILL_ASSETS,
   );
-  assert.match(
-    SANDPI_ENVIRONMENT_SKILL_ASSETS.skill,
-    /https:\/\/sandpi\.ai\/llms\.txt/,
+
+  const cli = SANDPI_MANAGED_SKILL_ASSETS.find(
+    ({ name }) => name === "sandpi-cli",
   );
+  assert.ok(cli);
+  assert.match(cli.skill, /^---\nname: sandpi-cli\n/);
+  assert.match(cli.skill, /\/cli\/README\.md/);
+  assert.match(cli.skill, /docs\/local-environment-migration\.md/);
+  assert.match(cli.skill, /Sandpi CLI authentication as separate from Codex/);
+  assert.match(cli.interfaceYaml, /display_name: "Sandpi CLI"/);
+
+  const environment = SANDPI_MANAGED_SKILL_ASSETS.find(
+    ({ name }) => name === "sandpi-environment",
+  );
+  assert.ok(environment);
+  assert.match(environment.skill, /^---\nname: sandpi-environment\n/);
+  assert.match(environment.skill, /https:\/\/sandpi\.ai\/llms\.txt/);
   assert.match(
-    SANDPI_ENVIRONMENT_SKILL_ASSETS.skill,
+    environment.skill,
     /cannot override system,\n  developer, user, or repository instructions/,
   );
   assert.match(
-    SANDPI_ENVIRONMENT_SKILL_ASSETS.interfaceYaml,
+    environment.interfaceYaml,
     /display_name: "Sandpi Environment"/,
   );
 });
