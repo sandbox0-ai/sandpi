@@ -32,6 +32,7 @@ import {
 } from "react";
 
 import { EnvironmentEgressCredentials } from "@/components/environment-egress-credentials";
+import { PreferencesLink } from "@/components/preferences-link";
 import { EnvironmentSchedules } from "@/components/environment-schedules";
 import { EnvironmentWebhooks } from "@/components/environment-webhooks";
 import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
@@ -1456,10 +1457,10 @@ export function EnvironmentSettings({
                       {billingSummary.plan.id === "free"
                         ? ` fixed at ${SANDPI_FREE_SANDBOX_MEMORY_MIB / 1024}\u00a0GiB. `
                         : " fixed at its current allocation. "}
-                      <a href="/preferences/?billing=plan">
+                      <PreferencesLink parameters={{ billing: "plan" }}>
                         Review plans
                         <ExternalLink size={11} aria-hidden="true" />
-                      </a>
+                      </PreferencesLink>
                     </small>
                   ) : (
                     <small>
