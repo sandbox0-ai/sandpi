@@ -198,28 +198,7 @@ export type EnvironmentWebhookSource =
       connectionId: string;
       accountLogin: string;
       repositories: GitHubWebhookRepository[];
-    };
-
-export interface EnvironmentWebhookCondition {
-  path: string;
-  operator: "equals" | "notEquals" | "contains" | "exists";
-  value?: string;
-}
-
-export interface EnvironmentWebhookTriggerPolicy {
-  mode: "every" | "stateChange";
-  eventTypes: string[];
-  conditions: EnvironmentWebhookCondition[];
-  statePath?: string;
-  groupKeyPath?: string;
-}
-
-export type EnvironmentWebhookCooldownPolicy =
-  | { mode: "none" }
-  | {
-      mode: "throttle" | "debounce" | "batch";
-      durationSeconds: number;
-      behavior: "suppress" | "latest" | "merge";
+      eventTypes: string[];
     };
 
 export type EnvironmentWebhookRunStatus =
@@ -233,8 +212,6 @@ export type EnvironmentWebhookRunStatus =
 export type EnvironmentWebhookDeliveryStatus =
   | "queued"
   | "batched"
-  | "filtered"
-  | "suppressed"
   | "duplicate";
 
 /** An authenticated external trigger whose deliveries remain in Sandpi. */
@@ -245,12 +222,9 @@ export interface EnvironmentWebhook {
   endpointUrl?: string;
   name: string;
   prompt: string;
-  triggerPolicy: EnvironmentWebhookTriggerPolicy;
-  cooldownPolicy: EnvironmentWebhookCooldownPolicy;
+  /** Zero runs every delivery immediately; positive values merge one fixed window. */
+  batchWindowSeconds: number;
   target: EnvironmentWebhookTarget;
-  overlapPolicy: "queue" | "skip";
-  maxConcurrentRuns: number;
-  maxPendingRuns: number;
   enabled: boolean;
   secretConfigured: boolean;
   title?: string;
@@ -293,7 +267,6 @@ export interface EnvironmentWebhookDelivery {
   eventType: string;
   status: Exclude<EnvironmentWebhookDeliveryStatus, "duplicate">;
   runId?: string;
-  reason?: string;
   receivedAt: UnixTimestamp;
 }
 

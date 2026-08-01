@@ -4,15 +4,12 @@ import type { Pool, PoolClient, QueryResultRow } from "pg";
 
 import type {
   EnvironmentWebhook,
-  EnvironmentWebhookCondition,
-  EnvironmentWebhookCooldownPolicy,
   EnvironmentWebhookDelivery,
   EnvironmentWebhookDeliveryStatus,
   EnvironmentWebhookRun,
   EnvironmentWebhookRunStatus,
   EnvironmentWebhookSource,
   EnvironmentWebhookTarget,
-  EnvironmentWebhookTriggerPolicy,
   GitHubWebhookRepository,
 } from "@/lib/types";
 import { toUnixTimestamp } from "@/lib/time";
@@ -30,12 +27,8 @@ export interface StoredEnvironmentWebhook {
   name: string;
   secret?: EncryptedValue;
   prompt: string;
-  triggerPolicy: EnvironmentWebhookTriggerPolicy;
-  cooldownPolicy: EnvironmentWebhookCooldownPolicy;
+  batchWindowSeconds: number;
   target: EnvironmentWebhookTarget;
-  overlapPolicy: "queue" | "skip";
-  maxConcurrentRuns: number;
-  maxPendingRuns: number;
   enabled: boolean;
   title?: string;
   modelId?: string;
@@ -64,7 +57,6 @@ export interface StoredEnvironmentWebhookRun {
   collaborationMode?: "plan";
   serviceTier?: string;
   target: EnvironmentWebhookTarget;
-  overlapPolicy: "queue" | "skip";
   sessionId?: string;
   nativeTurnId?: string;
   submission: TurnSubmissionCoordinates;
@@ -92,7 +84,6 @@ interface WebhookExecutionSnapshot {
   name: string;
   prompt: string;
   target: EnvironmentWebhookTarget;
-  overlapPolicy: "queue" | "skip";
   title?: string;
   modelId?: string;
   reasoningEffort?: string;
@@ -115,20 +106,11 @@ interface EnvironmentWebhookRow extends QueryResultRow {
   github_connection_id: string | null;
   github_account_login: string | null;
   github_repositories: unknown;
+  github_event_types: unknown;
   prompt: string;
-  trigger_mode: "every" | "state_change";
-  event_types: unknown;
-  conditions: unknown;
-  state_path: string | null;
-  group_key_path: string | null;
-  cooldown_mode: "none" | "throttle" | "debounce" | "batch";
-  cooldown_seconds: number;
-  cooldown_behavior: "suppress" | "latest" | "merge";
+  batch_window_seconds: number;
   target_kind: "new_session" | "source_thread" | "session";
   target_session_id: string | null;
-  overlap_policy: "queue" | "skip";
-  max_concurrent_runs: number;
-  max_pending_runs: number;
   enabled: boolean;
   title: string | null;
   model_id: string | null;
@@ -158,7 +140,6 @@ interface EnvironmentWebhookRunRow extends QueryResultRow {
   service_tier: string | null;
   target_kind: "new_session" | "source_thread" | "session";
   target_session_id: string | null;
-  overlap_policy: "queue" | "skip";
   session_id: string | null;
   native_turn_id: string | null;
   request_id: string;
@@ -183,17 +164,13 @@ interface EnvironmentWebhookDeliveryRow extends QueryResultRow {
   event_type: string;
   status: Exclude<EnvironmentWebhookDeliveryStatus, "duplicate">;
   run_id: string | null;
-  reason: string | null;
   received_at: Date;
 }
 
-interface CooldownBucketRow extends QueryResultRow {
+interface BatchBucketRow extends QueryResultRow {
   webhook_id: string;
   group_key: string;
   webhook_revision: string | number;
-  mode: "throttle" | "debounce" | "batch";
-  behavior: "suppress" | "latest" | "merge";
-  duration_seconds: number;
   due_at: Date;
   configuration: unknown;
   events: unknown;
@@ -205,6 +182,7 @@ const WEBHOOK_SELECT = `
   SELECT webhook.*,
          github_source.connection_id AS github_connection_id,
          github_connection.account_login AS github_account_login,
+         github_source.event_types AS github_event_types,
          COALESCE((
            SELECT JSONB_AGG(
              JSONB_BUILD_OBJECT(
@@ -228,8 +206,10 @@ const WEBHOOK_SELECT = `
     ON github_connection.id = github_source.connection_id
 `;
 const MAX_BUCKET_EVENTS = 50;
+const MAX_PENDING_RUNS = 100;
+const MAX_CONCURRENT_RUNS = 1;
 
-/** Persists Webhook definitions, delivery admission, cooldowns, and run leases. */
+/** Persists Webhook definitions, delivery admission, batches, and run leases. */
 export class EnvironmentWebhookStore {
   constructor(private readonly pool: Pool) {}
 
@@ -299,16 +279,13 @@ export class EnvironmentWebhookStore {
            id, environment_id, created_by_user_id, endpoint_id, name,
            secret_ciphertext, secret_initialization_vector,
            secret_authentication_tag, secret_algorithm, secret_key_id,
-           prompt, trigger_mode, event_types, conditions, state_path,
-           group_key_path, cooldown_mode, cooldown_seconds, cooldown_behavior,
-           target_kind, target_session_id, overlap_policy, max_concurrent_runs,
-           max_pending_runs, enabled, title, model_id, reasoning_effort,
-           collaboration_mode, service_tier, source_kind
+           prompt, batch_window_seconds, target_kind, target_session_id,
+           enabled, title, model_id, reasoning_effort, collaboration_mode,
+           service_tier, source_kind
          )
          SELECT
            $1, environment.id, $2, $4, $5, $6, $7, $8, $9, $10,
-           $11, $12, $13::JSONB, $14::JSONB, $15, $16, $17, $18, $19,
-           $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31
+           $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21
          FROM environments environment
          WHERE environment.id = $3 AND environment.created_by_user_id = $2`,
         webhookMutationValues(input, config),
@@ -341,7 +318,6 @@ export class EnvironmentWebhookStore {
     webhookId: string;
     expectedRevision: number;
     configuration: WebhookMutableConfiguration;
-    resetTriggerState?: boolean;
     secret?: EncryptedValue;
   }) {
     const config = input.configuration;
@@ -350,26 +326,21 @@ export class EnvironmentWebhookStore {
       await client.query("BEGIN");
       const result = await client.query(
         `UPDATE environment_webhooks webhook
-       SET name = $5, prompt = $6, trigger_mode = $7,
-           event_types = $8::JSONB, conditions = $9::JSONB,
-           state_path = $10, group_key_path = $11, cooldown_mode = $12,
-           cooldown_seconds = $13, cooldown_behavior = $14,
-           target_kind = $15, target_session_id = $16,
-           overlap_policy = $17, max_concurrent_runs = $18,
-           max_pending_runs = $19, enabled = $20, title = $21,
-           model_id = $22, reasoning_effort = $23,
-           collaboration_mode = $24, service_tier = $25,
-           secret_ciphertext = COALESCE($26, secret_ciphertext),
-           secret_initialization_vector = COALESCE($27, secret_initialization_vector),
-           secret_authentication_tag = COALESCE($28, secret_authentication_tag),
-           secret_algorithm = COALESCE($29, secret_algorithm),
-           secret_key_id = COALESCE($30, secret_key_id),
+       SET name = $5, prompt = $6, batch_window_seconds = $7,
+           target_kind = $8, target_session_id = $9, enabled = $10,
+           title = $11, model_id = $12, reasoning_effort = $13,
+           collaboration_mode = $14, service_tier = $15,
+           secret_ciphertext = COALESCE($16, secret_ciphertext),
+           secret_initialization_vector = COALESCE($17, secret_initialization_vector),
+           secret_authentication_tag = COALESCE($18, secret_authentication_tag),
+           secret_algorithm = COALESCE($19, secret_algorithm),
+           secret_key_id = COALESCE($20, secret_key_id),
            last_error = NULL, revision = webhook.revision + 1
        FROM environments environment
        WHERE webhook.id = $3 AND webhook.environment_id = $2
          AND webhook.environment_id = environment.id
          AND environment.created_by_user_id = $1
-         AND webhook.source_kind = $31
+         AND webhook.source_kind = $21
          AND webhook.revision = $4 AND webhook.deleted_at IS NULL
        RETURNING webhook.id`,
         [
@@ -379,23 +350,9 @@ export class EnvironmentWebhookStore {
           input.expectedRevision,
           config.name,
           config.prompt,
-          databaseTriggerMode(config.triggerPolicy.mode),
-          JSON.stringify(config.triggerPolicy.eventTypes),
-          JSON.stringify(config.triggerPolicy.conditions),
-          config.triggerPolicy.statePath ?? null,
-          config.triggerPolicy.groupKeyPath ?? null,
-          config.cooldownPolicy.mode,
-          config.cooldownPolicy.mode === "none"
-            ? 0
-            : config.cooldownPolicy.durationSeconds,
-          config.cooldownPolicy.mode === "none"
-            ? "merge"
-            : config.cooldownPolicy.behavior,
+          config.batchWindowSeconds,
           databaseWebhookTarget(config.target),
           config.target.kind === "session" ? config.target.sessionId : null,
-          config.overlapPolicy,
-          config.maxConcurrentRuns,
-          config.maxPendingRuns,
           config.enabled,
           config.title ?? null,
           config.modelId ?? null,
@@ -414,13 +371,6 @@ export class EnvironmentWebhookStore {
         throw conflict(
           "environment_webhook_changed",
           "The Webhook changed while it was being updated.",
-        );
-      }
-      if (input.resetTriggerState) {
-        await client.query(
-          `DELETE FROM environment_webhook_trigger_states
-           WHERE webhook_id = $1`,
-          [input.webhookId],
         );
       }
       if (config.source.kind === "github") {
@@ -458,7 +408,7 @@ export class EnvironmentWebhookStore {
       );
       if (!selected.rowCount) throw webhookNotFound();
       await client.query(
-        `DELETE FROM environment_webhook_cooldown_buckets
+        `DELETE FROM environment_webhook_batch_buckets
          WHERE webhook_id = $1`,
         [webhookId],
       );
@@ -536,18 +486,14 @@ export class EnvironmentWebhookStore {
     return result.rows.map(deliveryFromRow);
   }
 
-  /** Atomically deduplicates, filters, and reserves work for a verified event. */
+  /** Atomically deduplicates and reserves work for a verified event. */
   async ingestDelivery(input: {
     webhook: StoredEnvironmentWebhook;
     event: NormalizedWebhookEvent;
-    matched: boolean;
-    filterReason?: string;
     now: Date;
   }): Promise<
     | { kind: "stale" }
     | { kind: "duplicate" }
-    | { kind: "filtered" }
-    | { kind: "suppressed" }
     | { kind: "batched" }
     | { kind: "queued"; runId: string }
   > {
@@ -561,8 +507,7 @@ export class EnvironmentWebhookStore {
          FOR UPDATE`,
         [input.webhook.id, input.webhook.revision],
       );
-      const row = selected.rows[0];
-      if (!row) {
+      if (!selected.rows[0]) {
         await client.query("ROLLBACK");
         return { kind: "stale" };
       }
@@ -583,65 +528,18 @@ export class EnvironmentWebhookStore {
       }
 
       const deliveryId = `webhook_delivery_${randomUUID()}`;
-      let matched = input.matched;
-      let filterReason = input.filterReason;
-      if (matched && input.webhook.triggerPolicy.mode === "stateChange") {
-        const stateValue = input.event.stateValue;
-        if (stateValue === undefined) {
-          matched = false;
-          filterReason = "The configured state value is missing.";
-        } else {
-          const previous = await client.query<{ state_value: string }>(
-            `SELECT state_value FROM environment_webhook_trigger_states
-             WHERE webhook_id = $1 AND group_key = $2`,
-            [input.webhook.id, input.event.groupKey],
-          );
-          if (previous.rows[0]?.state_value === stateValue) {
-            matched = false;
-            filterReason = "The trigger state did not change.";
-          } else {
-            await client.query(
-              `INSERT INTO environment_webhook_trigger_states (
-                 webhook_id, group_key, state_value
-               ) VALUES ($1, $2, $3)
-               ON CONFLICT (webhook_id, group_key) DO UPDATE
-               SET state_value = EXCLUDED.state_value, updated_at = NOW()`,
-              [input.webhook.id, input.event.groupKey, stateValue],
-            );
-          }
-        }
-      }
-      if (!matched) {
-        await insertDelivery(client, {
-          id: deliveryId,
-          webhookId: input.webhook.id,
-          event: input.event,
-          status: "filtered",
-          reason: filterReason ?? "The delivery did not match the trigger policy.",
-          now: input.now,
-        });
-        await updateLastDelivery(
-          client,
-          input.webhook.id,
-          input.now,
-          "filtered",
-        );
-        await client.query("COMMIT");
-        return { kind: "filtered" };
-      }
-
       const snapshot = executionSnapshot(input.webhook);
-      const bucket = await client.query<CooldownBucketRow>(
-        `SELECT * FROM environment_webhook_cooldown_buckets
-         WHERE webhook_id = $1 AND group_key = $2
-         FOR UPDATE`,
-        [input.webhook.id, input.event.groupKey],
-      );
-      const existingBucket = bucket.rows[0];
-      const reservesRunSlot =
-        !existingBucket ||
-        (existingBucket.event_count === 0 &&
-          existingBucket.behavior !== "suppress");
+      const existingBucket = input.webhook.batchWindowSeconds
+        ? (
+            await client.query<BatchBucketRow>(
+              `SELECT * FROM environment_webhook_batch_buckets
+               WHERE webhook_id = $1 AND group_key = $2
+               FOR UPDATE`,
+              [input.webhook.id, input.event.groupKey],
+            )
+          ).rows[0]
+        : undefined;
+      const reservesRunSlot = !existingBucket;
       if (reservesRunSlot) {
         const pending = await client.query<{ count: string }>(
           `SELECT (
@@ -649,12 +547,12 @@ export class EnvironmentWebhookStore {
              WHERE webhook_id = $1
                AND status IN ('queued', 'claimed', 'running')
            ) + (
-             SELECT COUNT(*) FROM environment_webhook_cooldown_buckets
-             WHERE webhook_id = $1 AND event_count > 0
+             SELECT COUNT(*) FROM environment_webhook_batch_buckets
+             WHERE webhook_id = $1
            ) AS count`,
           [input.webhook.id],
         );
-        if (Number(pending.rows[0]?.count ?? 0) >= input.webhook.maxPendingRuns) {
+        if (Number(pending.rows[0]?.count ?? 0) >= MAX_PENDING_RUNS) {
           throw new HttpError(
             503,
             "environment_webhook_backlog_full",
@@ -663,7 +561,7 @@ export class EnvironmentWebhookStore {
         }
       }
 
-      if (input.webhook.cooldownPolicy.mode === "none") {
+      if (!input.webhook.batchWindowSeconds) {
         const run = await insertRun(
           client,
           snapshot,
@@ -690,64 +588,7 @@ export class EnvironmentWebhookStore {
         return { kind: "queued", runId: run.id };
       }
 
-      const cooldown = input.webhook.cooldownPolicy;
-      if (cooldown.mode === "throttle" && !existingBucket) {
-        const run = await insertRun(
-          client,
-          snapshot,
-          [input.event],
-          1,
-          input.now,
-        );
-        await insertDelivery(client, {
-          id: deliveryId,
-          webhookId: input.webhook.id,
-          event: input.event,
-          status: "queued",
-          runId: run.id,
-          now: input.now,
-        });
-        await insertEmptyThrottleBucket(
-          client,
-          input.webhook,
-          input.event.groupKey,
-          snapshot,
-          input.now,
-        );
-        await updateLastDelivery(
-          client,
-          input.webhook.id,
-          input.now,
-          "queued",
-          "queued",
-        );
-        await client.query("COMMIT");
-        return { kind: "queued", runId: run.id };
-      }
-
-      if (
-        existingBucket &&
-        existingBucket.behavior === "suppress"
-      ) {
-        await insertDelivery(client, {
-          id: deliveryId,
-          webhookId: input.webhook.id,
-          event: input.event,
-          status: "suppressed",
-          reason: "The delivery arrived during the configured cooldown window.",
-          now: input.now,
-        });
-        await updateLastDelivery(
-          client,
-          input.webhook.id,
-          input.now,
-          "suppressed",
-        );
-        await client.query("COMMIT");
-        return { kind: "suppressed" };
-      }
-
-      await upsertCooldownBucket(client, {
+      await upsertBatchBucket(client, {
         webhook: input.webhook,
         existing: existingBucket,
         snapshot,
@@ -777,13 +618,13 @@ export class EnvironmentWebhookStore {
     }
   }
 
-  async dueBucketKeys(now: Date, limit = 50) {
+  async dueBatchKeys(now: Date, limit = 50) {
     const result = await this.pool.query<{
       webhook_id: string;
       group_key: string;
     }>(
       `SELECT webhook_id, group_key
-       FROM environment_webhook_cooldown_buckets
+       FROM environment_webhook_batch_buckets
        WHERE due_at <= $1
        ORDER BY due_at, webhook_id, group_key
        LIMIT $2`,
@@ -795,8 +636,8 @@ export class EnvironmentWebhookStore {
     }));
   }
 
-  /** Converts one immutable, due cooldown bucket into a durable run. */
-  async releaseDueBucket(input: {
+  /** Converts one immutable, due batch into a durable run. */
+  async releaseDueBatch(input: {
     webhookId: string;
     groupKey: string;
     now: Date;
@@ -808,8 +649,8 @@ export class EnvironmentWebhookStore {
         "SELECT id FROM environment_webhooks WHERE id = $1 FOR UPDATE",
         [input.webhookId],
       );
-      const selected = await client.query<CooldownBucketRow>(
-        `SELECT * FROM environment_webhook_cooldown_buckets
+      const selected = await client.query<BatchBucketRow>(
+        `SELECT * FROM environment_webhook_batch_buckets
          WHERE webhook_id = $1 AND group_key = $2 AND due_at <= $3
          FOR UPDATE`,
         [input.webhookId, input.groupKey, input.now],
@@ -822,7 +663,7 @@ export class EnvironmentWebhookStore {
       const events = webhookEvents(bucket.events);
       if (!bucket.event_count || !events.length) {
         await client.query(
-          `DELETE FROM environment_webhook_cooldown_buckets
+          `DELETE FROM environment_webhook_batch_buckets
            WHERE webhook_id = $1 AND group_key = $2`,
           [input.webhookId, input.groupKey],
         );
@@ -846,7 +687,7 @@ export class EnvironmentWebhookStore {
         [input.webhookId, run.id, input.groupKey],
       );
       await client.query(
-        `DELETE FROM environment_webhook_cooldown_buckets
+        `DELETE FROM environment_webhook_batch_buckets
          WHERE webhook_id = $1 AND group_key = $2`,
         [input.webhookId, input.groupKey],
       );
@@ -883,7 +724,7 @@ export class EnvironmentWebhookStore {
     return result.rows.map((row) => row.id);
   }
 
-  /** Claims one due run while enforcing the Webhook's concurrency limit. */
+  /** Claims one due run while keeping one active run per Webhook. */
   async claimRunLease(
     runId: string,
     leaseToken: string,
@@ -940,7 +781,7 @@ export class EnvironmentWebhookStore {
           [runRow.webhook_id],
         );
         if (
-          Number(active.rows[0]?.count ?? 0) >= webhookRow.max_concurrent_runs
+          Number(active.rows[0]?.count ?? 0) >= MAX_CONCURRENT_RUNS
         ) {
           await client.query("ROLLBACK");
           return undefined;
@@ -1094,12 +935,8 @@ export interface WebhookMutableConfiguration {
   source: WebhookSourceConfiguration;
   name: string;
   prompt: string;
-  triggerPolicy: EnvironmentWebhookTriggerPolicy;
-  cooldownPolicy: EnvironmentWebhookCooldownPolicy;
+  batchWindowSeconds: number;
   target: EnvironmentWebhookTarget;
-  overlapPolicy: "queue" | "skip";
-  maxConcurrentRuns: number;
-  maxPendingRuns: number;
   enabled: boolean;
   title?: string;
   modelId?: string;
@@ -1110,7 +947,12 @@ export interface WebhookMutableConfiguration {
 
 export type WebhookSourceConfiguration =
   | { kind: "custom" }
-  | { kind: "github"; connectionId: string; repositoryIds: string[] };
+  | {
+      kind: "github";
+      connectionId: string;
+      repositoryIds: string[];
+      eventTypes: string[];
+    };
 
 function webhookMutationValues(
   input: {
@@ -1134,23 +976,9 @@ function webhookMutationValues(
     input.secret?.algorithm ?? null,
     input.secret?.keyId ?? null,
     config.prompt,
-    databaseTriggerMode(config.triggerPolicy.mode),
-    JSON.stringify(config.triggerPolicy.eventTypes),
-    JSON.stringify(config.triggerPolicy.conditions),
-    config.triggerPolicy.statePath ?? null,
-    config.triggerPolicy.groupKeyPath ?? null,
-    config.cooldownPolicy.mode,
-    config.cooldownPolicy.mode === "none"
-      ? 0
-      : config.cooldownPolicy.durationSeconds,
-    config.cooldownPolicy.mode === "none"
-      ? "merge"
-      : config.cooldownPolicy.behavior,
+    config.batchWindowSeconds,
     databaseWebhookTarget(config.target),
     config.target.kind === "session" ? config.target.sessionId : null,
-    config.overlapPolicy,
-    config.maxConcurrentRuns,
-    config.maxPendingRuns,
     config.enabled,
     config.title ?? null,
     config.modelId ?? null,
@@ -1174,6 +1002,14 @@ async function replaceGitHubSource(
       400,
       "environment_webhook_github_repositories_invalid",
       "Select between 1 and 100 GitHub repositories.",
+    );
+  }
+  const eventTypes = Array.from(new Set(source.eventTypes));
+  if (!eventTypes.length || eventTypes.length > 100) {
+    throw new HttpError(
+      400,
+      "environment_webhook_github_events_invalid",
+      "Select between 1 and 100 GitHub events.",
     );
   }
   const connection = await client.query<{
@@ -1217,11 +1053,13 @@ async function replaceGitHubSource(
     );
   }
   await client.query(
-    `INSERT INTO environment_webhook_github_sources (webhook_id, connection_id)
-     VALUES ($1, $2)
+    `INSERT INTO environment_webhook_github_sources (
+       webhook_id, connection_id, event_types
+     ) VALUES ($1, $2, $3::JSONB)
      ON CONFLICT (webhook_id) DO UPDATE
-     SET connection_id = EXCLUDED.connection_id`,
-    [webhookId, source.connectionId],
+     SET connection_id = EXCLUDED.connection_id,
+         event_types = EXCLUDED.event_types`,
+    [webhookId, source.connectionId, JSON.stringify(eventTypes)],
   );
   await client.query(
     "DELETE FROM environment_webhook_github_repositories WHERE webhook_id = $1",
@@ -1242,17 +1080,16 @@ async function insertDelivery(
     id: string;
     webhookId: string;
     event: NormalizedWebhookEvent;
-    status: "queued" | "batched" | "filtered" | "suppressed";
+    status: "queued" | "batched";
     runId?: string;
-    reason?: string;
     now: Date;
   },
 ) {
   await client.query(
     `INSERT INTO environment_webhook_deliveries (
        id, webhook_id, source_delivery_id, event_type, group_key,
-       status, normalized_event, run_id, reason, received_at
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7::JSONB, $8, $9, $10)`,
+       status, normalized_event, run_id, received_at
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7::JSONB, $8, $9)`,
     [
       input.id,
       input.webhookId,
@@ -1262,7 +1099,6 @@ async function insertDelivery(
       input.status,
       JSON.stringify(input.event),
       input.runId ?? null,
-      input.reason?.slice(0, 2_000) ?? null,
       input.now,
     ],
   );
@@ -1288,11 +1124,11 @@ async function insertRun(
     `INSERT INTO environment_webhook_runs (
        id, webhook_id, webhook_revision, status, prompt, title, model_id,
        reasoning_effort, collaboration_mode, service_tier, target_kind,
-       target_session_id, overlap_policy, session_id, request_id,
+       target_session_id, session_id, request_id,
        client_message_id, stable_input_id, event_count, event_types, not_before
      ) VALUES (
        $1, $2, $3, 'queued', $4, $5, $6, $7, $8, $9, $10,
-       $11, $12, $13, $14, $15, $16, $17, $18::JSONB, $19
+       $11, $12, $13, $14, $15, $16, $17::JSONB, $18
      ) RETURNING *`,
     [
       runId,
@@ -1306,7 +1142,6 @@ async function insertRun(
       snapshot.serviceTier ?? null,
       databaseWebhookTarget(snapshot.target),
       snapshot.target.kind === "session" ? snapshot.target.sessionId : null,
-      snapshot.overlapPolicy,
       sessionId,
       submission.requestId,
       submission.clientMessageId,
@@ -1339,85 +1174,43 @@ async function webhookRunSessionId(
   return requireString(result.rows[0]?.session_id ?? null);
 }
 
-async function insertEmptyThrottleBucket(
-  client: PoolClient,
-  webhook: StoredEnvironmentWebhook,
-  groupKey: string,
-  snapshot: WebhookExecutionSnapshot,
-  now: Date,
-) {
-  if (webhook.cooldownPolicy.mode !== "throttle") return;
-  await client.query(
-    `INSERT INTO environment_webhook_cooldown_buckets (
-       webhook_id, group_key, webhook_revision, mode, behavior,
-       duration_seconds, due_at, configuration
-     ) VALUES ($1, $2, $3, 'throttle', $4, $5, $6, $7::JSONB)`,
-    [
-      webhook.id,
-      groupKey,
-      webhook.revision,
-      webhook.cooldownPolicy.behavior,
-      webhook.cooldownPolicy.durationSeconds,
-      new Date(now.getTime() + webhook.cooldownPolicy.durationSeconds * 1_000),
-      JSON.stringify(snapshot),
-    ],
-  );
-}
-
-async function upsertCooldownBucket(
+async function upsertBatchBucket(
   client: PoolClient,
   input: {
     webhook: StoredEnvironmentWebhook;
-    existing?: CooldownBucketRow;
+    existing?: BatchBucketRow;
     snapshot: WebhookExecutionSnapshot;
     event: NormalizedWebhookEvent;
     now: Date;
   },
 ) {
-  const cooldown = input.webhook.cooldownPolicy;
-  if (cooldown.mode === "none") return;
   const existingEvents = input.existing
     ? webhookEvents(input.existing.events)
     : [];
-  const behavior = input.existing?.behavior ?? cooldown.behavior;
-  const mode = input.existing?.mode ?? cooldown.mode;
-  const durationSeconds =
-    input.existing?.duration_seconds ?? cooldown.durationSeconds;
-  const allEvents =
-    behavior === "latest"
-      ? [input.event]
-      : [...existingEvents, input.event];
-  const events = allEvents.slice(-MAX_BUCKET_EVENTS);
+  const events = [...existingEvents, input.event].slice(-MAX_BUCKET_EVENTS);
   const priorCount = input.existing?.event_count ?? 0;
   const eventCount = priorCount + 1;
   const truncatedEventCount = Math.max(0, eventCount - events.length);
-  const initialDueAt = new Date(
-    input.now.getTime() + durationSeconds * 1_000,
-  );
   const dueAt =
-    mode === "debounce"
-      ? initialDueAt
-      : input.existing?.due_at ?? initialDueAt;
+    input.existing?.due_at ??
+    new Date(
+      input.now.getTime() + input.webhook.batchWindowSeconds * 1_000,
+    );
   await client.query(
-    `INSERT INTO environment_webhook_cooldown_buckets (
-       webhook_id, group_key, webhook_revision, mode, behavior,
-       duration_seconds, due_at, configuration, events, event_count,
-       truncated_event_count
+    `INSERT INTO environment_webhook_batch_buckets (
+       webhook_id, group_key, webhook_revision, due_at, configuration,
+       events, event_count, truncated_event_count
      ) VALUES (
-       $1, $2, $3, $4, $5, $6, $7, $8::JSONB, $9::JSONB, $10, $11
+       $1, $2, $3, $4, $5::JSONB, $6::JSONB, $7, $8
      )
      ON CONFLICT (webhook_id, group_key) DO UPDATE
-     SET due_at = EXCLUDED.due_at,
-         events = EXCLUDED.events,
+     SET events = EXCLUDED.events,
          event_count = EXCLUDED.event_count,
          truncated_event_count = EXCLUDED.truncated_event_count`,
     [
       input.webhook.id,
       input.event.groupKey,
       input.existing?.webhook_revision ?? input.webhook.revision,
-      mode,
-      behavior,
-      durationSeconds,
       dueAt,
       JSON.stringify(input.existing?.configuration ?? input.snapshot),
       JSON.stringify(events),
@@ -1453,7 +1246,7 @@ async function cleanupDeletedWebhook(client: PoolClient, webhookId: string) {
            AND run.status IN ('queued', 'claimed', 'running')
        )
        AND NOT EXISTS (
-         SELECT 1 FROM environment_webhook_cooldown_buckets bucket
+         SELECT 1 FROM environment_webhook_batch_buckets bucket
          WHERE bucket.webhook_id = webhook.id
        )`,
     [webhookId],
@@ -1469,7 +1262,6 @@ function executionSnapshot(
     name: webhook.name,
     prompt: webhook.prompt,
     target: webhook.target,
-    overlapPolicy: webhook.overlapPolicy,
     ...(webhook.title ? { title: webhook.title } : {}),
     ...(webhook.modelId ? { modelId: webhook.modelId } : {}),
     ...(webhook.reasoningEffort
@@ -1529,21 +1321,6 @@ function webhookRunSubmission(runId: string) {
 }
 
 function webhookFromRow(row: EnvironmentWebhookRow): StoredEnvironmentWebhook {
-  const triggerPolicy: EnvironmentWebhookTriggerPolicy = {
-    mode: row.trigger_mode === "state_change" ? "stateChange" : "every",
-    eventTypes: stringArray(row.event_types),
-    conditions: webhookConditions(row.conditions),
-    ...(row.state_path ? { statePath: row.state_path } : {}),
-    ...(row.group_key_path ? { groupKeyPath: row.group_key_path } : {}),
-  };
-  const cooldownPolicy: EnvironmentWebhookCooldownPolicy =
-    row.cooldown_mode === "none"
-      ? { mode: "none" }
-      : {
-          mode: row.cooldown_mode,
-          durationSeconds: row.cooldown_seconds,
-          behavior: row.cooldown_behavior,
-        };
   const source: EnvironmentWebhookSource =
     row.source_kind === "custom"
       ? { kind: "custom" }
@@ -1552,6 +1329,7 @@ function webhookFromRow(row: EnvironmentWebhookRow): StoredEnvironmentWebhook {
           connectionId: requireString(row.github_connection_id),
           accountLogin: requireString(row.github_account_login),
           repositories: githubRepositories(row.github_repositories),
+          eventTypes: stringArray(row.github_event_types),
         };
   const secret =
     row.source_kind === "custom"
@@ -1574,13 +1352,9 @@ function webhookFromRow(row: EnvironmentWebhookRow): StoredEnvironmentWebhook {
     name: row.name,
     ...(secret ? { secret } : {}),
     prompt: row.prompt,
-    triggerPolicy,
-    cooldownPolicy,
+    batchWindowSeconds: row.batch_window_seconds,
     target:
       publicWebhookTarget(row.target_kind, row.target_session_id),
-    overlapPolicy: row.overlap_policy,
-    maxConcurrentRuns: row.max_concurrent_runs,
-    maxPendingRuns: row.max_pending_runs,
     enabled: row.enabled,
     ...(row.title ? { title: row.title } : {}),
     ...(row.model_id ? { modelId: row.model_id } : {}),
@@ -1622,7 +1396,6 @@ function runFromRow(row: EnvironmentWebhookRunRow): StoredEnvironmentWebhookRun 
     ...(row.service_tier ? { serviceTier: row.service_tier } : {}),
     target:
       publicWebhookTarget(row.target_kind, row.target_session_id),
-    overlapPolicy: row.overlap_policy,
     ...(row.session_id ? { sessionId: row.session_id } : {}),
     ...(row.native_turn_id ? { nativeTurnId: row.native_turn_id } : {}),
     submission: {
@@ -1671,7 +1444,6 @@ function deliveryFromRow(
     eventType: row.event_type,
     status: row.status,
     ...(row.run_id ? { runId: row.run_id } : {}),
-    ...(row.reason ? { reason: row.reason } : {}),
     receivedAt: toUnixTimestamp(row.received_at),
   };
 }
@@ -1687,12 +1459,8 @@ export function publicEnvironmentWebhook(
     ...(endpointUrl ? { endpointUrl } : {}),
     name: webhook.name,
     prompt: webhook.prompt,
-    triggerPolicy: webhook.triggerPolicy,
-    cooldownPolicy: webhook.cooldownPolicy,
+    batchWindowSeconds: webhook.batchWindowSeconds,
     target: webhook.target,
-    overlapPolicy: webhook.overlapPolicy,
-    maxConcurrentRuns: webhook.maxConcurrentRuns,
-    maxPendingRuns: webhook.maxPendingRuns,
     enabled: webhook.enabled,
     secretConfigured: Boolean(webhook.secret),
     ...(webhook.title ? { title: webhook.title } : {}),
@@ -1717,10 +1485,6 @@ export function publicEnvironmentWebhook(
     createdAt: toUnixTimestamp(webhook.createdAt),
     updatedAt: toUnixTimestamp(webhook.updatedAt),
   };
-}
-
-function databaseTriggerMode(mode: EnvironmentWebhookTriggerPolicy["mode"]) {
-  return mode === "stateChange" ? "state_change" : "every";
 }
 
 function databaseWebhookTarget(target: EnvironmentWebhookTarget) {
@@ -1770,13 +1534,6 @@ function stringArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((candidate): candidate is string => typeof candidate === "string")
     : [];
-}
-
-function webhookConditions(value: unknown): EnvironmentWebhookCondition[] {
-  if (!Array.isArray(value)) return [];
-  return value.filter((candidate): candidate is EnvironmentWebhookCondition =>
-    isRecord(candidate),
-  );
 }
 
 function webhookEvents(value: unknown): NormalizedWebhookEvent[] {

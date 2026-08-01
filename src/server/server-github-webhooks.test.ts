@@ -177,19 +177,12 @@ test(
           kind: "github",
           connectionId: connection.id,
           repositoryIds: ["45678"],
+          eventTypes: ["issues.opened", "issue_comment.created"],
         },
         name: "GitHub triage",
         prompt: "Triage the GitHub event.",
-        triggerPolicy: {
-          mode: "every",
-          eventTypes: ["issues.opened", "issue_comment.created"],
-          conditions: [],
-        },
-        cooldownPolicy: { mode: "none" },
+        batchWindowSeconds: 0,
         target: { kind: "sourceThread" },
-        overlapPolicy: "queue",
-        maxConcurrentRuns: 2,
-        maxPendingRuns: 50,
         enabled: true,
       },
     });
@@ -214,6 +207,7 @@ test(
           defaultBranch: "main",
         },
       ],
+      eventTypes: ["issues.opened", "issue_comment.created"],
     });
 
     const invalid = await injectGitHubDelivery(server, {
@@ -246,6 +240,20 @@ test(
       action: "created",
     });
     assert.equal(second.statusCode, 202, second.body);
+
+    const unselected = await injectGitHubDelivery(server, {
+      deliveryId: "github-delivery-unselected",
+      eventName: "pull_request",
+      action: "opened",
+    });
+    assert.equal(unselected.statusCode, 202, unselected.body);
+    await waitFor(async () => {
+      const result = await database.query<{ status: string }>(
+        `SELECT status FROM webhook_github_receipts WHERE delivery_id = $1`,
+        ["github-delivery-unselected"],
+      );
+      return result.rows[0]?.status === "completed";
+    });
 
     await waitFor(async () => {
       const result = await database.query<{ count: string }>(

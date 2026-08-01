@@ -2331,7 +2331,7 @@ export function EnvironmentSettings({
               <SettingsSection
                 eyebrow="Environment Automation"
                 title="Webhooks"
-                description="Trigger durable Codex runs from authenticated custom events, with declarative filters and cooldown controls."
+                description="Connect selected GitHub events or an authenticated Custom URL to durable Codex runs, with optional burst batching."
               >
                 <EnvironmentWebhooks
                   environmentId={draft.id}

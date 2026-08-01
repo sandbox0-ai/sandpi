@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { Pool } from "pg";
+import { seedCommunityDefaults } from "./seed";
 import {
   loadMigrations,
   migrateDatabase,
@@ -90,6 +91,7 @@ test("migration history contains every durable Sandpi boundary", async () => {
       "0060_environment_webhooks",
       "0061_retire_webhook_provider_adapters",
       "0062_github_webhook_sources",
+      "0063_simplify_environment_webhooks",
     ],
   );
 
@@ -129,6 +131,22 @@ test("migration history contains every durable Sandpi boundary", async () => {
     githubWebhookSql,
     /access_token|refresh_token|installation_token/i,
   );
+
+  const simplifiedWebhookSql = migrations[62]?.sql ?? "";
+  assert.match(simplifiedWebhookSql, /DELETE FROM environment_webhooks/);
+  assert.match(
+    simplifiedWebhookSql,
+    /DROP TABLE environment_webhook_trigger_states/,
+  );
+  assert.match(
+    simplifiedWebhookSql,
+    /DROP TABLE environment_webhook_cooldown_buckets/,
+  );
+  assert.match(
+    simplifiedWebhookSql,
+    /CREATE TABLE environment_webhook_batch_buckets\b/,
+  );
+  assert.match(simplifiedWebhookSql, /ADD COLUMN event_types JSONB NOT NULL/);
 
   const deviceAuthSql = migrations[3]?.sql ?? "";
   assert.match(deviceAuthSql, /CREATE TABLE codex_device_auth_flows\b/);
@@ -997,5 +1015,86 @@ test(
       ),
       true,
     );
+  },
+);
+
+test(
+  "simplifying Webhooks deliberately discards unreleased definitions and policy state",
+  { skip: !process.env.DATABASE_URL },
+  async (context) => {
+    const schema = `sandpi_webhook_simplification_${randomUUID().replaceAll("-", "")}`;
+    const administration = new Pool({
+      connectionString: process.env.DATABASE_URL,
+      application_name: "sandpi-webhook-simplification-administration",
+      max: 1,
+    });
+    await administration.query(`CREATE SCHEMA "${schema}"`);
+    const database = new Pool({
+      connectionString: process.env.DATABASE_URL,
+      application_name: "sandpi-webhook-simplification-test",
+      options: `-c search_path=${schema}`,
+      max: 2,
+    });
+    context.after(async () => {
+      await database.end();
+      await administration.query(`DROP SCHEMA "${schema}" CASCADE`);
+      await administration.end();
+    });
+
+    const migrations = await loadMigrations();
+    await migrateDatabase(database, migrations.slice(0, 62));
+    await seedCommunityDefaults(database, {
+      admin: {
+        id: "user-webhook-simplification",
+        email: "webhook-simplification@sandpi.local",
+        identitySubject: "webhook-simplification",
+      },
+      environment: {
+        id: "environment-webhook-simplification",
+        name: "Webhook simplification",
+      },
+    });
+    await database.query(
+      `INSERT INTO environment_webhooks (
+         id, environment_id, created_by_user_id, endpoint_id, name,
+         secret_ciphertext, secret_initialization_vector,
+         secret_authentication_tag, secret_algorithm, secret_key_id,
+         prompt, target_kind
+       ) VALUES (
+         'legacy-webhook', 'environment-webhook-simplification',
+         'user-webhook-simplification', 'legacy-endpoint', 'Legacy policy',
+         decode('01', 'hex'), decode('02', 'hex'), decode('03', 'hex'),
+         'aes-256-gcm', 'legacy-key', 'Legacy prompt', 'new_session'
+       )`,
+    );
+
+    const migration = migrations[62];
+    assert.equal(migration?.version, "0063_simplify_environment_webhooks");
+    await migrateDatabase(database, [migration!]);
+
+    const definitions = await database.query<{ count: string }>(
+      "SELECT COUNT(*)::TEXT AS count FROM environment_webhooks",
+    );
+    assert.equal(definitions.rows[0]?.count, "0");
+    const columns = await database.query<{ column_name: string }>(
+      `SELECT column_name FROM information_schema.columns
+       WHERE table_schema = $1 AND table_name = 'environment_webhooks'`,
+      [schema],
+    );
+    const names = new Set(columns.rows.map((row) => row.column_name));
+    assert.equal(names.has("trigger_mode"), false);
+    assert.equal(names.has("conditions"), false);
+    assert.equal(names.has("cooldown_mode"), false);
+    assert.equal(names.has("max_pending_runs"), false);
+    assert.equal(names.has("batch_window_seconds"), true);
+    const tables = await database.query<{ table_name: string }>(
+      `SELECT table_name FROM information_schema.tables
+       WHERE table_schema = $1 AND table_name LIKE 'environment_webhook_%'`,
+      [schema],
+    );
+    const tableNames = new Set(tables.rows.map((row) => row.table_name));
+    assert.equal(tableNames.has("environment_webhook_trigger_states"), false);
+    assert.equal(tableNames.has("environment_webhook_cooldown_buckets"), false);
+    assert.equal(tableNames.has("environment_webhook_batch_buckets"), true);
   },
 );

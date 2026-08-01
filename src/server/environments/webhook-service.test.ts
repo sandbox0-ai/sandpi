@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { NormalizedWebhookEvent } from "./webhook-ingress";
-import { webhookEventMatches } from "./webhook-service";
 import { renderWebhookPrompt } from "./webhook-store";
 
 const event: NormalizedWebhookEvent = {
@@ -16,44 +15,6 @@ const event: NormalizedWebhookEvent = {
     pull_request: { draft: false },
   },
 };
-
-test("matches event types and declarative JSON Pointer conditions", () => {
-  assert.deepEqual(
-    webhookEventMatches(
-      {
-        mode: "every",
-        eventTypes: ["pull_request.synchronize"],
-        conditions: [
-          {
-            path: "/payload/repository/full_name",
-            operator: "equals",
-            value: "sandbox0-ai/sandpi",
-          },
-          {
-            path: "/payload/pull_request/draft",
-            operator: "equals",
-            value: "false",
-          },
-        ],
-      },
-      event,
-    ),
-    { matched: true },
-  );
-});
-
-test("reports the first trigger condition that does not match", () => {
-  const result = webhookEventMatches(
-    {
-      mode: "every",
-      eventTypes: ["issues.opened"],
-      conditions: [],
-    },
-    event,
-  );
-  assert.equal(result.matched, false);
-  assert.match(result.reason ?? "", /not enabled/);
-});
 
 test("keeps untrusted payloads inside one bounded prompt envelope", () => {
   const prompt = renderWebhookPrompt("Review the event", [

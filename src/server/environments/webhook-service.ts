@@ -2,11 +2,8 @@ import { randomBytes, randomUUID } from "node:crypto";
 
 import type {
   EnvironmentWebhook,
-  EnvironmentWebhookCondition,
-  EnvironmentWebhookCooldownPolicy,
   EnvironmentWebhookSetup,
   EnvironmentWebhookTarget,
-  EnvironmentWebhookTriggerPolicy,
 } from "@/lib/types";
 import { GITHUB_WEBHOOK_EVENT_TYPE_VALUES } from "@/lib/github-webhooks";
 import { EnvironmentAutomationExecutor } from "@/server/automations/executor";
@@ -186,9 +183,6 @@ export class EnvironmentWebhookService {
       webhookId,
       expectedRevision: current.revision,
       configuration,
-      resetTriggerState:
-        triggerPolicyFingerprint(current.triggerPolicy) !==
-        triggerPolicyFingerprint(configuration.triggerPolicy),
       ...(encryptedSecret ? { secret: encryptedSecret } : {}),
     });
     this.wake();
@@ -321,15 +315,10 @@ export class EnvironmentWebhookService {
     webhook: StoredEnvironmentWebhook,
     receivedEvent: NormalizedWebhookEvent,
   ) {
-    const event = boundedWebhookEvent(
-      configuredEventCoordinates(webhook, receivedEvent),
-    );
-    const match = webhookEventMatches(webhook.triggerPolicy, event);
+    const event = boundedWebhookEvent(receivedEvent);
     const result = await this.webhooks.ingestDelivery({
       webhook,
       event,
-      matched: match.matched,
-      filterReason: match.reason,
       now: this.now(),
     });
     if (result.kind !== "stale") this.wake();
@@ -370,23 +359,8 @@ export class EnvironmentWebhookService {
       }
     }
     const source = normalizedSource(input.source);
-    const statePath =
-      input.triggerPolicy.mode === "stateChange"
-        ? input.triggerPolicy.statePath?.trim() ||
-          (source.kind === "github" ? "/stateValue" : "/payload/status")
-        : input.triggerPolicy.statePath?.trim();
-    const eventTypes = Array.from(
-      new Set(input.triggerPolicy.eventTypes.map((value) => value.trim())),
-    ).filter(Boolean);
     if (source.kind === "github") {
-      if (!eventTypes.length) {
-        throw new HttpError(
-          400,
-          "environment_webhook_github_events_required",
-          "Select at least one GitHub event.",
-        );
-      }
-      const unsupported = eventTypes.filter(
+      const unsupported = source.eventTypes.filter(
         (eventType) => !GITHUB_WEBHOOK_EVENT_TYPE_VALUES.has(eventType),
       );
       if (unsupported.length) {
@@ -396,26 +370,19 @@ export class EnvironmentWebhookService {
           `Unsupported GitHub event types: ${unsupported.join(", ")}.`,
         );
       }
+    } else if (input.target.kind === "sourceThread") {
+      throw new HttpError(
+        400,
+        "environment_webhook_target_invalid",
+        "Source-thread targets are only available for GitHub Webhooks.",
+      );
     }
     return {
       source,
       name: input.name.trim(),
       prompt: input.prompt.trim(),
-      triggerPolicy: {
-        mode: input.triggerPolicy.mode,
-        eventTypes,
-        conditions: input.triggerPolicy.conditions.map(normalizedCondition),
-        ...(statePath ? { statePath } : {}),
-        ...(input.triggerPolicy.groupKeyPath?.trim()
-          ? { groupKeyPath: input.triggerPolicy.groupKeyPath.trim() }
-          : {}),
-      },
-      cooldownPolicy: input.cooldownPolicy,
+      batchWindowSeconds: input.batchWindowSeconds,
       target: input.target,
-      overlapPolicy: input.overlapPolicy,
-      maxConcurrentRuns:
-        input.target.kind === "session" ? 1 : input.maxConcurrentRuns,
-      maxPendingRuns: input.maxPendingRuns,
       enabled: input.enabled,
       ...(input.title?.trim() ? { title: input.title.trim() } : {}),
       ...(input.modelId?.trim() ? { modelId: input.modelId.trim() } : {}),
@@ -458,9 +425,9 @@ export class EnvironmentWebhookService {
 
   private async reconcile() {
     const limit = this.options.batchSize ?? 50;
-    const bucketKeys = await this.webhooks.dueBucketKeys(this.now(), limit);
+    const bucketKeys = await this.webhooks.dueBatchKeys(this.now(), limit);
     for (const key of bucketKeys) {
-      await this.webhooks.releaseDueBucket({ ...key, now: this.now() });
+      await this.webhooks.releaseDueBatch({ ...key, now: this.now() });
     }
     const runIds = await this.webhooks.dueRunIds(this.now(), limit);
     for (const runId of runIds) await this.reconcileRun(runId);
@@ -485,7 +452,7 @@ export class EnvironmentWebhookService {
         environmentId: claimed.webhook.environmentId,
         createdByUserId: claimed.webhook.createdByUserId,
         name: claimed.webhook.name,
-        overlapPolicy: claimed.run.overlapPolicy,
+        overlapPolicy: "queue",
       },
       run: claimed.run,
       persistence: {
@@ -524,94 +491,6 @@ export class EnvironmentWebhookService {
   }
 }
 
-export function webhookEventMatches(
-  policy: EnvironmentWebhookTriggerPolicy,
-  event: NormalizedWebhookEvent,
-): { matched: boolean; reason?: string } {
-  if (policy.eventTypes.length && !policy.eventTypes.includes(event.eventType)) {
-    return {
-      matched: false,
-      reason: `Event type ${event.eventType} is not enabled.`,
-    };
-  }
-  for (const condition of policy.conditions) {
-    if (!conditionMatches(event, condition)) {
-      return {
-        matched: false,
-        reason: `Condition ${condition.path} ${condition.operator} did not match.`,
-      };
-    }
-  }
-  return { matched: true };
-}
-
-function configuredEventCoordinates(
-  webhook: StoredEnvironmentWebhook,
-  event: NormalizedWebhookEvent,
-) {
-  const envelope = event as unknown as Record<string, unknown>;
-  const configuredGroup = webhook.triggerPolicy.groupKeyPath
-    ? scalarValue(jsonPointer(envelope, webhook.triggerPolicy.groupKeyPath))
-    : undefined;
-  const configuredState = webhook.triggerPolicy.statePath
-    ? scalarValue(jsonPointer(envelope, webhook.triggerPolicy.statePath))
-    : event.stateValue;
-  return {
-    ...event,
-    groupKey: boundedText(configuredGroup ?? event.groupKey, 500),
-    ...(configuredState !== undefined ? { stateValue: configuredState } : {}),
-  };
-}
-
-function conditionMatches(
-  event: NormalizedWebhookEvent,
-  condition: EnvironmentWebhookCondition,
-) {
-  const actual = jsonPointer(
-    event as unknown as Record<string, unknown>,
-    condition.path,
-  );
-  if (condition.operator === "exists") return actual !== undefined;
-  const expected = condition.value ?? "";
-  if (condition.operator === "equals") return scalarValue(actual) === expected;
-  if (condition.operator === "notEquals") {
-    return scalarValue(actual) !== expected;
-  }
-  if (typeof actual === "string") return actual.includes(expected);
-  if (Array.isArray(actual)) {
-    return actual.some((candidate) => scalarValue(candidate) === expected);
-  }
-  return false;
-}
-
-function jsonPointer(value: unknown, pointer: string): unknown {
-  if (pointer === "") return value;
-  if (!pointer.startsWith("/")) return undefined;
-  let current = value;
-  for (const encoded of pointer.slice(1).split("/")) {
-    const key = encoded.replaceAll("~1", "/").replaceAll("~0", "~");
-    if (Array.isArray(current)) {
-      const index = Number(key);
-      if (!Number.isInteger(index)) return undefined;
-      current = current[index];
-    } else if (isRecord(current)) {
-      current = current[key];
-    } else {
-      return undefined;
-    }
-  }
-  return current;
-}
-
-function scalarValue(value: unknown): string | undefined {
-  if (typeof value === "string") return value;
-  if (typeof value === "number" || typeof value === "boolean") {
-    return String(value);
-  }
-  if (value === null) return "null";
-  return undefined;
-}
-
 function boundedWebhookEvent(
   event: NormalizedWebhookEvent,
 ): NormalizedWebhookEvent {
@@ -632,38 +511,7 @@ function boundedWebhookEvent(
     groupKey: boundedText(event.groupKey, 500),
     summary: boundedText(event.summary, 1_000),
     payload,
-    ...(event.stateValue !== undefined
-      ? { stateValue: event.stateValue.slice(0, 1_000) }
-      : {}),
   };
-}
-
-function normalizedCondition(
-  condition: EnvironmentWebhookCondition,
-): EnvironmentWebhookCondition {
-  return {
-    path: condition.path.trim(),
-    operator: condition.operator,
-    ...(condition.value !== undefined ? { value: condition.value } : {}),
-  };
-}
-
-function triggerPolicyFingerprint(policy: EnvironmentWebhookTriggerPolicy) {
-  return JSON.stringify({
-    mode: policy.mode,
-    eventTypes: [...policy.eventTypes].sort(),
-    conditions: policy.conditions
-      .map((condition) =>
-        JSON.stringify({
-          path: condition.path,
-          operator: condition.operator,
-          value: condition.value ?? null,
-        }),
-      )
-      .sort(),
-    statePath: policy.statePath ?? null,
-    groupKeyPath: policy.groupKeyPath ?? null,
-  });
 }
 
 function configuredSecret(supplied: string | undefined) {
@@ -681,6 +529,9 @@ function normalizedSource(
     connectionId: source.connectionId.trim(),
     repositoryIds: Array.from(
       new Set(source.repositoryIds.map((repositoryId) => repositoryId.trim())),
+    ).filter(Boolean),
+    eventTypes: Array.from(
+      new Set(source.eventTypes.map((eventType) => eventType.trim())),
     ).filter(Boolean),
   };
 }
@@ -702,16 +553,8 @@ function boundedText(value: string, maximum: number) {
   return normalized.length <= maximum ? normalized : normalized.slice(0, maximum);
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
-}
-
-export function defaultWebhookCooldownPolicy(): EnvironmentWebhookCooldownPolicy {
-  return { mode: "none" };
 }
 
 export function defaultWebhookTarget(): EnvironmentWebhookTarget {

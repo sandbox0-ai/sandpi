@@ -325,29 +325,7 @@ const environmentWebhookSourceSchema = z.discriminatedUnion("kind", [
     connectionId: z.string(),
     accountLogin: z.string(),
     repositories: z.array(githubWebhookRepositorySchema),
-  }),
-]);
-
-const environmentWebhookConditionSchema = z.object({
-  path: z.string(),
-  operator: z.enum(["equals", "notEquals", "contains", "exists"]),
-  value: z.string().optional(),
-});
-
-const environmentWebhookTriggerPolicySchema = z.object({
-  mode: z.enum(["every", "stateChange"]),
-  eventTypes: z.array(z.string()),
-  conditions: z.array(environmentWebhookConditionSchema),
-  statePath: z.string().optional(),
-  groupKeyPath: z.string().optional(),
-});
-
-const environmentWebhookCooldownPolicySchema = z.discriminatedUnion("mode", [
-  z.object({ mode: z.literal("none") }),
-  z.object({
-    mode: z.enum(["throttle", "debounce", "batch"]),
-    durationSeconds: z.number().int().positive(),
-    behavior: z.enum(["suppress", "latest", "merge"]),
+    eventTypes: z.array(z.string()),
   }),
 ]);
 
@@ -363,8 +341,6 @@ const environmentWebhookRunStatusSchema = z.enum([
 const environmentWebhookDeliveryStatusSchema = z.enum([
   "queued",
   "batched",
-  "filtered",
-  "suppressed",
   "duplicate",
 ]);
 
@@ -377,12 +353,8 @@ export const environmentWebhookSchema = component(
     endpointUrl: z.url().optional(),
     name: z.string(),
     prompt: z.string(),
-    triggerPolicy: environmentWebhookTriggerPolicySchema,
-    cooldownPolicy: environmentWebhookCooldownPolicySchema,
+    batchWindowSeconds: z.number().int().min(0).max(86_400),
     target: environmentWebhookTargetSchema,
-    overlapPolicy: z.enum(["queue", "skip"]),
-    maxConcurrentRuns: z.number().int().positive(),
-    maxPendingRuns: z.number().int().positive(),
     enabled: z.boolean(),
     secretConfigured: z.boolean(),
     title: z.string().optional(),
@@ -433,7 +405,6 @@ export const environmentWebhookDeliverySchema = component(
     eventType: z.string(),
     status: environmentWebhookDeliveryStatusSchema.exclude(["duplicate"]),
     runId: z.string().optional(),
-    reason: z.string().optional(),
     receivedAt: unixTimestampSchema,
   }),
 );

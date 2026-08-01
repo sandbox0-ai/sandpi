@@ -179,21 +179,8 @@ function webhookDefinition(overrides: Record<string, unknown> = {}) {
   return {
     name: "Deployment events",
     prompt: "Review this event and run the relevant checks.",
-    triggerPolicy: {
-      mode: "every",
-      eventTypes: ["deploy.finished", "build.failed"],
-      conditions: [],
-      groupKeyPath: "/payload/deployment/environment",
-    },
-    cooldownPolicy: {
-      mode: "batch",
-      durationSeconds: 30,
-      behavior: "merge",
-    },
+    batchWindowSeconds: 30,
     target: { kind: "newSession" },
-    overlapPolicy: "queue",
-    maxConcurrentRuns: 2,
-    maxPendingRuns: 50,
     enabled: true,
     ...overrides,
   };
