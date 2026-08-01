@@ -32,7 +32,7 @@ test("loads the release-owned Sandpi Environment skill and interface", () => {
   );
 });
 
-test("keeps the public guide aligned with shared Browser and lifecycle invariants", () => {
+test("keeps the public guide aligned with shared Browser, lifecycle, and canonical references", () => {
   const guide = readFileSync(
     new URL("../../../public/llms.txt", import.meta.url),
     "utf8",
@@ -43,10 +43,9 @@ test("keeps the public guide aligned with shared Browser and lifecycle invariant
   assert.match(guide, /soft TTL and hard TTL to zero/);
   assert.match(guide, /does not idle-pause an Environment while/);
   assert.match(guide, /Process memory, sockets, live Browser pages/);
-  assert.match(guide, /\/workspace\/AGENTS\.md/);
-  assert.match(guide, /no Codex login/i);
-  assert.match(guide, /releases\/latest\/download\/install\.sh/);
+  assert.match(guide, /\/cli\/README\.md/);
   assert.match(guide, /docs\/local-environment-migration\.md/);
+  assert.match(guide, /docs\/architecture\/cli\.md/);
   assert.doesNotMatch(guide, /30-day|30 day|another full month/i);
 });
 
