@@ -32,6 +32,10 @@ import {
   saveClientPreferences,
 } from "@/lib/client-preferences";
 import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
+import {
+  PREFERENCES_RETURN_TO_PARAM,
+  safePreferencesReturnTo,
+} from "@/lib/preferences-navigation";
 import type {
   SandpiCloudSnapshot,
   SandpiPreferences,
@@ -68,6 +72,7 @@ export function PreferencesPage({
   const [draft, setDraft] = useState(initialPreferences);
   const [hydrated, setHydrated] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [returnTo, setReturnTo] = useState("/");
   const [saveState, setSaveState] = useState<
     { tone: "success" | "error"; message: string } | undefined
   >();
@@ -82,6 +87,16 @@ export function PreferencesPage({
     "sidebar",
     activeTab === "billing" ? "canvas" : "panel",
   );
+
+  useEffect(() => {
+    setReturnTo(
+      safePreferencesReturnTo(
+        new URLSearchParams(window.location.search).get(
+          PREFERENCES_RETURN_TO_PARAM,
+        ),
+      ),
+    );
+  }, []);
 
   const hasChanges = useMemo(
     () => JSON.stringify(draft) !== JSON.stringify(baseline),
@@ -274,7 +289,7 @@ export function PreferencesPage({
         label={text("Preferences navigation", "偏好设置导航")}
         headerAction={
           <SidebarBackAction
-            href="/"
+            href={returnTo}
             label={text("Back to workspace", "返回工作区")}
           />
         }

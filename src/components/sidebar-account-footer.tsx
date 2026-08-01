@@ -10,10 +10,10 @@ import {
   MonitorSmartphone,
   Settings,
 } from "lucide-react";
-import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 
 import { HelpFeedbackDialog } from "@/components/help-feedback-dialog";
+import { PreferencesLink } from "@/components/preferences-link";
 import { SidebarAccountSummary } from "@/components/sidebar-primitives";
 import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
 import { loggedOutHomeUrl } from "@/lib/auth-navigation";
@@ -281,14 +281,10 @@ export function SidebarAccountFooter({
           </div>
           <span className="sidebar-account-menu-divider" role="separator" />
           {showPreferences ? (
-            <Link
-              href="/preferences"
-              role="menuitem"
-              onClick={() => setAccountMenuOpen(false)}
-            >
+            <PreferencesLink role="menuitem">
               <Settings size={15} aria-hidden="true" />
               {ui.preferences}
-            </Link>
+            </PreferencesLink>
           ) : null}
           <button
             type="button"

@@ -42,6 +42,7 @@ import {
   useState,
 } from "react";
 
+import { PreferencesLink } from "@/components/preferences-link";
 import {
   ApiError,
   apiFetch,
@@ -3395,7 +3396,9 @@ export function WorkspaceIde({
             </span>
           </div>
           <span className={styles.runtimePlanBlockActions}>
-            <a href="/preferences/?billing=plan">{ui.managePlan}</a>
+            <PreferencesLink parameters={{ billing: "plan" }}>
+              {ui.managePlan}
+            </PreferencesLink>
             <a href={environmentDataHref(environment.id)}>
               {ui.dataAndBackups}
             </a>

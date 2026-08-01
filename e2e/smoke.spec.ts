@@ -3529,6 +3529,43 @@ test("serves the Preferences layout", async ({ page }) => {
   }
 });
 
+test("returns from Preferences to the originating session", async ({ page }) => {
+  const bootstrap = getMockBootstrap();
+  useEnglishUi(bootstrap);
+  const environment = bootstrap.environments[0]!;
+  const session = bootstrap.sessions.find(
+    (candidate) => candidate.environmentId === environment.id,
+  )!;
+  bootstrap.selectedEnvironmentId = environment.id;
+  bootstrap.selectedSessionId = session.id;
+  await page.route(
+    (url) => url.pathname === "/api/v1/bootstrap",
+    async (route) => {
+      await route.fulfill({ json: { data: bootstrap } });
+    },
+  );
+
+  const origin =
+    `/?environment=${encodeURIComponent(environment.id)}` +
+    `&session=${encodeURIComponent(session.id)}`;
+  await page.goto(origin);
+  await page.getByRole("button", { name: "Open account menu" }).click();
+  const preferencesLink = page.getByRole("menuitem", { name: "Preferences" });
+  await expect(preferencesLink).toHaveAttribute(
+    "href",
+    `/preferences?return_to=${encodeURIComponent(origin)}`,
+  );
+  await preferencesLink.click();
+
+  await expect(page).toHaveURL(/\/preferences\?/, { timeout: 30_000 });
+  expect(new URL(page.url()).searchParams.get("return_to")).toBe(origin);
+  await page.getByRole("link", { name: "Back to workspace" }).click();
+  await expect.poll(() => {
+    const current = new URL(page.url());
+    return `${current.pathname}${current.search}`;
+  }).toBe(origin);
+});
+
 test("shows account usage and submits only a server-owned plan id", async ({
   page,
 }) => {
