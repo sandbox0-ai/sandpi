@@ -59,10 +59,15 @@ jobs:
           set -euo pipefail
           if [[ "${GITHUB_REF_TYPE}" == "tag" && "${GITHUB_REF_NAME}" == cli/v* ]]; then
             version="${GITHUB_REF_NAME#cli/}"
+            asset_version="${version#v}"
+            if [[ ! "${asset_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
+              echo "CLI release tag must use cli/vX.Y.Z SemVer syntax."
+              exit 1
+            fi
           else
             version="dev-${GITHUB_SHA:0:12}"
+            asset_version="${version}"
           fi
-          asset_version="${version#v}"
           asset="sandpi_${asset_version}_${TARGET_GOOS}_${TARGET_GOARCH}"
           package_dir="${RUNNER_TEMP}/${asset}"
           mkdir -p "${package_dir}" dist
@@ -75,7 +80,8 @@ jobs:
           if [[ "${TARGET_ARCHIVE}" == "zip" ]]; then
             (cd "${package_dir}" && zip -q -r "${GITHUB_WORKSPACE}/dist/${asset}.zip" .)
           else
-            tar -C "${package_dir}" -czf "dist/${asset}.tar.gz" .
+            tar -C "${package_dir}" -czf "dist/${asset}.tar.gz" \
+              LICENSE README.md sandpi
           fi
       - uses: actions/upload-artifact@v7
         with:
@@ -90,6 +96,7 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
           pattern: sandpi-*
@@ -100,8 +107,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          (cd dist && sha256sum sandpi_*.tar.gz sandpi_*.zip > checksums.txt)
+          cp cli/install.sh cli/install.ps1 dist/
+          printf '%s\n' "${GITHUB_REF_NAME#cli/v}" > dist/version.txt
+          (cd dist && sha256sum sandpi_*.tar.gz sandpi_*.zip install.sh install.ps1 version.txt > checksums.txt)
+          release_channel=(--latest)
+          if [[ "${GITHUB_REF_NAME#cli/v}" == *-* ]]; then
+            release_channel=(--prerelease)
+          fi
           gh release create "${GITHUB_REF_NAME}" dist/* \
             --verify-tag \
             --generate-notes \
+            "${release_channel[@]}" \
             --title "Sandpi CLI ${GITHUB_REF_NAME#cli/}"

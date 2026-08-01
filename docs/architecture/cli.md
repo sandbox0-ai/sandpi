@@ -101,6 +101,15 @@ publishes a supported import contract.
 
 Pull requests run Go tests and a CLI build alongside the existing server,
 OpenAPI and Web validation. A `cli/v*` tag builds amd64 and arm64 archives for
-Linux, macOS and Windows and publishes checksums in a GitHub release. Tagging and
-release creation are separate maintainer actions; adding the workflow does not
-create a release by itself.
+Linux, macOS and Windows and publishes checksums in a GitHub release. The
+release also publishes stable `install.sh` and `install.ps1` assets. Each
+installer resolves a selected archive, verifies its SHA-256 digest from the
+release checksum manifest, and stages the verified binary before replacing the
+user-level installation. Installer integration tests use a local release
+server; PowerShell execution runs when `pwsh` is available.
+
+Tagging and release creation are separate maintainer actions; adding the
+workflow does not create a release by itself. The latest stable CLI release is
+marked as the repository's latest release so the stable installer URLs remain
+usable; SemVer prerelease tags remain prereleases and do not replace that
+stable channel.

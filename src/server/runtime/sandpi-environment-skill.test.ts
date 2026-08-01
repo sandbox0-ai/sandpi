@@ -45,6 +45,8 @@ test("keeps the public guide aligned with shared Browser and lifecycle invariant
   assert.match(guide, /Process memory, sockets, live Browser pages/);
   assert.match(guide, /\/workspace\/AGENTS\.md/);
   assert.match(guide, /no Codex login/i);
+  assert.match(guide, /releases\/latest\/download\/install\.sh/);
+  assert.match(guide, /docs\/local-environment-migration\.md/);
   assert.doesNotMatch(guide, /30-day|30 day|another full month/i);
 });
 

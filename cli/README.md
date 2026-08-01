@@ -8,9 +8,31 @@ A local agent can inspect its own setup, inspect the target Environment, decide
 what to merge, and call only the commands it needs. This works for both a new
 Environment and an Environment that already contains useful configuration.
 
-## Install from source
+For complete source-to-target workflows, see the
+[local coding-agent environment migration guide](../docs/local-environment-migration.md).
 
-Go 1.22 or newer is required.
+## Install
+
+Linux and macOS users can install the latest checksummed release without
+administrator privileges:
+
+```bash
+curl -fsSL https://github.com/sandbox0-ai/sandpi/releases/latest/download/install.sh | sh
+```
+
+On Windows PowerShell:
+
+```powershell
+Invoke-WebRequest https://github.com/sandbox0-ai/sandpi/releases/latest/download/install.ps1 -OutFile install.ps1
+.\install.ps1
+Remove-Item .\install.ps1
+```
+
+Both installers accept a pinned version and a custom destination. Run the
+downloaded script with `--help` or `-Help` for details. Release archives and
+`checksums.txt` remain available from the same GitHub release.
+
+Go 1.22 or newer can install the nested module directly:
 
 ```bash
 go install github.com/sandbox0-ai/sandpi/cli/cmd/sandpi@latest
@@ -230,26 +252,13 @@ sandpi api PUT /api/v1/environments/ENVIRONMENT_ID/provisioning \
 
 Only `/api/v1/` paths and GET, POST, PUT or DELETE are accepted.
 
-## Two migration workflows
+## Migration workflows
 
-For an empty target, create and wait for the Environment before applying chosen
-resources:
-
-```bash
-sandpi environment create --name "Imported project" > environment.json
-ENVIRONMENT_ID="$(jq -r .id environment.json)"
-sandpi environment wait "$ENVIRONMENT_ID"
-
-sandpi agents set --environment "$ENVIRONMENT_ID" --file ./AGENTS.md
-sandpi skill put --environment "$ENVIRONMENT_ID" release-helper ./release-helper
-sandpi mcp put --environment "$ENVIRONMENT_ID" docs --file ./docs-mcp.json
-sandpi memory set --environment "$ENVIRONMENT_ID" --file ./memory-settings.json
-```
-
-For an Environment already in use, start with `get` or `list`, preserve remote
-resources, and apply only selected names. `put` means one explicit resource
-replacement; delete operations require `--yes`. The CLI intentionally has no
-`migrate-all`, archive import, or hidden overwrite behavior.
+The [migration guide](../docs/local-environment-migration.md) covers source
+inventory, empty and already-used targets, merge behavior, credentials, memory
+boundaries, and a workflow that a local coding agent can execute. The CLI
+intentionally has no `migrate-all`, archive import, or hidden overwrite
+behavior.
 
 ## Development
 
