@@ -8,9 +8,7 @@ import {
 
 test("new Environment Sandboxes default to one GiB of memory", () => {
   assert.equal(ENVIRONMENT_SANDBOX_MEMORY_DEFAULT_MIB, 1024);
-  assert.ok(
-    ENVIRONMENT_SANDBOX_MEMORY_OPTIONS_MIB.includes(
-      ENVIRONMENT_SANDBOX_MEMORY_DEFAULT_MIB,
-    ),
-  );
+  assert.deepEqual(ENVIRONMENT_SANDBOX_MEMORY_OPTIONS_MIB, [
+    1024, 2048, 4096, 8192,
+  ]);
 });
