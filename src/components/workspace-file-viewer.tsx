@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import Image from "next/image";
 import {
+  memo,
   useCallback,
   useDeferredValue,
   useEffect,
@@ -746,7 +747,7 @@ function WorkspaceBinaryPreview({
   return <WorkspaceBrowserMediaPreview file={file} language={language} />;
 }
 
-export function WorkspaceFileViewer({
+export const WorkspaceFileViewer = memo(function WorkspaceFileViewer({
   environmentId,
   file,
   text,
@@ -796,4 +797,4 @@ export function WorkspaceFileViewer({
     return <WorkspaceCsvPreview file={file} text={content} language={language} />;
   }
   return <WorkspaceSourcePreview file={file} text={content} language={language} />;
-}
+});
