@@ -1423,6 +1423,50 @@ test("keeps anonymous visitors on the app home until they send a message", async
   ).toBe("Inspect this repository before changing anything");
 });
 
+test("offers anonymous visitors a dismissible local migration prompt", async ({
+  page,
+}) => {
+  await serveAnonymousBootstrap(page);
+  await page.goto("/");
+
+  const tip = page.getByRole("region", {
+    name: "Migrate Your Local Environment",
+  });
+  await expect(tip).toBeVisible();
+  await expect(tip).toContainText("sandpi.ai/llms.txt");
+
+  await tip.getByRole("button", { name: "Copy Prompt" }).click();
+  await expect(
+    tip.getByRole("button", { name: "Prompt Copied" }),
+  ).toBeVisible();
+
+  await tip
+    .getByRole("button", { name: "Dismiss Migration Tip" })
+    .click();
+  await expect(tip).toBeHidden();
+
+  await page.reload();
+  await expect(tip).toBeHidden();
+});
+
+test("shows the local migration prompt in an authenticated Sidebar", async ({
+  page,
+}) => {
+  const bootstrap = getMockBootstrap();
+  useEnglishUi(bootstrap);
+  await page.route(
+    (url) => url.pathname === "/api/v1/bootstrap",
+    async (route) => {
+      await route.fulfill({ json: { data: bootstrap } });
+    },
+  );
+
+  await page.goto("/");
+  await expect(
+    page.getByRole("region", { name: "Migrate Your Local Environment" }),
+  ).toBeVisible();
+});
+
 test("synchronizes the anonymous mobile sidebar with native chrome", async ({
   page,
 }) => {

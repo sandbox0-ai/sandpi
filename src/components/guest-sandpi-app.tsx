@@ -17,6 +17,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { AppFrame, AppSidebar } from "@/components/app-frame";
 import { HelpFeedbackDialog } from "@/components/help-feedback-dialog";
+import { SidebarTips } from "@/components/sidebar-tips";
 import {
   navigateToAuthLogin,
   newSessionAuthLoginUrl,
@@ -161,6 +162,7 @@ export function GuestSandpiApp({ loginUrl }: { loginUrl: string }) {
         </div>
         <p className={styles.sidebarEmpty}>{ui.guest.emptySidebar}</p>
       </div>
+      <SidebarTips language={preferences.general.language} />
     </AppSidebar>
   );
 

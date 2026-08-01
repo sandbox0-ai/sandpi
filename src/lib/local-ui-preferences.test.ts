@@ -40,8 +40,22 @@ test("normalizes browser-only UI preferences field by field", () => {
       filters: {
         codexSessionActivity: "commands",
       },
+      dismissedSidebarTips: [],
       codingAgentComposers: [],
     },
+  );
+});
+
+test("keeps dismissed Sidebar Tip versions bounded and unique", () => {
+  const dismissedSidebarTips: unknown[] = Array.from(
+    { length: 55 },
+    (_, index) => `tip-${index}:v1`,
+  );
+  dismissedSidebarTips.splice(1, 0, "tip-0:v1", "", 42);
+
+  assert.deepEqual(
+    normalizeLocalUiPreferences({ dismissedSidebarTips }).dismissedSidebarTips,
+    Array.from({ length: 50 }, (_, index) => `tip-${index}:v1`),
   );
 });
 
