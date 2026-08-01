@@ -8,6 +8,11 @@ const optionalUrl = z.preprocess(
   z.url().optional(),
 );
 
+const optionalString = z.preprocess(
+  (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+  z.string().trim().min(1).optional(),
+);
+
 const optionalDeploymentSecret = z
   .string()
   .min(32, "Deployment encryption keys must contain at least 32 characters.")
@@ -42,6 +47,10 @@ const environmentSchema = z.object({
   SANDPI_OIDC_TOKEN_ENDPOINT_AUTH_METHOD:
     oidcTokenEndpointAuthMethod.optional(),
   SANDPI_OIDC_SCOPES: z.string().default("openid profile email"),
+  SANDPI_GITHUB_APP_SLUG: optionalString,
+  SANDPI_GITHUB_CLIENT_ID: optionalString,
+  SANDPI_GITHUB_CLIENT_SECRET: optionalString,
+  SANDPI_GITHUB_WEBHOOK_SECRET: optionalString,
   SANDBOX0_API_HOST: optionalUrl,
   SANDBOX0_API_KEY: z.string().min(1).optional(),
   SANDBOX0_BASE_URL: optionalUrl,
@@ -86,6 +95,12 @@ export interface SandpiConfig {
         scopes: string;
       };
   secretKey?: string;
+  githubWebhooks?: {
+    appSlug: string;
+    clientId: string;
+    clientSecret: string;
+    webhookSecret: string;
+  };
   sandbox0?: { apiHost: string; apiKey: string };
   billing:
     | { mode: "disabled" }
@@ -190,6 +205,34 @@ export function loadConfig(
     };
   }
 
+  const githubValues = [
+    ["SANDPI_GITHUB_APP_SLUG", value.SANDPI_GITHUB_APP_SLUG],
+    ["SANDPI_GITHUB_CLIENT_ID", value.SANDPI_GITHUB_CLIENT_ID],
+    ["SANDPI_GITHUB_CLIENT_SECRET", value.SANDPI_GITHUB_CLIENT_SECRET],
+    ["SANDPI_GITHUB_WEBHOOK_SECRET", value.SANDPI_GITHUB_WEBHOOK_SECRET],
+  ] as const;
+  const configuredGitHubValues = githubValues.filter(([, configured]) => configured);
+  if (
+    configuredGitHubValues.length > 0 &&
+    configuredGitHubValues.length !== githubValues.length
+  ) {
+    const missing = githubValues
+      .filter(([, configured]) => !configured)
+      .map(([name]) => name);
+    throw new Error(
+      `${missing.join(", ")} ${missing.length === 1 ? "is" : "are"} required when GitHub Webhook integration is configured`,
+    );
+  }
+  const githubWebhooks =
+    configuredGitHubValues.length === githubValues.length
+      ? {
+          appSlug: value.SANDPI_GITHUB_APP_SLUG!,
+          clientId: value.SANDPI_GITHUB_CLIENT_ID!,
+          clientSecret: value.SANDPI_GITHUB_CLIENT_SECRET!,
+          webhookSecret: value.SANDPI_GITHUB_WEBHOOK_SECRET!,
+        }
+      : undefined;
+
   return {
     nodeEnv: value.NODE_ENV,
     databaseUrl: value.DATABASE_URL,
@@ -202,6 +245,7 @@ export function loadConfig(
     logLevel: value.SANDPI_LOG_LEVEL,
     auth,
     secretKey: value.SANDPI_SECRET_KEY,
+    githubWebhooks,
     sandbox0: apiHost && apiKey ? { apiHost, apiKey } : undefined,
     billing,
   };

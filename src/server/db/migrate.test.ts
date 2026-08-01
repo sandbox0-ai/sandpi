@@ -89,6 +89,7 @@ test("migration history contains every durable Sandpi boundary", async () => {
       "0059_add_ultra_subscription_plan",
       "0060_environment_webhooks",
       "0061_retire_webhook_provider_adapters",
+      "0062_github_webhook_sources",
     ],
   );
 
@@ -115,6 +116,19 @@ test("migration history contains every durable Sandpi boundary", async () => {
   }
   assert.match(sql, /harness_credentials[\s\S]+ciphertext BYTEA NOT NULL/);
   assert.doesNotMatch(sql, /credential_plaintext/i);
+
+  const githubWebhookSql = migrations[61]?.sql ?? "";
+  assert.match(githubWebhookSql, /CREATE TABLE webhook_github_connections\b/);
+  assert.match(githubWebhookSql, /CREATE TABLE webhook_github_receipts\b/);
+  assert.match(
+    githubWebhookSql,
+    /CREATE TABLE environment_webhook_session_bindings\b/,
+  );
+  assert.match(githubWebhookSql, /'source_thread'/);
+  assert.doesNotMatch(
+    githubWebhookSql,
+    /access_token|refresh_token|installation_token/i,
+  );
 
   const deviceAuthSql = migrations[3]?.sql ?? "";
   assert.match(deviceAuthSql, /CREATE TABLE codex_device_auth_flows\b/);

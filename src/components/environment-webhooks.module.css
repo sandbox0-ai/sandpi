@@ -98,6 +98,171 @@
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
 }
 
+.sourceChoices {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.sourceChoices > button {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel-strong);
+  color: var(--ink-faint);
+  text-align: left;
+  cursor: pointer;
+}
+
+.sourceChoices > button:disabled {
+  cursor: default;
+}
+
+.sourceChoices > button > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.sourceChoices > button > span {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.sourceChoices strong {
+  color: var(--ink-soft);
+  font-size: 10.5px;
+}
+
+.sourceChoices small,
+.sourceNote {
+  color: var(--ink-faint);
+  font-size: 9px;
+  line-height: 1.4;
+}
+
+.sourceChoices > .sourceActive {
+  border-color: color-mix(in srgb, var(--green) 65%, var(--line));
+  background: color-mix(in srgb, var(--green-soft) 36%, var(--panel-strong));
+  color: var(--green);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--green) 12%, transparent);
+}
+
+.githubSource {
+  display: grid;
+  gap: 10px;
+}
+
+.githubSource > p {
+  margin: 0;
+  color: var(--ink-faint);
+  font-size: 9.5px;
+  line-height: 1.45;
+}
+
+.githubActions,
+.repositoryHeading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.githubActions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.repositoryPicker {
+  display: grid;
+  gap: 7px;
+}
+
+.repositoryHeading > label {
+  display: grid;
+  min-width: min(320px, 100%);
+  gap: 5px;
+}
+
+.repositoryList {
+  display: grid;
+  max-height: 210px;
+  overflow-y: auto;
+  border: 1px solid var(--line-soft);
+  border-radius: 7px;
+  background: var(--sidebar);
+}
+
+.repositoryList > label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 6px 9px;
+  border-bottom: 1px solid var(--line-soft);
+  cursor: pointer;
+}
+
+.repositoryList > label:last-of-type {
+  border-bottom: 0;
+}
+
+.repositoryList span {
+  overflow: hidden;
+  color: var(--ink-soft);
+  font-size: 9.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.repositoryList small,
+.repositoryPicker > small {
+  color: var(--ink-faint);
+  font-size: 8.5px;
+}
+
+.repositoryList > p {
+  margin: 0;
+  padding: 10px;
+  color: var(--ink-faint);
+  font-size: 9.5px;
+}
+
+.eventPicker {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  overflow: hidden;
+  border: 1px solid var(--line-soft);
+  border-radius: 7px;
+  background: var(--sidebar);
+}
+
+.eventPicker label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 31px;
+  padding: 6px 9px;
+  border-bottom: 1px solid var(--line-soft);
+  color: var(--ink-soft);
+  font-size: 9.5px;
+  cursor: pointer;
+}
+
+.eventPicker label:nth-child(odd) {
+  border-right: 1px solid var(--line-soft);
+}
+
+.eventPicker label:nth-last-child(-n + 2) {
+  border-bottom: 0;
+}
+
 .activity {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -157,8 +322,18 @@
 
 @media (max-width: 720px) {
   .copyField,
-  .activity {
+  .activity,
+  .sourceChoices,
+  .eventPicker {
     grid-template-columns: 1fr;
+  }
+
+  .eventPicker label:nth-child(odd) {
+    border-right: 0;
+  }
+
+  .eventPicker label:nth-last-child(2) {
+    border-bottom: 1px solid var(--line-soft);
   }
 
   .copyField button {

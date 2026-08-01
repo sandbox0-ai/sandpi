@@ -20,6 +20,8 @@ import type {
   EnvironmentWebhookRun,
   EnvironmentWebhookSetup,
   EnvironmentWorkspaceBackup,
+  GitHubWebhookConnectionInventory,
+  GitHubWebhookInstallAttempt,
   SandpiBootstrap,
   SandpiCloudSnapshot,
   SandpiDeploymentSummary,
@@ -268,7 +270,62 @@ export const environmentScheduleRunSchema = component(
 
 const environmentWebhookTargetSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("newSession") }),
+  z.object({ kind: z.literal("sourceThread") }),
   z.object({ kind: z.literal("session"), sessionId: z.string() }),
+]);
+
+export const githubWebhookRepositorySchema = component(
+  "GitHubWebhookRepository",
+  z.object({
+    id: z.string(),
+    fullName: z.string(),
+    private: z.boolean(),
+    defaultBranch: z.string().optional(),
+  }),
+);
+
+export const githubWebhookConnectionSchema = component(
+  "GitHubWebhookConnection",
+  z.object({
+    id: z.string(),
+    installationId: z.string(),
+    accountId: z.string(),
+    accountLogin: z.string(),
+    accountType: z.string(),
+    repositorySelection: z.enum(["all", "selected"]),
+    status: z.enum(["active", "suspended", "revoked", "disconnected"]),
+    repositories: z.array(githubWebhookRepositorySchema),
+    lastError: z.string().optional(),
+    createdAt: unixTimestampSchema,
+    updatedAt: unixTimestampSchema,
+  }),
+);
+
+export const githubWebhookConnectionInventorySchema = component(
+  "GitHubWebhookConnectionInventory",
+  z.object({
+    configured: z.boolean(),
+    appSlug: z.string().optional(),
+    connections: z.array(githubWebhookConnectionSchema),
+  }),
+);
+
+export const githubWebhookInstallAttemptSchema = component(
+  "GitHubWebhookInstallAttempt",
+  z.object({
+    authorizationUrl: z.url(),
+    expiresAt: unixTimestampSchema,
+  }),
+);
+
+const environmentWebhookSourceSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("custom") }),
+  z.object({
+    kind: z.literal("github"),
+    connectionId: z.string(),
+    accountLogin: z.string(),
+    repositories: z.array(githubWebhookRepositorySchema),
+  }),
 ]);
 
 const environmentWebhookConditionSchema = z.object({
@@ -316,7 +373,8 @@ export const environmentWebhookSchema = component(
   z.object({
     id: z.string(),
     environmentId: z.string(),
-    endpointUrl: z.url(),
+    source: environmentWebhookSourceSchema,
+    endpointUrl: z.url().optional(),
     name: z.string(),
     prompt: z.string(),
     triggerPolicy: environmentWebhookTriggerPolicySchema,
@@ -1263,6 +1321,8 @@ const publicModelTypeChecks: {
   webhookSetup: z.ZodType<EnvironmentWebhookSetup>;
   webhookRun: z.ZodType<EnvironmentWebhookRun>;
   webhookDelivery: z.ZodType<EnvironmentWebhookDelivery>;
+  githubWebhookConnections: z.ZodType<GitHubWebhookConnectionInventory>;
+  githubWebhookInstallAttempt: z.ZodType<GitHubWebhookInstallAttempt>;
   session: z.ZodType<CodingSession>;
   preferences: z.ZodType<SandpiPreferences>;
   bootstrap: z.ZodType<SandpiBootstrap>;
@@ -1307,6 +1367,8 @@ const publicModelTypeChecks: {
   webhookSetup: environmentWebhookSetupSchema,
   webhookRun: environmentWebhookRunSchema,
   webhookDelivery: environmentWebhookDeliverySchema,
+  githubWebhookConnections: githubWebhookConnectionInventorySchema,
+  githubWebhookInstallAttempt: githubWebhookInstallAttemptSchema,
   session: codingSessionSchema,
   preferences: sandpiPreferencesSchema,
   bootstrap: bootstrapSchema,

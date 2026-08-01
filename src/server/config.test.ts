@@ -85,6 +85,33 @@ test("keeps self-hosted billing disabled by default", () => {
   });
 });
 
+test("configures GitHub Webhooks only from a complete GitHub App tuple", () => {
+  assert.equal(loadConfig({ NODE_ENV: "test" }).githubWebhooks, undefined);
+  assert.throws(
+    () =>
+      loadConfig({
+        NODE_ENV: "test",
+        SANDPI_GITHUB_APP_SLUG: "sandpi",
+      }),
+    /SANDPI_GITHUB_CLIENT_ID.*SANDPI_GITHUB_CLIENT_SECRET.*SANDPI_GITHUB_WEBHOOK_SECRET/,
+  );
+  assert.deepEqual(
+    loadConfig({
+      NODE_ENV: "test",
+      SANDPI_GITHUB_APP_SLUG: "sandpi",
+      SANDPI_GITHUB_CLIENT_ID: "Iv1.example",
+      SANDPI_GITHUB_CLIENT_SECRET: "github-client-secret",
+      SANDPI_GITHUB_WEBHOOK_SECRET: "github-webhook-secret",
+    }).githubWebhooks,
+    {
+      appSlug: "sandpi",
+      clientId: "Iv1.example",
+      clientSecret: "github-client-secret",
+      webhookSecret: "github-webhook-secret",
+    },
+  );
+});
+
 test("requires a complete server-side Stripe configuration", () => {
   assert.throws(
     () =>

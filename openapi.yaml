@@ -1914,6 +1914,37 @@ components:
           type: string
         environmentId:
           type: string
+        source:
+          oneOf:
+            - type: object
+              properties:
+                kind:
+                  type: string
+                  enum:
+                    - custom
+              required:
+                - kind
+              additionalProperties: false
+            - type: object
+              properties:
+                kind:
+                  type: string
+                  enum:
+                    - github
+                connectionId:
+                  type: string
+                accountLogin:
+                  type: string
+                repositories:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/GitHubWebhookRepository"
+              required:
+                - kind
+                - connectionId
+                - accountLogin
+                - repositories
+              additionalProperties: false
         endpointUrl:
           type: string
           format: uri
@@ -2013,6 +2044,15 @@ components:
                 kind:
                   type: string
                   enum:
+                    - sourceThread
+              required:
+                - kind
+              additionalProperties: false
+            - type: object
+              properties:
+                kind:
+                  type: string
+                  enum:
                     - session
                 sessionId:
                   type: string
@@ -2082,7 +2122,7 @@ components:
       required:
         - id
         - environmentId
-        - endpointUrl
+        - source
         - name
         - prompt
         - triggerPolicy
@@ -2239,6 +2279,99 @@ components:
           additionalProperties: false
       required:
         - error
+      additionalProperties: false
+    GitHubWebhookConnection:
+      type: object
+      properties:
+        id:
+          type: string
+        installationId:
+          type: string
+        accountId:
+          type: string
+        accountLogin:
+          type: string
+        accountType:
+          type: string
+        repositorySelection:
+          type: string
+          enum:
+            - all
+            - selected
+        status:
+          type: string
+          enum:
+            - active
+            - suspended
+            - revoked
+            - disconnected
+        repositories:
+          type: array
+          items:
+            $ref: "#/components/schemas/GitHubWebhookRepository"
+        lastError:
+          type: string
+        createdAt:
+          type: number
+          description: Unix time in seconds; fractional values preserve milliseconds.
+        updatedAt:
+          type: number
+          description: Unix time in seconds; fractional values preserve milliseconds.
+      required:
+        - id
+        - installationId
+        - accountId
+        - accountLogin
+        - accountType
+        - repositorySelection
+        - status
+        - repositories
+        - createdAt
+        - updatedAt
+      additionalProperties: false
+    GitHubWebhookConnectionInventory:
+      type: object
+      properties:
+        configured:
+          type: boolean
+        appSlug:
+          type: string
+        connections:
+          type: array
+          items:
+            $ref: "#/components/schemas/GitHubWebhookConnection"
+      required:
+        - configured
+        - connections
+      additionalProperties: false
+    GitHubWebhookInstallAttempt:
+      type: object
+      properties:
+        authorizationUrl:
+          type: string
+          format: uri
+        expiresAt:
+          type: number
+          description: Unix time in seconds; fractional values preserve milliseconds.
+      required:
+        - authorizationUrl
+        - expiresAt
+      additionalProperties: false
+    GitHubWebhookRepository:
+      type: object
+      properties:
+        id:
+          type: string
+        fullName:
+          type: string
+        private:
+          type: boolean
+        defaultBranch:
+          type: string
+      required:
+        - id
+        - fullName
+        - private
       additionalProperties: false
     NativeHarnessEvent:
       type: object
@@ -7368,6 +7501,114 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /api/v1/environments/{environmentId}/webhook-sources/github:
+    get:
+      operationId: getGitHubWebhookConnections
+      summary: List GitHub App connections available to Webhooks
+      tags:
+        - Webhooks
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+          in: path
+          name: environmentId
+          required: true
+      responses:
+        "200":
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/GitHubWebhookConnectionInventory"
+                required:
+                  - data
+                additionalProperties: false
+        default:
+          description: Sandpi error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/environments/{environmentId}/webhook-sources/github/connections/{connectionId}:
+    delete:
+      operationId: disconnectGitHubWebhookConnection
+      summary: Disconnect a GitHub App installation from Webhooks
+      tags:
+        - Webhooks
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+          in: path
+          name: environmentId
+          required: true
+        - schema:
+            type: string
+            minLength: 1
+          in: path
+          name: connectionId
+          required: true
+      responses:
+        "200":
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                    required:
+                      - id
+                    additionalProperties: false
+                required:
+                  - data
+                additionalProperties: false
+        default:
+          description: Sandpi error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/environments/{environmentId}/webhook-sources/github/install:
+    post:
+      operationId: startGitHubWebhookInstall
+      summary: Start a GitHub App installation for Webhooks
+      tags:
+        - Webhooks
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+          in: path
+          name: environmentId
+          required: true
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/GitHubWebhookInstallAttempt"
+                required:
+                  - data
+                additionalProperties: false
+        default:
+          description: Sandpi error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /api/v1/environments/{environmentId}/webhooks:
     get:
       operationId: listEnvironmentWebhooks
@@ -7418,6 +7659,41 @@ paths:
                   type: string
                   minLength: 1
                   maxLength: 80
+                source:
+                  default:
+                    kind: custom
+                  oneOf:
+                    - type: object
+                      properties:
+                        kind:
+                          type: string
+                          enum:
+                            - custom
+                      required:
+                        - kind
+                      additionalProperties: false
+                    - type: object
+                      properties:
+                        kind:
+                          type: string
+                          enum:
+                            - github
+                        connectionId:
+                          type: string
+                          minLength: 1
+                          maxLength: 200
+                        repositoryIds:
+                          minItems: 1
+                          maxItems: 100
+                          type: array
+                          items:
+                            type: string
+                            pattern: ^[0-9]+$
+                      required:
+                        - kind
+                        - connectionId
+                        - repositoryIds
+                      additionalProperties: false
                 secret:
                   type: string
                   minLength: 16
@@ -7516,6 +7792,15 @@ paths:
                           type: string
                           enum:
                             - newSession
+                      required:
+                        - kind
+                      additionalProperties: false
+                    - type: object
+                      properties:
+                        kind:
+                          type: string
+                          enum:
+                            - sourceThread
                       required:
                         - kind
                       additionalProperties: false
@@ -7622,6 +7907,41 @@ paths:
                   type: string
                   minLength: 1
                   maxLength: 80
+                source:
+                  default:
+                    kind: custom
+                  oneOf:
+                    - type: object
+                      properties:
+                        kind:
+                          type: string
+                          enum:
+                            - custom
+                      required:
+                        - kind
+                      additionalProperties: false
+                    - type: object
+                      properties:
+                        kind:
+                          type: string
+                          enum:
+                            - github
+                        connectionId:
+                          type: string
+                          minLength: 1
+                          maxLength: 200
+                        repositoryIds:
+                          minItems: 1
+                          maxItems: 100
+                          type: array
+                          items:
+                            type: string
+                            pattern: ^[0-9]+$
+                      required:
+                        - kind
+                        - connectionId
+                        - repositoryIds
+                      additionalProperties: false
                 secret:
                   type: string
                   minLength: 16
@@ -7720,6 +8040,15 @@ paths:
                           type: string
                           enum:
                             - newSession
+                      required:
+                        - kind
+                      additionalProperties: false
+                    - type: object
+                      properties:
+                        kind:
+                          type: string
+                          enum:
+                            - sourceThread
                       required:
                         - kind
                       additionalProperties: false
@@ -9491,6 +9820,124 @@ paths:
                 enum:
                   - null
                 description: No content.
+        default:
+          description: Sandpi error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/webhook-sources/github/callback:
+    get:
+      operationId: completeGitHubWebhookInstall
+      summary: Complete GitHub App installation for Webhooks
+      tags:
+        - Webhooks
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+          in: query
+          name: code
+          required: true
+        - schema:
+            type: string
+            minLength: 1
+          in: query
+          name: state
+          required: true
+        - schema:
+            type: string
+            pattern: ^[0-9]+$
+          in: query
+          name: installation_id
+          required: true
+        - schema:
+            type: string
+          in: query
+          name: setup_action
+          required: false
+      security: []
+      x-sandpi-content-type: text/html
+      responses:
+        "200":
+          description: Successful response.
+          content:
+            text/html:
+              schema:
+                type: string
+        default:
+          description: Sandpi error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/webhook-sources/github/events:
+    post:
+      operationId: receiveGitHubWebhook
+      summary: Receive a signed GitHub App webhook delivery
+      tags:
+        - Webhooks
+      description: Verifies the deployment GitHub App signature, durably acknowledges
+        the delivery, and routes it to matching Environment Webhooks.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {}
+      parameters:
+        - schema:
+            type: string
+          in: header
+          name: x-hub-signature-256
+          required: true
+        - schema:
+            type: string
+          in: header
+          name: x-github-delivery
+          required: true
+        - schema:
+            type: string
+          in: header
+          name: x-github-event
+          required: true
+      security: []
+      responses:
+        "200":
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum:
+                      - accepted
+                      - duplicate
+                  deliveryId:
+                    type: string
+                required:
+                  - status
+                  - deliveryId
+                additionalProperties: false
+        "202":
+          description: Accepted.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum:
+                      - accepted
+                      - duplicate
+                  deliveryId:
+                    type: string
+                required:
+                  - status
+                  - deliveryId
+                additionalProperties: false
         default:
           description: Sandpi error.
           content:

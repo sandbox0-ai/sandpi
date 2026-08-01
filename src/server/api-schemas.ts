@@ -145,6 +145,24 @@ const environmentWebhookConditionSchema = z
 export const environmentWebhookSchema = z
   .object({
     name: z.string().trim().min(1).max(80),
+    source: z
+      .discriminatedUnion("kind", [
+        z.object({ kind: z.literal("custom") }).strict(),
+        z
+          .object({
+            kind: z.literal("github"),
+            connectionId: z.string().trim().min(1).max(200),
+            repositoryIds: z
+              .array(z.string().trim().regex(/^[0-9]+$/))
+              .min(1)
+              .max(100)
+              .refine((ids) => new Set(ids).size === ids.length, {
+                message: "GitHub repository IDs must be unique.",
+              }),
+          })
+          .strict(),
+      ])
+      .default({ kind: "custom" }),
     secret: z.string().trim().min(16).max(1_000).optional(),
     prompt: z.string().trim().min(1).max(50_000),
     triggerPolicy: z
@@ -174,6 +192,7 @@ export const environmentWebhookSchema = z
     ]),
     target: z.discriminatedUnion("kind", [
       z.object({ kind: z.literal("newSession") }).strict(),
+      z.object({ kind: z.literal("sourceThread") }).strict(),
       z
         .object({
           kind: z.literal("session"),
@@ -191,7 +210,16 @@ export const environmentWebhookSchema = z
     collaborationMode: z.literal("plan").optional(),
     serviceTier: z.string().trim().min(1).max(100).optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((webhook, context) => {
+    if (webhook.source.kind === "github" && webhook.secret) {
+      context.addIssue({
+        code: "custom",
+        path: ["secret"],
+        message: "GitHub Webhooks do not accept a per-Webhook secret.",
+      });
+    }
+  });
 
 export const rotateEnvironmentWebhookSecretSchema = z
   .object({

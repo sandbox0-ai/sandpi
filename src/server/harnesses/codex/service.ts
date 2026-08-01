@@ -600,6 +600,7 @@ export class CodexService {
     sessionId: string;
     automationRunId: string;
     automationKind: "schedule" | "webhook";
+    automationSessionKey?: string;
     title: string;
     modelId?: string;
     reasoningEffort?: string;

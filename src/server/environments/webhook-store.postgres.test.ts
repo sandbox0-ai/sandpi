@@ -416,6 +416,7 @@ function configuration(
   overrides: Partial<WebhookMutableConfiguration> = {},
 ): WebhookMutableConfiguration {
   return {
+    source: { kind: "custom" },
     name: "Webhook test",
     prompt: "Handle this event",
     triggerPolicy: { mode: "every", eventTypes: [], conditions: [] },

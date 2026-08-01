@@ -10,8 +10,10 @@ import type {
   EnvironmentWebhookDeliveryStatus,
   EnvironmentWebhookRun,
   EnvironmentWebhookRunStatus,
+  EnvironmentWebhookSource,
   EnvironmentWebhookTarget,
   EnvironmentWebhookTriggerPolicy,
+  GitHubWebhookRepository,
 } from "@/lib/types";
 import { toUnixTimestamp } from "@/lib/time";
 import { HttpError, conflict, notFound } from "@/server/http-error";
@@ -23,9 +25,10 @@ export interface StoredEnvironmentWebhook {
   id: string;
   environmentId: string;
   createdByUserId?: string;
-  endpointId: string;
+  source: EnvironmentWebhookSource;
+  endpointId?: string;
   name: string;
-  secret: EncryptedValue;
+  secret?: EncryptedValue;
   prompt: string;
   triggerPolicy: EnvironmentWebhookTriggerPolicy;
   cooldownPolicy: EnvironmentWebhookCooldownPolicy;
@@ -101,13 +104,17 @@ interface EnvironmentWebhookRow extends QueryResultRow {
   id: string;
   environment_id: string;
   created_by_user_id: string | null;
-  endpoint_id: string;
+  source_kind: "custom" | "github";
+  endpoint_id: string | null;
   name: string;
-  secret_ciphertext: Buffer;
-  secret_initialization_vector: Buffer;
-  secret_authentication_tag: Buffer;
-  secret_algorithm: "aes-256-gcm";
-  secret_key_id: string;
+  secret_ciphertext: Buffer | null;
+  secret_initialization_vector: Buffer | null;
+  secret_authentication_tag: Buffer | null;
+  secret_algorithm: "aes-256-gcm" | null;
+  secret_key_id: string | null;
+  github_connection_id: string | null;
+  github_account_login: string | null;
+  github_repositories: unknown;
   prompt: string;
   trigger_mode: "every" | "state_change";
   event_types: unknown;
@@ -117,7 +124,7 @@ interface EnvironmentWebhookRow extends QueryResultRow {
   cooldown_mode: "none" | "throttle" | "debounce" | "batch";
   cooldown_seconds: number;
   cooldown_behavior: "suppress" | "latest" | "merge";
-  target_kind: "new_session" | "session";
+  target_kind: "new_session" | "source_thread" | "session";
   target_session_id: string | null;
   overlap_policy: "queue" | "skip";
   max_concurrent_runs: number;
@@ -149,7 +156,7 @@ interface EnvironmentWebhookRunRow extends QueryResultRow {
   reasoning_effort: string | null;
   collaboration_mode: "plan" | null;
   service_tier: string | null;
-  target_kind: "new_session" | "session";
+  target_kind: "new_session" | "source_thread" | "session";
   target_session_id: string | null;
   overlap_policy: "queue" | "skip";
   session_id: string | null;
@@ -195,9 +202,30 @@ interface CooldownBucketRow extends QueryResultRow {
 }
 
 const WEBHOOK_SELECT = `
-  SELECT webhook.*
+  SELECT webhook.*,
+         github_source.connection_id AS github_connection_id,
+         github_connection.account_login AS github_account_login,
+         COALESCE((
+           SELECT JSONB_AGG(
+             JSONB_BUILD_OBJECT(
+               'id', selected.repository_id,
+               'fullName', repository.full_name,
+               'private', repository.private,
+               'defaultBranch', repository.default_branch
+             ) ORDER BY repository.full_name, selected.repository_id
+           )
+           FROM environment_webhook_github_repositories selected
+           JOIN webhook_github_repositories repository
+             ON repository.connection_id = github_source.connection_id
+            AND repository.repository_id = selected.repository_id
+           WHERE selected.webhook_id = webhook.id
+         ), '[]'::JSONB) AS github_repositories
   FROM environment_webhooks webhook
   JOIN environments environment ON environment.id = webhook.environment_id
+  LEFT JOIN environment_webhook_github_sources github_source
+    ON github_source.webhook_id = webhook.id
+  LEFT JOIN webhook_github_connections github_connection
+    ON github_connection.id = github_source.connection_id
 `;
 const MAX_BUCKET_EVENTS = 50;
 
@@ -232,9 +260,22 @@ export class EnvironmentWebhookStore {
 
   async getByEndpoint(endpointId: string) {
     const result = await this.pool.query<EnvironmentWebhookRow>(
-      `SELECT * FROM environment_webhooks
-       WHERE endpoint_id = $1 AND enabled = TRUE AND deleted_at IS NULL`,
+      `${WEBHOOK_SELECT}
+       WHERE webhook.endpoint_id = $1 AND webhook.source_kind = 'custom'
+         AND webhook.enabled = TRUE AND webhook.deleted_at IS NULL`,
       [endpointId],
+    );
+    const row = result.rows[0];
+    if (!row) throw webhookNotFound();
+    return webhookFromRow(row);
+  }
+
+  async getEnabledById(webhookId: string) {
+    const result = await this.pool.query<EnvironmentWebhookRow>(
+      `${WEBHOOK_SELECT}
+       WHERE webhook.id = $1 AND webhook.enabled = TRUE
+         AND webhook.deleted_at IS NULL`,
+      [webhookId],
     );
     const row = result.rows[0];
     if (!row) throw webhookNotFound();
@@ -243,32 +284,54 @@ export class EnvironmentWebhookStore {
 
   async create(input: {
     id: string;
-    endpointId: string;
+    endpointId?: string;
     userId: string;
     environmentId: string;
-    secret: EncryptedValue;
+    secret?: EncryptedValue;
     configuration: WebhookMutableConfiguration;
   }) {
     const config = input.configuration;
-    await this.pool.query(
-      `INSERT INTO environment_webhooks (
-         id, environment_id, created_by_user_id, endpoint_id, name,
-         secret_ciphertext, secret_initialization_vector,
-         secret_authentication_tag, secret_algorithm, secret_key_id,
-         prompt, trigger_mode, event_types, conditions, state_path,
-         group_key_path, cooldown_mode, cooldown_seconds, cooldown_behavior,
-         target_kind, target_session_id, overlap_policy, max_concurrent_runs,
-         max_pending_runs, enabled, title, model_id, reasoning_effort,
-         collaboration_mode, service_tier
-       )
-       SELECT
-         $1, environment.id, $2, $4, $5, $6, $7, $8, $9, $10,
-         $11, $12, $13::JSONB, $14::JSONB, $15, $16, $17, $18, $19,
-         $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30
-       FROM environments environment
-       WHERE environment.id = $3 AND environment.created_by_user_id = $2`,
-      webhookMutationValues(input, config),
-    );
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await client.query(
+        `INSERT INTO environment_webhooks (
+           id, environment_id, created_by_user_id, endpoint_id, name,
+           secret_ciphertext, secret_initialization_vector,
+           secret_authentication_tag, secret_algorithm, secret_key_id,
+           prompt, trigger_mode, event_types, conditions, state_path,
+           group_key_path, cooldown_mode, cooldown_seconds, cooldown_behavior,
+           target_kind, target_session_id, overlap_policy, max_concurrent_runs,
+           max_pending_runs, enabled, title, model_id, reasoning_effort,
+           collaboration_mode, service_tier, source_kind
+         )
+         SELECT
+           $1, environment.id, $2, $4, $5, $6, $7, $8, $9, $10,
+           $11, $12, $13::JSONB, $14::JSONB, $15, $16, $17, $18, $19,
+           $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31
+         FROM environments environment
+         WHERE environment.id = $3 AND environment.created_by_user_id = $2`,
+        webhookMutationValues(input, config),
+      );
+      if (!result.rowCount) {
+        throw notFound("environment_not_found", "Environment not found.");
+      }
+      if (config.source.kind === "github") {
+        await replaceGitHubSource(
+          client,
+          input.userId,
+          input.id,
+          config.source,
+          config.enabled,
+        );
+      }
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
     return this.get(input.userId, input.environmentId, input.id);
   }
 
@@ -306,6 +369,7 @@ export class EnvironmentWebhookStore {
        WHERE webhook.id = $3 AND webhook.environment_id = $2
          AND webhook.environment_id = environment.id
          AND environment.created_by_user_id = $1
+         AND webhook.source_kind = $31
          AND webhook.revision = $4 AND webhook.deleted_at IS NULL
        RETURNING webhook.id`,
         [
@@ -327,7 +391,7 @@ export class EnvironmentWebhookStore {
           config.cooldownPolicy.mode === "none"
             ? "merge"
             : config.cooldownPolicy.behavior,
-          config.target.kind === "newSession" ? "new_session" : "session",
+          databaseWebhookTarget(config.target),
           config.target.kind === "session" ? config.target.sessionId : null,
           config.overlapPolicy,
           config.maxConcurrentRuns,
@@ -343,6 +407,7 @@ export class EnvironmentWebhookStore {
           input.secret?.authenticationTag ?? null,
           input.secret?.algorithm ?? null,
           input.secret?.keyId ?? null,
+          config.source.kind,
         ],
       );
       if (!result.rowCount) {
@@ -356,6 +421,15 @@ export class EnvironmentWebhookStore {
           `DELETE FROM environment_webhook_trigger_states
            WHERE webhook_id = $1`,
           [input.webhookId],
+        );
+      }
+      if (config.source.kind === "github") {
+        await replaceGitHubSource(
+          client,
+          input.userId,
+          input.webhookId,
+          config.source,
+          config.enabled,
         );
       }
       await client.query("COMMIT");
@@ -829,7 +903,7 @@ export class EnvironmentWebhookStore {
         return undefined;
       }
       const webhookResult = await client.query<EnvironmentWebhookRow>(
-        "SELECT * FROM environment_webhooks WHERE id = $1 FOR UPDATE",
+        `${WEBHOOK_SELECT} WHERE webhook.id = $1 FOR UPDATE OF webhook`,
         [webhookId],
       );
       const webhookRow = webhookResult.rows[0];
@@ -1017,6 +1091,7 @@ export class EnvironmentWebhookStore {
 }
 
 export interface WebhookMutableConfiguration {
+  source: WebhookSourceConfiguration;
   name: string;
   prompt: string;
   triggerPolicy: EnvironmentWebhookTriggerPolicy;
@@ -1033,13 +1108,17 @@ export interface WebhookMutableConfiguration {
   serviceTier?: string;
 }
 
+export type WebhookSourceConfiguration =
+  | { kind: "custom" }
+  | { kind: "github"; connectionId: string; repositoryIds: string[] };
+
 function webhookMutationValues(
   input: {
     id: string;
-    endpointId: string;
+    endpointId?: string;
     userId: string;
     environmentId: string;
-    secret: EncryptedValue;
+    secret?: EncryptedValue;
   },
   config: WebhookMutableConfiguration,
 ) {
@@ -1047,13 +1126,13 @@ function webhookMutationValues(
     input.id,
     input.userId,
     input.environmentId,
-    input.endpointId,
+    input.endpointId ?? null,
     config.name,
-    input.secret.ciphertext,
-    input.secret.initializationVector,
-    input.secret.authenticationTag,
-    input.secret.algorithm,
-    input.secret.keyId,
+    input.secret?.ciphertext ?? null,
+    input.secret?.initializationVector ?? null,
+    input.secret?.authenticationTag ?? null,
+    input.secret?.algorithm ?? null,
+    input.secret?.keyId ?? null,
     config.prompt,
     databaseTriggerMode(config.triggerPolicy.mode),
     JSON.stringify(config.triggerPolicy.eventTypes),
@@ -1067,7 +1146,7 @@ function webhookMutationValues(
     config.cooldownPolicy.mode === "none"
       ? "merge"
       : config.cooldownPolicy.behavior,
-    config.target.kind === "newSession" ? "new_session" : "session",
+    databaseWebhookTarget(config.target),
     config.target.kind === "session" ? config.target.sessionId : null,
     config.overlapPolicy,
     config.maxConcurrentRuns,
@@ -1078,7 +1157,83 @@ function webhookMutationValues(
     config.reasoningEffort ?? null,
     config.collaborationMode ?? null,
     config.serviceTier ?? null,
+    config.source.kind,
   ];
+}
+
+async function replaceGitHubSource(
+  client: PoolClient,
+  userId: string,
+  webhookId: string,
+  source: Extract<WebhookSourceConfiguration, { kind: "github" }>,
+  enabled: boolean,
+) {
+  const repositoryIds = Array.from(new Set(source.repositoryIds));
+  if (!repositoryIds.length || repositoryIds.length > 100) {
+    throw new HttpError(
+      400,
+      "environment_webhook_github_repositories_invalid",
+      "Select between 1 and 100 GitHub repositories.",
+    );
+  }
+  const connection = await client.query<{
+    id: string;
+    status: "active" | "suspended" | "revoked" | "disconnected";
+    already_bound: boolean;
+  }>(
+    `SELECT connection.id, connection.status,
+            EXISTS (
+              SELECT 1 FROM environment_webhook_github_sources existing
+              WHERE existing.webhook_id = $3
+                AND existing.connection_id = connection.id
+            ) AS already_bound
+     FROM webhook_github_connections connection
+     WHERE connection.id = $1 AND connection.created_by_user_id = $2
+     FOR UPDATE OF connection`,
+    [source.connectionId, userId, webhookId],
+  );
+  const selectedConnection = connection.rows[0];
+  if (
+    !selectedConnection ||
+    (selectedConnection.status !== "active" &&
+      (enabled || !selectedConnection.already_bound))
+  ) {
+    throw new HttpError(
+      400,
+      "environment_webhook_github_connection_invalid",
+      "The GitHub connection is unavailable.",
+    );
+  }
+  const repositories = await client.query<{ repository_id: string }>(
+    `SELECT repository_id FROM webhook_github_repositories
+     WHERE connection_id = $1 AND repository_id = ANY($2::TEXT[])`,
+    [source.connectionId, repositoryIds],
+  );
+  if (repositories.rowCount !== repositoryIds.length) {
+    throw new HttpError(
+      400,
+      "environment_webhook_github_repositories_invalid",
+      "One or more selected GitHub repositories are unavailable.",
+    );
+  }
+  await client.query(
+    `INSERT INTO environment_webhook_github_sources (webhook_id, connection_id)
+     VALUES ($1, $2)
+     ON CONFLICT (webhook_id) DO UPDATE
+     SET connection_id = EXCLUDED.connection_id`,
+    [webhookId, source.connectionId],
+  );
+  await client.query(
+    "DELETE FROM environment_webhook_github_repositories WHERE webhook_id = $1",
+    [webhookId],
+  );
+  await client.query(
+    `INSERT INTO environment_webhook_github_repositories (
+       webhook_id, repository_id
+     )
+     SELECT $1, UNNEST($2::TEXT[])`,
+    [webhookId, repositoryIds],
+  );
 }
 
 async function insertDelivery(
@@ -1122,10 +1277,11 @@ async function insertRun(
   truncatedEventCount = 0,
 ) {
   const runId = `webhook_run_${randomUUID()}`;
-  const sessionId =
-    snapshot.target.kind === "newSession"
-      ? `session_${randomUUID()}`
-      : snapshot.target.sessionId;
+  const sessionId = await webhookRunSessionId(
+    client,
+    snapshot,
+    events[0]?.groupKey ?? "default",
+  );
   const submission = webhookRunSubmission(runId);
   const eventTypes = Array.from(new Set(events.map((event) => event.eventType)));
   const result = await client.query<EnvironmentWebhookRunRow>(
@@ -1148,7 +1304,7 @@ async function insertRun(
       snapshot.reasoningEffort ?? null,
       snapshot.collaborationMode ?? null,
       snapshot.serviceTier ?? null,
-      snapshot.target.kind === "newSession" ? "new_session" : "session",
+      databaseWebhookTarget(snapshot.target),
       snapshot.target.kind === "session" ? snapshot.target.sessionId : null,
       snapshot.overlapPolicy,
       sessionId,
@@ -1161,6 +1317,26 @@ async function insertRun(
     ],
   );
   return runFromRow(result.rows[0]!);
+}
+
+async function webhookRunSessionId(
+  client: PoolClient,
+  snapshot: WebhookExecutionSnapshot,
+  groupKey: string,
+) {
+  if (snapshot.target.kind === "session") return snapshot.target.sessionId;
+  const generated = `session_${randomUUID()}`;
+  if (snapshot.target.kind === "newSession") return generated;
+  const result = await client.query<{ session_id: string }>(
+    `INSERT INTO environment_webhook_session_bindings (
+       webhook_id, group_key, session_id
+     ) VALUES ($1, $2, $3)
+     ON CONFLICT (webhook_id, group_key) DO UPDATE
+     SET updated_at = NOW()
+     RETURNING session_id`,
+    [snapshot.webhookId, groupKey, generated],
+  );
+  return requireString(result.rows[0]?.session_id ?? null);
 }
 
 async function insertEmptyThrottleBucket(
@@ -1368,28 +1544,40 @@ function webhookFromRow(row: EnvironmentWebhookRow): StoredEnvironmentWebhook {
           durationSeconds: row.cooldown_seconds,
           behavior: row.cooldown_behavior,
         };
+  const source: EnvironmentWebhookSource =
+    row.source_kind === "custom"
+      ? { kind: "custom" }
+      : {
+          kind: "github",
+          connectionId: requireString(row.github_connection_id),
+          accountLogin: requireString(row.github_account_login),
+          repositories: githubRepositories(row.github_repositories),
+        };
+  const secret =
+    row.source_kind === "custom"
+      ? {
+          ciphertext: requireBuffer(row.secret_ciphertext),
+          initializationVector: requireBuffer(row.secret_initialization_vector),
+          authenticationTag: requireBuffer(row.secret_authentication_tag),
+          algorithm: requireString(row.secret_algorithm) as "aes-256-gcm",
+          keyId: requireString(row.secret_key_id),
+        }
+      : undefined;
   return {
     id: row.id,
     environmentId: row.environment_id,
     ...(row.created_by_user_id
       ? { createdByUserId: row.created_by_user_id }
       : {}),
-    endpointId: row.endpoint_id,
+    source,
+    ...(row.endpoint_id ? { endpointId: row.endpoint_id } : {}),
     name: row.name,
-    secret: {
-      ciphertext: row.secret_ciphertext,
-      initializationVector: row.secret_initialization_vector,
-      authenticationTag: row.secret_authentication_tag,
-      algorithm: row.secret_algorithm,
-      keyId: row.secret_key_id,
-    },
+    ...(secret ? { secret } : {}),
     prompt: row.prompt,
     triggerPolicy,
     cooldownPolicy,
     target:
-      row.target_kind === "new_session"
-        ? { kind: "newSession" }
-        : { kind: "session", sessionId: requireString(row.target_session_id) },
+      publicWebhookTarget(row.target_kind, row.target_session_id),
     overlapPolicy: row.overlap_policy,
     maxConcurrentRuns: row.max_concurrent_runs,
     maxPendingRuns: row.max_pending_runs,
@@ -1433,9 +1621,7 @@ function runFromRow(row: EnvironmentWebhookRunRow): StoredEnvironmentWebhookRun 
       : {}),
     ...(row.service_tier ? { serviceTier: row.service_tier } : {}),
     target:
-      row.target_kind === "new_session"
-        ? { kind: "newSession" }
-        : { kind: "session", sessionId: requireString(row.target_session_id) },
+      publicWebhookTarget(row.target_kind, row.target_session_id),
     overlapPolicy: row.overlap_policy,
     ...(row.session_id ? { sessionId: row.session_id } : {}),
     ...(row.native_turn_id ? { nativeTurnId: row.native_turn_id } : {}),
@@ -1492,12 +1678,13 @@ function deliveryFromRow(
 
 export function publicEnvironmentWebhook(
   webhook: StoredEnvironmentWebhook,
-  endpointUrl: string,
+  endpointUrl?: string,
 ): EnvironmentWebhook {
   return {
     id: webhook.id,
     environmentId: webhook.environmentId,
-    endpointUrl,
+    source: webhook.source,
+    ...(endpointUrl ? { endpointUrl } : {}),
     name: webhook.name,
     prompt: webhook.prompt,
     triggerPolicy: webhook.triggerPolicy,
@@ -1507,7 +1694,7 @@ export function publicEnvironmentWebhook(
     maxConcurrentRuns: webhook.maxConcurrentRuns,
     maxPendingRuns: webhook.maxPendingRuns,
     enabled: webhook.enabled,
-    secretConfigured: true,
+    secretConfigured: Boolean(webhook.secret),
     ...(webhook.title ? { title: webhook.title } : {}),
     ...(webhook.modelId ? { modelId: webhook.modelId } : {}),
     ...(webhook.reasoningEffort
@@ -1536,6 +1723,49 @@ function databaseTriggerMode(mode: EnvironmentWebhookTriggerPolicy["mode"]) {
   return mode === "stateChange" ? "state_change" : "every";
 }
 
+function databaseWebhookTarget(target: EnvironmentWebhookTarget) {
+  if (target.kind === "newSession") return "new_session";
+  if (target.kind === "sourceThread") return "source_thread";
+  return "session";
+}
+
+function publicWebhookTarget(
+  kind: EnvironmentWebhookRow["target_kind"],
+  sessionId: string | null,
+): EnvironmentWebhookTarget {
+  if (kind === "new_session") return { kind: "newSession" };
+  if (kind === "source_thread") return { kind: "sourceThread" };
+  return { kind: "session", sessionId: requireString(sessionId) };
+}
+
+function githubRepositories(value: unknown): GitHubWebhookRepository[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((candidate) => {
+    if (!isRecord(candidate)) {
+      throw new Error("Stored GitHub Webhook repository is invalid.");
+    }
+    const id = requireString(candidate.id);
+    const fullName = requireString(candidate.fullName);
+    const privateRepository = candidate.private;
+    if (typeof privateRepository !== "boolean") {
+      throw new Error("Stored GitHub Webhook repository visibility is invalid.");
+    }
+    return {
+      id,
+      fullName,
+      private: privateRepository,
+      ...(typeof candidate.defaultBranch === "string"
+        ? { defaultBranch: candidate.defaultBranch }
+        : {}),
+    };
+  });
+}
+
+function requireBuffer(value: Buffer | null) {
+  if (!value) throw new Error("Stored Webhook secret is invalid.");
+  return value;
+}
+
 function stringArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((candidate): candidate is string => typeof candidate === "string")
@@ -1560,8 +1790,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function requireString(value: string | null) {
-  if (!value) throw new Error("Required Webhook database value is missing.");
+function requireString(value: unknown): string {
+  if (typeof value !== "string" || !value) {
+    throw new Error("Required Webhook database value is missing.");
+  }
   return value;
 }
 

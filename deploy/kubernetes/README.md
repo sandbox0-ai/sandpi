@@ -69,6 +69,12 @@ Optional production Environment variables:
 - `NEXT_PUBLIC_GA_MEASUREMENT_ID` — a public Google Analytics 4 measurement
   ID compiled into the browser bundle. Leave it unset to disable analytics,
   including for self-hosted deployments.
+- `SANDPI_GITHUB_APP_SLUG` and `SANDPI_GITHUB_CLIENT_ID`, together with the
+  `SANDPI_GITHUB_CLIENT_SECRET` and `SANDPI_GITHUB_WEBHOOK_SECRET` repository
+  secrets, enable direct GitHub App sources under Environment Webhooks. All four
+  values must be configured together. See
+  [Environment Webhooks](../../docs/architecture/environment-webhooks.md) for
+  callback URL, event URL, permissions and subscriptions.
 
 The production workflow requires `SANDPI_BILLING_MODE=stripe`. Configure the
 Stripe webhook endpoint as

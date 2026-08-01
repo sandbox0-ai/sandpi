@@ -67,6 +67,10 @@ jobs:
       SANDPI_AUTH_MODE: ${{ vars.SANDPI_AUTH_MODE }}
       SANDPI_BILLING_MODE: ${{ vars.SANDPI_BILLING_MODE }}
       SANDPI_COOKIE_SECRET: ${{ secrets.SANDPI_COOKIE_SECRET }}
+      SANDPI_GITHUB_APP_SLUG: ${{ vars.SANDPI_GITHUB_APP_SLUG }}
+      SANDPI_GITHUB_CLIENT_ID: ${{ vars.SANDPI_GITHUB_CLIENT_ID }}
+      SANDPI_GITHUB_CLIENT_SECRET: ${{ secrets.SANDPI_GITHUB_CLIENT_SECRET }}
+      SANDPI_GITHUB_WEBHOOK_SECRET: ${{ secrets.SANDPI_GITHUB_WEBHOOK_SECRET }}
       SANDPI_INGRESS_IP: ${{ vars.SANDPI_INGRESS_IP }}
       SANDPI_KUBE_CONFIG: ${{ secrets.SANDPI_KUBE_CONFIG }}
       SANDPI_OIDC_CLIENT_ID: ${{ vars.SANDPI_OIDC_CLIENT_ID }}
@@ -113,6 +117,17 @@ jobs:
           ];
           for (const name of required) {
             if (!process.env[name]) throw new Error(`${name} is required.`);
+          }
+          const github = [
+            "SANDPI_GITHUB_APP_SLUG",
+            "SANDPI_GITHUB_CLIENT_ID",
+            "SANDPI_GITHUB_CLIENT_SECRET",
+            "SANDPI_GITHUB_WEBHOOK_SECRET",
+          ];
+          const configuredGitHub = github.filter((name) => process.env[name]);
+          if (configuredGitHub.length > 0 && configuredGitHub.length !== github.length) {
+            const missing = github.filter((name) => !process.env[name]);
+            throw new Error(`${missing.join(", ")} must be configured together with the GitHub Webhook integration.`);
           }
           if (process.env.SANDPI_AUTH_MODE !== "oidc") {
             throw new Error("The production deployment requires SANDPI_AUTH_MODE=oidc.");
@@ -245,6 +260,10 @@ jobs:
             SANDPI_AUTH_MODE \
             SANDPI_BILLING_MODE \
             SANDPI_COOKIE_SECRET \
+            SANDPI_GITHUB_APP_SLUG \
+            SANDPI_GITHUB_CLIENT_ID \
+            SANDPI_GITHUB_CLIENT_SECRET \
+            SANDPI_GITHUB_WEBHOOK_SECRET \
             SANDPI_HOST \
             SANDPI_LOG_LEVEL \
             SANDPI_OIDC_CLIENT_ID \

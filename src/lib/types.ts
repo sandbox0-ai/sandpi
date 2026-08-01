@@ -154,7 +154,51 @@ export interface EnvironmentScheduleRun {
   updatedAt: UnixTimestamp;
 }
 
-export type EnvironmentWebhookTarget = EnvironmentScheduleTarget;
+export type EnvironmentWebhookTarget =
+  | { kind: "newSession" }
+  | { kind: "sourceThread" }
+  | { kind: "session"; sessionId: string };
+
+export interface GitHubWebhookRepository {
+  id: string;
+  fullName: string;
+  private: boolean;
+  defaultBranch?: string;
+}
+
+export interface GitHubWebhookConnection {
+  id: string;
+  installationId: string;
+  accountId: string;
+  accountLogin: string;
+  accountType: string;
+  repositorySelection: "all" | "selected";
+  status: "active" | "suspended" | "revoked" | "disconnected";
+  repositories: GitHubWebhookRepository[];
+  lastError?: string;
+  createdAt: UnixTimestamp;
+  updatedAt: UnixTimestamp;
+}
+
+export interface GitHubWebhookConnectionInventory {
+  configured: boolean;
+  appSlug?: string;
+  connections: GitHubWebhookConnection[];
+}
+
+export interface GitHubWebhookInstallAttempt {
+  authorizationUrl: string;
+  expiresAt: UnixTimestamp;
+}
+
+export type EnvironmentWebhookSource =
+  | { kind: "custom" }
+  | {
+      kind: "github";
+      connectionId: string;
+      accountLogin: string;
+      repositories: GitHubWebhookRepository[];
+    };
 
 export interface EnvironmentWebhookCondition {
   path: string;
@@ -197,7 +241,8 @@ export type EnvironmentWebhookDeliveryStatus =
 export interface EnvironmentWebhook {
   id: string;
   environmentId: string;
-  endpointUrl: string;
+  source: EnvironmentWebhookSource;
+  endpointUrl?: string;
   name: string;
   prompt: string;
   triggerPolicy: EnvironmentWebhookTriggerPolicy;
