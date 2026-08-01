@@ -43,6 +43,10 @@ const TAGS: OpenAPIV3.TagObject[] = [
   },
   { name: "Schedules", description: "Durable Environment automations." },
   {
+    name: "Webhooks",
+    description: "Signed external triggers for durable Environment automations.",
+  },
+  {
     name: "Codex",
     description: "Environment-scoped native Codex capabilities.",
   },
@@ -221,6 +225,29 @@ function normalizeTransportResponses(document: OpenAPIV3.Document) {
         !("$ref" in operation.requestBody)
       ) {
         operation.requestBody.required = false;
+      }
+      const requestContentTypes = extendedOperation[
+        "x-sandpi-request-content-types"
+      ];
+      if (
+        Array.isArray(requestContentTypes) &&
+        operation.requestBody &&
+        !("$ref" in operation.requestBody)
+      ) {
+        const jsonSchema = operation.requestBody.content["application/json"]
+          ?.schema;
+        operation.requestBody.content = Object.fromEntries(
+          requestContentTypes.map((contentType) => [
+            String(contentType),
+            {
+              schema:
+                contentType === "application/json"
+                  ? jsonSchema ?? {}
+                  : { type: "string" },
+            },
+          ]),
+        );
+        delete extendedOperation["x-sandpi-request-content-types"];
       }
       const defaultResponse = operation.responses.default;
       if (

@@ -2464,13 +2464,14 @@ export class SandpiStore {
   }
 
   /**
-   * Creates the deterministic product Session reserved by one Schedule run.
+   * Creates the deterministic product Session reserved by one Automation run.
    * Retrying the same run returns its existing row; another owner or run can
    * never adopt that id.
    */
-  async ensureScheduledSessionMetadata(input: {
+  async ensureAutomationSessionMetadata(input: {
     sessionId: string;
-    scheduleRunId: string;
+    automationRunId: string;
+    automationKind: "schedule" | "webhook";
     userId: string;
     environment: Environment;
     title: string;
@@ -2500,7 +2501,11 @@ export class SandpiStore {
           JSON.stringify({
             modelId: input.modelId ?? null,
             reasoningEffort: input.reasoningEffort ?? null,
-            scheduleRunId: input.scheduleRunId,
+            automationRunId: input.automationRunId,
+            automationKind: input.automationKind,
+            ...(input.automationKind === "schedule"
+              ? { scheduleRunId: input.automationRunId }
+              : {}),
           }),
           input.environment.revision,
           input.environment.name,
@@ -2527,18 +2532,28 @@ export class SandpiStore {
            WHERE session.id = $1 AND session.environment_id = $2
              AND session.created_by_user_id = $3
              AND environment.created_by_user_id = $3
-             AND session.metadata ->> 'scheduleRunId' = $4`,
+             AND (
+               (
+                 session.metadata ->> 'automationRunId' = $4
+                 AND session.metadata ->> 'automationKind' = $5
+               )
+               OR (
+                 $5 = 'schedule'
+                 AND session.metadata ->> 'scheduleRunId' = $4
+               )
+             )`,
           [
             input.sessionId,
             input.environment.id,
             input.userId,
-            input.scheduleRunId,
+            input.automationRunId,
+            input.automationKind,
           ],
         );
         if (!existing.rowCount) {
           throw conflict(
-            "environment_schedule_session_conflict",
-            "The Schedule run Session id belongs to another resource.",
+            "environment_automation_session_conflict",
+            "The Automation run Session id belongs to another resource.",
           );
         }
       }

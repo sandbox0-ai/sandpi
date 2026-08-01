@@ -53,7 +53,7 @@ Web 应用与 iOS、iPadOS、Android、OpenHarmony、Windows 和 macOS 第一方
 | 可控的出站访问 | 按目标限制 Sandbox 出站流量，并只向匹配的请求注入受支持的凭证，避免把服务密钥放进仓库或浏览器。 |
 | Workspace 防丢失 | 通过 Sandbox0 Volume snapshot 手动或定时备份 Workspace，设置保留数量并按需恢复。 |
 | 持久化数据加密 | Sandbox0 在写入对象存储前，对 Environment rootfs checkpoint 对象和默认 S0FS Workspace Volume 对象做应用层加密。 |
-| 持久化自动化 | 使用一次性或易读的周期规则定时执行长 Codex prompt，需要时仍可使用高级 Cron。Sandpi 在 Sandbox 外持久化运行意图，并在 server 或 runtime 恢复后对账原生 Turn。 |
+| 持久化自动化 | 定时执行 Codex prompt，或由经过校验的 GitHub、Alertmanager、Slack 和自定义 Webhook 触发。Sandpi 在 Sandbox 外持久化运行意图，并在 server 或 runtime 恢复后对账原生 Turn。 |
 
 Environment 刻意设计得比一个聊天会话更完整：
 
@@ -63,7 +63,7 @@ Environment
 ├── 一个原生 coding-agent harness 和 provider 账号
 ├── 网络策略和出站凭证
 ├── runtime 资源、终端、共享 Browser 和指标
-├── 持久化 Automation Schedules
+├── 持久化 Automation Schedules 和 Webhooks
 └── 多个原生 coding-agent Session
 ```
 
@@ -109,6 +109,8 @@ Environment。如果多个 Session 本来就应该共享文件、工具和执行
   Sandbox 手动 pause/restart 控制
 - Environment Schedules，支持一次性或易读的周期设置、高级 Cron、IANA
   时区、后续运行预览、持久化运行历史和重叠跳过
+- Environment Webhooks，支持 GitHub、Alertmanager、Slack 和自定义事件源，
+  包含 provider 校验、声明式触发条件、持久化 delivery 历史、冷却合并和运行队列限制
 - 每个 Environment 独立的网络策略和 Sandbox0 出站凭证注入
 - Workspace 手动/定时备份、保留和恢复
 - 内置单用户身份模式或 OIDC
@@ -277,6 +279,8 @@ Sandbox0
 - [Coding agent Environment 指南（`/llms.txt`）](./public/llms.txt)
 - [OpenAPI 契约](./docs/architecture/openapi-contract.md)
 - [原生 Session authority 与恢复](./docs/architecture/native-session-authority.md)
+- [Environment Schedules](./docs/architecture/environment-schedules.md)
+- [Environment Webhooks](./docs/architecture/environment-webhooks.md)
 - [Environment 出站凭证](./docs/architecture/environment-egress-credentials.md)
 - [Billing 与 usage 边界](./docs/architecture/billing-and-usage.md)
 - [Kubernetes 部署](./deploy/kubernetes/README.md)
