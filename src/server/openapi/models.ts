@@ -318,7 +318,6 @@ export const environmentWebhookSchema = component(
     environmentId: z.string(),
     endpointUrl: z.url(),
     name: z.string(),
-    provider: z.enum(["github", "alertmanager", "slack", "custom"]),
     prompt: z.string(),
     triggerPolicy: environmentWebhookTriggerPolicySchema,
     cooldownPolicy: environmentWebhookCooldownPolicySchema,

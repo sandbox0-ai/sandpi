@@ -9,7 +9,7 @@ import { seedCommunityDefaults } from "@/server/db/seed";
 import { HttpError } from "@/server/http-error";
 import { SecretBox } from "@/server/secrets";
 import { EnvironmentWebhookStore, type WebhookMutableConfiguration } from "./webhook-store";
-import type { NormalizedWebhookEvent } from "./webhook-adapters";
+import type { NormalizedWebhookEvent } from "./webhook-ingress";
 
 test(
   "deduplicates verified deliveries and fences concurrent run claims",
@@ -407,7 +407,7 @@ async function createWebhook(
     endpointId: `endpoint-${id}`,
     userId: "user-webhook-test",
     environmentId: "environment-webhook-test",
-    secret: secretBox.encrypt("provider-secret", `environment-webhook:${id}:secret`),
+    secret: secretBox.encrypt("webhook-secret", `environment-webhook:${id}:secret`),
     configuration: configuration(overrides),
   });
 }
@@ -417,7 +417,6 @@ function configuration(
 ): WebhookMutableConfiguration {
   return {
     name: "Webhook test",
-    provider: "custom",
     prompt: "Handle this event",
     triggerPolicy: { mode: "every", eventTypes: [], conditions: [] },
     cooldownPolicy: { mode: "none" },
@@ -438,7 +437,6 @@ function webhookEvent(
   now: Date,
 ): NormalizedWebhookEvent {
   return {
-    provider: "custom",
     deliveryId,
     eventType,
     groupKey,

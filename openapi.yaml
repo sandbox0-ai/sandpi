@@ -1919,13 +1919,6 @@ components:
           format: uri
         name:
           type: string
-        provider:
-          type: string
-          enum:
-            - github
-            - alertmanager
-            - slack
-            - custom
         prompt:
           type: string
         triggerPolicy:
@@ -2091,7 +2084,6 @@ components:
         - environmentId
         - endpointUrl
         - name
-        - provider
         - prompt
         - triggerPolicy
         - cooldownPolicy
@@ -7426,13 +7418,6 @@ paths:
                   type: string
                   minLength: 1
                   maxLength: 80
-                provider:
-                  type: string
-                  enum:
-                    - github
-                    - alertmanager
-                    - slack
-                    - custom
                 secret:
                   type: string
                   minLength: 16
@@ -7589,7 +7574,6 @@ paths:
                   maxLength: 100
               required:
                 - name
-                - provider
                 - prompt
                 - triggerPolicy
                 - cooldownPolicy
@@ -7638,13 +7622,6 @@ paths:
                   type: string
                   minLength: 1
                   maxLength: 80
-                provider:
-                  type: string
-                  enum:
-                    - github
-                    - alertmanager
-                    - slack
-                    - custom
                 secret:
                   type: string
                   minLength: 16
@@ -7801,7 +7778,6 @@ paths:
                   maxLength: 100
               required:
                 - name
-                - provider
                 - prompt
                 - triggerPolicy
                 - cooldownPolicy
@@ -9524,12 +9500,11 @@ paths:
   /api/v1/webhooks/{endpointId}:
     post:
       operationId: receiveEnvironmentWebhook
-      summary: Receive a signed Environment webhook delivery
+      summary: Receive an authenticated Environment webhook delivery
       tags:
         - Webhooks
-      description: Accepts GitHub, Alertmanager, Slack, or custom payloads.
-        Authentication is provider-specific and uses request signatures or a
-        bearer/query token.
+      description: Accepts JSON, form, or text payloads authenticated with a bearer or
+        query token.
       requestBody:
         required: true
         content:
@@ -9561,31 +9536,6 @@ paths:
         - schema:
             type: string
           in: header
-          name: x-hub-signature-256
-          required: false
-        - schema:
-            type: string
-          in: header
-          name: x-github-delivery
-          required: false
-        - schema:
-            type: string
-          in: header
-          name: x-github-event
-          required: false
-        - schema:
-            type: string
-          in: header
-          name: x-slack-request-timestamp
-          required: false
-        - schema:
-            type: string
-          in: header
-          name: x-slack-signature
-          required: false
-        - schema:
-            type: string
-          in: header
           name: idempotency-key
           required: false
         - schema:
@@ -9610,32 +9560,24 @@ paths:
           content:
             application/json:
               schema:
-                anyOf:
-                  - type: object
-                    properties:
-                      status:
-                        type: string
-                        enum:
-                          - duplicate
-                          - filtered
-                          - suppressed
-                          - batched
-                          - queued
-                      deliveryId:
-                        type: string
-                      runId:
-                        type: string
-                    required:
-                      - status
-                      - deliveryId
-                    additionalProperties: false
-                  - type: object
-                    properties:
-                      challenge:
-                        type: string
-                    required:
-                      - challenge
-                    additionalProperties: false
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum:
+                      - duplicate
+                      - filtered
+                      - suppressed
+                      - batched
+                      - queued
+                  deliveryId:
+                    type: string
+                  runId:
+                    type: string
+                required:
+                  - status
+                  - deliveryId
+                additionalProperties: false
         "202":
           description: Accepted.
           content:
@@ -9780,7 +9722,7 @@ tags:
   - name: Schedules
     description: Durable Environment automations.
   - name: Webhooks
-    description: Signed external triggers for durable Environment automations.
+    description: Authenticated external triggers for durable Environment automations.
   - name: Codex
     description: Environment-scoped native Codex capabilities.
   - name: Sessions

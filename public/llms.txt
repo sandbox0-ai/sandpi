@@ -32,12 +32,21 @@ This file describes the current Sandpi product contract. It is documentation, no
 
 ## Current product surfaces
 
-- Native Codex account connection, model and reasoning discovery, persistent Sessions and Turns, branching, tools, Skills, MCP, approvals, and supported slash-command surfaces.
-- Workspace file tree and editor, Git changes, Terminal, shared Browser, and current runtime metrics.
-- Per-Environment memory, idle pause, manual Sandbox pause/restart recovery, network policy, Sandbox0-backed egress credential injection, Workspace backups, and restore.
-- Durable one-time and recurring coding-agent Schedules with run history and overlap protection.
-- Verified GitHub, Alertmanager, Slack, and custom Environment Webhooks with trigger filters, cooldown policies, delivery history, and bounded run queues.
-- Sandpi owns users, Environment attribution, native Session references, and optional product entitlements. Sandbox0 owns Sandbox lifecycle, Volumes, network enforcement, credential injection, and usage truth.
+- Native Codex account connection, model and reasoning discovery, persistent
+  Sessions and Turns, branching, tools, Skills, MCP, approvals, and supported
+  slash-command surfaces.
+- Workspace file tree and editor, Git changes, Terminal, shared Browser, and
+  current runtime metrics.
+- Per-Environment memory, idle pause, manual Sandbox pause/restart recovery,
+  network policy, Sandbox0-backed egress credential injection, Workspace
+  backups and restore.
+- Durable one-time and recurring coding-agent Schedules with run history and
+  overlap protection.
+- Authenticated custom Environment Webhooks with trigger filters, cooldown
+  policies, delivery history, and bounded run queues.
+- Sandpi owns users, Environment attribution, native Session references, and
+  optional product entitlements. Sandbox0 owns Sandbox lifecycle, Volumes,
+  network enforcement, credential injection, and usage truth.
 
 Codex and the Web client are the currently implemented harness and client. Sandpi is pre-1.0, so discover exact native capabilities from the running harness instead of assuming every newer feature exists in an older deployment.
 

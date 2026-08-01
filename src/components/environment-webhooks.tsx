@@ -20,7 +20,6 @@ import type {
   EnvironmentWebhook,
   EnvironmentWebhookCondition,
   EnvironmentWebhookDelivery,
-  EnvironmentWebhookProvider,
   EnvironmentWebhookRun,
   EnvironmentWebhookSetup,
 } from "@/lib/types";
@@ -36,9 +35,7 @@ interface EnvironmentWebhooksProps {
 
 interface WebhookDraft {
   id?: string;
-  originalProvider?: EnvironmentWebhookProvider;
   name: string;
-  provider: EnvironmentWebhookProvider;
   secret: string;
   prompt: string;
   eventTypes: string;
@@ -68,33 +65,6 @@ interface WebhookHistory {
 }
 
 const REFRESH_INTERVAL_MS = 10_000;
-
-const PROVIDERS: Array<{
-  id: EnvironmentWebhookProvider;
-  label: string;
-  description: string;
-}> = [
-  {
-    id: "github",
-    label: "GitHub",
-    description: "HMAC-signed repository or organization events",
-  },
-  {
-    id: "alertmanager",
-    label: "Alertmanager",
-    description: "Grouped firing and resolved alerts",
-  },
-  {
-    id: "slack",
-    label: "Slack",
-    description: "Signed Events API or slash-command requests",
-  },
-  {
-    id: "custom",
-    label: "Custom",
-    description: "Any JSON, form, or text payload with a bearer token",
-  },
-];
 
 export function EnvironmentWebhooks({
   environmentId,
@@ -280,8 +250,8 @@ export function EnvironmentWebhooks({
     <div className="codex-extension-panel">
       <div className="codex-extension-toolbar">
         <p>
-          Provider signatures are verified before Sandpi persists, filters, and
-          cools down each delivery. Unsupported providers can use Custom.
+          A bearer token is verified before Sandpi persists, filters, and cools
+          down each delivery.
         </p>
         <div>
           <button
@@ -336,7 +306,7 @@ export function EnvironmentWebhooks({
         <div className="codex-extension-empty">
           <span><Webhook size={18} aria-hidden="true" /></span>
           <strong>No Webhooks yet</strong>
-          <p>Connect GitHub, Alertmanager, Slack, or a custom event source.</p>
+          <p>Trigger a Codex task from any authenticated event source.</p>
         </div>
       ) : (
         <div className={shared.list}>
@@ -354,7 +324,7 @@ export function EnvironmentWebhooks({
                     />
                     <div>
                       <strong>{webhook.name}</strong>
-                      <span>{providerLabel(webhook.provider)} · {webhook.endpointUrl}</span>
+                      <span>{webhook.endpointUrl}</span>
                     </div>
                   </div>
                   <span className={`${shared.badge} ${webhook.enabled ? shared.badgeEnabled : ""}`}>
@@ -485,19 +455,21 @@ function WebhookSetup({
   onCopy: (label: string, value: string) => void;
   onClose: () => void;
 }) {
-  const provider = setup.webhook.provider;
   return (
     <section className={styles.setup} aria-labelledby="webhook-setup-title">
       <header>
         <div>
-          <span>Provider setup</span>
-          <strong id="webhook-setup-title">Connect {providerLabel(provider)}</strong>
+          <span>Webhook setup</span>
+          <strong id="webhook-setup-title">Configure the event source</strong>
         </div>
         <button type="button" className="icon-button" aria-label="Close setup" onClick={onClose}>
           <X size={15} aria-hidden="true" />
         </button>
       </header>
-      <p>{providerInstructions(provider)}</p>
+      <p>
+        POST JSON, form, or text data with Authorization: Bearer &lt;token&gt;.
+        X-Sandpi-Event can name the event type.
+      </p>
       <CopyField
         label="Webhook URL"
         value={setup.webhook.endpointUrl}
@@ -507,13 +479,13 @@ function WebhookSetup({
       {setup.setupSecret ? (
         <>
           <CopyField
-            label={provider === "github" ? "Webhook secret" : "Bearer token"}
+            label="Bearer token"
             value={setup.setupSecret}
             copied={copied === "setup-secret"}
             onCopy={() => onCopy("setup-secret", setup.setupSecret!)}
           />
           <p className={styles.oneTimeSecret}>
-            This secret is shown once. Store it in the provider now.
+            This token is shown once. Store it in the event source now.
           </p>
         </>
       ) : null}
@@ -560,7 +532,6 @@ function WebhookEditor({
   onCancel: () => void;
   onSave: () => void;
 }) {
-  const selectedProvider = PROVIDERS.find((provider) => provider.id === draft.provider)!;
   return (
     <section className="environment-credential-editor" aria-labelledby="environment-webhook-editor-title">
       <header>
@@ -575,31 +546,15 @@ function WebhookEditor({
         </button>
       </header>
 
-      <div className="field-grid two-columns">
-        <label>
-          Name
-          <input autoComplete="off" maxLength={80} value={draft.name} onChange={(event) => onChange({ ...draft, name: event.target.value })} />
-        </label>
-        <label>
-          Provider
-          <select
-            value={draft.provider}
-            onChange={(event) => onChange({
-              ...draft,
-              provider: event.target.value as EnvironmentWebhookProvider,
-              secret: "",
-            })}
-          >
-            {PROVIDERS.map((provider) => <option key={provider.id} value={provider.id}>{provider.label}</option>)}
-          </select>
-          <small>{selectedProvider.description}</small>
-        </label>
-      </div>
+      <label className="full-field">
+        Name
+        <input autoComplete="off" maxLength={80} value={draft.name} onChange={(event) => onChange({ ...draft, name: event.target.value })} />
+      </label>
 
       <label className="full-field">
         <span className={shared.fieldHeading}>
-          {draft.provider === "slack" ? "Slack signing secret" : "Secret"}
-          <small>{draft.provider === "slack" && !draft.id ? "required" : draft.id ? "leave blank to keep current" : "generated if blank"}</small>
+          Bearer token
+          <small>{draft.id ? "leave blank to keep current" : "generated if blank"}</small>
         </span>
         <input
           type="password"
@@ -616,7 +571,7 @@ function WebhookEditor({
           className={shared.promptInput}
           maxLength={50_000}
           rows={7}
-          placeholder="Tell Codex how to investigate or respond. The verified event is appended as untrusted data."
+          placeholder="Tell Codex how to investigate or respond. The authenticated event is appended as untrusted data."
           value={draft.prompt}
           onChange={(event) => onChange({ ...draft, prompt: event.target.value })}
         />
@@ -645,7 +600,7 @@ function WebhookEditor({
           {draft.triggerMode === "stateChange" ? (
             <label>
               <span className={shared.fieldHeading}>State JSON Pointer <small>normalized event</small></span>
-              <input className={styles.codeInput} placeholder="/stateValue or /payload/status" value={draft.statePath} onChange={(event) => onChange({ ...draft, statePath: event.target.value })} />
+              <input className={styles.codeInput} placeholder="/payload/status" value={draft.statePath} onChange={(event) => onChange({ ...draft, statePath: event.target.value })} />
             </label>
           ) : null}
           <label>
@@ -793,13 +748,6 @@ function webhookDraftPayload(draft: WebhookDraft):
   if (draft.secret.trim() && draft.secret.trim().length < 16) {
     return { error: "Webhook secrets must contain at least 16 characters." };
   }
-  if (
-    draft.provider === "slack" &&
-    (!draft.id || draft.originalProvider !== "slack") &&
-    !draft.secret.trim()
-  ) {
-    return { error: "Paste the Slack App signing secret." };
-  }
   if (draft.targetKind === "session" && !draft.targetSessionId) {
     return { error: "Choose a target Session." };
   }
@@ -811,7 +759,6 @@ function webhookDraftPayload(draft: WebhookDraft):
     .filter(Boolean);
   const value = {
     name: draft.name.trim(),
-    provider: draft.provider,
     prompt: draft.prompt.trim(),
     triggerPolicy: {
       mode: draft.triggerMode,
@@ -847,7 +794,6 @@ function webhookDraftPayload(draft: WebhookDraft):
 function editableWebhookPayload(webhook: EnvironmentWebhook) {
   return {
     name: webhook.name,
-    provider: webhook.provider,
     prompt: webhook.prompt,
     triggerPolicy: webhook.triggerPolicy,
     cooldownPolicy: webhook.cooldownPolicy,
@@ -867,13 +813,12 @@ function editableWebhookPayload(webhook: EnvironmentWebhook) {
 function emptyDraft(sessionId?: string): WebhookDraft {
   return {
     name: "",
-    provider: "github",
     secret: "",
     prompt: "Investigate this event, make any safe in-scope changes, run relevant checks, and summarize the outcome.",
     eventTypes: "",
     conditions: "",
     triggerMode: "every",
-    statePath: "/stateValue",
+    statePath: "/payload/status",
     groupKeyPath: "",
     cooldownMode: "throttle",
     cooldownSeconds: 60,
@@ -890,15 +835,13 @@ function emptyDraft(sessionId?: string): WebhookDraft {
 function webhookDraft(webhook: EnvironmentWebhook): WebhookDraft {
   return {
     id: webhook.id,
-    originalProvider: webhook.provider,
     name: webhook.name,
-    provider: webhook.provider,
     secret: "",
     prompt: webhook.prompt,
     eventTypes: webhook.triggerPolicy.eventTypes.join(", "),
     conditions: webhook.triggerPolicy.conditions.map(formatCondition).join("\n"),
     triggerMode: webhook.triggerPolicy.mode,
-    statePath: webhook.triggerPolicy.statePath ?? "/stateValue",
+    statePath: webhook.triggerPolicy.statePath ?? "/payload/status",
     groupKeyPath: webhook.triggerPolicy.groupKeyPath ?? "",
     cooldownMode: webhook.cooldownPolicy.mode,
     cooldownSeconds: webhook.cooldownPolicy.mode === "none" ? 60 : webhook.cooldownPolicy.durationSeconds,
@@ -946,17 +889,6 @@ function isConditionOperator(value: string | undefined): value is EnvironmentWeb
 
 function formatCondition(condition: EnvironmentWebhookCondition) {
   return `${condition.path} ${condition.operator}${condition.value === undefined ? "" : ` ${condition.value}`}`;
-}
-
-function providerLabel(provider: EnvironmentWebhookProvider) {
-  return PROVIDERS.find((candidate) => candidate.id === provider)?.label ?? provider;
-}
-
-function providerInstructions(provider: EnvironmentWebhookProvider) {
-  if (provider === "github") return "Use the URL as the Payload URL, choose application/json, paste the generated secret, then select the GitHub events you want.";
-  if (provider === "alertmanager") return "Use the URL as a webhook receiver and send the token as Authorization: Bearer <token>, or append it as ?token=<token>.";
-  if (provider === "slack") return "Use the URL for the Events API Request URL or a slash command. Sandpi answers URL verification and validates each Slack signature.";
-  return "POST JSON, form, or text data with Authorization: Bearer <token>, or append ?token=<token>. X-Sandpi-Event can name the event type.";
 }
 
 function triggerSummary(webhook: EnvironmentWebhook) {
