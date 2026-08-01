@@ -99,8 +99,9 @@ test("Sandpi certificates use namespaced HTTP and DNS ACME issuers", async () =>
   assert.match(manifest, /name: letsencrypt-dns/);
   assert.match(
     manifest,
-    /dns01:\n          digitalocean:\n            tokenSecretRef:\n              key: access-token\n              name: sandpi-dns/,
+    /dns01:\n          cloudflare:\n            apiTokenSecretRef:\n              key: api-token\n              name: sandpi-cloudflare/,
   );
+  assert.doesNotMatch(manifest, /digitalocean:/);
   assert.match(manifest, /dnsNames:\n    - "\*\.preview\.sandpi\.ai"/);
   assert.match(manifest, /secretName: sandpi-preview-tls/);
 });
@@ -119,7 +120,7 @@ test("the CI identity cannot manage cluster-scoped or unrelated secrets", async 
 
   assert.match(
     bootstrap,
-    /resourceNames:\n      - sandpi-postgres\n      - sandpi-dns\n      - sandpi-runtime\n    resources:\n      - secrets/,
+    /resourceNames:\n      - sandpi-postgres\n      - sandpi-cloudflare\n      - sandpi-runtime\n    resources:\n      - secrets/,
   );
   assert.match(
     bootstrap,
@@ -143,8 +144,9 @@ test("the deploy workflow checks kubectl's native authorization result", async (
   );
   assert.match(
     workflow,
-    /can-i patch secret\/sandpi-dns[\s\S]*?\| grep -Fx yes/,
+    /can-i patch secret\/sandpi-cloudflare[\s\S]*?\| grep -Fx yes/,
   );
+  assert.match(workflow, /SANDPI_CLOUDFLARE_API_TOKEN/);
   assert.doesNotMatch(workflow, /can-i .*\| grep -Fx true/);
   assert.match(
     workflow,

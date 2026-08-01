@@ -15,7 +15,7 @@ also bootstrapped by an operator and is intentionally not stored in Git.
 
 TLS is issued and renewed through namespace-scoped Let's Encrypt `Issuer`
 resources. The apex certificate uses HTTP-01. The wildcard Preview certificate
-uses DigitalOcean DNS-01 because ACME HTTP-01 cannot authorize a wildcard.
+uses Cloudflare DNS-01 because ACME HTTP-01 cannot authorize a wildcard.
 The shared cluster has cert-manager `v1.21.0` installed once from its official
 OCI Helm chart with the resource settings in `cert-manager-values.yaml`:
 
@@ -31,7 +31,7 @@ KUBECONFIG=/root/.kube/do-config helm upgrade --install cert-manager \
 ```
 
 Every push to `main` runs tests, builds an immutable
-`ghcr.io/sandbox0-ai/sandpi:<commit>` image, patches the two pre-created
+`ghcr.io/sandbox0-ai/sandpi:<commit>` image, patches the three pre-created
 Kubernetes secrets, renders `app/` with that exact image, and waits for both
 rollouts and both production TLS certificates. It then verifies HTTPS health,
 the HTTP-to-HTTPS redirect, and wildcard Preview routing through the ingress
@@ -57,8 +57,8 @@ Required repository variables:
 Required repository secrets:
 
 - `SANDBOX0_API_KEY`
+- `SANDPI_CLOUDFLARE_API_TOKEN`
 - `SANDPI_COOKIE_SECRET`
-- `SANDPI_DNS_API_TOKEN`
 - `SANDPI_KUBE_CONFIG`
 - `SANDPI_OIDC_CLIENT_SECRET`
 - `SANDPI_POSTGRES_PASSWORD`
@@ -92,16 +92,24 @@ release that exposes `client.usage.listWindows()`. Sandpi deliberately fails
 startup with an older SDK instead of bypassing the public SDK boundary.
 
 The apex `sandpi.ai` record and wildcard `*.preview.sandpi.ai` record must be A
-records for the ingress address in `SANDPI_INGRESS_IP`. No AAAA record is
-published while the ingress has no IPv6 address. Set
+records for the ingress address in `SANDPI_INGRESS_IP`. Keep the Preview
+wildcard record DNS-only unless Cloudflare is separately configured with an
+edge certificate that covers `*.preview.sandpi.ai`. No AAAA record is published
+while the ingress has no IPv6 address. Set
 `SANDPI_PREVIEW_URL=https://preview.sandpi.ai`; Preview allocates exactly one
 additional label beneath that root for each Environment/port origin.
 Keep the Preview root on the same registrable site as `SANDPI_PUBLIC_URL` so its
 host-only session cookie remains available inside the embedded Preview frame.
 
-`SANDPI_DNS_API_TOKEN` is a DigitalOcean token with DNS write access used only
-by cert-manager's `letsencrypt-dns` Issuer. The operator must apply the updated
-`bootstrap.yaml` before enabling this deployment so the namespace contains the
-empty `sandpi-dns` Secret and the GitHub deployer can patch only that named
-Secret. cert-manager reads its `access-token` key to complete DNS-01; the
+`SANDPI_CLOUDFLARE_API_TOKEN` is used only by cert-manager's
+`letsencrypt-dns` Issuer. Give it `Zone / DNS / Edit` and `Zone / Zone / Read`
+for the `sandpi.ai` zone. The operator must apply the updated `bootstrap.yaml`
+before enabling this deployment so the namespace contains the empty
+`sandpi-cloudflare` Secret and the GitHub deployer can patch only that named
+Secret. cert-manager reads its `api-token` key to complete DNS-01; the
 application Deployment never mounts it.
+
+See the official
+[cert-manager Cloudflare solver](https://cert-manager.io/docs/configuration/acme/dns01/cloudflare/)
+and [Cloudflare Universal SSL hostname coverage](https://developers.cloudflare.com/ssl/edge-certificates/universal-ssl/limitations/)
+documentation.

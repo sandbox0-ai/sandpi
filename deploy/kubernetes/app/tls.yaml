@@ -63,10 +63,10 @@ spec:
     server: https://acme-v02.api.letsencrypt.org/directory
     solvers:
       - dns01:
-          digitalocean:
-            tokenSecretRef:
-              key: access-token
-              name: sandpi-dns
+          cloudflare:
+            apiTokenSecretRef:
+              key: api-token
+              name: sandpi-cloudflare
 ---
 apiVersion: cert-manager.io/v1
 kind: Certificate

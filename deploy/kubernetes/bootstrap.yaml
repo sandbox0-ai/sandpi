@@ -35,7 +35,7 @@ type: Opaque
 apiVersion: v1
 kind: Secret
 metadata:
-  name: sandpi-dns
+  name: sandpi-cloudflare
   namespace: sandpi
   labels:
     app.kubernetes.io/part-of: sandpi
@@ -83,7 +83,7 @@ rules:
       - ""
     resourceNames:
       - sandpi-postgres
-      - sandpi-dns
+      - sandpi-cloudflare
       - sandpi-runtime
     resources:
       - secrets
