@@ -247,6 +247,12 @@ export class GitHubWebhookSourceService {
           accountId: route.accountId,
           accountLogin: route.accountLogin,
         });
+        if (
+          webhook.source.kind !== "github" ||
+          !webhook.source.eventTypes.includes(event.eventType)
+        ) {
+          continue;
+        }
         const accepted = await this.webhooks.acceptVerifiedEvent(webhook, event);
         if (accepted.kind === "stale") {
           throw new Error("The routed Webhook changed while GitHub delivery was accepted.");

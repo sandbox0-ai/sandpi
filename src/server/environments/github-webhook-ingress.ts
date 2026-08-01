@@ -90,7 +90,6 @@ export function normalizeGitHubWebhookDelivery(input: {
       `${eventType}${delivery.repository ? ` in ${delivery.repository.fullName}` : ""}`,
     receivedAt: delivery.receivedAt,
     payload: delivery.payload,
-    ...(delivery.action ? { stateValue: delivery.action } : {}),
     source: {
       provider: "github",
       connectionId: input.connectionId,

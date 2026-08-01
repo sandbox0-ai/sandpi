@@ -24,7 +24,6 @@ import {
 import type {
   CodingSession,
   EnvironmentWebhook,
-  EnvironmentWebhookCondition,
   EnvironmentWebhookDelivery,
   EnvironmentWebhookRun,
   EnvironmentWebhookSetup,
@@ -48,19 +47,10 @@ interface WebhookDraft {
   name: string;
   secret: string;
   prompt: string;
-  eventTypes: string;
-  conditions: string;
-  triggerMode: "every" | "stateChange";
-  statePath: string;
-  groupKeyPath: string;
-  cooldownMode: "none" | "throttle" | "debounce" | "batch";
-  cooldownSeconds: number;
-  cooldownBehavior: "suppress" | "latest" | "merge";
+  githubEventTypes: string[];
+  batchWindowSeconds: number;
   targetKind: "newSession" | "sourceThread" | "session";
   targetSessionId: string;
-  overlapPolicy: "queue" | "skip";
-  maxConcurrentRuns: number;
-  maxPendingRuns: number;
   enabled: boolean;
   title?: string;
   modelId?: string;
@@ -368,7 +358,7 @@ export function EnvironmentWebhooks({
       <div className="codex-extension-toolbar">
         <p>
           Connect GitHub directly or use an authenticated URL. Sandpi verifies,
-          persists, filters, and cools down every delivery.
+          persists, batches, and safely delivers events to Codex.
         </p>
         <div>
           <button
@@ -466,8 +456,8 @@ export function EnvironmentWebhooks({
                     <dd>{triggerSummary(webhook)}</dd>
                   </div>
                   <div>
-                    <dt>Cooldown</dt>
-                    <dd>{cooldownSummary(webhook)}</dd>
+                    <dt>Delivery handling</dt>
+                    <dd>{batchSummary(webhook)}</dd>
                   </div>
                   <div>
                     <dt>Last delivery</dt>
@@ -695,7 +685,7 @@ function WebhookEditor({
         .toLocaleLowerCase()
         .includes(repositoryQuery.trim().toLocaleLowerCase()),
   );
-  const selectedEventTypes = new Set(splitEventTypes(draft.eventTypes));
+  const selectedEventTypes = new Set(draft.githubEventTypes);
   return (
     <section className="environment-credential-editor" aria-labelledby="environment-webhook-editor-title">
       <header>
@@ -719,8 +709,7 @@ function WebhookEditor({
         <header>
           <strong>Event source</strong>
           <span>
-            The source owns authentication and delivery; the Webhook owns
-            filtering and execution.
+            Choose GitHub events or create an authenticated URL for any sender.
           </span>
         </header>
         <div className={styles.sourceChoices}>
@@ -738,8 +727,7 @@ function WebhookEditor({
                 secret: "",
                 githubConnectionId: connection?.id ?? "",
                 githubRepositoryIds: [],
-                eventTypes: DEFAULT_GITHUB_WEBHOOK_EVENT_TYPES.join(", "),
-                statePath: "/stateValue",
+                githubEventTypes: [...DEFAULT_GITHUB_WEBHOOK_EVENT_TYPES],
                 targetKind: "sourceThread",
               });
             }}
@@ -757,8 +745,7 @@ function WebhookEditor({
                 sourceKind: "custom",
                 githubConnectionId: "",
                 githubRepositoryIds: [],
-                eventTypes: "",
-                statePath: "/payload/status",
+                githubEventTypes: [],
                 targetKind: "newSession",
               })
             }
@@ -786,6 +773,7 @@ function WebhookEditor({
               value={draft.secret}
               onChange={(event) => onChange({ ...draft, secret: event.target.value })}
             />
+            <small>Every authenticated request starts this Webhook.</small>
           </label>
         ) : (
           <div className={styles.githubSource}>
@@ -935,27 +923,12 @@ function WebhookEditor({
         <small className={shared.characterCount}>{draft.prompt.length.toLocaleString()} / 50,000</small>
       </label>
 
-      <div className={styles.policySection}>
-        <header>
-          <strong>Trigger policy</strong>
-          <span>Choose which verified deliveries produce runs.</span>
-        </header>
-        <div className="field-grid two-columns">
-          <label>
-            Trigger
-            <select value={draft.triggerMode} onChange={(event) => onChange({ ...draft, triggerMode: event.target.value as WebhookDraft["triggerMode"] })}>
-              <option value="every">Every matching event</option>
-              <option value="stateChange">Only when state changes</option>
-            </select>
-          </label>
-          {draft.sourceKind === "custom" ? (
-            <label>
-              <span className={shared.fieldHeading}>Event types <small>comma or newline separated</small></span>
-              <input placeholder="issues.opened, deploy.failed" value={draft.eventTypes} onChange={(event) => onChange({ ...draft, eventTypes: event.target.value })} />
-            </label>
-          ) : null}
-        </div>
-        {draft.sourceKind === "github" ? (
+      {draft.sourceKind === "github" ? (
+        <div className={styles.policySection}>
+          <header>
+            <strong>GitHub events</strong>
+            <span>Only the selected event actions start this Webhook.</span>
+          </header>
           <div className={styles.eventPicker}>
             {GITHUB_WEBHOOK_EVENT_TYPES.map((eventType) => (
               <label key={eventType.value}>
@@ -968,10 +941,9 @@ function WebhookEditor({
                     else next.delete(eventType.value);
                     onChange({
                       ...draft,
-                      eventTypes: GITHUB_WEBHOOK_EVENT_TYPES
+                      githubEventTypes: GITHUB_WEBHOOK_EVENT_TYPES
                         .filter((candidate) => next.has(candidate.value))
-                        .map((candidate) => candidate.value)
-                        .join(", "),
+                        .map((candidate) => candidate.value),
                     });
                   }}
                 />
@@ -979,130 +951,93 @@ function WebhookEditor({
               </label>
             ))}
           </div>
-        ) : null}
-        <div className="field-grid two-columns">
-          {draft.triggerMode === "stateChange" ? (
-            <label>
-              <span className={shared.fieldHeading}>State JSON Pointer <small>normalized event</small></span>
-              <input className={styles.codeInput} placeholder="/payload/status" value={draft.statePath} onChange={(event) => onChange({ ...draft, statePath: event.target.value })} />
-            </label>
-          ) : null}
-          {draft.sourceKind === "custom" ? (
-            <label>
-              <span className={shared.fieldHeading}>Group JSON Pointer <small>optional</small></span>
-              <input className={styles.codeInput} placeholder="/groupKey or /payload/repository/full_name" value={draft.groupKeyPath} onChange={(event) => onChange({ ...draft, groupKeyPath: event.target.value })} />
-            </label>
-          ) : null}
         </div>
+      ) : null}
+
+      <div className={styles.policySection}>
+        <header>
+          <strong>Delivery batching</strong>
+          <span>Run immediately or combine a short burst into one task.</span>
+        </header>
         <label className="full-field">
-          <span className={shared.fieldHeading}>Conditions <small>one per line: JSON Pointer, operator, value</small></span>
-          <textarea
-            className={styles.codeInput}
-            rows={4}
-            placeholder={'/payload/action equals opened\n/payload/labels contains urgent'}
-            value={draft.conditions}
-            onChange={(event) => onChange({ ...draft, conditions: event.target.value })}
-          />
-          <small>Operators: equals, notEquals, contains, exists.</small>
+          Behavior
+          <select
+            value={draft.batchWindowSeconds}
+            onChange={(event) =>
+              onChange({
+                ...draft,
+                batchWindowSeconds: Number(event.target.value),
+              })
+            }
+          >
+            <option value={0}>Run every delivery immediately</option>
+            <option value={30}>Combine deliveries for 30 seconds</option>
+            <option value={60}>Combine deliveries for 1 minute</option>
+            <option value={300}>Combine deliveries for 5 minutes</option>
+            <option value={900}>Combine deliveries for 15 minutes</option>
+            {![0, 30, 60, 300, 900].includes(draft.batchWindowSeconds) ? (
+              <option value={draft.batchWindowSeconds}>
+                Combine deliveries for {draft.batchWindowSeconds} seconds
+              </option>
+            ) : null}
+          </select>
         </label>
+        <p className={styles.policyExplanation}>
+          {draft.batchWindowSeconds === 0
+            ? "Each accepted delivery creates one queued run."
+            : draft.sourceKind === "github"
+              ? "The fixed window starts with the first event and combines events for the same pull request, issue, or repository."
+              : "The fixed window starts with the first request and combines all requests received by this Webhook."}
+        </p>
       </div>
 
       <div className={styles.policySection}>
         <header>
-          <strong>Cooldown policy</strong>
-          <span>Control event storms before a Session is created or woken.</span>
+          <strong>Run destination</strong>
+          <span>Choose where Sandpi should deliver each accepted run.</span>
         </header>
-        <div className="field-grid two-columns">
-          <label>
-            Mode
-            <select value={draft.cooldownMode} onChange={(event) => onChange({ ...draft, cooldownMode: event.target.value as WebhookDraft["cooldownMode"] })}>
-              <option value="none">None</option>
-              <option value="throttle">Throttle</option>
-              <option value="debounce">Debounce</option>
-              <option value="batch">Batch window</option>
-            </select>
-          </label>
-          {draft.cooldownMode !== "none" ? (
-            <label>
-              Duration (seconds)
-              <input type="number" min={1} max={86_400} value={draft.cooldownSeconds} onChange={(event) => onChange({ ...draft, cooldownSeconds: event.target.valueAsNumber || 1 })} />
-            </label>
-          ) : null}
-        </div>
-        {draft.cooldownMode !== "none" ? (
-          <label className="full-field">
-            Events during the window
-            <select value={draft.cooldownBehavior} onChange={(event) => onChange({ ...draft, cooldownBehavior: event.target.value as WebhookDraft["cooldownBehavior"] })}>
-              <option value="merge">Merge up to 50 event payloads</option>
-              <option value="latest">Keep only the latest payload</option>
-              <option value="suppress">Suppress after the first accepted payload</option>
-            </select>
-          </label>
-        ) : null}
-      </div>
-
-      <div className={styles.policySection}>
-        <header>
-          <strong>Run policy</strong>
-          <span>Bound concurrency and backlog independently from cooldown.</span>
-        </header>
-        <div className="field-grid two-columns">
-          <label>
-            Target
-            <select
-              value={
-                draft.targetKind === "session"
-                  ? draft.targetSessionId
-                  : draft.targetKind
-              }
-              onChange={(event) => {
-                const value = event.target.value;
-                onChange({
-                  ...draft,
-                  targetKind:
-                    value === "newSession" || value === "sourceThread"
-                      ? value
-                      : "session",
-                  targetSessionId:
-                    value === "newSession" || value === "sourceThread"
-                      ? draft.targetSessionId
-                      : value,
-                });
-              }}
-            >
-              <option value="newSession">New Session per run</option>
-              {draft.sourceKind === "github" ||
-              draft.targetKind === "sourceThread" ? (
-                <option value="sourceThread">
-                  One Session per pull request or issue
-                </option>
-              ) : null}
-              {sessions.map((session) => <option key={session.id} value={session.id}>{session.title}</option>)}
-            </select>
-          </label>
-          <label>
-            If target Session is busy
-            <select value={draft.overlapPolicy} onChange={(event) => onChange({ ...draft, overlapPolicy: event.target.value as WebhookDraft["overlapPolicy"] })}>
-              <option value="queue">Queue and retry</option>
-              <option value="skip">Record as skipped</option>
-            </select>
-          </label>
-        </div>
-        <div className="field-grid two-columns">
-          <label>
-            Concurrent runs
-            <input type="number" min={1} max={10} disabled={draft.targetKind === "session"} value={draft.targetKind === "session" ? 1 : draft.maxConcurrentRuns} onChange={(event) => onChange({ ...draft, maxConcurrentRuns: event.target.valueAsNumber || 1 })} />
-          </label>
-          <label>
-            Pending-run limit
-            <input type="number" min={1} max={1_000} value={draft.maxPendingRuns} onChange={(event) => onChange({ ...draft, maxPendingRuns: event.target.valueAsNumber || 1 })} />
-          </label>
-        </div>
+        <label className="full-field">
+          Target
+          <select
+            value={
+              draft.targetKind === "session"
+                ? draft.targetSessionId
+                : draft.targetKind
+            }
+            onChange={(event) => {
+              const value = event.target.value;
+              onChange({
+                ...draft,
+                targetKind:
+                  value === "newSession" || value === "sourceThread"
+                    ? value
+                    : "session",
+                targetSessionId:
+                  value === "newSession" || value === "sourceThread"
+                    ? draft.targetSessionId
+                    : value,
+              });
+            }}
+          >
+            <option value="newSession">Create a new Session for each run</option>
+            {draft.sourceKind === "github" ||
+            draft.targetKind === "sourceThread" ? (
+              <option value="sourceThread">
+                Reuse one Session per pull request or issue
+              </option>
+            ) : null}
+            {sessions.map((session) => (
+              <option key={session.id} value={session.id}>
+                Existing Session: {session.title}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
 
       <label className={shared.enabledField}>
         <input type="checkbox" checked={draft.enabled} onChange={(event) => onChange({ ...draft, enabled: event.target.checked })} />
-        Accept deliveries immediately
+        Enable this Webhook after saving
       </label>
 
       {error ? <p className="settings-inline-error" role="alert">{error}</p> : null}
@@ -1134,7 +1069,6 @@ function WebhookHistoryView({
           <div key={delivery.id}>
             <span>{delivery.eventType} · {delivery.status}</span>
             <small>{formatUnixTimestamp(delivery.receivedAt, language, timeZone, { dateStyle: "medium", timeStyle: "short" })}</small>
-            {delivery.reason ? <small>{delivery.reason}</small> : null}
           </div>
         )) : <small>No verified deliveries yet.</small>}
       </section>
@@ -1176,10 +1110,7 @@ function webhookDraftPayload(draft: WebhookDraft):
   if (draft.targetKind === "session" && !draft.targetSessionId) {
     return { error: "Choose a target Session." };
   }
-  const parsedConditions = parseConditions(draft.conditions);
-  if ("error" in parsedConditions) return parsedConditions;
-  const eventTypes = splitEventTypes(draft.eventTypes);
-  if (draft.sourceKind === "github" && !eventTypes.length) {
+  if (draft.sourceKind === "github" && !draft.githubEventTypes.length) {
     return { error: "Select at least one GitHub event." };
   }
   const value = {
@@ -1189,33 +1120,18 @@ function webhookDraftPayload(draft: WebhookDraft):
             kind: "github" as const,
             connectionId: draft.githubConnectionId,
             repositoryIds: draft.githubRepositoryIds,
+            eventTypes: draft.githubEventTypes,
           }
         : { kind: "custom" as const },
     name: draft.name.trim(),
     prompt: draft.prompt.trim(),
-    triggerPolicy: {
-      mode: draft.triggerMode,
-      eventTypes,
-      conditions: parsedConditions.value,
-      ...(draft.statePath.trim() ? { statePath: draft.statePath.trim() } : {}),
-      ...(draft.groupKeyPath.trim() ? { groupKeyPath: draft.groupKeyPath.trim() } : {}),
-    },
-    cooldownPolicy: draft.cooldownMode === "none"
-      ? { mode: "none" as const }
-      : {
-          mode: draft.cooldownMode,
-          durationSeconds: draft.cooldownSeconds,
-          behavior: draft.cooldownBehavior,
-        },
+    batchWindowSeconds: draft.batchWindowSeconds,
     target:
       draft.targetKind === "newSession"
         ? { kind: "newSession" as const }
         : draft.targetKind === "sourceThread"
           ? { kind: "sourceThread" as const }
           : { kind: "session" as const, sessionId: draft.targetSessionId },
-    overlapPolicy: draft.overlapPolicy,
-    maxConcurrentRuns: draft.targetKind === "session" ? 1 : draft.maxConcurrentRuns,
-    maxPendingRuns: draft.maxPendingRuns,
     enabled: draft.enabled,
     ...(draft.title ? { title: draft.title } : {}),
     ...(draft.modelId ? { modelId: draft.modelId } : {}),
@@ -1239,16 +1155,13 @@ function editableWebhookPayload(webhook: EnvironmentWebhook) {
             repositoryIds: webhook.source.repositories.map(
               (repository) => repository.id,
             ),
+            eventTypes: webhook.source.eventTypes,
           }
         : { kind: "custom" as const },
     name: webhook.name,
     prompt: webhook.prompt,
-    triggerPolicy: webhook.triggerPolicy,
-    cooldownPolicy: webhook.cooldownPolicy,
+    batchWindowSeconds: webhook.batchWindowSeconds,
     target: webhook.target,
-    overlapPolicy: webhook.overlapPolicy,
-    maxConcurrentRuns: webhook.maxConcurrentRuns,
-    maxPendingRuns: webhook.maxPendingRuns,
     enabled: webhook.enabled,
     ...(webhook.title ? { title: webhook.title } : {}),
     ...(webhook.modelId ? { modelId: webhook.modelId } : {}),
@@ -1266,19 +1179,10 @@ function emptyDraft(sessionId?: string): WebhookDraft {
     name: "",
     secret: "",
     prompt: "Investigate this event, make any safe in-scope changes, run relevant checks, and summarize the outcome.",
-    eventTypes: "",
-    conditions: "",
-    triggerMode: "every",
-    statePath: "/payload/status",
-    groupKeyPath: "",
-    cooldownMode: "throttle",
-    cooldownSeconds: 60,
-    cooldownBehavior: "merge",
+    githubEventTypes: [],
+    batchWindowSeconds: 0,
     targetKind: "newSession",
     targetSessionId: sessionId ?? "",
-    overlapPolicy: "queue",
-    maxConcurrentRuns: 1,
-    maxPendingRuns: 100,
     enabled: true,
   };
 }
@@ -1296,19 +1200,11 @@ function webhookDraft(webhook: EnvironmentWebhook): WebhookDraft {
     name: webhook.name,
     secret: "",
     prompt: webhook.prompt,
-    eventTypes: webhook.triggerPolicy.eventTypes.join(", "),
-    conditions: webhook.triggerPolicy.conditions.map(formatCondition).join("\n"),
-    triggerMode: webhook.triggerPolicy.mode,
-    statePath: webhook.triggerPolicy.statePath ?? "/payload/status",
-    groupKeyPath: webhook.triggerPolicy.groupKeyPath ?? "",
-    cooldownMode: webhook.cooldownPolicy.mode,
-    cooldownSeconds: webhook.cooldownPolicy.mode === "none" ? 60 : webhook.cooldownPolicy.durationSeconds,
-    cooldownBehavior: webhook.cooldownPolicy.mode === "none" ? "merge" : webhook.cooldownPolicy.behavior,
+    githubEventTypes:
+      webhook.source.kind === "github" ? webhook.source.eventTypes : [],
+    batchWindowSeconds: webhook.batchWindowSeconds,
     targetKind: webhook.target.kind,
     targetSessionId: webhook.target.kind === "session" ? webhook.target.sessionId : "",
-    overlapPolicy: webhook.overlapPolicy,
-    maxConcurrentRuns: webhook.maxConcurrentRuns,
-    maxPendingRuns: webhook.maxPendingRuns,
     enabled: webhook.enabled,
     title: webhook.title,
     modelId: webhook.modelId,
@@ -1318,62 +1214,17 @@ function webhookDraft(webhook: EnvironmentWebhook): WebhookDraft {
   };
 }
 
-function parseConditions(input: string):
-  | { value: EnvironmentWebhookCondition[] }
-  | { error: string } {
-  const conditions: EnvironmentWebhookCondition[] = [];
-  for (const [index, rawLine] of input.split("\n").entries()) {
-    const line = rawLine.trim();
-    if (!line) continue;
-    const [path, operator, ...valueParts] = line.split(/\s+/);
-    if (!path || (!path.startsWith("/") && path !== "")) {
-      return { error: `Condition ${index + 1} needs a JSON Pointer starting with /.` };
-    }
-    if (!isConditionOperator(operator)) {
-      return { error: `Condition ${index + 1} uses an unknown operator.` };
-    }
-    const value = valueParts.join(" ");
-    if (operator !== "exists" && !value) {
-      return { error: `Condition ${index + 1} needs a comparison value.` };
-    }
-    conditions.push({ path, operator, ...(operator === "exists" ? {} : { value }) });
-  }
-  return { value: conditions };
-}
-
-function splitEventTypes(input: string) {
-  return Array.from(
-    new Set(
-      input
-        .split(/[\n,]/)
-        .map((value) => value.trim())
-        .filter(Boolean),
-    ),
-  );
-}
-
-function isConditionOperator(value: string | undefined): value is EnvironmentWebhookCondition["operator"] {
-  return value === "equals" || value === "notEquals" || value === "contains" || value === "exists";
-}
-
-function formatCondition(condition: EnvironmentWebhookCondition) {
-  return `${condition.path} ${condition.operator}${condition.value === undefined ? "" : ` ${condition.value}`}`;
-}
-
 function triggerSummary(webhook: EnvironmentWebhook) {
-  const eventTypes = webhook.triggerPolicy.eventTypes.length
-    ? webhook.triggerPolicy.eventTypes.join(", ")
-    : "all events";
-  return webhook.triggerPolicy.mode === "stateChange"
-    ? `State change · ${eventTypes}`
-    : eventTypes;
+  if (webhook.source.kind === "custom") return "Every authenticated request";
+  return webhook.source.eventTypes.length === 1
+    ? webhook.source.eventTypes[0]!
+    : `${webhook.source.eventTypes.length} selected GitHub events`;
 }
 
-function cooldownSummary(webhook: EnvironmentWebhook) {
-  const policy = webhook.cooldownPolicy;
-  return policy.mode === "none"
-    ? "None"
-    : `${policy.mode} · ${policy.durationSeconds}s · ${policy.behavior}`;
+function batchSummary(webhook: EnvironmentWebhook) {
+  return webhook.batchWindowSeconds === 0
+    ? "Run immediately"
+    : `Combine for ${webhook.batchWindowSeconds}s`;
 }
 
 function webhookSourceSummary(webhook: EnvironmentWebhook) {

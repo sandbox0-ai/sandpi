@@ -9,7 +9,6 @@ export interface NormalizedWebhookEvent {
   summary: string;
   receivedAt: string;
   payload: unknown;
-  stateValue?: string;
   source?: {
     provider: "custom" | "github";
     connectionId?: string;

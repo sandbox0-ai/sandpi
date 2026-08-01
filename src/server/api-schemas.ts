@@ -121,27 +121,6 @@ export const environmentScheduleSchema = z
   })
   .strict();
 
-const webhookJsonPointerSchema = z
-  .string()
-  .trim()
-  .max(500)
-  .refine((value) => value === "" || value.startsWith("/"), {
-    message: "A JSON Pointer must be empty or start with /.",
-  });
-
-const environmentWebhookConditionSchema = z
-  .object({
-    path: webhookJsonPointerSchema,
-    operator: z.enum(["equals", "notEquals", "contains", "exists"]),
-    value: z.string().max(2_000).optional(),
-  })
-  .strict()
-  .refine(
-    (condition) =>
-      condition.operator === "exists" || condition.value !== undefined,
-    { message: "A comparison condition requires a value." },
-  );
-
 export const environmentWebhookSchema = z
   .object({
     name: z.string().trim().min(1).max(80),
@@ -159,37 +138,20 @@ export const environmentWebhookSchema = z
               .refine((ids) => new Set(ids).size === ids.length, {
                 message: "GitHub repository IDs must be unique.",
               }),
+            eventTypes: z
+              .array(z.string().trim().min(1).max(200))
+              .min(1)
+              .max(100)
+              .refine((events) => new Set(events).size === events.length, {
+                message: "GitHub event types must be unique.",
+              }),
           })
           .strict(),
       ])
       .default({ kind: "custom" }),
     secret: z.string().trim().min(16).max(1_000).optional(),
     prompt: z.string().trim().min(1).max(50_000),
-    triggerPolicy: z
-      .object({
-        mode: z.enum(["every", "stateChange"]).default("every"),
-        eventTypes: z
-          .array(z.string().trim().min(1).max(200))
-          .max(100)
-          .default([]),
-        conditions: z
-          .array(environmentWebhookConditionSchema)
-          .max(20)
-          .default([]),
-        statePath: webhookJsonPointerSchema.optional(),
-        groupKeyPath: webhookJsonPointerSchema.optional(),
-      })
-      .strict(),
-    cooldownPolicy: z.discriminatedUnion("mode", [
-      z.object({ mode: z.literal("none") }).strict(),
-      z
-        .object({
-          mode: z.enum(["throttle", "debounce", "batch"]),
-          durationSeconds: z.number().int().min(1).max(86_400),
-          behavior: z.enum(["suppress", "latest", "merge"]),
-        })
-        .strict(),
-    ]),
+    batchWindowSeconds: z.number().int().min(0).max(86_400).default(0),
     target: z.discriminatedUnion("kind", [
       z.object({ kind: z.literal("newSession") }).strict(),
       z.object({ kind: z.literal("sourceThread") }).strict(),
@@ -200,9 +162,6 @@ export const environmentWebhookSchema = z
         })
         .strict(),
     ]),
-    overlapPolicy: z.enum(["queue", "skip"]).default("queue"),
-    maxConcurrentRuns: z.number().int().min(1).max(10).default(1),
-    maxPendingRuns: z.number().int().min(1).max(1_000).default(100),
     enabled: z.boolean().default(true),
     title: z.string().trim().min(1).max(200).optional(),
     modelId: z.string().trim().min(1).max(200).optional(),
@@ -217,6 +176,13 @@ export const environmentWebhookSchema = z
         code: "custom",
         path: ["secret"],
         message: "GitHub Webhooks do not accept a per-Webhook secret.",
+      });
+    }
+    if (webhook.source.kind === "custom" && webhook.target.kind === "sourceThread") {
+      context.addIssue({
+        code: "custom",
+        path: ["target", "kind"],
+        message: "Source-thread targets are only available for GitHub Webhooks.",
       });
     }
   });

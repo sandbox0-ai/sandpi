@@ -1939,11 +1939,16 @@ components:
                   type: array
                   items:
                     $ref: "#/components/schemas/GitHubWebhookRepository"
+                eventTypes:
+                  type: array
+                  items:
+                    type: string
               required:
                 - kind
                 - connectionId
                 - accountLogin
                 - repositories
+                - eventTypes
               additionalProperties: false
         endpointUrl:
           type: string
@@ -1952,82 +1957,10 @@ components:
           type: string
         prompt:
           type: string
-        triggerPolicy:
-          type: object
-          properties:
-            mode:
-              type: string
-              enum:
-                - every
-                - stateChange
-            eventTypes:
-              type: array
-              items:
-                type: string
-            conditions:
-              type: array
-              items:
-                type: object
-                properties:
-                  path:
-                    type: string
-                  operator:
-                    type: string
-                    enum:
-                      - equals
-                      - notEquals
-                      - contains
-                      - exists
-                  value:
-                    type: string
-                required:
-                  - path
-                  - operator
-                additionalProperties: false
-            statePath:
-              type: string
-            groupKeyPath:
-              type: string
-          required:
-            - mode
-            - eventTypes
-            - conditions
-          additionalProperties: false
-        cooldownPolicy:
-          oneOf:
-            - type: object
-              properties:
-                mode:
-                  type: string
-                  enum:
-                    - none
-              required:
-                - mode
-              additionalProperties: false
-            - type: object
-              properties:
-                mode:
-                  type: string
-                  enum:
-                    - throttle
-                    - debounce
-                    - batch
-                durationSeconds:
-                  type: integer
-                  minimum: 0
-                  exclusiveMinimum: true
-                  maximum: 9007199254740991
-                behavior:
-                  type: string
-                  enum:
-                    - suppress
-                    - latest
-                    - merge
-              required:
-                - mode
-                - durationSeconds
-                - behavior
-              additionalProperties: false
+        batchWindowSeconds:
+          type: integer
+          minimum: 0
+          maximum: 86400
         target:
           oneOf:
             - type: object
@@ -2060,21 +1993,6 @@ components:
                 - kind
                 - sessionId
               additionalProperties: false
-        overlapPolicy:
-          type: string
-          enum:
-            - queue
-            - skip
-        maxConcurrentRuns:
-          type: integer
-          minimum: 0
-          exclusiveMinimum: true
-          maximum: 9007199254740991
-        maxPendingRuns:
-          type: integer
-          minimum: 0
-          exclusiveMinimum: true
-          maximum: 9007199254740991
         enabled:
           type: boolean
         secretConfigured:
@@ -2099,8 +2017,6 @@ components:
           enum:
             - queued
             - batched
-            - filtered
-            - suppressed
             - duplicate
         lastRunStatus:
           type: string
@@ -2125,12 +2041,8 @@ components:
         - source
         - name
         - prompt
-        - triggerPolicy
-        - cooldownPolicy
+        - batchWindowSeconds
         - target
-        - overlapPolicy
-        - maxConcurrentRuns
-        - maxPendingRuns
         - enabled
         - secretConfigured
         - createdAt
@@ -2150,11 +2062,7 @@ components:
           enum:
             - queued
             - batched
-            - filtered
-            - suppressed
         runId:
-          type: string
-        reason:
           type: string
         receivedAt:
           type: number
@@ -7612,7 +7520,7 @@ paths:
   /api/v1/environments/{environmentId}/webhooks:
     get:
       operationId: listEnvironmentWebhooks
-      summary: List Environment webhook triggers
+      summary: List Environment Webhooks
       tags:
         - Webhooks
       parameters:
@@ -7645,7 +7553,7 @@ paths:
                 $ref: "#/components/schemas/Error"
     post:
       operationId: createEnvironmentWebhook
-      summary: Create an Environment webhook trigger
+      summary: Create an Environment Webhook
       tags:
         - Webhooks
       requestBody:
@@ -7689,10 +7597,19 @@ paths:
                           items:
                             type: string
                             pattern: ^[0-9]+$
+                        eventTypes:
+                          minItems: 1
+                          maxItems: 100
+                          type: array
+                          items:
+                            type: string
+                            minLength: 1
+                            maxLength: 200
                       required:
                         - kind
                         - connectionId
                         - repositoryIds
+                        - eventTypes
                       additionalProperties: false
                 secret:
                   type: string
@@ -7702,88 +7619,11 @@ paths:
                   type: string
                   minLength: 1
                   maxLength: 50000
-                triggerPolicy:
-                  type: object
-                  properties:
-                    mode:
-                      default: every
-                      type: string
-                      enum:
-                        - every
-                        - stateChange
-                    eventTypes:
-                      default: []
-                      maxItems: 100
-                      type: array
-                      items:
-                        type: string
-                        minLength: 1
-                        maxLength: 200
-                    conditions:
-                      default: []
-                      maxItems: 20
-                      type: array
-                      items:
-                        type: object
-                        properties:
-                          path:
-                            type: string
-                            maxLength: 500
-                          operator:
-                            type: string
-                            enum:
-                              - equals
-                              - notEquals
-                              - contains
-                              - exists
-                          value:
-                            type: string
-                            maxLength: 2000
-                        required:
-                          - path
-                          - operator
-                        additionalProperties: false
-                    statePath:
-                      type: string
-                      maxLength: 500
-                    groupKeyPath:
-                      type: string
-                      maxLength: 500
-                  additionalProperties: false
-                cooldownPolicy:
-                  oneOf:
-                    - type: object
-                      properties:
-                        mode:
-                          type: string
-                          enum:
-                            - none
-                      required:
-                        - mode
-                      additionalProperties: false
-                    - type: object
-                      properties:
-                        mode:
-                          type: string
-                          enum:
-                            - throttle
-                            - debounce
-                            - batch
-                        durationSeconds:
-                          type: integer
-                          minimum: 1
-                          maximum: 86400
-                        behavior:
-                          type: string
-                          enum:
-                            - suppress
-                            - latest
-                            - merge
-                      required:
-                        - mode
-                        - durationSeconds
-                        - behavior
-                      additionalProperties: false
+                batchWindowSeconds:
+                  default: 0
+                  type: integer
+                  minimum: 0
+                  maximum: 86400
                 target:
                   oneOf:
                     - type: object
@@ -7818,22 +7658,6 @@ paths:
                         - kind
                         - sessionId
                       additionalProperties: false
-                overlapPolicy:
-                  default: queue
-                  type: string
-                  enum:
-                    - queue
-                    - skip
-                maxConcurrentRuns:
-                  default: 1
-                  type: integer
-                  minimum: 1
-                  maximum: 10
-                maxPendingRuns:
-                  default: 100
-                  type: integer
-                  minimum: 1
-                  maximum: 1000
                 enabled:
                   default: true
                   type: boolean
@@ -7860,8 +7684,6 @@ paths:
               required:
                 - name
                 - prompt
-                - triggerPolicy
-                - cooldownPolicy
                 - target
               additionalProperties: false
       parameters:
@@ -7893,7 +7715,7 @@ paths:
   /api/v1/environments/{environmentId}/webhooks/{webhookId}:
     put:
       operationId: updateEnvironmentWebhook
-      summary: Replace an Environment webhook trigger
+      summary: Replace an Environment Webhook
       tags:
         - Webhooks
       requestBody:
@@ -7937,10 +7759,19 @@ paths:
                           items:
                             type: string
                             pattern: ^[0-9]+$
+                        eventTypes:
+                          minItems: 1
+                          maxItems: 100
+                          type: array
+                          items:
+                            type: string
+                            minLength: 1
+                            maxLength: 200
                       required:
                         - kind
                         - connectionId
                         - repositoryIds
+                        - eventTypes
                       additionalProperties: false
                 secret:
                   type: string
@@ -7950,88 +7781,11 @@ paths:
                   type: string
                   minLength: 1
                   maxLength: 50000
-                triggerPolicy:
-                  type: object
-                  properties:
-                    mode:
-                      default: every
-                      type: string
-                      enum:
-                        - every
-                        - stateChange
-                    eventTypes:
-                      default: []
-                      maxItems: 100
-                      type: array
-                      items:
-                        type: string
-                        minLength: 1
-                        maxLength: 200
-                    conditions:
-                      default: []
-                      maxItems: 20
-                      type: array
-                      items:
-                        type: object
-                        properties:
-                          path:
-                            type: string
-                            maxLength: 500
-                          operator:
-                            type: string
-                            enum:
-                              - equals
-                              - notEquals
-                              - contains
-                              - exists
-                          value:
-                            type: string
-                            maxLength: 2000
-                        required:
-                          - path
-                          - operator
-                        additionalProperties: false
-                    statePath:
-                      type: string
-                      maxLength: 500
-                    groupKeyPath:
-                      type: string
-                      maxLength: 500
-                  additionalProperties: false
-                cooldownPolicy:
-                  oneOf:
-                    - type: object
-                      properties:
-                        mode:
-                          type: string
-                          enum:
-                            - none
-                      required:
-                        - mode
-                      additionalProperties: false
-                    - type: object
-                      properties:
-                        mode:
-                          type: string
-                          enum:
-                            - throttle
-                            - debounce
-                            - batch
-                        durationSeconds:
-                          type: integer
-                          minimum: 1
-                          maximum: 86400
-                        behavior:
-                          type: string
-                          enum:
-                            - suppress
-                            - latest
-                            - merge
-                      required:
-                        - mode
-                        - durationSeconds
-                        - behavior
-                      additionalProperties: false
+                batchWindowSeconds:
+                  default: 0
+                  type: integer
+                  minimum: 0
+                  maximum: 86400
                 target:
                   oneOf:
                     - type: object
@@ -8066,22 +7820,6 @@ paths:
                         - kind
                         - sessionId
                       additionalProperties: false
-                overlapPolicy:
-                  default: queue
-                  type: string
-                  enum:
-                    - queue
-                    - skip
-                maxConcurrentRuns:
-                  default: 1
-                  type: integer
-                  minimum: 1
-                  maximum: 10
-                maxPendingRuns:
-                  default: 100
-                  type: integer
-                  minimum: 1
-                  maximum: 1000
                 enabled:
                   default: true
                   type: boolean
@@ -8108,8 +7846,6 @@ paths:
               required:
                 - name
                 - prompt
-                - triggerPolicy
-                - cooldownPolicy
                 - target
               additionalProperties: false
       parameters:
@@ -8146,7 +7882,7 @@ paths:
                 $ref: "#/components/schemas/Error"
     delete:
       operationId: deleteEnvironmentWebhook
-      summary: Delete an Environment webhook trigger
+      summary: Delete an Environment Webhook
       tags:
         - Webhooks
       parameters:
@@ -10013,8 +9749,6 @@ paths:
                     type: string
                     enum:
                       - duplicate
-                      - filtered
-                      - suppressed
                       - batched
                       - queued
                   deliveryId:
@@ -10036,8 +9770,6 @@ paths:
                     type: string
                     enum:
                       - duplicate
-                      - filtered
-                      - suppressed
                       - batched
                       - queued
                   deliveryId:

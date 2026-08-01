@@ -163,7 +163,7 @@ const noContent = z.null().describe("No content.");
 const redirect = z.null().describe("Redirect response.");
 const rawObject = z.record(z.string(), z.unknown());
 const webhookIngressResult = z.object({
-  status: z.enum(["duplicate", "filtered", "suppressed", "batched", "queued"]),
+  status: z.enum(["duplicate", "batched", "queued"]),
   deliveryId: z.string(),
   runId: z.string().optional(),
 });
@@ -815,7 +815,7 @@ export const openApiRouteContracts: readonly OpenApiRouteContract[] = [
     url: "/api/v1/environments/:environmentId/webhooks",
     schema: {
       operationId: "listEnvironmentWebhooks",
-      summary: "List Environment webhook triggers",
+      summary: "List Environment Webhooks",
       tags: ["Webhooks"],
       response: { 200: dataEnvelope(z.array(environmentWebhookSchema)) },
     },
@@ -825,7 +825,7 @@ export const openApiRouteContracts: readonly OpenApiRouteContract[] = [
     url: "/api/v1/environments/:environmentId/webhooks",
     schema: {
       operationId: "createEnvironmentWebhook",
-      summary: "Create an Environment webhook trigger",
+      summary: "Create an Environment Webhook",
       tags: ["Webhooks"],
       body: environmentWebhookInputSchema,
       response: { 201: dataEnvelope(environmentWebhookSetupSchema) },
@@ -836,7 +836,7 @@ export const openApiRouteContracts: readonly OpenApiRouteContract[] = [
     url: "/api/v1/environments/:environmentId/webhooks/:webhookId",
     schema: {
       operationId: "updateEnvironmentWebhook",
-      summary: "Replace an Environment webhook trigger",
+      summary: "Replace an Environment Webhook",
       tags: ["Webhooks"],
       body: environmentWebhookInputSchema,
       response: { 200: dataEnvelope(environmentWebhookSetupSchema) },
@@ -858,7 +858,7 @@ export const openApiRouteContracts: readonly OpenApiRouteContract[] = [
     url: "/api/v1/environments/:environmentId/webhooks/:webhookId",
     schema: {
       operationId: "deleteEnvironmentWebhook",
-      summary: "Delete an Environment webhook trigger",
+      summary: "Delete an Environment Webhook",
       tags: ["Webhooks"],
       response: { 200: dataEnvelope(idResultSchema) },
     },
