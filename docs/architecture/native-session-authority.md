@@ -68,23 +68,24 @@ currently start at `/workspace`; product support for nested `AGENTS.md` scopes
 therefore requires a future native working-directory selection passed to
 `thread/start`, rather than a Sandpi-owned discovery algorithm.
 
-## Sandpi Environment Skill
+## Sandpi-managed Skills
 
-Sandpi materializes a product-owned `sandpi-environment` Skill under the
-reserved `/workspace/.sandpi/skills` root before Codex app-server startup and
-registers that root through native `skills/extraRoots/set`. The Skill is visible
-in Codex's native inventory and can be disabled through the same native
-configuration as any other discovered Skill. Sandpi does not copy it into
-PostgreSQL, inject it as hidden Turn input or place it in the user-owned
-`/workspace/.agents/skills` tree.
+Sandpi materializes product-owned `sandpi-environment` and `sandpi-cli` Skills
+under the reserved `/workspace/.sandpi/skills` root before Codex app-server
+startup and registers that root through native `skills/extraRoots/set`. The
+Skills are visible in Codex's native inventory and can be disabled through the
+same native configuration as any other discovered Skill. Sandpi does not copy
+them into PostgreSQL, inject them as hidden Turn input or place them in the
+user-owned `/workspace/.agents/skills` tree.
 
-The Skill contains only stable navigation and trust-boundary instructions. It
-loads current product behavior from the public, application-owned
-`https://sandpi.ai/llms.txt`, delegates exact Browser commands to the locally
-installed Playwright Skill, and never bypasses Environment network policy when
-that guide is unavailable. Sandpi reconciles the small Skill asset with the
-server release, while ordinary product guidance changes at the public URL
-without requiring a coding-agent image or Environment replacement.
+Both Skills contain only stable navigation and trust-boundary instructions.
+`sandpi-environment` loads current product behavior from the public,
+application-owned `https://sandpi.ai/llms.txt` and delegates exact Browser
+commands to the locally installed Playwright Skill. `sandpi-cli` routes CLI and
+migration tasks to their canonical repository documentation instead of
+duplicating commands. Sandpi reconciles these small assets with the server
+release, while ordinary guidance changes at the linked sources without
+requiring a coding-agent image or Environment replacement.
 
 ## Persistent native state and credentials
 

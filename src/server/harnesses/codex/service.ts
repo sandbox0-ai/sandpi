@@ -65,7 +65,7 @@ import type { RuntimeQuotaGate } from "@/server/billing/quota-service";
 import {
   CODEX_MCP_OAUTH_CALLBACK_BASE_PATH,
   CODEX_MCP_OAUTH_CALLBACK_PORT,
-  SANDPI_ENVIRONMENT_SKILL_ROOT,
+  SANDPI_MANAGED_SKILL_ROOT,
 } from "@/server/runtime/types";
 import {
   SandpiStore,
@@ -117,10 +117,10 @@ const MODEL_CATALOG_CACHE_TTL_MS = 30_000;
 const MAX_MODEL_CATALOG_CACHE_ENTRIES = 128;
 const CODEX_ENVIRONMENT_CWD = "/workspace";
 const CODEX_ENVIRONMENT_HOME = "/workspace/.sandpi/harnesses/codex";
-// Register the Sandpi-managed Environment guide beside conventional
+// Register Sandpi-managed product skills beside conventional
 // root-account skill locations even though Sandpi isolates CODEX_HOME.
 const CODEX_ENVIRONMENT_EXTRA_SKILL_ROOTS = [
-  SANDPI_ENVIRONMENT_SKILL_ROOT,
+  SANDPI_MANAGED_SKILL_ROOT,
   "/root/.codex/skills",
   "/root/.agents/skills",
 ] as const;

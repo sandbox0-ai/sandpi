@@ -1,0 +1,4 @@
+interface:
+  display_name: "Sandpi CLI"
+  short_description: "Use the official Sandpi CLI safely"
+  default_prompt: "Use $sandpi-cli to operate Sandpi Environments for this task."
