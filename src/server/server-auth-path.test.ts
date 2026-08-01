@@ -9,7 +9,7 @@ import {
   validateBillingRuntime,
 } from "./server";
 
-test("only Stripe webhook and browser-auth entry routes bypass authentication", () => {
+test("only signed webhook and browser-auth entry routes bypass authentication", () => {
   assert.equal(publicAuthPath("/api/v1/auth/login"), true);
   assert.equal(publicAuthPath("/api/v1/auth/callback?code=example"), true);
   assert.equal(publicAuthPath("/api/v1/auth/native/prepare"), true);
@@ -23,6 +23,10 @@ test("only Stripe webhook and browser-auth entry routes bypass authentication", 
   assert.equal(publicAuthPath("/api/v1/billing/summary"), false);
   assert.equal(publicAuthPath("/api/v1/billing/checkout"), false);
   assert.equal(publicAuthPath("/api/v1/billing/webhook/other"), false);
+  assert.equal(publicAuthPath("/api/v1/webhooks/hook_123"), true);
+  assert.equal(publicAuthPath("/api/v1/webhooks/hook_123?token=secret"), true);
+  assert.equal(publicAuthPath("/api/v1/webhooks"), false);
+  assert.equal(publicAuthPath("/api/v1/webhooks/hook_123/runs"), false);
 });
 
 test("Stripe mode refuses to start without the official SDK usage resource", () => {

@@ -8,6 +8,7 @@ const API_NO_STORE_PATHS = [
   "/harnesses/codex/mcp",
   "/workspace-backups",
   "/schedules",
+  "/webhooks",
   "/egress-credentials",
   "/billing",
 ] as const;

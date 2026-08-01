@@ -64,6 +64,11 @@ import {
   type EnvironmentScheduleConfiguration,
 } from "@/server/environments/schedule-service";
 import { EnvironmentScheduleStore } from "@/server/environments/schedule-store";
+import {
+  EnvironmentWebhookService,
+  type EnvironmentWebhookConfiguration,
+} from "@/server/environments/webhook-service";
+import { EnvironmentWebhookStore } from "@/server/environments/webhook-store";
 import { EnvironmentWorkspaceBackupService } from "@/server/environments/workspace-backup-service";
 import { CodexEnvironmentAuthService } from "@/server/harnesses/codex/auth-service";
 import { CodexAuthStore } from "@/server/harnesses/codex/auth-store";
@@ -116,8 +121,10 @@ import {
   environmentOrderSchema,
   environmentProvisioningSchema,
   environmentScheduleSchema,
+  environmentWebhookSchema,
   environmentUpdateSchema,
   preferencesSchema,
+  rotateEnvironmentWebhookSecretSchema,
   sessionCreateSchema,
   sessionForkSchema,
   sessionGoalUpdateSchema,
@@ -243,6 +250,14 @@ export async function createSandpiServer(
     codex,
     app.log,
   );
+  const webhooks = new EnvironmentWebhookService(
+    new EnvironmentWebhookStore(pool),
+    store,
+    codex,
+    secretBox,
+    config.publicUrl,
+    app.log,
+  );
   const environments = new EnvironmentService(
     store,
     runtime,
@@ -321,6 +336,12 @@ export async function createSandpiServer(
     encoding: false,
     runFirst: true,
   });
+  app.removeContentTypeParser("text/plain");
+  app.addContentTypeParser(
+    ["application/x-www-form-urlencoded", "text/plain"],
+    { parseAs: "buffer" },
+    (_request, body, done) => done(null, body),
+  );
   await app.register(fastifyCompress, {
     global: true,
     threshold: 1_024,
@@ -373,6 +394,7 @@ export async function createSandpiServer(
     egressCredentials,
     workspaceBackups,
     schedules,
+    webhooks,
   });
 
   if (existsSync(config.webDir)) {
@@ -401,6 +423,7 @@ export async function createSandpiServer(
   app.addHook("onClose", async () => {
     await sandboxUsage?.close();
     await schedules.close();
+    await webhooks.close();
     await workspaceBackups.close();
     await lifecycle.close();
     await codexAuth.close();
@@ -422,6 +445,7 @@ export async function createSandpiServer(
     app.log.warn({ err: error }, "Codex Environment recovery deferred");
   });
   await schedules.start();
+  await webhooks.start();
 
   return {
     app,
@@ -613,6 +637,7 @@ export function registerApiRoutes(
     egressCredentials: EnvironmentEgressCredentialService;
     workspaceBackups: EnvironmentWorkspaceBackupService;
     schedules: EnvironmentScheduleService;
+    webhooks: EnvironmentWebhookService;
   },
 ) {
   const deployment = deploymentSummary(services.config, services.runtime);
@@ -923,6 +948,128 @@ export function registerApiRoutes(
       data: await services.schedules.list(
         request.principal.userId,
         request.params.environmentId,
+      ),
+    }),
+  );
+  app.post<{
+    Params: { endpointId: string };
+    Querystring: { token?: string };
+  }>(
+    "/api/v1/webhooks/:endpointId",
+    { config: { rawBody: true }, bodyLimit: 1_048_576 },
+    async (request, reply) => {
+      if (!Buffer.isBuffer(request.rawBody)) {
+        throw new HttpError(
+          400,
+          "environment_webhook_body_invalid",
+          "The Webhook request body could not be read.",
+        );
+      }
+      const result = await services.webhooks.receive({
+        endpointId: request.params.endpointId,
+        rawBody: request.rawBody,
+        headers: request.headers,
+        contentType: request.headers["content-type"],
+        queryToken:
+          typeof request.query.token === "string"
+            ? request.query.token
+            : undefined,
+      });
+      return reply.status(result.statusCode).send(result.body);
+    },
+  );
+  app.get<{ Params: { environmentId: string } }>(
+    "/api/v1/environments/:environmentId/webhooks",
+    async (request) => ({
+      data: await services.webhooks.list(
+        request.principal.userId,
+        request.params.environmentId,
+      ),
+    }),
+  );
+  app.post<{ Params: { environmentId: string }; Body: unknown }>(
+    "/api/v1/environments/:environmentId/webhooks",
+    async (request, reply) => {
+      const body = environmentWebhookSchema.parse(request.body);
+      return reply.status(201).send({
+        data: await services.webhooks.create(
+          request.principal.userId,
+          request.params.environmentId,
+          environmentWebhookConfiguration(body),
+        ),
+      });
+    },
+  );
+  app.put<{
+    Params: { environmentId: string; webhookId: string };
+    Body: unknown;
+  }>(
+    "/api/v1/environments/:environmentId/webhooks/:webhookId",
+    async (request) => {
+      const body = environmentWebhookSchema.parse(request.body);
+      return {
+        data: await services.webhooks.update(
+          request.principal.userId,
+          request.params.environmentId,
+          request.params.webhookId,
+          environmentWebhookConfiguration(body),
+        ),
+      };
+    },
+  );
+  app.put<{
+    Params: { environmentId: string; webhookId: string };
+    Body: unknown;
+  }>(
+    "/api/v1/environments/:environmentId/webhooks/:webhookId/secret",
+    async (request) => {
+      const body = rotateEnvironmentWebhookSecretSchema.parse(request.body);
+      return {
+        data: await services.webhooks.rotateSecret(
+          request.principal.userId,
+          request.params.environmentId,
+          request.params.webhookId,
+          body.secret,
+        ),
+      };
+    },
+  );
+  app.delete<{
+    Params: { environmentId: string; webhookId: string };
+  }>(
+    "/api/v1/environments/:environmentId/webhooks/:webhookId",
+    async (request) => {
+      await services.webhooks.delete(
+        request.principal.userId,
+        request.params.environmentId,
+        request.params.webhookId,
+      );
+      return { data: { id: request.params.webhookId } };
+    },
+  );
+  app.get<{
+    Params: { environmentId: string; webhookId: string };
+  }>(
+    "/api/v1/environments/:environmentId/webhooks/:webhookId/runs",
+    async (request) => ({
+      data: await services.webhooks.listRuns(
+        request.principal.userId,
+        request.params.environmentId,
+        request.params.webhookId,
+        boundedIntegerQuery(request, "limit", 50, 1, 100),
+      ),
+    }),
+  );
+  app.get<{
+    Params: { environmentId: string; webhookId: string };
+  }>(
+    "/api/v1/environments/:environmentId/webhooks/:webhookId/deliveries",
+    async (request) => ({
+      data: await services.webhooks.listDeliveries(
+        request.principal.userId,
+        request.params.environmentId,
+        request.params.webhookId,
+        boundedIntegerQuery(request, "limit", 50, 1, 100),
       ),
     }),
   );
@@ -2905,7 +3052,8 @@ export function publicAuthPath(url: string) {
     path === "/api/v1/auth/native/prepare" ||
     path === "/api/v1/auth/native/login" ||
     path === "/api/v1/auth/native/complete" ||
-    path === "/api/v1/billing/webhook"
+    path === "/api/v1/billing/webhook" ||
+    /^\/api\/v1\/webhooks\/[^/]+$/.test(path)
   );
 }
 
@@ -3063,6 +3211,33 @@ function environmentScheduleConfiguration(
           }
         : input.timing,
     target: input.target,
+    enabled: input.enabled,
+    ...(input.title ? { title: input.title } : {}),
+    ...(input.modelId ? { modelId: input.modelId } : {}),
+    ...(input.reasoningEffort
+      ? { reasoningEffort: input.reasoningEffort }
+      : {}),
+    ...(input.collaborationMode
+      ? { collaborationMode: input.collaborationMode }
+      : {}),
+    ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
+  };
+}
+
+function environmentWebhookConfiguration(
+  input: z.infer<typeof environmentWebhookSchema>,
+): EnvironmentWebhookConfiguration {
+  return {
+    name: input.name,
+    provider: input.provider,
+    ...(input.secret ? { secret: input.secret } : {}),
+    prompt: input.prompt,
+    triggerPolicy: input.triggerPolicy,
+    cooldownPolicy: input.cooldownPolicy,
+    target: input.target,
+    overlapPolicy: input.overlapPolicy,
+    maxConcurrentRuns: input.maxConcurrentRuns,
+    maxPendingRuns: input.maxPendingRuns,
     enabled: input.enabled,
     ...(input.title ? { title: input.title } : {}),
     ...(input.modelId ? { modelId: input.modelId } : {}),

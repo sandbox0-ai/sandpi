@@ -291,10 +291,10 @@ test("coalesces a recurring backlog after server downtime", async () => {
     schedules as unknown as EnvironmentScheduleStore,
     productStore(),
     {
-      async ensureScheduledSession() {
+      async ensureAutomationSession() {
         throw new Error("not used");
       },
-      async readScheduledTurnStatus() {
+      async readAutomationTurnStatus() {
         return { status: "absent" as const };
       },
       async startTurn(input) {
@@ -340,10 +340,10 @@ test("skips a due interval while the previous Schedule Turn is still running", a
     schedules as unknown as EnvironmentScheduleStore,
     productStore(),
     {
-      async ensureScheduledSession() {
+      async ensureAutomationSession() {
         throw new Error("not used");
       },
-      async readScheduledTurnStatus() {
+      async readAutomationTurnStatus() {
         return {
           status: "running" as const,
           nativeTurnId: "turn-active",
@@ -383,10 +383,10 @@ test("a restarted server reconciles an ambiguous accepted Turn without replay", 
   let starts = 0;
   let nativeAccepted = false;
   const codex = {
-    async ensureScheduledSession() {
+    async ensureAutomationSession() {
       throw new Error("not used");
     },
-    async readScheduledTurnStatus() {
+    async readAutomationTurnStatus() {
       return nativeAccepted
         ? {
             status: "succeeded" as const,
@@ -447,19 +447,19 @@ test("reserves a new deterministic Session for a new-Session run", async () => {
       nextRunAt: now,
     }),
   );
-  const ensured: Array<{ sessionId: string; scheduleRunId: string }> = [];
+  const ensured: Array<{ sessionId: string; automationRunId: string }> = [];
   const service = new EnvironmentScheduleService(
     schedules as unknown as EnvironmentScheduleStore,
     productStore(),
     {
-      async ensureScheduledSession(input) {
+      async ensureAutomationSession(input) {
         ensured.push({
           sessionId: input.sessionId,
-          scheduleRunId: input.scheduleRunId,
+          automationRunId: input.automationRunId,
         });
         return input.sessionId;
       },
-      async readScheduledTurnStatus() {
+      async readAutomationTurnStatus() {
         return { status: "absent" as const };
       },
       async startTurn(input) {
@@ -478,7 +478,7 @@ test("reserves a new deterministic Session for a new-Session run", async () => {
 
   assert.equal(ensured.length, 1);
   assert.match(ensured[0]!.sessionId, /^session_/);
-  assert.match(ensured[0]!.scheduleRunId, /^schedule_run_/);
+  assert.match(ensured[0]!.automationRunId, /^schedule_run_/);
   const run = [...schedules.runs.values()][0]!;
   assert.equal(run.sessionId, ensured[0]!.sessionId);
   assert.equal(

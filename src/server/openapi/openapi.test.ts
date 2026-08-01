@@ -24,7 +24,7 @@ test("OpenAPI publishes every supported operation with a unique id", async () =>
   const operations = allOperations(document);
   const operationIds = operations.map((operation) => operation.operationId);
 
-  assert.equal(operations.length, 112);
+  assert.equal(operations.length, 120);
   assert.ok(operationIds.every(Boolean));
   assert.equal(new Set(operationIds).size, operationIds.length);
   assert.ok(Object.keys(document.paths).every((path) => !path.includes(":")));
@@ -39,9 +39,28 @@ test("OpenAPI publishes every supported operation with a unique id", async () =>
       "/api/v1/environments/{environmentId}/sandbox/restart",
       "restartEnvironmentSandbox",
     ],
+    [
+      "/api/v1/environments/{environmentId}/webhooks/{webhookId}/secret",
+      "rotateEnvironmentWebhookSecret",
+    ],
   ] as const) {
     assert.equal(operation(document, path, "put").operationId, operationId);
   }
+  assert.deepEqual(
+    operation(document, "/api/v1/webhooks/{endpointId}", "post").security,
+    [],
+  );
+  const webhookRequestBody = operation(
+    document,
+    "/api/v1/webhooks/{endpointId}",
+    "post",
+  ).requestBody;
+  assert.ok(webhookRequestBody && !("$ref" in webhookRequestBody));
+  assert.deepEqual(Object.keys(webhookRequestBody.content), [
+    "application/json",
+    "application/x-www-form-urlencoded",
+    "text/plain",
+  ]);
 });
 
 test("OpenAPI preserves the shared Browser and streaming semantics", async () => {

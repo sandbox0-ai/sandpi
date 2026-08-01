@@ -1,0 +1,172 @@
+.setup {
+  display: grid;
+  gap: 10px;
+  padding: 13px;
+  border: 1px solid color-mix(in srgb, var(--green) 45%, var(--line));
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--green-soft) 38%, var(--panel-strong));
+}
+
+.setup > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.setup > header > div {
+  display: grid;
+  gap: 2px;
+}
+
+.setup > header span {
+  color: var(--green);
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.setup > header strong {
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.setup > p {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.copyField {
+  display: grid;
+  grid-template-columns: minmax(88px, auto) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.copyField > span {
+  color: var(--ink-faint);
+  font-size: 9px;
+  font-weight: 650;
+}
+
+.copyField code {
+  overflow: hidden;
+  padding: 7px 8px;
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  background: var(--sidebar);
+  color: var(--ink-soft);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.oneTimeSecret {
+  color: var(--amber) !important;
+  font-weight: 600;
+}
+
+.policySection {
+  display: grid;
+  gap: 11px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.policySection > header {
+  display: grid;
+  gap: 2px;
+}
+
+.policySection > header strong {
+  color: var(--ink-soft);
+  font-size: 11px;
+}
+
+.policySection > header span {
+  color: var(--ink-faint);
+  font-size: 9px;
+  line-height: 1.4;
+}
+
+.codeInput {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+}
+
+.activity {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  overflow: hidden;
+  margin-top: 9px;
+  border: 1px solid var(--line-soft);
+  border-radius: 7px;
+  background: var(--sidebar);
+}
+
+.activity > section {
+  display: grid;
+  align-content: start;
+  gap: 0;
+}
+
+.activity > section + section {
+  border-left: 1px solid var(--line-soft);
+}
+
+.activity > section > strong {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line-soft);
+  color: var(--ink-soft);
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.activity > section > div {
+  display: grid;
+  gap: 2px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.activity > section > div:last-child {
+  border-bottom: 0;
+}
+
+.activity span {
+  color: var(--ink-soft);
+  font-size: 9.5px;
+  text-transform: capitalize;
+}
+
+.activity small {
+  padding: 8px 10px;
+  color: var(--ink-faint);
+  font-size: 8.5px;
+  line-height: 1.35;
+}
+
+.activity div small {
+  padding: 0;
+}
+
+@media (max-width: 720px) {
+  .copyField,
+  .activity {
+    grid-template-columns: 1fr;
+  }
+
+  .copyField button {
+    justify-self: start;
+  }
+
+  .activity > section + section {
+    border-top: 1px solid var(--line-soft);
+    border-left: 0;
+  }
+}

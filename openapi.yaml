@@ -1907,6 +1907,295 @@ components:
         - createdAt
         - updatedAt
       additionalProperties: false
+    EnvironmentWebhook:
+      type: object
+      properties:
+        id:
+          type: string
+        environmentId:
+          type: string
+        endpointUrl:
+          type: string
+          format: uri
+        name:
+          type: string
+        provider:
+          type: string
+          enum:
+            - github
+            - alertmanager
+            - slack
+            - custom
+        prompt:
+          type: string
+        triggerPolicy:
+          type: object
+          properties:
+            mode:
+              type: string
+              enum:
+                - every
+                - stateChange
+            eventTypes:
+              type: array
+              items:
+                type: string
+            conditions:
+              type: array
+              items:
+                type: object
+                properties:
+                  path:
+                    type: string
+                  operator:
+                    type: string
+                    enum:
+                      - equals
+                      - notEquals
+                      - contains
+                      - exists
+                  value:
+                    type: string
+                required:
+                  - path
+                  - operator
+                additionalProperties: false
+            statePath:
+              type: string
+            groupKeyPath:
+              type: string
+          required:
+            - mode
+            - eventTypes
+            - conditions
+          additionalProperties: false
+        cooldownPolicy:
+          oneOf:
+            - type: object
+              properties:
+                mode:
+                  type: string
+                  enum:
+                    - none
+              required:
+                - mode
+              additionalProperties: false
+            - type: object
+              properties:
+                mode:
+                  type: string
+                  enum:
+                    - throttle
+                    - debounce
+                    - batch
+                durationSeconds:
+                  type: integer
+                  minimum: 0
+                  exclusiveMinimum: true
+                  maximum: 9007199254740991
+                behavior:
+                  type: string
+                  enum:
+                    - suppress
+                    - latest
+                    - merge
+              required:
+                - mode
+                - durationSeconds
+                - behavior
+              additionalProperties: false
+        target:
+          oneOf:
+            - type: object
+              properties:
+                kind:
+                  type: string
+                  enum:
+                    - newSession
+              required:
+                - kind
+              additionalProperties: false
+            - type: object
+              properties:
+                kind:
+                  type: string
+                  enum:
+                    - session
+                sessionId:
+                  type: string
+              required:
+                - kind
+                - sessionId
+              additionalProperties: false
+        overlapPolicy:
+          type: string
+          enum:
+            - queue
+            - skip
+        maxConcurrentRuns:
+          type: integer
+          minimum: 0
+          exclusiveMinimum: true
+          maximum: 9007199254740991
+        maxPendingRuns:
+          type: integer
+          minimum: 0
+          exclusiveMinimum: true
+          maximum: 9007199254740991
+        enabled:
+          type: boolean
+        secretConfigured:
+          type: boolean
+        title:
+          type: string
+        modelId:
+          type: string
+        reasoningEffort:
+          type: string
+        collaborationMode:
+          type: string
+          enum:
+            - plan
+        serviceTier:
+          type: string
+        lastDeliveryAt:
+          type: number
+          description: Unix time in seconds; fractional values preserve milliseconds.
+        lastDeliveryStatus:
+          type: string
+          enum:
+            - queued
+            - batched
+            - filtered
+            - suppressed
+            - duplicate
+        lastRunStatus:
+          type: string
+          enum:
+            - queued
+            - claimed
+            - running
+            - succeeded
+            - failed
+            - skipped
+        lastError:
+          type: string
+        createdAt:
+          type: number
+          description: Unix time in seconds; fractional values preserve milliseconds.
+        updatedAt:
+          type: number
+          description: Unix time in seconds; fractional values preserve milliseconds.
+      required:
+        - id
+        - environmentId
+        - endpointUrl
+        - name
+        - provider
+        - prompt
+        - triggerPolicy
+        - cooldownPolicy
+        - target
+        - overlapPolicy
+        - maxConcurrentRuns
+        - maxPendingRuns
+        - enabled
+        - secretConfigured
+        - createdAt
+        - updatedAt
+      additionalProperties: false
+    EnvironmentWebhookDelivery:
+      type: object
+      properties:
+        id:
+          type: string
+        webhookId:
+          type: string
+        eventType:
+          type: string
+        status:
+          type: string
+          enum:
+            - queued
+            - batched
+            - filtered
+            - suppressed
+        runId:
+          type: string
+        reason:
+          type: string
+        receivedAt:
+          type: number
+          description: Unix time in seconds; fractional values preserve milliseconds.
+      required:
+        - id
+        - webhookId
+        - eventType
+        - status
+        - receivedAt
+      additionalProperties: false
+    EnvironmentWebhookRun:
+      type: object
+      properties:
+        id:
+          type: string
+        webhookId:
+          type: string
+        status:
+          type: string
+          enum:
+            - queued
+            - claimed
+            - running
+            - succeeded
+            - failed
+            - skipped
+        eventCount:
+          type: integer
+          minimum: 0
+          exclusiveMinimum: true
+          maximum: 9007199254740991
+        eventTypes:
+          type: array
+          items:
+            type: string
+        sessionId:
+          type: string
+        nativeTurnId:
+          type: string
+        error:
+          type: string
+        startedAt:
+          type: number
+          description: Unix time in seconds; fractional values preserve milliseconds.
+        finishedAt:
+          type: number
+          description: Unix time in seconds; fractional values preserve milliseconds.
+        createdAt:
+          type: number
+          description: Unix time in seconds; fractional values preserve milliseconds.
+        updatedAt:
+          type: number
+          description: Unix time in seconds; fractional values preserve milliseconds.
+      required:
+        - id
+        - webhookId
+        - status
+        - eventCount
+        - eventTypes
+        - createdAt
+        - updatedAt
+      additionalProperties: false
+    EnvironmentWebhookSetup:
+      type: object
+      properties:
+        webhook:
+          $ref: "#/components/schemas/EnvironmentWebhook"
+        setupSecret:
+          type: string
+      required:
+        - webhook
+      additionalProperties: false
     EnvironmentWorkspaceBackup:
       type: object
       properties:
@@ -7087,6 +7376,656 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /api/v1/environments/{environmentId}/webhooks:
+    get:
+      operationId: listEnvironmentWebhooks
+      summary: List Environment webhook triggers
+      tags:
+        - Webhooks
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+          in: path
+          name: environmentId
+          required: true
+      responses:
+        "200":
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/EnvironmentWebhook"
+                required:
+                  - data
+                additionalProperties: false
+        default:
+          description: Sandpi error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      operationId: createEnvironmentWebhook
+      summary: Create an Environment webhook trigger
+      tags:
+        - Webhooks
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 80
+                provider:
+                  type: string
+                  enum:
+                    - github
+                    - alertmanager
+                    - slack
+                    - custom
+                secret:
+                  type: string
+                  minLength: 16
+                  maxLength: 1000
+                prompt:
+                  type: string
+                  minLength: 1
+                  maxLength: 50000
+                triggerPolicy:
+                  type: object
+                  properties:
+                    mode:
+                      default: every
+                      type: string
+                      enum:
+                        - every
+                        - stateChange
+                    eventTypes:
+                      default: []
+                      maxItems: 100
+                      type: array
+                      items:
+                        type: string
+                        minLength: 1
+                        maxLength: 200
+                    conditions:
+                      default: []
+                      maxItems: 20
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          path:
+                            type: string
+                            maxLength: 500
+                          operator:
+                            type: string
+                            enum:
+                              - equals
+                              - notEquals
+                              - contains
+                              - exists
+                          value:
+                            type: string
+                            maxLength: 2000
+                        required:
+                          - path
+                          - operator
+                        additionalProperties: false
+                    statePath:
+                      type: string
+                      maxLength: 500
+                    groupKeyPath:
+                      type: string
+                      maxLength: 500
+                  additionalProperties: false
+                cooldownPolicy:
+                  oneOf:
+                    - type: object
+                      properties:
+                        mode:
+                          type: string
+                          enum:
+                            - none
+                      required:
+                        - mode
+                      additionalProperties: false
+                    - type: object
+                      properties:
+                        mode:
+                          type: string
+                          enum:
+                            - throttle
+                            - debounce
+                            - batch
+                        durationSeconds:
+                          type: integer
+                          minimum: 1
+                          maximum: 86400
+                        behavior:
+                          type: string
+                          enum:
+                            - suppress
+                            - latest
+                            - merge
+                      required:
+                        - mode
+                        - durationSeconds
+                        - behavior
+                      additionalProperties: false
+                target:
+                  oneOf:
+                    - type: object
+                      properties:
+                        kind:
+                          type: string
+                          enum:
+                            - newSession
+                      required:
+                        - kind
+                      additionalProperties: false
+                    - type: object
+                      properties:
+                        kind:
+                          type: string
+                          enum:
+                            - session
+                        sessionId:
+                          type: string
+                          minLength: 1
+                          maxLength: 200
+                      required:
+                        - kind
+                        - sessionId
+                      additionalProperties: false
+                overlapPolicy:
+                  default: queue
+                  type: string
+                  enum:
+                    - queue
+                    - skip
+                maxConcurrentRuns:
+                  default: 1
+                  type: integer
+                  minimum: 1
+                  maximum: 10
+                maxPendingRuns:
+                  default: 100
+                  type: integer
+                  minimum: 1
+                  maximum: 1000
+                enabled:
+                  default: true
+                  type: boolean
+                title:
+                  type: string
+                  minLength: 1
+                  maxLength: 200
+                modelId:
+                  type: string
+                  minLength: 1
+                  maxLength: 200
+                reasoningEffort:
+                  type: string
+                  minLength: 1
+                  maxLength: 100
+                collaborationMode:
+                  type: string
+                  enum:
+                    - plan
+                serviceTier:
+                  type: string
+                  minLength: 1
+                  maxLength: 100
+              required:
+                - name
+                - provider
+                - prompt
+                - triggerPolicy
+                - cooldownPolicy
+                - target
+              additionalProperties: false
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+          in: path
+          name: environmentId
+          required: true
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/EnvironmentWebhookSetup"
+                required:
+                  - data
+                additionalProperties: false
+        default:
+          description: Sandpi error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/environments/{environmentId}/webhooks/{webhookId}:
+    put:
+      operationId: updateEnvironmentWebhook
+      summary: Replace an Environment webhook trigger
+      tags:
+        - Webhooks
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 80
+                provider:
+                  type: string
+                  enum:
+                    - github
+                    - alertmanager
+                    - slack
+                    - custom
+                secret:
+                  type: string
+                  minLength: 16
+                  maxLength: 1000
+                prompt:
+                  type: string
+                  minLength: 1
+                  maxLength: 50000
+                triggerPolicy:
+                  type: object
+                  properties:
+                    mode:
+                      default: every
+                      type: string
+                      enum:
+                        - every
+                        - stateChange
+                    eventTypes:
+                      default: []
+                      maxItems: 100
+                      type: array
+                      items:
+                        type: string
+                        minLength: 1
+                        maxLength: 200
+                    conditions:
+                      default: []
+                      maxItems: 20
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          path:
+                            type: string
+                            maxLength: 500
+                          operator:
+                            type: string
+                            enum:
+                              - equals
+                              - notEquals
+                              - contains
+                              - exists
+                          value:
+                            type: string
+                            maxLength: 2000
+                        required:
+                          - path
+                          - operator
+                        additionalProperties: false
+                    statePath:
+                      type: string
+                      maxLength: 500
+                    groupKeyPath:
+                      type: string
+                      maxLength: 500
+                  additionalProperties: false
+                cooldownPolicy:
+                  oneOf:
+                    - type: object
+                      properties:
+                        mode:
+                          type: string
+                          enum:
+                            - none
+                      required:
+                        - mode
+                      additionalProperties: false
+                    - type: object
+                      properties:
+                        mode:
+                          type: string
+                          enum:
+                            - throttle
+                            - debounce
+                            - batch
+                        durationSeconds:
+                          type: integer
+                          minimum: 1
+                          maximum: 86400
+                        behavior:
+                          type: string
+                          enum:
+                            - suppress
+                            - latest
+                            - merge
+                      required:
+                        - mode
+                        - durationSeconds
+                        - behavior
+                      additionalProperties: false
+                target:
+                  oneOf:
+                    - type: object
+                      properties:
+                        kind:
+                          type: string
+                          enum:
+                            - newSession
+                      required:
+                        - kind
+                      additionalProperties: false
+                    - type: object
+                      properties:
+                        kind:
+                          type: string
+                          enum:
+                            - session
+                        sessionId:
+                          type: string
+                          minLength: 1
+                          maxLength: 200
+                      required:
+                        - kind
+                        - sessionId
+                      additionalProperties: false
+                overlapPolicy:
+                  default: queue
+                  type: string
+                  enum:
+                    - queue
+                    - skip
+                maxConcurrentRuns:
+                  default: 1
+                  type: integer
+                  minimum: 1
+                  maximum: 10
+                maxPendingRuns:
+                  default: 100
+                  type: integer
+                  minimum: 1
+                  maximum: 1000
+                enabled:
+                  default: true
+                  type: boolean
+                title:
+                  type: string
+                  minLength: 1
+                  maxLength: 200
+                modelId:
+                  type: string
+                  minLength: 1
+                  maxLength: 200
+                reasoningEffort:
+                  type: string
+                  minLength: 1
+                  maxLength: 100
+                collaborationMode:
+                  type: string
+                  enum:
+                    - plan
+                serviceTier:
+                  type: string
+                  minLength: 1
+                  maxLength: 100
+              required:
+                - name
+                - provider
+                - prompt
+                - triggerPolicy
+                - cooldownPolicy
+                - target
+              additionalProperties: false
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+          in: path
+          name: environmentId
+          required: true
+        - schema:
+            type: string
+            minLength: 1
+          in: path
+          name: webhookId
+          required: true
+      responses:
+        "200":
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/EnvironmentWebhookSetup"
+                required:
+                  - data
+                additionalProperties: false
+        default:
+          description: Sandpi error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      operationId: deleteEnvironmentWebhook
+      summary: Delete an Environment webhook trigger
+      tags:
+        - Webhooks
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+          in: path
+          name: environmentId
+          required: true
+        - schema:
+            type: string
+            minLength: 1
+          in: path
+          name: webhookId
+          required: true
+      responses:
+        "200":
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                    required:
+                      - id
+                    additionalProperties: false
+                required:
+                  - data
+                additionalProperties: false
+        default:
+          description: Sandpi error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/environments/{environmentId}/webhooks/{webhookId}/deliveries:
+    get:
+      operationId: listEnvironmentWebhookDeliveries
+      summary: List recent verified webhook deliveries
+      tags:
+        - Webhooks
+      parameters:
+        - schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+          in: query
+          name: limit
+          required: false
+        - schema:
+            type: string
+            minLength: 1
+          in: path
+          name: environmentId
+          required: true
+        - schema:
+            type: string
+            minLength: 1
+          in: path
+          name: webhookId
+          required: true
+      responses:
+        "200":
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/EnvironmentWebhookDelivery"
+                required:
+                  - data
+                additionalProperties: false
+        default:
+          description: Sandpi error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/environments/{environmentId}/webhooks/{webhookId}/runs:
+    get:
+      operationId: listEnvironmentWebhookRuns
+      summary: List recent webhook-triggered runs
+      tags:
+        - Webhooks
+      parameters:
+        - schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+          in: query
+          name: limit
+          required: false
+        - schema:
+            type: string
+            minLength: 1
+          in: path
+          name: environmentId
+          required: true
+        - schema:
+            type: string
+            minLength: 1
+          in: path
+          name: webhookId
+          required: true
+      responses:
+        "200":
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/EnvironmentWebhookRun"
+                required:
+                  - data
+                additionalProperties: false
+        default:
+          description: Sandpi error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/environments/{environmentId}/webhooks/{webhookId}/secret:
+    put:
+      operationId: rotateEnvironmentWebhookSecret
+      summary: Replace or rotate an Environment webhook secret
+      tags:
+        - Webhooks
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                secret:
+                  type: string
+                  minLength: 16
+                  maxLength: 1000
+              additionalProperties: false
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+          in: path
+          name: environmentId
+          required: true
+        - schema:
+            type: string
+            minLength: 1
+          in: path
+          name: webhookId
+          required: true
+      responses:
+        "200":
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/EnvironmentWebhookSetup"
+                required:
+                  - data
+                additionalProperties: false
+        default:
+          description: Sandpi error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /api/v1/environments/{environmentId}/workspace-backups:
     get:
       operationId: listEnvironmentWorkspaceBackups
@@ -8582,6 +9521,150 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /api/v1/webhooks/{endpointId}:
+    post:
+      operationId: receiveEnvironmentWebhook
+      summary: Receive a signed Environment webhook delivery
+      tags:
+        - Webhooks
+      description: Accepts GitHub, Alertmanager, Slack, or custom payloads.
+        Authentication is provider-specific and uses request signatures or a
+        bearer/query token.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {}
+          application/x-www-form-urlencoded:
+            schema:
+              type: string
+          text/plain:
+            schema:
+              type: string
+      parameters:
+        - schema:
+            type: string
+          in: query
+          name: token
+          required: false
+        - schema:
+            type: string
+            minLength: 1
+          in: path
+          name: endpointId
+          required: true
+        - schema:
+            type: string
+          in: header
+          name: authorization
+          required: false
+        - schema:
+            type: string
+          in: header
+          name: x-hub-signature-256
+          required: false
+        - schema:
+            type: string
+          in: header
+          name: x-github-delivery
+          required: false
+        - schema:
+            type: string
+          in: header
+          name: x-github-event
+          required: false
+        - schema:
+            type: string
+          in: header
+          name: x-slack-request-timestamp
+          required: false
+        - schema:
+            type: string
+          in: header
+          name: x-slack-signature
+          required: false
+        - schema:
+            type: string
+          in: header
+          name: idempotency-key
+          required: false
+        - schema:
+            type: string
+          in: header
+          name: x-request-id
+          required: false
+        - schema:
+            type: string
+          in: header
+          name: x-sandpi-delivery
+          required: false
+        - schema:
+            type: string
+          in: header
+          name: x-sandpi-event
+          required: false
+      security: []
+      responses:
+        "200":
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - type: object
+                    properties:
+                      status:
+                        type: string
+                        enum:
+                          - duplicate
+                          - filtered
+                          - suppressed
+                          - batched
+                          - queued
+                      deliveryId:
+                        type: string
+                      runId:
+                        type: string
+                    required:
+                      - status
+                      - deliveryId
+                    additionalProperties: false
+                  - type: object
+                    properties:
+                      challenge:
+                        type: string
+                    required:
+                      - challenge
+                    additionalProperties: false
+        "202":
+          description: Accepted.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum:
+                      - duplicate
+                      - filtered
+                      - suppressed
+                      - batched
+                      - queued
+                  deliveryId:
+                    type: string
+                  runId:
+                    type: string
+                required:
+                  - status
+                  - deliveryId
+                additionalProperties: false
+        default:
+          description: Sandpi error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /health/live:
     get:
       operationId: getLiveness
@@ -8696,6 +9779,8 @@ tags:
     description: Persistent Workspace snapshots and restore.
   - name: Schedules
     description: Durable Environment automations.
+  - name: Webhooks
+    description: Signed external triggers for durable Environment automations.
   - name: Codex
     description: Environment-scoped native Codex capabilities.
   - name: Sessions

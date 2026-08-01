@@ -594,11 +594,12 @@ export class CodexService {
     throw new Error("Codex service closed while Session creation was pending.");
   }
 
-  async ensureScheduledSession(input: {
+  async ensureAutomationSession(input: {
     userId: string;
     environment: Environment;
     sessionId: string;
-    scheduleRunId: string;
+    automationRunId: string;
+    automationKind: "schedule" | "webhook";
     title: string;
     modelId?: string;
     reasoningEffort?: string;
@@ -609,7 +610,7 @@ export class CodexService {
       input.userId,
       input.environment,
     );
-    await this.store.ensureScheduledSessionMetadata(input);
+    await this.store.ensureAutomationSessionMetadata(input);
     await this.ensureNativeSessionCreated(
       input,
       input.sessionId,
@@ -2682,7 +2683,7 @@ export class CodexService {
     }
   }
 
-  async readScheduledTurnStatus(input: {
+  async readAutomationTurnStatus(input: {
     userId: string;
     sessionId: string;
     clientMessageId: string;
@@ -2738,12 +2739,12 @@ export class CodexService {
           nativeTurnId: recoveryTurn.id,
           error:
             recoveryTurn.error?.message ??
-            "The scheduled Codex recovery Turn did not complete.",
+            "The Automation recovery Turn did not complete.",
         };
       }
       if (
         sessionRuntime.recoverySourceNativeTurnId === turn.id ||
-        scheduledTurnNeedsRuntimeRecovery(
+        automationTurnNeedsRuntimeRecovery(
           sessionRuntime,
           turn,
           input.clientMessageId,
@@ -2763,8 +2764,8 @@ export class CodexService {
       error:
         turn.error?.message ??
         (turn.status === "interrupted"
-          ? "The scheduled Codex Turn was interrupted."
-          : "The scheduled Codex Turn failed."),
+          ? "The Automation Codex Turn was interrupted."
+          : "The Automation Codex Turn failed."),
     };
   }
 
@@ -7339,7 +7340,7 @@ function nativeTurnBelongsToReplacedRuntime(
   );
 }
 
-function scheduledTurnNeedsRuntimeRecovery(
+function automationTurnNeedsRuntimeRecovery(
   session: StoredSessionRuntime,
   turn: CodexTurn,
   clientMessageId: string,
