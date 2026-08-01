@@ -55,7 +55,7 @@ Codex is the first supported coding agent.
 | Controlled outbound access | Restrict sandbox egress by destination and inject supported credentials only into matching traffic, instead of placing service secrets in the repository or browser. |
 | Workspace protection | Create manual or scheduled Workspace backups with retention and restore them through Sandbox0 Volume snapshots. |
 | Encrypted persisted state | Sandbox0 encrypts persisted Environment rootfs checkpoint objects and default S0FS Workspace Volume objects at the application layer before object storage. |
-| Durable Automation | Schedule a Codex prompt or trigger it from an authenticated custom Webhook. Sandpi persists run intent outside the Sandbox and reconciles native Turn completion after server or runtime recovery. |
+| Durable Automation | Schedule a Codex prompt or trigger it from a connected GitHub App or authenticated custom Webhook. Sandpi persists run intent outside the Sandbox and reconciles native Turn completion after server or runtime recovery. |
 
 An Environment is deliberately larger than a chat:
 
@@ -127,8 +127,9 @@ coding-agent configuration into a new or existing Sandpi Environment. See
 - Environment Schedules with one-time or human-friendly recurring timing,
   Advanced cron, IANA time zones, upcoming-run previews, durable run history
   and overlap skipping
-- Generic Environment Webhooks with bearer authentication, declarative trigger
-  filters, durable delivery history, cooldown batching and bounded run admission
+- Environment Webhooks with direct GitHub App repository/event selection or a
+  bearer-authenticated custom URL, declarative trigger filters, durable delivery
+  history, cooldown batching and bounded run admission
 - Per-Environment network policy and Sandbox0-backed egress credential injection
 - Manual and scheduled Workspace backups, retention and restore
 - Built-in single-user identity or OIDC

@@ -25,6 +25,7 @@ export interface ClaimedEnvironmentAutomationRun {
   prompt: string;
   target:
     | { kind: "newSession" }
+    | { kind: "sourceThread" }
     | { kind: "session"; sessionId: string };
   sessionId?: string;
   title?: string;
@@ -296,6 +297,11 @@ export class EnvironmentAutomationExecutor {
       sessionId: run.sessionId,
       automationRunId: run.id,
       automationKind: definition.sourceKind,
+      ...(run.target.kind === "sourceThread"
+        ? {
+            automationSessionKey: `${definition.sourceKind}:${definition.id}:source-thread:${run.sessionId}`,
+          }
+        : {}),
       title: run.title ?? definition.name,
       modelId: run.modelId,
       reasoningEffort: run.reasoningEffort,

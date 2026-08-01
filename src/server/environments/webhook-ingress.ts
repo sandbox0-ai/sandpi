@@ -10,6 +10,18 @@ export interface NormalizedWebhookEvent {
   receivedAt: string;
   payload: unknown;
   stateValue?: string;
+  source?: {
+    provider: "custom" | "github";
+    connectionId?: string;
+    externalAccountId?: string;
+    externalAccountName?: string;
+    resourceId?: string;
+    resourceName?: string;
+    actor?: string;
+    subject?: string;
+    conversationKey?: string;
+    occurredAt?: string;
+  };
 }
 
 /** Authenticates a generic Webhook request before normalizing its envelope. */
@@ -43,6 +55,7 @@ export function normalizeAuthenticatedWebhookRequest(input: {
     summary: eventType,
     receivedAt: now.toISOString(),
     payload,
+    source: { provider: "custom" },
   };
 }
 

@@ -69,6 +69,12 @@ import {
   type EnvironmentWebhookConfiguration,
 } from "@/server/environments/webhook-service";
 import { EnvironmentWebhookStore } from "@/server/environments/webhook-store";
+import {
+  HttpGitHubWebhookClient,
+  type GitHubWebhookClient,
+} from "@/server/environments/github-webhook-client";
+import { GitHubWebhookSourceService } from "@/server/environments/github-webhook-service";
+import { GitHubWebhookSourceStore } from "@/server/environments/github-webhook-store";
 import { EnvironmentWorkspaceBackupService } from "@/server/environments/workspace-backup-service";
 import { CodexEnvironmentAuthService } from "@/server/harnesses/codex/auth-service";
 import { CodexAuthStore } from "@/server/harnesses/codex/auth-store";
@@ -156,6 +162,7 @@ export interface SandpiServerOptions {
   pool?: Pool;
   advisoryLockPool?: Pool;
   runtime?: RuntimeAdapter;
+  githubWebhookClient?: GitHubWebhookClient;
 }
 
 export interface SandpiServer {
@@ -250,12 +257,29 @@ export async function createSandpiServer(
     codex,
     app.log,
   );
+  const webhookStore = new EnvironmentWebhookStore(pool);
   const webhooks = new EnvironmentWebhookService(
-    new EnvironmentWebhookStore(pool),
+    webhookStore,
     store,
     codex,
     secretBox,
     config.publicUrl,
+    app.log,
+  );
+  const githubWebhookClient =
+    options.githubWebhookClient ??
+    (config.githubWebhooks
+      ? new HttpGitHubWebhookClient(
+          config.githubWebhooks.clientId,
+          config.githubWebhooks.clientSecret,
+        )
+      : undefined);
+  const githubWebhooks = new GitHubWebhookSourceService(
+    new GitHubWebhookSourceStore(pool),
+    store,
+    webhooks,
+    githubWebhookClient,
+    config.githubWebhooks,
     app.log,
   );
   const environments = new EnvironmentService(
@@ -395,6 +419,7 @@ export async function createSandpiServer(
     workspaceBackups,
     schedules,
     webhooks,
+    githubWebhooks,
   });
 
   if (existsSync(config.webDir)) {
@@ -423,6 +448,7 @@ export async function createSandpiServer(
   app.addHook("onClose", async () => {
     await sandboxUsage?.close();
     await schedules.close();
+    await githubWebhooks.close();
     await webhooks.close();
     await workspaceBackups.close();
     await lifecycle.close();
@@ -446,6 +472,7 @@ export async function createSandpiServer(
   });
   await schedules.start();
   await webhooks.start();
+  await githubWebhooks.start();
 
   return {
     app,
@@ -638,6 +665,7 @@ export function registerApiRoutes(
     workspaceBackups: EnvironmentWorkspaceBackupService;
     schedules: EnvironmentScheduleService;
     webhooks: EnvironmentWebhookService;
+    githubWebhooks: GitHubWebhookSourceService;
   },
 ) {
   const deployment = deploymentSummary(services.config, services.runtime);
@@ -950,6 +978,85 @@ export function registerApiRoutes(
         request.params.environmentId,
       ),
     }),
+  );
+  app.post(
+    "/api/v1/webhook-sources/github/events",
+    { config: { rawBody: true }, bodyLimit: 2 * 1024 * 1024 },
+    async (request, reply) => {
+      if (!Buffer.isBuffer(request.rawBody)) {
+        throw new HttpError(
+          400,
+          "github_webhook_invalid",
+          "The GitHub Webhook request body could not be read.",
+        );
+      }
+      const result = await services.githubWebhooks.receive({
+        rawBody: request.rawBody,
+        headers: request.headers,
+      });
+      return reply.status(result.statusCode).send(result.body);
+    },
+  );
+  app.get<{
+    Querystring: {
+      code?: string;
+      state?: string;
+      installation_id?: string;
+    };
+  }>(
+    "/api/v1/webhook-sources/github/callback",
+    async (request, reply) => {
+      const code = requiredQueryString(request.query.code, "code");
+      const state = requiredQueryString(request.query.state, "state");
+      const installationId = requiredGitHubInstallationId(
+        request.query.installation_id,
+      );
+      const result = await services.githubWebhooks.completeInstall(
+        code,
+        state,
+        installationId,
+      );
+      return reply
+        .header("Cache-Control", "no-store")
+        .header(
+          "Content-Security-Policy",
+          "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'",
+        )
+        .type("text/html; charset=utf-8")
+        .send(githubWebhookConnectionCompleteHtml(services.config, result));
+    },
+  );
+  app.get<{ Params: { environmentId: string } }>(
+    "/api/v1/environments/:environmentId/webhook-sources/github",
+    async (request) => ({
+      data: await services.githubWebhooks.inventory(
+        request.principal.userId,
+        request.params.environmentId,
+      ),
+    }),
+  );
+  app.post<{ Params: { environmentId: string } }>(
+    "/api/v1/environments/:environmentId/webhook-sources/github/install",
+    async (request, reply) =>
+      reply.status(201).send({
+        data: await services.githubWebhooks.startInstall(
+          request.principal.userId,
+          request.params.environmentId,
+        ),
+      }),
+  );
+  app.delete<{
+    Params: { environmentId: string; connectionId: string };
+  }>(
+    "/api/v1/environments/:environmentId/webhook-sources/github/connections/:connectionId",
+    async (request) => {
+      await services.githubWebhooks.disconnect(
+        request.principal.userId,
+        request.params.environmentId,
+        request.params.connectionId,
+      );
+      return { data: { id: request.params.connectionId } };
+    },
   );
   app.post<{
     Params: { endpointId: string };
@@ -3053,8 +3160,59 @@ export function publicAuthPath(url: string) {
     path === "/api/v1/auth/native/login" ||
     path === "/api/v1/auth/native/complete" ||
     path === "/api/v1/billing/webhook" ||
+    path === "/api/v1/webhook-sources/github/callback" ||
+    path === "/api/v1/webhook-sources/github/events" ||
     /^\/api\/v1\/webhooks\/[^/]+$/.test(path)
   );
+}
+
+function requiredQueryString(value: unknown, name: string) {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new HttpError(
+      400,
+      "github_webhook_connection_callback_invalid",
+      `GitHub did not provide ${name}.`,
+    );
+  }
+  return value;
+}
+
+function requiredGitHubInstallationId(value: unknown) {
+  const installationId = requiredQueryString(value, "installation_id");
+  if (!/^[0-9]+$/.test(installationId)) {
+    throw new HttpError(
+      400,
+      "github_webhook_connection_callback_invalid",
+      "GitHub provided an invalid installation_id.",
+    );
+  }
+  return installationId;
+}
+
+function githubWebhookConnectionCompleteHtml(
+  config: SandpiConfig,
+  result: { environmentId: string; connectionCount: number },
+) {
+  const message = JSON.stringify({
+    type: "sandpi:github-webhook-connected",
+    environmentId: result.environmentId,
+    connectionCount: result.connectionCount,
+  }).replaceAll("<", "\\u003c");
+  const targetOrigin = JSON.stringify(config.publicUrl.origin);
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>GitHub connected to Sandpi</title>
+    <style>body{font:16px system-ui,sans-serif;margin:3rem;max-width:36rem}p{line-height:1.5}</style>
+  </head>
+  <body>
+    <h1>GitHub connected</h1>
+    <p>You can close this window and continue configuring the Webhook in Sandpi.</p>
+    <script>window.opener?.postMessage(${message},${targetOrigin});window.close();</script>
+  </body>
+</html>`;
 }
 
 export function validateBillingRuntime(
@@ -3228,6 +3386,7 @@ function environmentWebhookConfiguration(
   input: z.infer<typeof environmentWebhookSchema>,
 ): EnvironmentWebhookConfiguration {
   return {
+    source: input.source,
     name: input.name,
     ...(input.secret ? { secret: input.secret } : {}),
     prompt: input.prompt,

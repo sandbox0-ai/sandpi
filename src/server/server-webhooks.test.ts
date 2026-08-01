@@ -56,6 +56,25 @@ test(
     });
     assert.equal(legacyProvider.statusCode, 400, legacyProvider.body);
 
+    const githubInventory = await server.app.inject({
+      method: "GET",
+      url: "/api/v1/environments/env-default/webhook-sources/github",
+    });
+    assert.equal(githubInventory.statusCode, 200, githubInventory.body);
+    assert.deepEqual(githubInventory.json().data, {
+      configured: false,
+      connections: [],
+    });
+    const githubInstall = await server.app.inject({
+      method: "POST",
+      url: "/api/v1/environments/env-default/webhook-sources/github/install",
+    });
+    assert.equal(githubInstall.statusCode, 409, githubInstall.body);
+    assert.equal(
+      githubInstall.json().error.code,
+      "github_webhook_not_configured",
+    );
+
     const secret = "custom-bearer-secret-for-api-test";
     const create = await server.app.inject({
       method: "POST",
@@ -65,9 +84,16 @@ test(
     assert.equal(create.statusCode, 201, create.body);
     assert.equal(create.headers["cache-control"], "no-store");
     const setup = create.json().data as {
-      webhook: { id: string; endpointUrl: string };
+      webhook: {
+        id: string;
+        endpointUrl: string;
+        source: { kind: string };
+        secretConfigured: boolean;
+      };
     };
     assert.equal("provider" in setup.webhook, false);
+    assert.deepEqual(setup.webhook.source, { kind: "custom" });
+    assert.equal(setup.webhook.secretConfigured, true);
     assert.match(setup.webhook.endpointUrl, /\/api\/v1\/webhooks\/hook_/);
 
     const path = new URL(setup.webhook.endpointUrl).pathname;

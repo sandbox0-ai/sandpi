@@ -45,6 +45,81 @@ test("keeps the Schedule overlap contract as skip", async () => {
   ]);
 });
 
+test("uses one stable Automation Session owner for a source thread", async () => {
+  const ensured: Array<{
+    automationRunId: string;
+    automationSessionKey?: string;
+    sessionId: string;
+  }> = [];
+  const executor = new EnvironmentAutomationExecutor(
+    {
+      async getEnvironment() {
+        return { id: "environment-one" } as Environment;
+      },
+    } as unknown as SandpiStore,
+    {
+      async ensureAutomationSession(input) {
+        ensured.push(input);
+        return input.sessionId;
+      },
+      async readAutomationTurnStatus() {
+        return { status: "succeeded" as const, nativeTurnId: "turn-one" };
+      },
+      async startTurn() {
+        throw new Error("An already completed source-thread run must not restart.");
+      },
+    },
+    { warn() {} },
+  );
+  const definition = {
+    id: "webhook-one",
+    sourceKind: "webhook" as const,
+    environmentId: "environment-one",
+    createdByUserId: "user-one",
+    name: "GitHub thread",
+    overlapPolicy: "queue" as const,
+  };
+  for (const suffix of ["one", "two"]) {
+    await executor.execute({
+      definition,
+      run: {
+        id: `webhook-run-${suffix}`,
+        status: "claimed",
+        prompt: "Handle the GitHub event",
+        target: { kind: "sourceThread" },
+        sessionId: "session-source-thread",
+        submission: {
+          requestId: `request-${suffix}`,
+          clientMessageId: `message-${suffix}`,
+          stableInputId: `input-${suffix}`,
+        },
+        leaseToken: `lease-${suffix}`,
+        dispatchAttemptCount: 1,
+      },
+      persistence: {
+        async markRunning() {
+          throw new Error("The completed run must not become running.");
+        },
+        async defer() {
+          throw new Error("The completed run must not be deferred.");
+        },
+        async finish() {
+          return true;
+        },
+      },
+    });
+  }
+
+  assert.deepEqual(
+    ensured.map(({ automationRunId }) => automationRunId),
+    ["webhook-run-one", "webhook-run-two"],
+  );
+  assert.deepEqual(
+    new Set(ensured.map(({ automationSessionKey }) => automationSessionKey)),
+    new Set(["webhook:webhook-one:source-thread:session-source-thread"]),
+  );
+});
+
 async function executeBusyTarget(overlapPolicy: "queue" | "skip") {
   const deferred: Array<
     Parameters<EnvironmentAutomationPersistence["defer"]>[0]

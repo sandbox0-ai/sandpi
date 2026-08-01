@@ -24,7 +24,7 @@ test("OpenAPI publishes every supported operation with a unique id", async () =>
   const operations = allOperations(document);
   const operationIds = operations.map((operation) => operation.operationId);
 
-  assert.equal(operations.length, 120);
+  assert.equal(operations.length, 125);
   assert.ok(operationIds.every(Boolean));
   assert.equal(new Set(operationIds).size, operationIds.length);
   assert.ok(Object.keys(document.paths).every((path) => !path.includes(":")));
@@ -48,6 +48,16 @@ test("OpenAPI publishes every supported operation with a unique id", async () =>
   }
   assert.deepEqual(
     operation(document, "/api/v1/webhooks/{endpointId}", "post").security,
+    [],
+  );
+  assert.deepEqual(
+    operation(document, "/api/v1/webhook-sources/github/events", "post")
+      .security,
+    [],
+  );
+  assert.deepEqual(
+    operation(document, "/api/v1/webhook-sources/github/callback", "get")
+      .security,
     [],
   );
   const webhookRequestBody = operation(

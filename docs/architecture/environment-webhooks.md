@@ -10,7 +10,7 @@ using Sandbox Functions as an HTTP control plane.
 external event source
       |
       v
-public Sandpi endpoint + bearer-token authentication
+GitHub App signature or custom bearer-token authentication
       |
       v
 PostgreSQL delivery ledger -> trigger policy -> cooldown bucket
@@ -22,23 +22,80 @@ durable Automation run -> native Codex Turn
 native Thread remains conversation authority
 ```
 
-The endpoint is public only with respect to Sandpi's browser login. Every
-request must still pass the Webhook's own bearer-token check.
-The encrypted secret, definition, delivery ledger, cooldown buckets and run
-ledger stay in Sandpi PostgreSQL. A Sandbox does not receive database or
-Webhook credentials.
+Ingress endpoints are public only with respect to Sandpi's browser login. A
+custom request must pass its Webhook's bearer-token check. A GitHub request must
+pass the deployment GitHub App's raw-body HMAC verification before it is
+acknowledged. The encrypted custom secret, source binding, definition, delivery
+ledger, cooldown buckets and run ledger stay in Sandpi PostgreSQL. A Sandbox
+does not receive database, Webhook or GitHub App credentials.
 
 The run ledger stores delivery and recovery coordinates, not the resulting
 conversation transcript. After a Turn is accepted, the native coding-agent
 Thread remains the source of truth for messages, tool calls, reasoning and
 output, just as it does for Schedules and interactive input.
 
-## Request authentication and event envelope
+## Webhook sources
 
-Environment Webhooks are a generic ingress rather than provider integrations.
-They accept JSON, form or text payloads authenticated with `Authorization:
-Bearer <token>`. The `?token=` fallback exists for senders that cannot configure
-headers, but query strings may be retained by upstream access logs.
+The Webhook product owns two source types. The source is immutable after
+creation because changing it would also change the authentication and resource
+authority of the definition.
+
+### GitHub App
+
+GitHub is a direct Webhook source, not a protocol option applied to a generic
+payload. A Sandpi deployment owns one GitHub App configuration. A signed-in
+Sandpi user starts an installation with a short-lived, hashed `state`. GitHub
+returns an OAuth authorization code and installation id. Sandpi exchanges the
+code, verifies that the authorizing GitHub user can access that exact
+installation, imports its current repository inventory, and discards the user
+access token. No GitHub token is persisted or projected into an Environment.
+
+GitHub Apps expose one deployment-level event URL rather than a URL per
+repository. Sandpi therefore verifies and durably records a global receipt
+before responding, then asynchronously fans the event out by installation and
+repository to enabled Environment Webhooks. The GitHub delivery id is
+idempotent globally, while the existing delivery ledger remains idempotent per
+Webhook. Installation suspension/deletion disables bound definitions; an
+explicit Sandpi disconnect remains disconnected until the user reconnects.
+Repository-access events refresh metadata only for repositories that the user
+already proved accessible through OAuth and remove revoked bindings. They never
+expand another user's selectable inventory; newly added repositories require
+the user to reconnect and prove access.
+
+Each GitHub Webhook selects one connection, 1-100 repositories and an explicit
+event allowlist. The initial supported events cover pull requests, pull-request
+reviews and review comments, issues, and issue/PR comments. The GitHub App needs
+read-only **Pull requests** and **Issues** repository permissions (plus the
+mandatory read-only Metadata permission) and subscriptions for Pull request,
+Pull request review, Pull request review comment, Issues and Issue comment.
+
+Configure these deployment values together:
+
+```text
+SANDPI_GITHUB_APP_SLUG
+SANDPI_GITHUB_CLIENT_ID
+SANDPI_GITHUB_CLIENT_SECRET
+SANDPI_GITHUB_WEBHOOK_SECRET
+```
+
+The GitHub App callback URL is
+`https://<sandpi-host>/api/v1/webhook-sources/github/callback`; enable “Request
+user authorization (OAuth) during installation.” Its active Webhook URL is
+`https://<sandpi-host>/api/v1/webhook-sources/github/events`, configured with
+the same webhook secret. Partial deployment configuration fails startup.
+
+This connection authorizes Webhook delivery only. It does not grant the coding
+agent GitHub API or repository-clone credentials. Those remain separate
+Environment credential and network-policy decisions.
+
+### Custom URL
+
+The custom source accepts JSON, form or text payloads authenticated with
+`Authorization: Bearer <token>`. The `?token=` fallback exists for senders that
+cannot configure headers, but query strings may be retained by upstream access
+logs.
+
+## Normalized event envelope
 
 Each accepted request is normalized into one internal event model:
 
@@ -50,9 +107,8 @@ Each accepted request is normalized into one internal event model:
   value;
 - the original parsed payload remains available under `/payload`.
 
-GitHub Apps, Slack Apps and other installation-based products require a
-separate account connection and resource-binding model. They must not be
-represented as protocol options on a generic Webhook definition.
+Provider metadata is retained in the normalized source envelope for prompts and
+conditions without leaking provider credentials.
 
 ## Trigger policy
 
@@ -100,8 +156,15 @@ untrusted external data rather than instructions.
 
 `maxPendingRuns` bounds queued, claimed and running work, including a run slot
 already reserved by a non-empty cooldown bucket. `maxConcurrentRuns` bounds
-active runs for new-Session targets; a fixed Session is always limited to one
-because the native harness admits only one active Turn per Session.
+active runs for new-Session and source-thread targets; a fixed Session is always
+limited to one because the native harness admits only one active Turn per
+Session.
+
+A GitHub definition can use `sourceThread` to map every pull request or issue to
+one durable product Session. Comments, reviews and updates for the same thread
+reuse that Session, while unrelated repositories and thread numbers remain
+isolated. Archiving or deleting the Session removes the binding, so the next
+event creates a fresh native Session rather than targeting archived state.
 
 When a fixed target is busy, `overlapPolicy=queue` keeps the run durable and
 retries it, while `skip` records a terminal skipped run. Archiving or deleting a
@@ -128,9 +191,12 @@ PUT/DELETE /api/v1/environments/{environmentId}/webhooks/{webhookId}
 PUT /api/v1/environments/{environmentId}/webhooks/{webhookId}/secret
 GET /api/v1/environments/{environmentId}/webhooks/{webhookId}/runs
 GET /api/v1/environments/{environmentId}/webhooks/{webhookId}/deliveries
+GET /api/v1/environments/{environmentId}/webhook-sources/github
+POST /api/v1/environments/{environmentId}/webhook-sources/github/install
+DELETE /api/v1/environments/{environmentId}/webhook-sources/github/connections/{connectionId}
 ```
 
-Each definition receives one unguessable ingress URL:
+Each custom definition receives one unguessable ingress URL:
 
 ```text
 POST /api/v1/webhooks/{endpointId}
@@ -141,6 +207,13 @@ once. Supplied secrets must contain at least 16 characters. Secrets are
 encrypted with `SANDPI_SECRET_KEY`; creating or rotating a Webhook fails closed
 when credential encryption is not configured.
 
-The Environment Settings UI provides generic sender instructions, one-time
-token copying, trigger and cooldown editors, run admission controls, and recent
-delivery and run history.
+GitHub uses these two public deployment endpoints instead:
+
+```text
+GET  /api/v1/webhook-sources/github/callback
+POST /api/v1/webhook-sources/github/events
+```
+
+The Environment Settings UI provides GitHub installation, repository and event
+selection, custom sender instructions and one-time token copying, trigger and
+cooldown editors, run admission controls, and recent delivery and run history.

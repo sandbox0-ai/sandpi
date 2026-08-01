@@ -8,6 +8,7 @@ import type {
   EnvironmentWebhookTarget,
   EnvironmentWebhookTriggerPolicy,
 } from "@/lib/types";
+import { GITHUB_WEBHOOK_EVENT_TYPE_VALUES } from "@/lib/github-webhooks";
 import { EnvironmentAutomationExecutor } from "@/server/automations/executor";
 import type { CodexService } from "@/server/harnesses/codex/service";
 import { HttpError } from "@/server/http-error";
@@ -22,6 +23,7 @@ import {
   publicEnvironmentWebhook,
   type StoredEnvironmentWebhook,
   type WebhookMutableConfiguration,
+  type WebhookSourceConfiguration,
 } from "./webhook-store";
 
 interface WebhookLogger {
@@ -41,7 +43,8 @@ interface WebhookCodex {
 }
 
 export interface EnvironmentWebhookConfiguration
-  extends WebhookMutableConfiguration {
+  extends Omit<WebhookMutableConfiguration, "source"> {
+  source?: WebhookSourceConfiguration;
   secret?: string;
 }
 
@@ -111,25 +114,37 @@ export class EnvironmentWebhookService {
     environmentId: string,
     input: EnvironmentWebhookConfiguration,
   ): Promise<EnvironmentWebhookSetup> {
-    const secretBox = this.requireSecretBox();
     const id = `webhook_${randomUUID()}`;
     const configuration = await this.normalizeConfiguration(
       userId,
       environmentId,
       input,
     );
-    const secret = configuredSecret(input.secret);
+    if (configuration.source.kind === "github" && input.secret) {
+      throw githubSecretUnsupported();
+    }
+    const secret =
+      configuration.source.kind === "custom"
+        ? configuredSecret(input.secret)
+        : undefined;
     const webhook = await this.webhooks.create({
       id,
-      endpointId: `hook_${randomUUID()}`,
       userId,
       environmentId,
-      secret: secretBox.encrypt(secret.value, secretAssociatedData(id)),
+      ...(secret
+        ? {
+            endpointId: `hook_${randomUUID()}`,
+            secret: this.requireSecretBox().encrypt(
+              secret.value,
+              secretAssociatedData(id),
+            ),
+          }
+        : {}),
       configuration,
     });
     return {
       webhook: this.publicWebhook(webhook),
-      ...(secret.generated ? { setupSecret: secret.value } : {}),
+      ...(secret?.generated ? { setupSecret: secret.value } : {}),
     };
   }
 
@@ -145,6 +160,16 @@ export class EnvironmentWebhookService {
       environmentId,
       input,
     );
+    if (current.source.kind !== configuration.source.kind) {
+      throw new HttpError(
+        400,
+        "environment_webhook_source_immutable",
+        "Create a new Webhook to change its source.",
+      );
+    }
+    if (configuration.source.kind === "github" && input.secret) {
+      throw githubSecretUnsupported();
+    }
     let setupSecret: string | undefined;
     let encryptedSecret;
     if (input.secret) {
@@ -180,13 +205,16 @@ export class EnvironmentWebhookService {
     suppliedSecret?: string,
   ): Promise<EnvironmentWebhookSetup> {
     const current = await this.webhooks.get(userId, environmentId, webhookId);
+    if (current.source.kind !== "custom") {
+      throw githubSecretUnsupported();
+    }
     const secret = configuredSecret(suppliedSecret);
     const webhook = await this.webhooks.update({
       userId,
       environmentId,
       webhookId,
       expectedRevision: current.revision,
-      configuration: current,
+      configuration: { ...current, source: { kind: "custom" } },
       secret: this.requireSecretBox().encrypt(
         secret.value,
         secretAssociatedData(current.id),
@@ -236,36 +264,30 @@ export class EnvironmentWebhookService {
   }): Promise<{ statusCode: 200 | 202; body: unknown }> {
     let webhook = await this.webhooks.getByEndpoint(input.endpointId);
     for (let attempt = 0; attempt < 2; attempt += 1) {
+      if (webhook.source.kind !== "custom" || !webhook.secret) {
+        throw new HttpError(
+          404,
+          "environment_webhook_not_found",
+          "Webhook not found.",
+        );
+      }
       const secret = this.requireSecretBox().decrypt(
         webhook.secret,
         secretAssociatedData(webhook.id),
       );
-      const event = boundedWebhookEvent(
-        configuredEventCoordinates(
-          webhook,
-          normalizeAuthenticatedWebhookRequest({
-            secret,
-            rawBody: input.rawBody,
-            headers: input.headers,
-            contentType: input.contentType,
-            queryToken: input.queryToken,
-            now: this.now(),
-          }),
-        ),
-      );
-      const match = webhookEventMatches(webhook.triggerPolicy, event);
-      const result = await this.webhooks.ingestDelivery({
-        webhook,
-        event,
-        matched: match.matched,
-        filterReason: match.reason,
+      const event = normalizeAuthenticatedWebhookRequest({
+        secret,
+        rawBody: input.rawBody,
+        headers: input.headers,
+        contentType: input.contentType,
+        queryToken: input.queryToken,
         now: this.now(),
       });
+      const result = await this.acceptVerifiedEvent(webhook, event);
       if (result.kind === "stale") {
         webhook = await this.webhooks.getByEndpoint(input.endpointId);
         continue;
       }
-      this.wake();
       return {
         statusCode:
           result.kind === "duplicate" ? 200 : 202,
@@ -281,6 +303,37 @@ export class EnvironmentWebhookService {
       "environment_webhook_changed",
       "The Webhook changed while the delivery was being accepted; retry it.",
     );
+  }
+
+  async getEnabledForProvider(webhookId: string) {
+    const webhook = await this.webhooks.getEnabledById(webhookId);
+    if (webhook.source.kind !== "github") {
+      throw new HttpError(
+        404,
+        "environment_webhook_not_found",
+        "Webhook not found.",
+      );
+    }
+    return webhook;
+  }
+
+  async acceptVerifiedEvent(
+    webhook: StoredEnvironmentWebhook,
+    receivedEvent: NormalizedWebhookEvent,
+  ) {
+    const event = boundedWebhookEvent(
+      configuredEventCoordinates(webhook, receivedEvent),
+    );
+    const match = webhookEventMatches(webhook.triggerPolicy, event);
+    const result = await this.webhooks.ingestDelivery({
+      webhook,
+      event,
+      matched: match.matched,
+      filterReason: match.reason,
+      now: this.now(),
+    });
+    if (result.kind !== "stale") this.wake();
+    return result;
   }
 
   async reconcileOnce() {
@@ -316,18 +369,41 @@ export class EnvironmentWebhookService {
         );
       }
     }
+    const source = normalizedSource(input.source);
     const statePath =
       input.triggerPolicy.mode === "stateChange"
-        ? input.triggerPolicy.statePath?.trim() || "/payload/status"
+        ? input.triggerPolicy.statePath?.trim() ||
+          (source.kind === "github" ? "/stateValue" : "/payload/status")
         : input.triggerPolicy.statePath?.trim();
+    const eventTypes = Array.from(
+      new Set(input.triggerPolicy.eventTypes.map((value) => value.trim())),
+    ).filter(Boolean);
+    if (source.kind === "github") {
+      if (!eventTypes.length) {
+        throw new HttpError(
+          400,
+          "environment_webhook_github_events_required",
+          "Select at least one GitHub event.",
+        );
+      }
+      const unsupported = eventTypes.filter(
+        (eventType) => !GITHUB_WEBHOOK_EVENT_TYPE_VALUES.has(eventType),
+      );
+      if (unsupported.length) {
+        throw new HttpError(
+          400,
+          "environment_webhook_github_events_unsupported",
+          `Unsupported GitHub event types: ${unsupported.join(", ")}.`,
+        );
+      }
+    }
     return {
+      source,
       name: input.name.trim(),
       prompt: input.prompt.trim(),
       triggerPolicy: {
         mode: input.triggerPolicy.mode,
-        eventTypes: Array.from(
-          new Set(input.triggerPolicy.eventTypes.map((value) => value.trim())),
-        ).filter(Boolean),
+        eventTypes,
         conditions: input.triggerPolicy.conditions.map(normalizedCondition),
         ...(statePath ? { statePath } : {}),
         ...(input.triggerPolicy.groupKeyPath?.trim()
@@ -423,10 +499,12 @@ export class EnvironmentWebhookService {
   private publicWebhook(webhook: StoredEnvironmentWebhook): EnvironmentWebhook {
     return publicEnvironmentWebhook(
       webhook,
-      new URL(
-        `/api/v1/webhooks/${encodeURIComponent(webhook.endpointId)}`,
-        this.publicUrl,
-      ).toString(),
+      webhook.endpointId
+        ? new URL(
+            `/api/v1/webhooks/${encodeURIComponent(webhook.endpointId)}`,
+            this.publicUrl,
+          ).toString()
+        : undefined,
     );
   }
 
@@ -592,6 +670,27 @@ function configuredSecret(supplied: string | undefined) {
   const value = supplied?.trim();
   if (value) return { value, generated: false };
   return { value: randomBytes(32).toString("base64url"), generated: true };
+}
+
+function normalizedSource(
+  source: EnvironmentWebhookConfiguration["source"],
+): WebhookSourceConfiguration {
+  if (!source || source.kind === "custom") return { kind: "custom" };
+  return {
+    kind: "github",
+    connectionId: source.connectionId.trim(),
+    repositoryIds: Array.from(
+      new Set(source.repositoryIds.map((repositoryId) => repositoryId.trim())),
+    ).filter(Boolean),
+  };
+}
+
+function githubSecretUnsupported() {
+  return new HttpError(
+    400,
+    "environment_webhook_secret_unsupported",
+    "GitHub Webhooks use the deployment GitHub App and do not have a per-Webhook secret.",
+  );
 }
 
 function secretAssociatedData(webhookId: string) {

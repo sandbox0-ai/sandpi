@@ -2464,14 +2464,14 @@ export class SandpiStore {
   }
 
   /**
-   * Creates the deterministic product Session reserved by one Automation run.
-   * Retrying the same run returns its existing row; another owner or run can
-   * never adopt that id.
+   * Creates a deterministic product Session reserved by an Automation run or
+   * stable source thread. Retries may reuse only the same ownership key.
    */
   async ensureAutomationSessionMetadata(input: {
     sessionId: string;
     automationRunId: string;
     automationKind: "schedule" | "webhook";
+    automationSessionKey?: string;
     userId: string;
     environment: Environment;
     title: string;
@@ -2503,6 +2503,9 @@ export class SandpiStore {
             reasoningEffort: input.reasoningEffort ?? null,
             automationRunId: input.automationRunId,
             automationKind: input.automationKind,
+            ...(input.automationSessionKey
+              ? { automationSessionKey: input.automationSessionKey }
+              : {}),
             ...(input.automationKind === "schedule"
               ? { scheduleRunId: input.automationRunId }
               : {}),
@@ -2541,6 +2544,11 @@ export class SandpiStore {
                  $5 = 'schedule'
                  AND session.metadata ->> 'scheduleRunId' = $4
                )
+               OR (
+                 $6::TEXT IS NOT NULL
+                 AND session.metadata ->> 'automationSessionKey' = $6
+                 AND session.metadata ->> 'automationKind' = $5
+               )
              )`,
           [
             input.sessionId,
@@ -2548,6 +2556,7 @@ export class SandpiStore {
             input.userId,
             input.automationRunId,
             input.automationKind,
+            input.automationSessionKey ?? null,
           ],
         );
         if (!existing.rowCount) {

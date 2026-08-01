@@ -65,6 +65,8 @@ import {
   environmentScheduleRunSchema,
   environmentScheduleSchema,
   environmentWebhookDeliverySchema,
+  githubWebhookConnectionInventorySchema,
+  githubWebhookInstallAttemptSchema,
   environmentWebhookRunSchema,
   environmentWebhookSchema,
   environmentWebhookSetupSchema,
@@ -164,6 +166,10 @@ const webhookIngressResult = z.object({
   status: z.enum(["duplicate", "filtered", "suppressed", "batched", "queued"]),
   deliveryId: z.string(),
   runId: z.string().optional(),
+});
+const githubWebhookIngressResult = z.object({
+  status: z.enum(["accepted", "duplicate"]),
+  deliveryId: z.string(),
 });
 const modelPage = z.object({ data: z.array(z.unknown()) });
 const modelMeta = z.object({
@@ -729,6 +735,79 @@ export const openApiRouteContracts: readonly OpenApiRouteContract[] = [
         200: webhookIngressResult,
         202: webhookIngressResult,
       },
+    },
+  }),
+  defineContract({
+    method: "POST",
+    url: "/api/v1/webhook-sources/github/events",
+    public: true,
+    schema: {
+      operationId: "receiveGitHubWebhook",
+      summary: "Receive a signed GitHub App webhook delivery",
+      description:
+        "Verifies the deployment GitHub App signature, durably acknowledges the delivery, and routes it to matching Environment Webhooks.",
+      tags: ["Webhooks"],
+      "x-sandpi-request-content-types": ["application/json"],
+      headers: z.object({
+        "x-hub-signature-256": z.string(),
+        "x-github-delivery": z.string(),
+        "x-github-event": z.string(),
+      }),
+      body: z.unknown(),
+      response: {
+        200: githubWebhookIngressResult,
+        202: githubWebhookIngressResult,
+      },
+    },
+  }),
+  defineContract({
+    method: "GET",
+    url: "/api/v1/webhook-sources/github/callback",
+    public: true,
+    schema: {
+      operationId: "completeGitHubWebhookInstall",
+      summary: "Complete GitHub App installation for Webhooks",
+      tags: ["Webhooks"],
+      querystring: z.looseObject({
+        code: z.string().min(1),
+        state: z.string().min(1),
+        installation_id: z.string().regex(/^[0-9]+$/),
+        setup_action: z.string().optional(),
+      }),
+      response: { 200: z.string() },
+      "x-sandpi-content-type": "text/html",
+    },
+  }),
+  defineContract({
+    method: "GET",
+    url: "/api/v1/environments/:environmentId/webhook-sources/github",
+    schema: {
+      operationId: "getGitHubWebhookConnections",
+      summary: "List GitHub App connections available to Webhooks",
+      tags: ["Webhooks"],
+      response: {
+        200: dataEnvelope(githubWebhookConnectionInventorySchema),
+      },
+    },
+  }),
+  defineContract({
+    method: "POST",
+    url: "/api/v1/environments/:environmentId/webhook-sources/github/install",
+    schema: {
+      operationId: "startGitHubWebhookInstall",
+      summary: "Start a GitHub App installation for Webhooks",
+      tags: ["Webhooks"],
+      response: { 201: dataEnvelope(githubWebhookInstallAttemptSchema) },
+    },
+  }),
+  defineContract({
+    method: "DELETE",
+    url: "/api/v1/environments/:environmentId/webhook-sources/github/connections/:connectionId",
+    schema: {
+      operationId: "disconnectGitHubWebhookConnection",
+      summary: "Disconnect a GitHub App installation from Webhooks",
+      tags: ["Webhooks"],
+      response: { 200: dataEnvelope(idResultSchema) },
     },
   }),
   defineContract({
