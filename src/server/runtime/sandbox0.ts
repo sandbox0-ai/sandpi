@@ -1799,15 +1799,31 @@ export class Sandbox0Runtime implements RuntimeAdapter {
       this.invalidateWorkspaceGitState(runtime);
     } catch (error) {
       if (!committed && previousMoved) {
-        await sandbox.deleteFile(destination).catch(() => undefined);
         try {
           await sandbox.moveFile(backup, destination);
         } catch {
-          throw new HttpError(
-            502,
-            "codex_skill_rollback_failed",
-            "The skill replacement failed and Sandbox0 could not restore the previous skill.",
-          );
+          let destinationExists = false;
+          try {
+            await sandbox.statFile(destination);
+            destinationExists = true;
+          } catch (statError) {
+            if (!isMissingResource(statError)) {
+              throw new HttpError(
+                502,
+                "codex_skill_rollback_failed",
+                "The skill replacement failed and Sandbox0 could not verify the requested skill.",
+              );
+            }
+          }
+          if (!destinationExists) {
+            throw new HttpError(
+              502,
+              "codex_skill_rollback_failed",
+              "The skill replacement failed and Sandbox0 could not restore the previous skill.",
+            );
+          }
+          // Another replacement committed after this operation moved the old
+          // directory aside. Preserve that winner instead of deleting it.
         }
       }
       if (!committed) {
@@ -2101,7 +2117,7 @@ export class Sandbox0Runtime implements RuntimeAdapter {
         !repository ||
         !isMissingResource(error)
       ) {
-        throw error;
+        throw translateWorkspaceFileError(error);
       }
       const relativePath = path.posix.relative(repository.root, filePath);
       const revision = change.staged

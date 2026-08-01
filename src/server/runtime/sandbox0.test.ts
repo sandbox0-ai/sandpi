@@ -4072,6 +4072,127 @@ test("replaces Environment skills through a protected staging directory", async 
   );
 });
 
+test("preserves a concurrent Environment skill replacement when rollback loses the race", async () => {
+  const destination = "/workspace/.agents/skills/release";
+  let currentSkill: string | undefined = "old";
+  const staged = new Map<string, string>();
+  const backups = new Map<string, string>();
+  let signalFirstCommit: (() => void) | undefined;
+  let releaseFirstCommit: (() => void) | undefined;
+  const firstCommitStarted = new Promise<void>((resolve) => {
+    signalFirstCommit = resolve;
+  });
+  const firstCommitReleased = new Promise<void>((resolve) => {
+    releaseFirstCommit = resolve;
+  });
+  const missing = () =>
+    new APIError({
+      statusCode: 404,
+      code: "not_found",
+      message: "not found",
+    });
+  const occupied = () =>
+    new APIError({
+      statusCode: 409,
+      code: "already_exists",
+      message: "destination exists",
+    });
+  const runtime = runtimeWithClient({
+    sandboxes: {
+      sandbox() {
+        return {
+          async statFile(filePath: string) {
+            if (filePath === destination) {
+              if (currentSkill === undefined) throw missing();
+              return { type: "dir", size: 0, isLink: false };
+            }
+            return { type: "dir", size: 0, isLink: false };
+          },
+          async mkdir() {},
+          async writeFile(filePath: string, content: Uint8Array) {
+            staged.set(
+              filePath.slice(0, -"/SKILL.md".length),
+              Buffer.from(content).toString("utf8"),
+            );
+          },
+          async moveFile(source: string, target: string) {
+            if (source === destination) {
+              if (currentSkill === undefined) throw missing();
+              backups.set(target, currentSkill);
+              currentSkill = undefined;
+              return;
+            }
+            if (source.endsWith("/next") && target === destination) {
+              const content = staged.get(source);
+              if (content === undefined) throw missing();
+              if (content === "first") {
+                signalFirstCommit?.();
+                await firstCommitReleased;
+              }
+              if (currentSkill !== undefined) throw occupied();
+              staged.delete(source);
+              currentSkill = content;
+              return;
+            }
+            if (source.endsWith("/previous") && target === destination) {
+              const content = backups.get(source);
+              if (content === undefined) throw missing();
+              if (currentSkill !== undefined) throw occupied();
+              backups.delete(source);
+              currentSkill = content;
+              return;
+            }
+            assert.fail(`unexpected move ${source} -> ${target}`);
+          },
+          async deleteFile(filePath: string) {
+            if (filePath === destination) currentSkill = undefined;
+            for (const key of [...staged.keys()]) {
+              if (key === filePath || key.startsWith(`${filePath}/`)) {
+                staged.delete(key);
+              }
+            }
+            for (const key of [...backups.keys()]) {
+              if (key === filePath || key.startsWith(`${filePath}/`)) {
+                backups.delete(key);
+              }
+            }
+          },
+        };
+      },
+    },
+  });
+
+  const first = runtime
+    .replaceCodexEnvironmentSkill(environmentRuntimeRecord(), "release", [
+      {
+        path: "SKILL.md",
+        content: Buffer.from("first"),
+        executable: false,
+      },
+    ])
+    .catch((error: unknown) => error);
+  await firstCommitStarted;
+
+  await runtime.replaceCodexEnvironmentSkill(
+    environmentRuntimeRecord(),
+    "release",
+    [
+      {
+        path: "SKILL.md",
+        content: Buffer.from("second"),
+        executable: false,
+      },
+    ],
+  );
+  releaseFirstCommit?.();
+
+  const error = await first;
+  assert.equal((error as HttpError).statusCode, 409);
+  assert.equal(currentSkill, "second");
+  assert.equal(staged.size, 0);
+  assert.equal(backups.size, 0);
+});
+
 test("renames and recursively deletes mutable Workspace entries", async () => {
   const modifiedAt = new Date("2026-07-27T08:00:00.000Z");
   const entries = new Map<
@@ -4453,6 +4574,44 @@ test("opens Sandpi-managed Workspace files as read-only", async () => {
     },
   );
   assert.equal(writes, 0);
+});
+
+test("maps missing Workspace IDE files to the public not-found contract", async () => {
+  const filePath = "/workspace/AGENTS.md";
+  let missingStats = 0;
+  const runtime = runtimeWithClient({
+    sandboxes: {
+      sandbox(sandboxId: string) {
+        assert.equal(sandboxId, "sandbox-environment");
+        return {
+          async cmd(name: string) {
+            assert.equal(name, "find-git-repositories");
+            return { exitCode: 0, stderr: "", stdout: "" };
+          },
+          async statFile(candidatePath: string) {
+            if (candidatePath === filePath) {
+              missingStats += 1;
+              throw new APIError({
+                statusCode: 404,
+                code: "file_not_found",
+                message: "file not found",
+              });
+            }
+            return { type: "dir", size: 0, isLink: false };
+          },
+        };
+      },
+    },
+  });
+
+  await assert.rejects(
+    runtime.readWorkspaceIdeFile(environmentRuntimeRecord(), filePath),
+    (error: unknown) =>
+      error instanceof HttpError &&
+      error.statusCode === 404 &&
+      error.code === "workspace_file_not_found",
+  );
+  assert.equal(missingStats, 2);
 });
 
 test("returns verified media metadata instead of treating ASCII containers as text", async () => {
