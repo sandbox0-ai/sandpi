@@ -8,11 +8,13 @@ import {
   browserSessionSchema,
   codexComposerUploadSchema,
   codexHookUpdateSchema,
+  codexMcpServerConfigurationSchema,
   codexMcpServerEnabledSchema,
   codexMemoriesSettingsSchema,
   codexPersonalitySelectionSchema,
   codexRateLimitResetSchema,
   codexSkillConfigurationSchema,
+  codexSkillPutSchema,
   environmentBrowserViewportSchema,
   environmentCreateSchema,
   environmentOrderSchema,
@@ -437,6 +439,16 @@ export const openApiRouteContracts: readonly OpenApiRouteContract[] = [
     },
   }),
   defineContract({
+    method: "GET",
+    url: "/api/v1/environments/:environmentId",
+    schema: {
+      operationId: "getEnvironment",
+      summary: "Get an Environment",
+      tags: ["Environments"],
+      response: { 200: dataEnvelope(environmentSchema) },
+    },
+  }),
+  defineContract({
     method: "POST",
     url: "/api/v1/environments",
     schema: {
@@ -522,6 +534,16 @@ export const openApiRouteContracts: readonly OpenApiRouteContract[] = [
       summary: "List secret-free egress credential projections",
       tags: ["Egress credentials"],
       response: { 200: dataEnvelope(z.array(egressCredentialSchema)) },
+    },
+  }),
+  defineContract({
+    method: "GET",
+    url: "/api/v1/environments/:environmentId/egress-credentials/:credentialId",
+    schema: {
+      operationId: "getEnvironmentEgressCredential",
+      summary: "Get one secret-free egress credential projection",
+      tags: ["Egress credentials"],
+      response: { 200: dataEnvelope(egressCredentialSchema) },
     },
   }),
   defineContract({
@@ -871,6 +893,27 @@ export const openApiRouteContracts: readonly OpenApiRouteContract[] = [
     },
   }),
   defineContract({
+    method: "PUT",
+    url: "/api/v1/environments/:environmentId/harnesses/codex/skills/:name",
+    schema: {
+      operationId: "putEnvironmentCodexSkill",
+      summary: "Create or replace one user-owned Environment Codex skill",
+      tags: ["Codex"],
+      body: codexSkillPutSchema,
+      response: { 200: dataEnvelope(skillsInventorySchema) },
+    },
+  }),
+  defineContract({
+    method: "DELETE",
+    url: "/api/v1/environments/:environmentId/harnesses/codex/skills/:name",
+    schema: {
+      operationId: "deleteEnvironmentCodexSkill",
+      summary: "Delete one user-owned Environment Codex skill",
+      tags: ["Codex"],
+      response: { 200: dataEnvelope(skillsInventorySchema) },
+    },
+  }),
+  defineContract({
     method: "GET",
     url: "/api/v1/environments/:environmentId/harnesses/codex/mcp-servers",
     schema: {
@@ -891,6 +934,27 @@ export const openApiRouteContracts: readonly OpenApiRouteContract[] = [
       summary: "Enable or disable an Environment Codex MCP server",
       tags: ["Codex"],
       body: codexMcpServerEnabledSchema,
+      response: { 200: dataEnvelope(mcpInventorySchema) },
+    },
+  }),
+  defineContract({
+    method: "PUT",
+    url: "/api/v1/environments/:environmentId/harnesses/codex/mcp-servers/:name",
+    schema: {
+      operationId: "putEnvironmentCodexMcpServer",
+      summary: "Create or replace one Environment Codex MCP server",
+      tags: ["Codex"],
+      body: codexMcpServerConfigurationSchema,
+      response: { 200: dataEnvelope(mcpInventorySchema) },
+    },
+  }),
+  defineContract({
+    method: "DELETE",
+    url: "/api/v1/environments/:environmentId/harnesses/codex/mcp-servers/:name",
+    schema: {
+      operationId: "deleteEnvironmentCodexMcpServer",
+      summary: "Delete one user-managed Environment Codex MCP server",
+      tags: ["Codex"],
       response: { 200: dataEnvelope(mcpInventorySchema) },
     },
   }),

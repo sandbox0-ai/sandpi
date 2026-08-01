@@ -3914,6 +3914,164 @@ test("creates empty Workspace files and folders without replacing existing entri
   assert.equal(directories.length, 1);
 });
 
+test("replaces Environment skills through a protected staging directory", async () => {
+  const entries = new Map<
+    string,
+    { type: "file" | "dir" | "symlink"; size: number; isLink: boolean }
+  >([
+    ["/workspace", { type: "dir", size: 0, isLink: false }],
+    ["/workspace/.agents", { type: "dir", size: 0, isLink: false }],
+    ["/workspace/.agents/skills", { type: "dir", size: 0, isLink: false }],
+    [
+      "/workspace/.agents/skills/release",
+      { type: "dir", size: 0, isLink: false },
+    ],
+    [
+      "/workspace/.agents/skills/release/old.txt",
+      { type: "file", size: 3, isLink: false },
+    ],
+  ]);
+  const contents = new Map<string, string>([
+    ["/workspace/.agents/skills/release/old.txt", "old"],
+  ]);
+  const commands: string[] = [];
+  let failNextCommit = false;
+  const missing = () =>
+    new APIError({
+      statusCode: 404,
+      code: "not_found",
+      message: "not found",
+    });
+  const moveTree = (source: string, destination: string) => {
+    for (const [entryPath, entry] of [...entries]) {
+      if (entryPath !== source && !entryPath.startsWith(`${source}/`)) continue;
+      entries.delete(entryPath);
+      const movedPath = `${destination}${entryPath.slice(source.length)}`;
+      entries.set(movedPath, entry);
+      const content = contents.get(entryPath);
+      if (content !== undefined) {
+        contents.delete(entryPath);
+        contents.set(movedPath, content);
+      }
+    }
+  };
+  const deleteTree = (root: string) => {
+    for (const entryPath of [...entries.keys()]) {
+      if (entryPath === root || entryPath.startsWith(`${root}/`)) {
+        entries.delete(entryPath);
+        contents.delete(entryPath);
+      }
+    }
+  };
+  const runtime = runtimeWithClient({
+    sandboxes: {
+      sandbox() {
+        return {
+          async statFile(filePath: string) {
+            const entry = entries.get(filePath);
+            if (!entry) throw missing();
+            return entry;
+          },
+          async mkdir(directoryPath: string) {
+            entries.set(directoryPath, {
+              type: "dir",
+              size: 0,
+              isLink: false,
+            });
+          },
+          async writeFile(filePath: string, content: Uint8Array) {
+            entries.set(filePath, {
+              type: "file",
+              size: content.byteLength,
+              isLink: false,
+            });
+            contents.set(filePath, Buffer.from(content).toString("utf8"));
+          },
+          async moveFile(source: string, destination: string) {
+            if (
+              failNextCommit &&
+              source.endsWith("/next") &&
+              destination === "/workspace/.agents/skills/release"
+            ) {
+              failNextCommit = false;
+              throw new APIError({
+                statusCode: 500,
+                code: "move_failed",
+                message: "move failed",
+              });
+            }
+            moveTree(source, destination);
+          },
+          async deleteFile(entryPath: string) {
+            deleteTree(entryPath);
+          },
+          async cmd(command: string) {
+            commands.push(command);
+            return { exitCode: 0 };
+          },
+        };
+      },
+    },
+  });
+
+  await runtime.replaceCodexEnvironmentSkill(
+    environmentRuntimeRecord(),
+    "release",
+    [
+      {
+        path: "SKILL.md",
+        content: Buffer.from("---\nname: release\n---\n"),
+        executable: false,
+      },
+      {
+        path: "scripts/release.sh",
+        content: Buffer.from("#!/bin/sh\n"),
+        executable: true,
+      },
+    ],
+  );
+
+  assert.equal(
+    contents.get("/workspace/.agents/skills/release/SKILL.md"),
+    "---\nname: release\n---\n",
+  );
+  assert.equal(
+    contents.get("/workspace/.agents/skills/release/scripts/release.sh"),
+    "#!/bin/sh\n",
+  );
+  assert.equal(
+    entries.has("/workspace/.agents/skills/release/old.txt"),
+    false,
+  );
+  assert.match(commands[0] ?? "", /^chmod 755 -- /);
+  assert.match(commands[0] ?? "", /scripts\/release\.sh'$/);
+
+  failNextCommit = true;
+  await assert.rejects(
+    runtime.replaceCodexEnvironmentSkill(
+      environmentRuntimeRecord(),
+      "release",
+      [
+        {
+          path: "SKILL.md",
+          content: Buffer.from("replacement"),
+          executable: false,
+        },
+      ],
+    ),
+  );
+  assert.equal(
+    contents.get("/workspace/.agents/skills/release/SKILL.md"),
+    "---\nname: release\n---\n",
+  );
+  assert.equal(
+    [...entries.keys()].some((entryPath) =>
+      entryPath.startsWith("/workspace/.sandpi/tmp/skills/"),
+    ),
+    false,
+  );
+});
+
 test("renames and recursively deletes mutable Workspace entries", async () => {
   const modifiedAt = new Date("2026-07-27T08:00:00.000Z");
   const entries = new Map<

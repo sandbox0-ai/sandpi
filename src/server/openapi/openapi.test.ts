@@ -24,7 +24,7 @@ test("OpenAPI publishes every supported operation with a unique id", async () =>
   const operations = allOperations(document);
   const operationIds = operations.map((operation) => operation.operationId);
 
-  assert.equal(operations.length, 106);
+  assert.equal(operations.length, 112);
   assert.ok(operationIds.every(Boolean));
   assert.equal(new Set(operationIds).size, operationIds.length);
   assert.ok(Object.keys(document.paths).every((path) => !path.includes(":")));
@@ -111,6 +111,44 @@ test("OpenAPI preserves the shared Browser and streaming semantics", async () =>
       .maxItems,
     64,
   );
+});
+
+test("OpenAPI publishes resource-level CLI operations", async () => {
+  const { document } = await builtOpenApi;
+  for (const [path, method, operationId] of [
+    [
+      "/api/v1/environments/{environmentId}",
+      "get",
+      "getEnvironment",
+    ],
+    [
+      "/api/v1/environments/{environmentId}/egress-credentials/{credentialId}",
+      "get",
+      "getEnvironmentEgressCredential",
+    ],
+    [
+      "/api/v1/environments/{environmentId}/harnesses/codex/skills/{name}",
+      "put",
+      "putEnvironmentCodexSkill",
+    ],
+    [
+      "/api/v1/environments/{environmentId}/harnesses/codex/skills/{name}",
+      "delete",
+      "deleteEnvironmentCodexSkill",
+    ],
+    [
+      "/api/v1/environments/{environmentId}/harnesses/codex/mcp-servers/{name}",
+      "put",
+      "putEnvironmentCodexMcpServer",
+    ],
+    [
+      "/api/v1/environments/{environmentId}/harnesses/codex/mcp-servers/{name}",
+      "delete",
+      "deleteEnvironmentCodexMcpServer",
+    ],
+  ] as const) {
+    assert.equal(operation(document, path, method).operationId, operationId);
+  }
 });
 
 function allOperations(document: OpenAPIV3.Document) {

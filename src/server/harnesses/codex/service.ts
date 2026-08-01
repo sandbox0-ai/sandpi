@@ -129,6 +129,10 @@ const CODEX_ROLLOUT_ROOTS = [
   `${CODEX_ENVIRONMENT_HOME}/archived_sessions`,
 ] as const;
 const CODEX_ROLLOUT_READ_TIMEOUT_MS = 30_000;
+const CODEX_USER_SKILL_ROOT = "/workspace/.agents/skills";
+const CODEX_SKILL_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+const MAX_CODEX_SKILL_FILE_BYTES = 5 * 1024 * 1024;
+const MAX_CODEX_SKILL_BYTES = 10 * 1024 * 1024;
 const CODEX_MCP_SERVER_NAME = /^[A-Za-z0-9_-]{1,64}$/;
 const CODEX_MCP_OAUTH_TIMEOUT_SECONDS = 5 * 60;
 const MAX_CODEX_RATE_LIMIT_BUCKETS = 16;
@@ -187,6 +191,40 @@ const SESSION_NOTIFICATION_METHODS = new Set<string>(
 );
 type CodexMcpAuthStatus =
   "unsupported" | "notLoggedIn" | "bearerToken" | "oAuth" | "unknown";
+
+export interface CodexSkillFileInput {
+  path: string;
+  content: Uint8Array;
+  executable: boolean;
+}
+
+interface CodexMcpSharedConfiguration {
+  enabled: boolean;
+  required: boolean;
+  startupTimeoutSec?: number;
+  toolTimeoutSec?: number;
+  enabledTools?: string[];
+  disabledTools?: string[];
+  defaultToolsApprovalMode?: "auto" | "prompt" | "writes" | "approve";
+}
+
+export type CodexMcpServerConfiguration = CodexMcpSharedConfiguration &
+  (
+    | {
+        transport: "stdio";
+        command: string;
+        args: string[];
+        cwd?: string;
+        envVars?: string[];
+      }
+    | {
+        transport: "streamable-http";
+        url: string;
+        auth?: "oauth" | "chatgpt";
+        oauthResource?: string;
+        scopes?: string[];
+      }
+  );
 
 interface ServiceLogger {
   debug(fields: object, message: string): void;
@@ -1408,6 +1446,7 @@ export class CodexService {
     userId: string,
     environmentId: string,
     forceReload = false,
+    extraUserRoots: string[] = [],
   ): Promise<CodexSkillsInventory> {
     const runtime = await this.environmentRuntimeForEnvironment(
       userId,
@@ -1419,6 +1458,16 @@ export class CodexService {
       params: {
         cwds: [CODEX_ENVIRONMENT_CWD],
         ...(forceReload ? { forceReload: true } : {}),
+        ...(extraUserRoots.length > 0
+          ? {
+              perCwdExtraUserRoots: [
+                {
+                  cwd: CODEX_ENVIRONMENT_CWD,
+                  extraUserRoots,
+                },
+              ],
+            }
+          : {}),
       },
     });
     const result = requireRpcResult(
@@ -1522,6 +1571,112 @@ export class CodexService {
     };
   }
 
+  async putEnvironmentSkill(input: {
+    userId: string;
+    environmentId: string;
+    name: string;
+    files: CodexSkillFileInput[];
+    enabled: boolean;
+  }): Promise<CodexSkillsInventory> {
+    const name = requireCodexSkillName(input.name);
+    requireCodexSkillFiles(input.files);
+    const runtime = await this.environmentRuntimeForEnvironment(
+      input.userId,
+      input.environmentId,
+    );
+
+    // Ask Codex to discover the exact bytes at a temporary user-skill path
+    // before replacing the requested path. A malformed SKILL.md must not
+    // destroy a working skill in an Environment that is already in use.
+    const validationName = `sandpi_validate_${randomUUID().replaceAll("-", "")}`;
+    const validationRoot = `${CODEX_USER_SKILL_ROOT}/${validationName}`;
+    const validationPath = `${validationRoot}/${name}/SKILL.md`;
+    await this.runtime.replaceCodexEnvironmentSkill(
+      runtime,
+      validationName,
+      input.files.map((file) => ({
+        ...file,
+        path: `${name}/${file.path}`,
+      })),
+    );
+    try {
+      const validationInventory = await this.listEnvironmentSkills(
+        input.userId,
+        input.environmentId,
+        true,
+        [validationRoot],
+      );
+      const validated = validationInventory.skills.some(
+        (candidate) => candidate.path === validationPath,
+      );
+      if (!validated) {
+        throw new HttpError(
+          422,
+          "codex_skill_invalid",
+          "Codex did not discover the supplied Environment skill.",
+          validationInventory.errors.length > 0
+            ? { errors: validationInventory.errors }
+            : undefined,
+        );
+      }
+      await this.runtime.replaceCodexEnvironmentSkill(
+        runtime,
+        name,
+        input.files,
+      );
+    } finally {
+      await this.runtime.deleteCodexEnvironmentSkill(runtime, validationName);
+    }
+
+    let inventory = await this.listEnvironmentSkills(
+      input.userId,
+      input.environmentId,
+      true,
+    );
+    const skillPath = `${CODEX_USER_SKILL_ROOT}/${name}/SKILL.md`;
+    const skill = inventory.skills.find((candidate) => candidate.path === skillPath);
+    if (!skill) {
+      throw new HttpError(
+        422,
+        "codex_skill_invalid",
+        "Codex did not discover the installed Environment skill.",
+        inventory.errors.length > 0 ? { errors: inventory.errors } : undefined,
+      );
+    }
+    if (skill.enabled !== input.enabled) {
+      await this.setEnvironmentSkillEnabled({
+        userId: input.userId,
+        environmentId: input.environmentId,
+        path: skillPath,
+        enabled: input.enabled,
+      });
+      inventory = await this.listEnvironmentSkills(
+        input.userId,
+        input.environmentId,
+        true,
+      );
+    }
+    return inventory;
+  }
+
+  async deleteEnvironmentSkill(input: {
+    userId: string;
+    environmentId: string;
+    name: string;
+  }): Promise<CodexSkillsInventory> {
+    const name = requireCodexSkillName(input.name);
+    const runtime = await this.environmentRuntimeForEnvironment(
+      input.userId,
+      input.environmentId,
+    );
+    await this.runtime.deleteCodexEnvironmentSkill(runtime, name);
+    return this.listEnvironmentSkills(
+      input.userId,
+      input.environmentId,
+      true,
+    );
+  }
+
   async listEnvironmentMcpServers(
     userId: string,
     environmentId: string,
@@ -1559,6 +1714,70 @@ export class CodexService {
     await this.writeCodexConfigValue(input.environmentId, runtime, {
       keyPath: `mcp_servers.${name}.enabled`,
       value: input.enabled,
+    });
+    await this.reloadEnvironmentMcpServers(input.environmentId, runtime);
+    return this.readEnvironmentMcpInventory(input.environmentId, runtime);
+  }
+
+  async putEnvironmentMcpServer(input: {
+    userId: string;
+    environmentId: string;
+    name: string;
+    configuration: CodexMcpServerConfiguration;
+  }): Promise<CodexMcpInventory> {
+    const runtime = await this.environmentRuntimeForEnvironment(
+      input.userId,
+      input.environmentId,
+    );
+    const name = requireMcpServerName(input.name);
+    const config = await this.readEnvironmentCodexConfig(
+      input.environmentId,
+      runtime,
+    );
+    if (
+      Object.hasOwn(config.effectiveServers, name) &&
+      !Object.hasOwn(config.userServers, name)
+    ) {
+      throw new HttpError(
+        409,
+        "codex_mcp_server_not_managed",
+        "This MCP server is supplied by another configuration layer and cannot be replaced.",
+      );
+    }
+    await this.writeCodexConfigValue(input.environmentId, runtime, {
+      keyPath: `mcp_servers.${name}`,
+      value: codexMcpServerDefinition(input.configuration),
+    });
+    await this.reloadEnvironmentMcpServers(input.environmentId, runtime);
+    return this.readEnvironmentMcpInventory(input.environmentId, runtime);
+  }
+
+  async deleteEnvironmentMcpServer(input: {
+    userId: string;
+    environmentId: string;
+    name: string;
+  }): Promise<CodexMcpInventory> {
+    const runtime = await this.environmentRuntimeForEnvironment(
+      input.userId,
+      input.environmentId,
+    );
+    const name = requireMcpServerName(input.name);
+    const config = await this.readEnvironmentCodexConfig(
+      input.environmentId,
+      runtime,
+    );
+    if (!Object.hasOwn(config.userServers, name)) {
+      throw new HttpError(
+        404,
+        "codex_mcp_server_not_managed",
+        "This MCP server is not managed by the Environment Codex configuration.",
+      );
+    }
+    // Codex config/value/write removes a user-layer table when it receives a
+    // null replacement, while leaving admin and project layers untouched.
+    await this.writeCodexConfigValue(input.environmentId, runtime, {
+      keyPath: `mcp_servers.${name}`,
+      value: null,
     });
     await this.reloadEnvironmentMcpServers(input.environmentId, runtime);
     return this.readEnvironmentMcpInventory(input.environmentId, runtime);
@@ -6142,6 +6361,70 @@ function codexSkillDependencies(value: unknown): CodexSkillDependency[] {
   });
 }
 
+function requireCodexSkillName(value: string) {
+  const name = value.trim();
+  if (!CODEX_SKILL_NAME.test(name)) {
+    throw new HttpError(
+      400,
+      "invalid_codex_skill_name",
+      "Skill names may contain letters, numbers, hyphens and underscores.",
+    );
+  }
+  return name;
+}
+
+function requireCodexSkillFiles(files: CodexSkillFileInput[]) {
+  const paths = new Set<string>();
+  let totalBytes = 0;
+  for (const file of files) {
+    const normalized = path.posix.normalize(file.path);
+    if (
+      normalized !== file.path ||
+      normalized.startsWith("/") ||
+      normalized === "." ||
+      normalized === ".." ||
+      normalized.startsWith("../") ||
+      file.path.includes("\\")
+    ) {
+      throw new HttpError(
+        400,
+        "invalid_codex_skill_file_path",
+        "Skill files must use normalized relative POSIX paths.",
+      );
+    }
+    if (paths.has(normalized)) {
+      throw new HttpError(
+        400,
+        "duplicate_codex_skill_file",
+        "Skill file paths must be unique.",
+      );
+    }
+    paths.add(normalized);
+    if (file.content.byteLength > MAX_CODEX_SKILL_FILE_BYTES) {
+      throw new HttpError(
+        413,
+        "codex_skill_file_too_large",
+        "A skill file may contain at most 5 MiB.",
+      );
+    }
+    totalBytes += file.content.byteLength;
+  }
+  if (!paths.has("SKILL.md")) {
+    throw new HttpError(
+      400,
+      "codex_skill_manifest_missing",
+      "A skill must include SKILL.md.",
+    );
+  }
+  if (totalBytes > MAX_CODEX_SKILL_BYTES) {
+    throw new HttpError(
+      413,
+      "codex_skill_too_large",
+      "A skill may contain at most 10 MiB of files.",
+    );
+  }
+}
+
 function requireMcpServerName(value: string) {
   const name = value.trim();
   if (!CODEX_MCP_SERVER_NAME.test(name)) {
@@ -6152,6 +6435,51 @@ function requireMcpServerName(value: string) {
     );
   }
   return name;
+}
+
+function codexMcpServerDefinition(
+  configuration: CodexMcpServerConfiguration,
+): Record<string, unknown> {
+  const shared = {
+    enabled: configuration.enabled,
+    required: configuration.required,
+    ...(configuration.startupTimeoutSec !== undefined
+      ? { startup_timeout_sec: configuration.startupTimeoutSec }
+      : {}),
+    ...(configuration.toolTimeoutSec !== undefined
+      ? { tool_timeout_sec: configuration.toolTimeoutSec }
+      : {}),
+    ...(configuration.enabledTools
+      ? { enabled_tools: configuration.enabledTools }
+      : {}),
+    ...(configuration.disabledTools
+      ? { disabled_tools: configuration.disabledTools }
+      : {}),
+    ...(configuration.defaultToolsApprovalMode
+      ? {
+          default_tools_approval_mode:
+            configuration.defaultToolsApprovalMode,
+        }
+      : {}),
+  };
+  if (configuration.transport === "stdio") {
+    return {
+      command: configuration.command,
+      args: configuration.args,
+      ...(configuration.cwd ? { cwd: configuration.cwd } : {}),
+      ...(configuration.envVars ? { env_vars: configuration.envVars } : {}),
+      ...shared,
+    };
+  }
+  return {
+    url: configuration.url,
+    ...(configuration.auth ? { auth: configuration.auth } : {}),
+    ...(configuration.oauthResource
+      ? { oauth_resource: configuration.oauthResource }
+      : {}),
+    ...(configuration.scopes ? { scopes: configuration.scopes } : {}),
+    ...shared,
+  };
 }
 
 function mcpOAuthCallbackUrl(publicUrl: string) {

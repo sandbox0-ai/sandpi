@@ -193,6 +193,11 @@ interface Fixture {
     nativeSessionId: string;
   }>;
   mcpOAuthCallbacks: Array<{ port: number }>;
+  installedSkills: Array<{
+    name: string;
+    files: Array<{ path: string; content: string; executable: boolean }>;
+  }>;
+  deletedSkills: string[];
   exceptionalCandidateQueryCount(): number;
   lifecycleLockActive(): boolean;
   runtimeRecoveryCount(): number;
@@ -427,6 +432,8 @@ function fixture(
   ];
   const rolloutReads: Fixture["rolloutReads"] = [];
   const mcpOAuthCallbacks: Fixture["mcpOAuthCallbacks"] = [];
+  const installedSkills: Fixture["installedSkills"] = [];
+  const deletedSkills: string[] = [];
   let exceptionalCandidateQueries = 0;
   let lifecycleLockDepth = 0;
   let runtimeRecoveries = 0;
@@ -1486,6 +1493,30 @@ function fixture(
       return "{}";
     },
     async installCodexEnvironmentCredential() {},
+    async replaceCodexEnvironmentSkill(
+      _runtime: StoredEnvironmentRuntime,
+      name: string,
+      files: Array<{
+        path: string;
+        content: Uint8Array;
+        executable: boolean;
+      }>,
+    ) {
+      installedSkills.push({
+        name,
+        files: files.map((file) => ({
+          path: file.path,
+          content: Buffer.from(file.content).toString("utf8"),
+          executable: file.executable,
+        })),
+      });
+    },
+    async deleteCodexEnvironmentSkill(
+      _runtime: StoredEnvironmentRuntime,
+      name: string,
+    ) {
+      deletedSkills.push(name);
+    },
     async ensureEnvironmentMcpOAuthCallbackService(
       _runtime: StoredEnvironmentRuntime,
       callback: { port: number },
@@ -1627,6 +1658,8 @@ function fixture(
     streamStarts,
     rolloutReads,
     mcpOAuthCallbacks,
+    installedSkills,
+    deletedSkills,
     exceptionalCandidateQueryCount: () => exceptionalCandidateQueries,
     lifecycleLockActive: () => lifecycleLockDepth > 0,
     runtimeRecoveryCount: () => runtimeRecoveries,
@@ -7872,6 +7905,220 @@ test("lists and toggles Environment skills through Codex native RPCs", async () 
   }
 });
 
+test("installs and removes one user-owned Environment skill", async () => {
+  const skillPath = "/workspace/.agents/skills/release/SKILL.md";
+  let listCount = 0;
+  const context = fixture({
+    onRequest(message) {
+      if (message.method === "skills/list") {
+        listCount += 1;
+        const installedName = context.installedSkills.at(-1)?.name;
+        const installedPath =
+          listCount === 1 && installedName
+            ? `/workspace/.agents/skills/${installedName}/release/SKILL.md`
+            : skillPath;
+        if (listCount === 1) {
+          assert.deepEqual(
+            (message.params as { perCwdExtraUserRoots?: unknown })
+              .perCwdExtraUserRoots,
+            [
+              {
+                cwd: "/workspace",
+                extraUserRoots: [
+                  `/workspace/.agents/skills/${installedName}`,
+                ],
+              },
+            ],
+          );
+        }
+        return {
+          id: message.id,
+          result: {
+            data: [
+              {
+                cwd: "/workspace",
+                skills:
+                  listCount <= 2
+                    ? [
+                        {
+                          name: "release",
+                          description: "Prepare a release.",
+                          path: installedPath,
+                          scope: "repo",
+                          enabled: true,
+                        },
+                      ]
+                    : [],
+                errors: [],
+              },
+            ],
+          },
+        };
+      }
+      return undefined;
+    },
+  });
+  try {
+    const installed = await context.service.putEnvironmentSkill({
+      userId: "user",
+      environmentId: environment.id,
+      name: "release",
+      enabled: true,
+      files: [
+        {
+          path: "SKILL.md",
+          content: Buffer.from("---\nname: release\n---\n"),
+          executable: false,
+        },
+        {
+          path: "scripts/release.sh",
+          content: Buffer.from("#!/bin/sh\n"),
+          executable: true,
+        },
+      ],
+    });
+    assert.equal(installed.skills[0]?.path, skillPath);
+    assert.equal(context.installedSkills.length, 2);
+    assert.match(
+      context.installedSkills[0]?.name ?? "",
+      /^sandpi_validate_[0-9a-f]{32}$/,
+    );
+    assert.deepEqual(
+      context.installedSkills.map(({ files }) => files),
+      [
+        [
+          {
+            path: "release/SKILL.md",
+            content: "---\nname: release\n---\n",
+            executable: false,
+          },
+          {
+            path: "release/scripts/release.sh",
+            content: "#!/bin/sh\n",
+            executable: true,
+          },
+        ],
+        [
+          {
+            path: "SKILL.md",
+            content: "---\nname: release\n---\n",
+            executable: false,
+          },
+          {
+            path: "scripts/release.sh",
+            content: "#!/bin/sh\n",
+            executable: true,
+          },
+        ],
+      ],
+    );
+    assert.equal(context.installedSkills[1]?.name, "release");
+    assert.deepEqual(context.deletedSkills, [
+      context.installedSkills[0]!.name,
+    ]);
+
+    const afterDelete = await context.service.deleteEnvironmentSkill({
+      userId: "user",
+      environmentId: environment.id,
+      name: "release",
+    });
+    assert.deepEqual(context.deletedSkills, [
+      context.installedSkills[0]!.name,
+      "release",
+    ]);
+    assert.deepEqual(afterDelete.skills, []);
+  } finally {
+    await context.close();
+  }
+});
+
+test("rejects unsafe Environment skill file paths before writing", async () => {
+  const context = fixture();
+  try {
+    await assert.rejects(
+      context.service.putEnvironmentSkill({
+        userId: "user",
+        environmentId: environment.id,
+        name: "release",
+        enabled: true,
+        files: [
+          {
+            path: "../SKILL.md",
+            content: Buffer.from("unsafe"),
+            executable: false,
+          },
+        ],
+      }),
+      (error) =>
+        error instanceof HttpError &&
+        error.code === "invalid_codex_skill_file_path",
+    );
+    assert.deepEqual(context.installedSkills, []);
+  } finally {
+    await context.close();
+  }
+});
+
+test("preserves the requested skill when Codex rejects staged content", async () => {
+  const context = fixture({
+    onRequest(message) {
+      if (message.method === "skills/list") {
+        return {
+          id: message.id,
+          result: {
+            data: [
+              {
+                cwd: "/workspace",
+                skills: [],
+                errors: [
+                  {
+                    path: "/workspace/.agents/skills/invalid/SKILL.md",
+                    message: "invalid skill",
+                  },
+                ],
+              },
+            ],
+          },
+        };
+      }
+      return undefined;
+    },
+  });
+  try {
+    await assert.rejects(
+      context.service.putEnvironmentSkill({
+        userId: "user",
+        environmentId: environment.id,
+        name: "release",
+        enabled: true,
+        files: [
+          {
+            path: "SKILL.md",
+            content: Buffer.from("not a native skill"),
+            executable: false,
+          },
+        ],
+      }),
+      (error) =>
+        error instanceof HttpError && error.code === "codex_skill_invalid",
+    );
+    assert.equal(context.installedSkills.length, 1);
+    assert.match(
+      context.installedSkills[0]?.name ?? "",
+      /^sandpi_validate_[0-9a-f]{32}$/,
+    );
+    assert.equal(
+      context.installedSkills.some(({ name }) => name === "release"),
+      false,
+    );
+    assert.deepEqual(context.deletedSkills, [
+      context.installedSkills[0]!.name,
+    ]);
+  } finally {
+    await context.close();
+  }
+});
+
 test("lists native MCP definitions and toggles only the user layer", async () => {
   let docsEnabled = true;
   const context = fixture({
@@ -8037,6 +8284,89 @@ test("lists native MCP definitions and toggles only the user layer", async () =>
       (error) =>
         error instanceof HttpError &&
         error.code === "codex_mcp_server_not_managed",
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test("creates, replaces and deletes user-layer MCP definitions", async () => {
+  let docs: Record<string, unknown> | undefined;
+  const context = fixture({
+    onRequest(message) {
+      if (message.method === "config/read") {
+        return {
+          id: message.id,
+          result: {
+            config: { mcp_servers: docs ? { docs } : {} },
+            layers: [
+              {
+                name: { type: "user", profile: null },
+                config: { mcp_servers: docs ? { docs } : {} },
+              },
+            ],
+          },
+        };
+      }
+      if (message.method === "config/value/write") {
+        const params = message.params as {
+          keyPath: string;
+          value: Record<string, unknown> | null;
+        };
+        assert.equal(params.keyPath, "mcp_servers.docs");
+        docs = params.value ?? undefined;
+        return { id: message.id, result: { status: "ok" } };
+      }
+      if (message.method === "config/mcpServer/reload") {
+        return { id: message.id, result: {} };
+      }
+      if (message.method === "mcpServerStatus/list") {
+        return {
+          id: message.id,
+          result: { data: [], nextCursor: null },
+        };
+      }
+      return undefined;
+    },
+  });
+  try {
+    const created = await context.service.putEnvironmentMcpServer({
+      userId: "user",
+      environmentId: environment.id,
+      name: "docs",
+      configuration: {
+        transport: "streamable-http",
+        url: "https://docs.example.test/mcp",
+        auth: "oauth",
+        enabled: true,
+        required: false,
+        enabledTools: ["search"],
+        defaultToolsApprovalMode: "prompt",
+      },
+    });
+    assert.equal(created.servers[0]?.name, "docs");
+    assert.deepEqual(docs, {
+      url: "https://docs.example.test/mcp",
+      auth: "oauth",
+      enabled: true,
+      required: false,
+      enabled_tools: ["search"],
+      default_tools_approval_mode: "prompt",
+    });
+
+    const deleted = await context.service.deleteEnvironmentMcpServer({
+      userId: "user",
+      environmentId: environment.id,
+      name: "docs",
+    });
+    assert.deepEqual(deleted.servers, []);
+    assert.equal(docs, undefined);
+    const writes = context.writes.filter(
+      ({ message }) => message.method === "config/value/write",
+    );
+    assert.equal(
+      (writes.at(-1)?.message.params as { value: unknown }).value,
+      null,
     );
   } finally {
     await context.close();

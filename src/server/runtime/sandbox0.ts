@@ -67,6 +67,7 @@ import {
   type RuntimeCredentialSourceMetadata,
   type RuntimeAdapter,
   type RuntimeBrowserDashboard,
+  type RuntimeCodexSkillFile,
   type RuntimeCodexEventStreamHandle,
   type RuntimeUsageWindowPage,
   type RuntimeEnvironmentEgressCredential,
@@ -1731,6 +1732,130 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     }
   }
 
+  async replaceCodexEnvironmentSkill(
+    runtime: EnvironmentRuntimeRecord,
+    name: string,
+    files: RuntimeCodexSkillFile[],
+  ) {
+    const skillName = requireRuntimeSkillName(name);
+    const destinationRoot = "/workspace/.agents/skills";
+    const destination = path.posix.join(destinationRoot, skillName);
+    const operationId = randomUUID();
+    const operationRoot = `/workspace/.sandpi/tmp/skills/${operationId}`;
+    const staging = `${operationRoot}/next`;
+    const backup = `${operationRoot}/previous`;
+    const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
+    let previousMoved = false;
+    let committed = false;
+
+    try {
+      await sandbox.mkdir(destinationRoot, true);
+      await assertWorkspacePathHasNoSymlink(sandbox, destinationRoot);
+      await assertWorkspacePathHasNoSymlink(sandbox, destination, true);
+      await sandbox.mkdir(staging, true);
+
+      for (const file of files) {
+        const relativePath = requireRuntimeSkillFilePath(file.path);
+        const filePath = path.posix.join(staging, relativePath);
+        await sandbox.mkdir(path.posix.dirname(filePath), true);
+        await sandbox.writeFile(filePath, file.content);
+      }
+
+      const executablePaths = files
+        .filter((file) => file.executable)
+        .map((file) =>
+          shellSingleQuoted(
+            path.posix.join(staging, requireRuntimeSkillFilePath(file.path)),
+          ),
+        );
+      if (executablePaths.length > 0) {
+        const result = await sandbox.cmd(
+          `chmod 755 -- ${executablePaths.join(" ")}`,
+          { wait: true },
+        );
+        if (result.exitCode !== undefined && result.exitCode !== 0) {
+          throw new HttpError(
+            502,
+            "codex_skill_permissions_failed",
+            "Sandbox0 could not preserve executable skill files.",
+          );
+        }
+      }
+
+      try {
+        await sandbox.statFile(destination);
+        await sandbox.moveFile(destination, backup);
+        previousMoved = true;
+      } catch (error) {
+        if (!isMissingResource(error)) throw error;
+      }
+
+      await sandbox.moveFile(staging, destination);
+      committed = true;
+      if (previousMoved) {
+        await sandbox.deleteFile(backup).catch(() => undefined);
+      }
+      await sandbox.deleteFile(operationRoot).catch(() => undefined);
+      this.invalidateWorkspaceGitState(runtime);
+    } catch (error) {
+      if (!committed && previousMoved) {
+        await sandbox.deleteFile(destination).catch(() => undefined);
+        try {
+          await sandbox.moveFile(backup, destination);
+        } catch {
+          throw new HttpError(
+            502,
+            "codex_skill_rollback_failed",
+            "The skill replacement failed and Sandbox0 could not restore the previous skill.",
+          );
+        }
+      }
+      if (!committed) {
+        await sandbox.deleteFile(staging).catch(() => undefined);
+        await sandbox.deleteFile(operationRoot).catch(() => undefined);
+      }
+      if (error instanceof HttpError) throw error;
+      throw translateWorkspaceFileError(error);
+    }
+  }
+
+  async deleteCodexEnvironmentSkill(
+    runtime: EnvironmentRuntimeRecord,
+    name: string,
+  ) {
+    const skillName = requireRuntimeSkillName(name);
+    const destination = path.posix.join(
+      "/workspace/.agents/skills",
+      skillName,
+    );
+    const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
+    try {
+      const skill = await assertWorkspacePathHasNoSymlink(
+        sandbox,
+        destination,
+      );
+      if (!skill || skill.type !== "dir") {
+        throw new HttpError(
+          404,
+          "codex_skill_not_found",
+          "The Environment skill does not exist.",
+        );
+      }
+      await sandbox.deleteFile(destination);
+      this.invalidateWorkspaceGitState(runtime);
+    } catch (error) {
+      if (error instanceof HttpError) throw error;
+      if (isMissingResource(error)) {
+        throw new HttpError(
+          404,
+          "codex_skill_not_found",
+          "The Environment skill does not exist.",
+        );
+      }
+      throw translateWorkspaceFileError(error);
+    }
+  }
+
   async readFile(runtime: EnvironmentRuntimeRecord, requestedPath: string) {
     try {
       return (
@@ -3131,6 +3256,36 @@ async function waitForNewAttempt(
 
 function shellSingleQuoted(value: string) {
   return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function requireRuntimeSkillName(value: string) {
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(value)) {
+    throw new HttpError(
+      400,
+      "invalid_codex_skill_name",
+      "Skill names may contain letters, numbers, hyphens and underscores.",
+    );
+  }
+  return value;
+}
+
+function requireRuntimeSkillFilePath(value: string) {
+  const normalized = path.posix.normalize(value);
+  if (
+    normalized !== value ||
+    normalized.startsWith("/") ||
+    normalized === "." ||
+    normalized === ".." ||
+    normalized.startsWith("../") ||
+    value.includes("\\")
+  ) {
+    throw new HttpError(
+      400,
+      "invalid_codex_skill_file_path",
+      "Skill files must use normalized relative POSIX paths.",
+    );
+  }
+  return normalized;
 }
 
 function workspaceFileSearchPattern(query: string) {

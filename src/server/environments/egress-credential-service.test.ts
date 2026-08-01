@@ -57,6 +57,46 @@ const logger = {
   warn() {},
 };
 
+test("returns one secret-free Environment credential projection", async () => {
+  const store = {
+    async getEnvironmentEgressCredential(
+      userId: string,
+      environmentId: string,
+      credentialId: string,
+    ) {
+      assert.equal(userId, "user-one");
+      assert.equal(environmentId, environment.id);
+      assert.equal(credentialId, "credential-one");
+      return {
+        id: credentialId,
+        environmentId,
+        sourceRef: "sandpi-credential-one",
+        ...configuration,
+        status: "active",
+        currentVersion: 2,
+        createdAt: 1,
+        updatedAt: 2,
+      };
+    },
+  } as unknown as SandpiStore;
+  const service = new EnvironmentEgressCredentialService(
+    store,
+    {} as RuntimeAdapter,
+    logger,
+  );
+
+  const result = await service.get(
+    "user-one",
+    environment.id,
+    "credential-one",
+  );
+
+  assert.equal(result.id, "credential-one");
+  assert.equal(result.currentVersion, 2);
+  assert.equal("sourceRef" in result, false);
+  assert.equal(JSON.stringify(result).includes("sandpi-credential-one"), false);
+});
+
 test("creates a server-namespaced source and returns no sourceRef or secret", async () => {
   let stored: StoredEnvironmentEgressCredential | undefined;
   const applied: RuntimeEnvironmentEgressCredential[][] = [];

@@ -43,6 +43,8 @@ test("keeps the public guide aligned with shared Browser and lifecycle invariant
   assert.match(guide, /soft TTL and hard TTL to zero/);
   assert.match(guide, /does not idle-pause an Environment while/);
   assert.match(guide, /Process memory, sockets, live Browser pages/);
+  assert.match(guide, /\/workspace\/AGENTS\.md/);
+  assert.match(guide, /no Codex login/i);
   assert.doesNotMatch(guide, /30-day|30 day|another full month/i);
 });
 

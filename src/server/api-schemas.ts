@@ -205,6 +205,124 @@ export const codexSkillConfigurationSchema = z.object({
   enabled: z.boolean(),
 });
 
+const codexSkillRelativePathSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(1_024)
+  .refine(
+    (value) =>
+      !value.startsWith("/") &&
+      !value.includes("\\") &&
+      value.split("/").every((component) => component !== ".." && component !== ""),
+    "Skill file paths must be normalized relative POSIX paths.",
+  );
+
+export const codexSkillPutSchema = z
+  .object({
+    files: z
+      .array(
+        z
+          .object({
+            path: codexSkillRelativePathSchema,
+            contentBase64: z
+              .string()
+              .max(Math.ceil((5 * 1024 * 1024 * 4) / 3) + 4)
+              .regex(
+                /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/,
+                "contentBase64 must be canonical base64",
+              )
+              .refine(
+                (value) =>
+                  Buffer.from(value, "base64").toString("base64") === value,
+                "contentBase64 must be canonical base64",
+              )
+              .refine(
+                (value) =>
+                  Buffer.from(value, "base64").byteLength <= 5 * 1024 * 1024,
+                "Skill files may contain at most 5 MiB.",
+              ),
+            executable: z.boolean().default(false),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(256),
+    enabled: z.boolean().default(true),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    const paths = value.files.map((file) => file.path);
+    if (!paths.includes("SKILL.md")) {
+      context.addIssue({
+        code: "custom",
+        path: ["files"],
+        message: "A skill must include SKILL.md.",
+      });
+    }
+    if (new Set(paths).size !== paths.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["files"],
+        message: "Skill file paths must be unique.",
+      });
+    }
+  });
+
+const codexMcpSharedConfigurationShape = {
+  enabled: z.boolean().default(true),
+  required: z.boolean().default(false),
+  startupTimeoutSec: z.number().positive().max(300).optional(),
+  toolTimeoutSec: z.number().positive().max(3_600).optional(),
+  enabledTools: z.array(z.string().trim().min(1).max(256)).max(512).optional(),
+  disabledTools: z.array(z.string().trim().min(1).max(256)).max(512).optional(),
+  defaultToolsApprovalMode: z
+    .enum(["auto", "prompt", "writes", "approve"])
+    .optional(),
+} as const;
+
+const codexMcpHttpUrlSchema = z
+  .url()
+  .max(8_192)
+  .refine((value) => {
+    try {
+      const parsed = new URL(value);
+      return (
+        (parsed.protocol === "http:" || parsed.protocol === "https:") &&
+        parsed.username === "" &&
+        parsed.password === ""
+      );
+    } catch {
+      return false;
+    }
+  }, "MCP URLs must use HTTP(S) and cannot contain credentials.");
+
+export const codexMcpServerConfigurationSchema = z.discriminatedUnion(
+  "transport",
+  [
+    z
+      .object({
+        transport: z.literal("stdio"),
+        command: z.string().trim().min(1).max(4_096),
+        args: z.array(z.string().max(8_192)).max(256).default([]),
+        cwd: z.string().trim().min(1).max(4_096).optional(),
+        envVars: z.array(z.string().trim().min(1).max(256)).max(256).optional(),
+        ...codexMcpSharedConfigurationShape,
+      })
+      .strict(),
+    z
+      .object({
+        transport: z.literal("streamable-http"),
+        url: codexMcpHttpUrlSchema,
+        auth: z.enum(["oauth", "chatgpt"]).optional(),
+        oauthResource: z.string().trim().min(1).max(8_192).optional(),
+        scopes: z.array(z.string().trim().min(1).max(512)).max(128).optional(),
+        ...codexMcpSharedConfigurationShape,
+      })
+      .strict(),
+  ],
+);
+
 export const codexMcpServerEnabledSchema = z.object({
   enabled: z.boolean(),
 });

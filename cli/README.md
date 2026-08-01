@@ -1,0 +1,265 @@
+# Sandpi CLI
+
+`sandpi` is a Go client for operating Sandpi Environments from a terminal or a
+local coding agent. It deliberately exposes small Environment resources instead
+of defining a proprietary migration archive or a one-size-fits-all import plan.
+
+A local agent can inspect its own setup, inspect the target Environment, decide
+what to merge, and call only the commands it needs. This works for both a new
+Environment and an Environment that already contains useful configuration.
+
+## Install from source
+
+Go 1.22 or newer is required.
+
+```bash
+go install github.com/sandbox0-ai/sandpi/cli/cmd/sandpi@latest
+```
+
+To build the current checkout:
+
+```bash
+cd cli
+go build -o ./bin/sandpi ./cmd/sandpi
+```
+
+Tagged `cli/v*` releases publish Linux, macOS and Windows binaries for amd64 and
+arm64. The CLI remains in this repository and uses the nested
+`github.com/sandbox0-ai/sandpi/cli` Go module.
+
+## Authenticate
+
+```bash
+sandpi auth login
+sandpi auth status
+```
+
+Browser sign-in returns a `sandpi://auth/callback` URL. Paste that URL into the
+waiting CLI. Use `--no-open` when the CLI should print the sign-in URL without
+opening a browser.
+
+This authenticates the CLI to Sandpi. It does not log Codex in or import a Codex
+account. Codex account connection remains an Environment-scoped Sandpi product
+flow.
+
+The CLI stores its endpoint and Sandpi session in the operating system user
+configuration directory under `sandpi/config.json`, with mode `0600` on Unix.
+`SANDPI_ENDPOINT` and `SANDPI_SESSION_COOKIE` override the stored values.
+
+All successful command output is JSON. API errors are also emitted as stable
+JSON on stderr. Add `--compact` for one-line output.
+
+## Resource commands
+
+```text
+sandpi environment list|get|create|delete|wait
+sandpi agents      get|set
+sandpi skill       list|put|delete|enable|disable
+sandpi mcp         list|get|put|delete|enable|disable|oauth-login
+sandpi memory      get|set|reset
+sandpi credential  list|get|create|update|rotate|delete
+sandpi api         METHOD /api/v1/...
+```
+
+Run `sandpi <resource> <command> --help` for flags and input details.
+
+### AGENTS.md
+
+Each Environment has one root instruction file at exactly
+`/workspace/AGENTS.md`.
+
+For a new Environment where the file does not exist, `set` creates it:
+
+```bash
+sandpi agents set --environment "$ENVIRONMENT_ID" --file ./AGENTS.md
+```
+
+An existing file is never replaced implicitly. Read its JSON projection,
+decode and merge the content, then write against the revision you read:
+
+```bash
+sandpi agents get --environment "$ENVIRONMENT_ID" > remote-agents.json
+jq -r .content remote-agents.json | base64 --decode > remote-AGENTS.md
+revision="$(jq -r .revision remote-agents.json)"
+
+# Merge remote-AGENTS.md and the local instructions into merged-AGENTS.md.
+sandpi agents set \
+  --environment "$ENVIRONMENT_ID" \
+  --file ./merged-AGENTS.md \
+  --base-revision "$revision"
+```
+
+If the file changes after the read, Sandpi returns a revision conflict. Fetch
+and merge again. `--force` is available only for an intentional current-value
+replacement.
+
+Use `agents get --raw` when only decoded content is needed and no later
+optimistic write depends on its revision.
+
+### Skills
+
+`skill put` replaces one named user-owned skill, not the complete skill set:
+
+```bash
+sandpi skill list --environment "$ENVIRONMENT_ID" --force
+sandpi skill put \
+  --environment "$ENVIRONMENT_ID" \
+  release-helper \
+  ~/.agents/skills/release-helper
+```
+
+The source directory must contain `SKILL.md`. Symlinks and non-regular files are
+rejected, `.git` is excluded, and executable bits are preserved. Sandpi first
+asks native Codex to discover the supplied skill at a temporary path. Only a
+valid skill replaces the requested directory.
+
+### MCP servers
+
+`mcp put` accepts one typed definition. A stdio example:
+
+```json
+{
+  "transport": "stdio",
+  "command": "npx",
+  "args": ["-y", "@upstash/context7-mcp"],
+  "enabled": true,
+  "required": false,
+  "startupTimeoutSec": 20,
+  "toolTimeoutSec": 60
+}
+```
+
+A streamable HTTP example:
+
+```json
+{
+  "transport": "streamable-http",
+  "url": "https://mcp.example.com/mcp",
+  "auth": "oauth",
+  "scopes": ["read:docs"],
+  "enabledTools": ["search"],
+  "defaultToolsApprovalMode": "prompt"
+}
+```
+
+Apply only that server and, when needed, start its native MCP OAuth flow:
+
+```bash
+sandpi mcp put --environment "$ENVIRONMENT_ID" docs --file ./docs-mcp.json
+sandpi mcp oauth-login --environment "$ENVIRONMENT_ID" docs
+```
+
+The API refuses to replace a server supplied by a managed or project layer.
+Static secrets should not be embedded in MCP JSON; use Environment egress
+credentials for destination-scoped injection.
+
+### Memories
+
+The supported native Codex memory resource is its Environment policy:
+
+```json
+{
+  "featureEnabled": true,
+  "useMemories": true,
+  "generateMemories": true
+}
+```
+
+```bash
+sandpi memory get --environment "$ENVIRONMENT_ID"
+sandpi memory set --environment "$ENVIRONMENT_ID" --file ./memory-settings.json
+```
+
+Codex currently exposes memory policy and `memory/reset`, but no native
+content-import contract. The CLI therefore does not copy Codex's private Git or
+SQLite memory storage. Stable instructions can be reviewed and merged into
+`/workspace/AGENTS.md`; native memory content migration can be added when the
+harness exposes a supported import API.
+
+### Egress credentials
+
+Credential material is accepted only by `create` and `rotate`. List, get and
+mutation responses are secret-free. For example, a destination-scoped bearer
+header credential uses this shape:
+
+```json
+{
+  "name": "GitHub API",
+  "resolverKind": "static_headers",
+  "projection": {
+    "type": "http_headers",
+    "headers": [
+      {
+        "name": "Authorization",
+        "valueTemplate": "Bearer {{ .token }}"
+      }
+    ]
+  },
+  "rule": {
+    "protocol": "https",
+    "domains": ["api.github.com"],
+    "ports": [{ "port": 443, "protocol": "tcp" }],
+    "failurePolicy": "fail-closed"
+  },
+  "enabled": true,
+  "material": {
+    "type": "static_headers",
+    "values": { "token": "replace-with-secret" }
+  }
+}
+```
+
+Pass secret-bearing JSON over stdin or from a mode-`0600` temporary file rather
+than putting material in command-line arguments:
+
+```bash
+sandpi credential create --environment "$ENVIRONMENT_ID" --file -
+```
+
+### Low-level API access
+
+The typed commands cover common Environment operations. A local agent can use
+the JSON escape hatch for another current API without waiting for a bundled
+migration format:
+
+```bash
+sandpi api GET /api/v1/environments
+sandpi api PUT /api/v1/environments/ENVIRONMENT_ID/provisioning \
+  --file ./request.json
+```
+
+Only `/api/v1/` paths and GET, POST, PUT or DELETE are accepted.
+
+## Two migration workflows
+
+For an empty target, create and wait for the Environment before applying chosen
+resources:
+
+```bash
+sandpi environment create --name "Imported project" > environment.json
+ENVIRONMENT_ID="$(jq -r .id environment.json)"
+sandpi environment wait "$ENVIRONMENT_ID"
+
+sandpi agents set --environment "$ENVIRONMENT_ID" --file ./AGENTS.md
+sandpi skill put --environment "$ENVIRONMENT_ID" release-helper ./release-helper
+sandpi mcp put --environment "$ENVIRONMENT_ID" docs --file ./docs-mcp.json
+sandpi memory set --environment "$ENVIRONMENT_ID" --file ./memory-settings.json
+```
+
+For an Environment already in use, start with `get` or `list`, preserve remote
+resources, and apply only selected names. `put` means one explicit resource
+replacement; delete operations require `--yes`. The CLI intentionally has no
+`migrate-all`, archive import, or hidden overwrite behavior.
+
+## Development
+
+```bash
+cd cli
+go test ./...
+go vet ./...
+go build ./cmd/sandpi
+```
+
+The server contract and CLI are versioned in the same Sandpi pull request. See
+[`../docs/architecture/cli.md`](../docs/architecture/cli.md) for API boundaries
+and migration decisions.

@@ -73,6 +73,18 @@ Use separate Environments when you want isolation or a different provider
 account. Use multiple Sessions inside one Environment when they should share the
 same files, tools and execution context.
 
+## CLI
+
+The Go [`sandpi` CLI](./cli/README.md) operates Environments and lets a user or
+local coding agent migrate selected configuration without copying an entire
+Workspace. It exposes resource-level commands for `/workspace/AGENTS.md`,
+individual Skills and MCP servers, native memory settings, and secret-injecting
+egress credentials, plus a low-level JSON API escape hatch.
+
+The CLI supports both empty and already-used Environments: inspect and merge
+existing state first, then replace only the named resource. It does not include
+a `migrate-all` archive, and it does not provide Codex login commands.
+
 ## Design principles
 
 1. **No invasive harness changes.** Sandpi is designed to run the official
@@ -315,6 +327,7 @@ Sandbox0
 ## Documentation
 
 - [Coding-agent Environment guide (`/llms.txt`)](./public/llms.txt)
+- [CLI and configuration migration](./docs/architecture/cli.md)
 - [OpenAPI contract](./docs/architecture/openapi-contract.md)
 - [Native Session authority and recovery](./docs/architecture/native-session-authority.md)
 - [Environment Schedules](./docs/architecture/environment-schedules.md)
@@ -329,6 +342,7 @@ Sandbox0
 npm run lint
 npm run typecheck
 npm test
+npm run test:cli
 npm run build
 npm run test:e2e
 ```

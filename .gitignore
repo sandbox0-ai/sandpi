@@ -11,3 +11,4 @@ npm-debug.log*
 playwright-report/
 test-results/
 /public/monaco/
+/cli/bin/

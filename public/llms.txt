@@ -92,10 +92,34 @@ Codex and the Web client are the currently implemented harness and client.
 Sandpi is pre-1.0, so discover exact native capabilities from the running
 harness instead of assuming every newer feature exists in an older deployment.
 
+## CLI-driven configuration migration
+
+- The Go `sandpi` CLI is for resource-level Environment operations. A user or
+  local coding agent should inspect the source and target, decide what to merge,
+  and apply selected resources. Do not assume an entire local Workspace should
+  be copied into Sandpi.
+- Each Environment has one root instruction file at
+  `/workspace/AGENTS.md`. Existing content uses Workspace revisions and should
+  be read and merged before replacement.
+- Skill writes replace one named user-owned skill only after native Codex
+  discovery validates staged content. MCP writes replace one user-layer server;
+  managed and project layers remain authoritative.
+- Native Codex exposes memory policy and reset, but no supported memory-content
+  import API. Do not edit Codex's private Git or SQLite memory state.
+- Egress credential material is write-only. Use destination-scoped credential
+  injection instead of placing static secrets in MCP definitions or Workspace
+  files.
+- CLI authentication connects to Sandpi itself. The CLI has no Codex login or
+  provider-account import command.
+
 ## Canonical references
 
 - Project overview and current capabilities:
   https://github.com/sandbox0-ai/sandpi
+- CLI commands and migration behavior:
+  https://github.com/sandbox0-ai/sandpi/blob/main/cli/README.md
+- CLI architecture and API boundaries:
+  https://github.com/sandbox0-ai/sandpi/blob/main/docs/architecture/cli.md
 - Native Session, Browser, recovery, and lifecycle authority:
   https://github.com/sandbox0-ai/sandpi/blob/main/docs/architecture/native-session-authority.md
 - Environment egress credentials:

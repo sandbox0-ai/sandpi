@@ -71,6 +71,16 @@ Environment
 Environment。如果多个 Session 本来就应该共享文件、工具和执行上下文，则把它们放在
 同一个 Environment 中。
 
+## CLI
+
+仓库内的 Go [`sandpi` CLI](./cli/README.md) 可以操作 Environment，也可以让用户或
+本地 coding agent 只迁移选中的配置，而不是复制整个 Workspace。它提供
+`/workspace/AGENTS.md`、单个 Skill、单个 MCP server、原生 memory settings 和出站
+凭证等资源级命令，同时保留底层 JSON API 入口。
+
+CLI 同时适用于全新和已经使用过的 Environment：先读取并合并已有状态，再只替换明确
+指定的资源。它不提供 `migrate-all` 打包格式，也不提供 Codex login 命令。
+
 ## 设计原则
 
 1. **不侵入 coding-agent harness。** Sandpi 的设计目标是不 fork、不 patch、
@@ -288,6 +298,7 @@ Sandbox0
 npm run lint
 npm run typecheck
 npm test
+npm run test:cli
 npm run build
 npm run test:e2e
 ```

@@ -3536,6 +3536,37 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
   /api/v1/environments/{environmentId}:
+    get:
+      operationId: getEnvironment
+      summary: Get an Environment
+      tags:
+        - Environments
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+          in: path
+          name: environmentId
+          required: true
+      responses:
+        "200":
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Environment"
+                required:
+                  - data
+                additionalProperties: false
+        default:
+          description: Sandpi error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
     put:
       operationId: updateEnvironment
       summary: Replace mutable Environment settings
@@ -4266,6 +4297,43 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
   /api/v1/environments/{environmentId}/egress-credentials/{credentialId}:
+    get:
+      operationId: getEnvironmentEgressCredential
+      summary: Get one secret-free egress credential projection
+      tags:
+        - Egress credentials
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+          in: path
+          name: environmentId
+          required: true
+        - schema:
+            type: string
+            minLength: 1
+          in: path
+          name: credentialId
+          required: true
+      responses:
+        "200":
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/EnvironmentEgressCredential"
+                required:
+                  - data
+                additionalProperties: false
+        default:
+          description: Sandpi error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
     put:
       operationId: updateEnvironmentEgressCredential
       summary: Replace an egress credential configuration
@@ -5117,6 +5185,223 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /api/v1/environments/{environmentId}/harnesses/codex/mcp-servers/{name}:
+    put:
+      operationId: putEnvironmentCodexMcpServer
+      summary: Create or replace one Environment Codex MCP server
+      tags:
+        - Codex
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - type: object
+                  properties:
+                    transport:
+                      type: string
+                      enum:
+                        - stdio
+                    command:
+                      type: string
+                      minLength: 1
+                      maxLength: 4096
+                    args:
+                      default: []
+                      maxItems: 256
+                      type: array
+                      items:
+                        type: string
+                        maxLength: 8192
+                    cwd:
+                      type: string
+                      minLength: 1
+                      maxLength: 4096
+                    envVars:
+                      maxItems: 256
+                      type: array
+                      items:
+                        type: string
+                        minLength: 1
+                        maxLength: 256
+                    enabled:
+                      default: true
+                      type: boolean
+                    required:
+                      default: false
+                      type: boolean
+                    startupTimeoutSec:
+                      type: number
+                      minimum: 0
+                      exclusiveMinimum: true
+                      maximum: 300
+                    toolTimeoutSec:
+                      type: number
+                      minimum: 0
+                      exclusiveMinimum: true
+                      maximum: 3600
+                    enabledTools:
+                      maxItems: 512
+                      type: array
+                      items:
+                        type: string
+                        minLength: 1
+                        maxLength: 256
+                    disabledTools:
+                      maxItems: 512
+                      type: array
+                      items:
+                        type: string
+                        minLength: 1
+                        maxLength: 256
+                    defaultToolsApprovalMode:
+                      type: string
+                      enum:
+                        - auto
+                        - prompt
+                        - writes
+                        - approve
+                  required:
+                    - transport
+                    - command
+                  additionalProperties: false
+                - type: object
+                  properties:
+                    transport:
+                      type: string
+                      enum:
+                        - streamable-http
+                    url:
+                      type: string
+                      maxLength: 8192
+                      format: uri
+                    auth:
+                      type: string
+                      enum:
+                        - oauth
+                        - chatgpt
+                    oauthResource:
+                      type: string
+                      minLength: 1
+                      maxLength: 8192
+                    scopes:
+                      maxItems: 128
+                      type: array
+                      items:
+                        type: string
+                        minLength: 1
+                        maxLength: 512
+                    enabled:
+                      default: true
+                      type: boolean
+                    required:
+                      default: false
+                      type: boolean
+                    startupTimeoutSec:
+                      type: number
+                      minimum: 0
+                      exclusiveMinimum: true
+                      maximum: 300
+                    toolTimeoutSec:
+                      type: number
+                      minimum: 0
+                      exclusiveMinimum: true
+                      maximum: 3600
+                    enabledTools:
+                      maxItems: 512
+                      type: array
+                      items:
+                        type: string
+                        minLength: 1
+                        maxLength: 256
+                    disabledTools:
+                      maxItems: 512
+                      type: array
+                      items:
+                        type: string
+                        minLength: 1
+                        maxLength: 256
+                    defaultToolsApprovalMode:
+                      type: string
+                      enum:
+                        - auto
+                        - prompt
+                        - writes
+                        - approve
+                  required:
+                    - transport
+                    - url
+                  additionalProperties: false
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+          in: path
+          name: environmentId
+          required: true
+        - schema:
+            type: string
+            minLength: 1
+          in: path
+          name: name
+          required: true
+      responses:
+        "200":
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/CodexMcpInventory"
+                required:
+                  - data
+                additionalProperties: false
+        default:
+          description: Sandpi error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      operationId: deleteEnvironmentCodexMcpServer
+      summary: Delete one user-managed Environment Codex MCP server
+      tags:
+        - Codex
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+          in: path
+          name: environmentId
+          required: true
+        - schema:
+            type: string
+            minLength: 1
+          in: path
+          name: name
+          required: true
+      responses:
+        "200":
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/CodexMcpInventory"
+                required:
+                  - data
+                additionalProperties: false
+        default:
+          description: Sandpi error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /api/v1/environments/{environmentId}/harnesses/codex/mcp-servers/{name}/enabled:
     put:
       operationId: setEnvironmentCodexMcpServerEnabled
@@ -5624,6 +5909,116 @@ paths:
                       - path
                       - enabled
                     additionalProperties: false
+                required:
+                  - data
+                additionalProperties: false
+        default:
+          description: Sandpi error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/environments/{environmentId}/harnesses/codex/skills/{name}:
+    put:
+      operationId: putEnvironmentCodexSkill
+      summary: Create or replace one user-owned Environment Codex skill
+      tags:
+        - Codex
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                files:
+                  minItems: 1
+                  maxItems: 256
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      path:
+                        type: string
+                        minLength: 1
+                        maxLength: 1024
+                      contentBase64:
+                        type: string
+                        maxLength: 6990511
+                        pattern: ^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$
+                      executable:
+                        default: false
+                        type: boolean
+                    required:
+                      - path
+                      - contentBase64
+                    additionalProperties: false
+                enabled:
+                  default: true
+                  type: boolean
+              required:
+                - files
+              additionalProperties: false
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+          in: path
+          name: environmentId
+          required: true
+        - schema:
+            type: string
+            minLength: 1
+          in: path
+          name: name
+          required: true
+      responses:
+        "200":
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/CodexSkillsInventory"
+                required:
+                  - data
+                additionalProperties: false
+        default:
+          description: Sandpi error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      operationId: deleteEnvironmentCodexSkill
+      summary: Delete one user-owned Environment Codex skill
+      tags:
+        - Codex
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+          in: path
+          name: environmentId
+          required: true
+        - schema:
+            type: string
+            minLength: 1
+          in: path
+          name: name
+          required: true
+      responses:
+        "200":
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/CodexSkillsInventory"
                 required:
                   - data
                 additionalProperties: false

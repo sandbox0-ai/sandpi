@@ -23,11 +23,21 @@ jobs:
         with:
           node-version: 24
           cache: npm
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: cli/go.mod
+          cache-dependency-path: cli/go.sum
       - run: npm ci
       - run: npm test
       - run: npm run openapi:check
       - run: npm run typecheck
       - run: npm run build
+      - run: go test ./...
+        working-directory: cli
+      - run: go vet ./...
+        working-directory: cli
+      - run: go build -trimpath -o "${RUNNER_TEMP}/sandpi" ./cmd/sandpi
+        working-directory: cli
       - uses: azure/setup-kubectl@v5.1.0
         with:
           version: v1.35.1

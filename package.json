@@ -44,6 +44,7 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test 'src/**/*.test.ts'",
+    "test:cli": "cd cli && go test ./...",
     "test:e2e": "playwright test",
     "prepack": "npm run openapi:check && npm run build"
   },
