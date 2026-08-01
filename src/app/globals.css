@@ -4424,6 +4424,38 @@ code.codex-compact-activity-subject {
   box-shadow: 0 0 0 2px var(--blue-soft);
 }
 
+.environment-browser-control {
+  display: inline-flex;
+  height: 26px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit;
+  font-size: 9.5px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.environment-browser-control:hover:not(:disabled) {
+  border-color: var(--blue);
+  background: var(--blue-soft);
+}
+
+.environment-browser-control:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.environment-browser-control:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 1px;
+}
+
 .environment-browser-stage {
   position: relative;
   min-width: 0;
@@ -4437,6 +4469,18 @@ code.codex-compact-activity-subject {
   height: 100%;
   border: 0;
   background: var(--panel);
+}
+
+.environment-browser-vnc {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  outline: none;
+  background: #111;
+}
+
+.environment-browser-vnc:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--blue);
 }
 
 .environment-browser-state {
@@ -4507,6 +4551,10 @@ code.codex-compact-activity-subject {
 
   .environment-browser-viewport-mode select {
     max-width: 104px;
+  }
+
+  .environment-browser-control span {
+    display: none;
   }
 }
 

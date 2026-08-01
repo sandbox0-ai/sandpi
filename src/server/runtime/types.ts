@@ -15,7 +15,11 @@ import type {
   EnvironmentCredentialResolverKind,
   EnvironmentEgressCredential,
 } from "@/lib/environment-credentials";
-import type { BrowserDashboardViewport } from "@/lib/environment-browser";
+import type {
+  BrowserDashboardViewport,
+  EnvironmentBrowserControl,
+  EnvironmentBrowserOwner,
+} from "@/lib/environment-browser";
 import type { UnixTimestamp } from "@/lib/time";
 import type {
   CodexDecoderState,
@@ -52,10 +56,10 @@ export interface RuntimeCodexSkillFile {
 }
 
 /**
- * Server-only connection details for the official Playwright Dashboard.
+ * Server-only connection details for the owner-specific Browser transport.
  * Sandpi API handlers must never serialize the protected upstream headers.
  */
-export interface RuntimeBrowserDashboard {
+export interface RuntimeBrowserUpstream extends EnvironmentBrowserControl {
   publicUrl: string;
   requestHeaders: Record<string, string>;
 }
@@ -208,10 +212,14 @@ export interface RuntimeAdapter {
     runtime: EnvironmentRuntimeRecord,
     input: { port: number },
   ): Promise<RuntimeMcpOAuthCallbackService>;
-  ensureEnvironmentBrowserDashboard(
+  updateEnvironmentBrowserControl(
+    runtime: EnvironmentRuntimeRecord,
+    input: { owner: EnvironmentBrowserOwner; force?: boolean },
+  ): Promise<EnvironmentBrowserControl>;
+  ensureEnvironmentBrowserService(
     runtime: EnvironmentRuntimeRecord,
     restart?: boolean,
-  ): Promise<RuntimeBrowserDashboard>;
+  ): Promise<RuntimeBrowserUpstream>;
   ensureEnvironmentBrowserSession(
     runtime: EnvironmentRuntimeRecord,
   ): Promise<boolean>;

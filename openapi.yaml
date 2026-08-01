@@ -4145,11 +4145,12 @@ paths:
       summary: Load the embedded shared Browser dashboard
       tags:
         - Browser
-      description: Sandpi's built-in Browser is one shared Playwright browser session
-        for the human and the agent. The human can take over the embedded tab to
-        complete an interactive sign-in, then hand the same authenticated
-        profile back to the agent. Browser localhost and loopback URLs resolve
-        inside the Environment sandbox, not on the client device.
+      description: Sandpi's built-in Browser keeps one shared profile with one active
+        owner. A human can take control for any interactive browser task and
+        later return the same profile to the agent; Sandpi rejects agent-side
+        Browser operations while human control is active. Browser localhost and
+        loopback URLs resolve inside the Environment sandbox, not on the client
+        device.
       parameters:
         - schema:
             type: string
@@ -4183,17 +4184,152 @@ paths:
               schema:
                 type: string
                 format: binary
+  /api/v1/environments/{environmentId}/browser/control:
+    get:
+      operationId: getEnvironmentBrowserControl
+      summary: Get the shared Browser owner
+      tags:
+        - Browser
+      description: Sandpi's built-in Browser keeps one shared profile with one active
+        owner. A human can take control for any interactive browser task and
+        later return the same profile to the agent; Sandpi rejects agent-side
+        Browser operations while human control is active. Browser localhost and
+        loopback URLs resolve inside the Environment sandbox, not on the client
+        device.
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+          in: path
+          name: environmentId
+          required: true
+      x-sandpi-shared-browser: true
+      responses:
+        "200":
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      owner:
+                        type: string
+                        enum:
+                          - agent
+                          - human
+                      transport:
+                        type: string
+                        enum:
+                          - playwright
+                          - vnc
+                      revision:
+                        type: integer
+                        minimum: 0
+                        maximum: 9007199254740991
+                    required:
+                      - owner
+                      - transport
+                      - revision
+                    additionalProperties: false
+                required:
+                  - data
+                additionalProperties: false
+        default:
+          description: Sandpi error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    put:
+      operationId: updateEnvironmentBrowserControl
+      summary: Transfer control of the shared Browser
+      tags:
+        - Browser
+      description: Sandpi's built-in Browser keeps one shared profile with one active
+        owner. A human can take control for any interactive browser task and
+        later return the same profile to the agent; Sandpi rejects agent-side
+        Browser operations while human control is active. Browser localhost and
+        loopback URLs resolve inside the Environment sandbox, not on the client
+        device.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                owner:
+                  type: string
+                  enum:
+                    - agent
+                    - human
+                force:
+                  type: boolean
+              required:
+                - owner
+              additionalProperties: false
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+          in: path
+          name: environmentId
+          required: true
+      x-sandpi-shared-browser: true
+      responses:
+        "200":
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      owner:
+                        type: string
+                        enum:
+                          - agent
+                          - human
+                      transport:
+                        type: string
+                        enum:
+                          - playwright
+                          - vnc
+                      revision:
+                        type: integer
+                        minimum: 0
+                        maximum: 9007199254740991
+                    required:
+                      - owner
+                      - transport
+                      - revision
+                    additionalProperties: false
+                required:
+                  - data
+                additionalProperties: false
+        default:
+          description: Sandpi error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /api/v1/environments/{environmentId}/browser/open:
     post:
       operationId: openEnvironmentBrowserUrl
       summary: Open a loopback URL in the shared Browser
       tags:
         - Browser
-      description: Sandpi's built-in Browser is one shared Playwright browser session
-        for the human and the agent. The human can take over the embedded tab to
-        complete an interactive sign-in, then hand the same authenticated
-        profile back to the agent. Browser localhost and loopback URLs resolve
-        inside the Environment sandbox, not on the client device.
+      description: Sandpi's built-in Browser keeps one shared profile with one active
+        owner. A human can take control for any interactive browser task and
+        later return the same profile to the agent; Sandpi rejects agent-side
+        Browser operations while human control is active. Browser localhost and
+        loopback URLs resolve inside the Environment sandbox, not on the client
+        device.
       requestBody:
         required: true
         content:
@@ -4234,11 +4370,12 @@ paths:
       summary: Ensure the shared Environment Browser session
       tags:
         - Browser
-      description: Sandpi's built-in Browser is one shared Playwright browser session
-        for the human and the agent. The human can take over the embedded tab to
-        complete an interactive sign-in, then hand the same authenticated
-        profile back to the agent. Browser localhost and loopback URLs resolve
-        inside the Environment sandbox, not on the client device.
+      description: Sandpi's built-in Browser keeps one shared profile with one active
+        owner. A human can take control for any interactive browser task and
+        later return the same profile to the agent; Sandpi rejects agent-side
+        Browser operations while human control is active. Browser localhost and
+        loopback URLs resolve inside the Environment sandbox, not on the client
+        device.
       requestBody:
         required: false
         content:
@@ -4273,11 +4410,12 @@ paths:
       summary: Resize the shared Browser viewport
       tags:
         - Browser
-      description: Sandpi's built-in Browser is one shared Playwright browser session
-        for the human and the agent. The human can take over the embedded tab to
-        complete an interactive sign-in, then hand the same authenticated
-        profile back to the agent. Browser localhost and loopback URLs resolve
-        inside the Environment sandbox, not on the client device.
+      description: Sandpi's built-in Browser keeps one shared profile with one active
+        owner. A human can take control for any interactive browser task and
+        later return the same profile to the agent; Sandpi rejects agent-side
+        Browser operations while human control is active. Browser localhost and
+        loopback URLs resolve inside the Environment sandbox, not on the client
+        device.
       requestBody:
         required: true
         content:
@@ -4320,11 +4458,12 @@ paths:
       summary: Connect the embedded Browser dashboard WebSocket
       tags:
         - Browser
-      description: Sandpi's built-in Browser is one shared Playwright browser session
-        for the human and the agent. The human can take over the embedded tab to
-        complete an interactive sign-in, then hand the same authenticated
-        profile back to the agent. Browser localhost and loopback URLs resolve
-        inside the Environment sandbox, not on the client device.
+      description: Sandpi's built-in Browser keeps one shared profile with one active
+        owner. A human can take control for any interactive browser task and
+        later return the same profile to the agent; Sandpi rejects agent-side
+        Browser operations while human control is active. Browser localhost and
+        loopback URLs resolve inside the Environment sandbox, not on the client
+        device.
       parameters:
         - schema:
             type: string
@@ -4339,7 +4478,7 @@ paths:
           name: dashboardSocketId
           required: true
       x-sandpi-websocket:
-        protocol: opaque-playwright-dashboard
+        protocol: opaque-environment-browser
         direction: bidirectional
       x-sandpi-shared-browser: true
       responses:

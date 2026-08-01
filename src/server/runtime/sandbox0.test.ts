@@ -1131,7 +1131,7 @@ test("preserves unrelated services and installs a constrained MCP OAuth callback
   assert.equal(JSON.stringify(replacement).includes("publishable"), false);
 });
 
-test("publishes the official Dashboard behind a server-only hashed header", async () => {
+test("publishes the agent Browser transport behind a server-only hashed header", async () => {
   let replacement: Array<Record<string, unknown>> = [];
   let serviceUpdates = 0;
   let loseFirstUpdateResponse = true;
@@ -1223,7 +1223,7 @@ test("publishes the official Dashboard behind a server-only hashed header", asyn
   };
 
   const dashboard =
-    await runtime.ensureEnvironmentBrowserDashboard(coordinates);
+    await runtime.ensureEnvironmentBrowserService(coordinates);
 
   assert.equal(dashboard.publicUrl, "https://browser.example.invalid");
   const requestToken = dashboard.requestHeaders["X-Sandpi-Browser-Proxy"];
@@ -1255,15 +1255,15 @@ test("publishes the official Dashboard behind a server-only hashed header", asyn
   assert.deepEqual(service.runtime.command.slice(0, 2), ["sh", "-c"]);
   assert.match(
     service.runtime.command[2] ?? "",
-    /recover_stale_profiles\(\).*node -e.*recovery_status.*ensure_browser\(\).*recover_stale_profiles && return 0.*playwright-cli open about:blank.*node -e.*playwright-cli open about:blank/,
+    /profile=\/workspace\/\.sandpi\/browser\/profile.*migrate_legacy_profile\(\).*playwright-cli close.*ensure_browser\(\).*playwright-cli tab-list.*--profile="\$profile".*prewarm_browser/s,
   );
   assert.doesNotMatch(
     service.runtime.command[2] ?? "",
-    /playwright-cli tab-list/,
+    /browser_is_running|pgrep/,
   );
   assert.match(
     service.runtime.command[2] ?? "",
-    /wait_for_dashboard\(\).*SANDPI_PLAYWRIGHT_DASHBOARD_READY_SCRIPT_BASE64.*\(wait_for_dashboard 43420 && ensure_browser; while :; do sleep 15; ensure_browser; done\) & exec playwright-cli show --host 0\.0\.0\.0 --port 43420/,
+    /wait_for_dashboard\(\).*SANDPI_PLAYWRIGHT_DASHBOARD_READY_SCRIPT_BASE64.*wait_for_dashboard 43420 \|\| return 1.*until ensure_browser.*sleep 15.*exec playwright-cli show --host 0\.0\.0\.0 --port 43420/s,
   );
   assert.equal(
     spawnSync("sh", ["-n", "-c", service.runtime.command[2] ?? ""]).status,
@@ -1295,8 +1295,9 @@ test("publishes the official Dashboard behind a server-only hashed header", asyn
   assert.ok(
     [...service.runtime.command, ...Object.values(service.runtime.envVars)]
       .reduce((bytes, value) => bytes + Buffer.byteLength(value), 0) <
-      8 * 1024,
+      16 * 1024,
   );
+  assert.equal(service.runtime.envVars.SANDPI_BROWSER_OWNER, "agent");
   assert.equal(service.runtime.envVars.SANDPI_BROWSER_SESSION_REVISION, "0");
   assert.equal(service.ingress._public, true);
   assert.deepEqual(service.ingress.routes[0]?.methods, ["GET"]);
@@ -1311,11 +1312,11 @@ test("publishes the official Dashboard behind a server-only hashed header", asyn
   assert.equal(JSON.stringify(replacement).includes(requestToken), false);
   assert.equal(replacement[0]?.id, "preview");
 
-  const reused = await runtime.ensureEnvironmentBrowserDashboard(coordinates);
+  const reused = await runtime.ensureEnvironmentBrowserService(coordinates);
   assert.equal(reused.publicUrl, dashboard.publicUrl);
   assert.equal(serviceUpdates, 1);
 
-  await runtime.ensureEnvironmentBrowserDashboard(coordinates, true);
+  await runtime.ensureEnvironmentBrowserService(coordinates, true);
   assert.equal(serviceUpdates, 2);
   const restarted = replacement.find(
     (candidate) => candidate.id === "sandpi-browser-dashboard",
@@ -1323,6 +1324,139 @@ test("publishes the official Dashboard behind a server-only hashed header", asyn
     runtime: { envVars: Record<string, string> };
   };
   assert.equal(restarted.runtime.envVars.SANDPI_BROWSER_SESSION_REVISION, "1");
+});
+
+test("uses the AppService spec as the Browser owner handoff fence", async () => {
+  let preflights = 0;
+  let preflightCommand: {
+    command?: string[];
+    envVars?: Record<string, string>;
+  } | undefined;
+  let serviceUpdates = 0;
+  let currentServices: Array<Record<string, unknown>> = [];
+  const runtime = runtimeWithClient({
+    sandboxes: {
+      sandbox(sandboxId: string) {
+        return {
+          async getServices() {
+            return { sandboxId, services: currentServices };
+          },
+          async cmd(
+            alias: string,
+            options: {
+              command?: string[];
+              envVars?: Record<string, string>;
+            },
+          ) {
+            if (alias === "browser-takeover-preflight") {
+              preflights += 1;
+              preflightCommand = options;
+            } else {
+              assert.equal(alias, "browser-agent-control-guard");
+            }
+            return { exitCode: 0, stdout: "", stderr: "" };
+          },
+          async updateServices(services: Array<Record<string, unknown>>) {
+            serviceUpdates += 1;
+            currentServices = services.map((service) => ({
+              ...service,
+              publicUrl: "https://browser.example.invalid",
+            }));
+            return { sandboxId, services: currentServices };
+          },
+        };
+      },
+    },
+  });
+  const coordinates: EnvironmentRuntimeRecord = {
+    id: environment.id,
+    sandboxId: environment.sandboxId,
+    workspaceVolumeId: environment.workspaceVolumeId,
+    runtimeGeneration: 1,
+    decoder: {
+      supervisorCursor: 0,
+      tailBase64: "",
+      runtimeGeneration: 1,
+    },
+  };
+
+  const initial = await runtime.ensureEnvironmentBrowserService(coordinates);
+  assert.deepEqual(
+    {
+      owner: initial.owner,
+      transport: initial.transport,
+      revision: initial.revision,
+    },
+    {
+      owner: "agent",
+      transport: "playwright",
+      revision: 0,
+    },
+  );
+  const human = await runtime.updateEnvironmentBrowserControl(coordinates, {
+    owner: "human",
+  });
+  assert.deepEqual(human, {
+    owner: "human",
+    transport: "vnc",
+    revision: 1,
+  });
+  assert.equal(preflights, 1);
+  assert.equal(serviceUpdates, 2);
+  const takeoverPreparation = String(preflightCommand?.command?.at(-1));
+  assert.match(
+    takeoverPreparation,
+    /playwright_guard=\/workspace\/\.sandpi\/bin\/playwright-cli[\s\S]+command -v Xvfb/,
+  );
+  assert.match(
+    Buffer.from(
+      preflightCommand?.envVars?.SANDPI_PLAYWRIGHT_CLI_GUARD_BASE64 ?? "",
+      "base64",
+    ).toString("utf8"),
+    /human control.*exec \/usr\/local\/bin\/playwright-cli/s,
+  );
+
+  const humanService = currentServices[0] as {
+    runtime: { command: string[]; envVars: Record<string, string> };
+  };
+  const humanCommand = humanService.runtime.command[2] ?? "";
+  assert.equal(humanService.runtime.envVars.SANDPI_BROWSER_OWNER, "human");
+  assert.equal(
+    humanService.runtime.envVars.SANDPI_BROWSER_SESSION_REVISION,
+    "1",
+  );
+  assert.match(humanCommand, /Xvfb.*openbox.*x11vnc.*setpriv/s);
+  assert.match(humanCommand, /google-chrome-stable.*chrome-linux/s);
+  assert.doesNotMatch(
+    humanCommand,
+    /--headless|--remote-debugging|--enable-automation/,
+  );
+  assert.equal(spawnSync("sh", ["-n", "-c", humanCommand]).status, 0);
+  assert.equal(
+    spawnSync(process.execPath, ["--check"], {
+      input: Buffer.from(
+        humanService.runtime.envVars
+          .SANDPI_VNC_WEBSOCKET_BRIDGE_SCRIPT_BASE64,
+        "base64",
+      ).toString("utf8"),
+    }).status,
+    0,
+  );
+
+  const upstream = await runtime.ensureEnvironmentBrowserService(coordinates);
+  assert.equal(upstream.owner, "human");
+  assert.equal(serviceUpdates, 2);
+
+  const agent = await runtime.updateEnvironmentBrowserControl(coordinates, {
+    owner: "agent",
+  });
+  assert.deepEqual(agent, {
+    owner: "agent",
+    transport: "playwright",
+    revision: 2,
+  });
+  assert.equal(preflights, 1);
+  assert.equal(serviceUpdates, 3);
 });
 
 test("uses only official Playwright CLI commands for the shared browser", async () => {
@@ -1401,7 +1535,7 @@ test("uses only official Playwright CLI commands for the shared browser", async 
         "about:blank",
         "--browser",
         "chromium",
-        "--persistent",
+        "--profile=/workspace/.sandpi/browser/profile",
       ],
       ["playwright-cli", "tab-new", "http://localhost:3000/"],
       ["playwright-cli", "resize", "519", "759"],
@@ -1418,8 +1552,7 @@ test("uses only official Playwright CLI commands for the shared browser", async 
 test("recovers one stale persistent browser profile lock", async () => {
   const commands: Array<{ alias: string; command: string[] }> = [];
   let openAttempts = 0;
-  const profilePath =
-    "/workspace/.cache/ms-playwright/daemon/8af22c44f40455cc/ud-default-chrome-for-testing";
+  const profilePath = "/workspace/.sandpi/browser/profile";
   const runtime = runtimeWithClient({
     sandboxes: {
       sandbox() {
@@ -1513,8 +1646,7 @@ test("distinguishes missing Playwright dependencies from failed recovery", async
       error.code === "environment_browser_dependency_unavailable",
   );
 
-  const profilePath =
-    "/workspace/.cache/ms-playwright/daemon/8af22c44f40455cc/ud-default-chrome-for-testing";
+  const profilePath = "/workspace/.sandpi/browser/profile";
   const unrecoverable = runtimeWithClient({
     sandboxes: {
       sandbox() {
@@ -2564,6 +2696,7 @@ test("starts one Environment-scoped Codex app-server without unsupported plugin 
   assert.deepEqual(sessions[0]?.spec.env, {
     HOME: "/workspace",
     CODEX_HOME: "/workspace/.sandpi/harnesses/codex",
+    PATH: "/workspace/.sandpi/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
   });
   assert.deepEqual(sessions[0]?.spec.lifecycle, {
     restart: {
@@ -2587,7 +2720,18 @@ test("starts one Environment-scoped Codex app-server without unsupported plugin 
   const preparationCommand = String(preparation?.command?.at(-1));
   assert.equal(
     Object.keys(preparation?.envVars ?? {}).length,
-    SANDPI_MANAGED_SKILL_ASSETS.length * 2,
+    SANDPI_MANAGED_SKILL_ASSETS.length * 2 + 1,
+  );
+  assert.match(
+    Buffer.from(
+      preparation?.envVars?.SANDPI_PLAYWRIGHT_CLI_GUARD_BASE64 ?? "",
+      "base64",
+    ).toString("utf8"),
+    /human control.*exec \/usr\/local\/bin\/playwright-cli/s,
+  );
+  assert.match(
+    preparationCommand,
+    /playwright_guard=\/workspace\/\.sandpi\/bin\/playwright-cli/,
   );
   for (const [index, asset] of SANDPI_MANAGED_SKILL_ASSETS.entries()) {
     assert.equal(

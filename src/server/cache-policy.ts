@@ -11,6 +11,7 @@ const API_NO_STORE_PATHS = [
   "/webhooks",
   "/egress-credentials",
   "/billing",
+  "/browser/control",
 ] as const;
 
 /**

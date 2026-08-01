@@ -1,5 +1,5 @@
 const PLAYWRIGHT_DEFAULT_PROFILE_PATH =
-  /^\/workspace\/\.cache\/ms-playwright\/daemon\/[a-f0-9]{16}\/ud-default-chrome-for-testing$/;
+  /^(?:\/workspace\/\.sandpi\/browser\/profile|\/workspace\/\.cache\/ms-playwright\/daemon\/[a-f0-9]{16}\/ud-default-chrome-for-testing)$/;
 const PLAYWRIGHT_PROFILE_IN_USE =
   /Browser is already in use for ([^,\r\n]+)/;
 

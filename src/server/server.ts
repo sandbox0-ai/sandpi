@@ -111,6 +111,7 @@ import { SandpiStore } from "@/server/store";
 import { TerminalInputQueue } from "@/server/terminal-input-queue";
 import {
   billingCheckoutSchema,
+  browserControlSchema,
   browserOpenSchema,
   browserSessionSchema,
   codexComposerUploadSchema,
@@ -2316,6 +2317,28 @@ export function registerApiRoutes(
       } finally {
         closeWatchers();
       }
+    },
+  );
+  app.get<{ Params: { environmentId: string } }>(
+    "/api/v1/environments/:environmentId/browser/control",
+    async (request) => ({
+      data: await services.browser.control(
+        request.principal.userId,
+        request.params.environmentId,
+      ),
+    }),
+  );
+  app.put<{ Params: { environmentId: string }; Body: unknown }>(
+    "/api/v1/environments/:environmentId/browser/control",
+    async (request) => {
+      const input = browserControlSchema.parse(request.body);
+      return {
+        data: await services.browser.updateControl(
+          request.principal.userId,
+          request.params.environmentId,
+          input,
+        ),
+      };
     },
   );
   app.post<{ Params: { environmentId: string }; Body: unknown }>(

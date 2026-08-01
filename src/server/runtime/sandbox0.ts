@@ -15,7 +15,11 @@ import {
   type SandboxMetrics,
 } from "sandbox0";
 
-import type { BrowserDashboardViewport } from "@/lib/environment-browser";
+import type {
+  BrowserDashboardViewport,
+  EnvironmentBrowserControl,
+  EnvironmentBrowserOwner,
+} from "@/lib/environment-browser";
 import type {
   Environment,
   EnvironmentResourceMetrics,
@@ -66,7 +70,7 @@ import {
   type RecoveredCodexEnvironmentRuntime,
   type RuntimeCredentialSourceMetadata,
   type RuntimeAdapter,
-  type RuntimeBrowserDashboard,
+  type RuntimeBrowserUpstream,
   type RuntimeCodexSkillFile,
   type RuntimeCodexEventStreamHandle,
   type RuntimeUsageWindowPage,
@@ -100,6 +104,16 @@ import {
   playwrightStaleProfileLockRecoveryCommand,
   type PlaywrightCliResult,
 } from "./playwright-browser-recovery";
+import {
+  HUMAN_BROWSER_PREFLIGHT_SCRIPT,
+  humanBrowserStartScript,
+  ENVIRONMENT_BROWSER_PROFILE_PATH,
+  PLAYWRIGHT_CLI_ENVIRONMENT,
+  PLAYWRIGHT_CLI_GUARD_SCRIPT,
+  PLAYWRIGHT_DASHBOARD_READY_SCRIPT_BASE64,
+  playwrightDashboardStartScript,
+  VNC_WEBSOCKET_BRIDGE_SCRIPT_BASE64,
+} from "./environment-browser-runtime";
 import { reconcileTerminalReplayCursor } from "./terminal-replay";
 import {
   terminalCommandUpdate,
@@ -120,6 +134,17 @@ const SANDBOX_LIST_PAGE_SIZE = 100;
 const TERMINAL_EVENT_RETENTION_BYTES = 4 * 1024 * 1024;
 const ENVIRONMENT_CODEX_HOME = "/workspace/.sandpi/harnesses/codex";
 const WORKSPACE_CODEX_LAYOUT_MARKER = `${ENVIRONMENT_CODEX_HOME}/.sandpi-layout-environment-v1`;
+const ENVIRONMENT_PLAYWRIGHT_GUARD_PATH =
+  `${WORKSPACE_INTERNAL_ROOT}/bin/playwright-cli`;
+const ENVIRONMENT_AGENT_PATH = [
+  `${WORKSPACE_INTERNAL_ROOT}/bin`,
+  "/usr/local/sbin",
+  "/usr/local/bin",
+  "/usr/sbin",
+  "/usr/bin",
+  "/sbin",
+  "/bin",
+].join(":");
 const ENVIRONMENT_CODEX_AUTH_FILE = CODEX_ENVIRONMENT_CREDENTIAL_PATH;
 // Sandpi exposes native Skills and MCP servers, but it has no host surface for
 // Codex Apps or plugin-install approvals. Keep their discovery tools out of
@@ -137,73 +162,14 @@ const BROWSER_DASHBOARD_AUTH_HEADER = "X-Sandpi-Browser-Proxy";
 const PLAYWRIGHT_CLI_TIMEOUT_SECONDS = 120;
 const PLAYWRIGHT_AGENT_SKILL_VERSION_MARKER =
   `${WORKSPACE_INTERNAL_ROOT}/browser/playwright-cli-agent-skill-package-version`;
-const PLAYWRIGHT_DASHBOARD_READY_SCRIPT = String.raw`
-const net = require("node:net");
-
-const port = Number(process.argv[1]);
-const deadline = Date.now() + 30_000;
-const connect = () => {
-  const socket = net.connect({ host: "127.0.0.1", port });
-  socket.once("connect", () => {
-    socket.end();
-    process.exit(0);
-  });
-  socket.once("error", () => {
-    socket.destroy();
-    if (Date.now() >= deadline) process.exit(1);
-    setTimeout(connect, 25);
-  });
-};
-connect();
-`;
-const PLAYWRIGHT_DASHBOARD_READY_SCRIPT_BASE64 = Buffer.from(
-  PLAYWRIGHT_DASHBOARD_READY_SCRIPT,
+const PLAYWRIGHT_CLI_GUARD_BASE64 = Buffer.from(
+  PLAYWRIGHT_CLI_GUARD_SCRIPT,
   "utf8",
 ).toString("base64");
 const PLAYWRIGHT_STALE_PROFILE_LOCK_RECOVERY_SCRIPT_BASE64 = Buffer.from(
   PLAYWRIGHT_STALE_PROFILE_LOCK_RECOVERY_SCRIPT,
   "utf8",
 ).toString("base64");
-const PLAYWRIGHT_DASHBOARD_START_SCRIPT = [
-  "recover_stale_profiles() {",
-  "browser_running=1;",
-  "for profile in /workspace/.cache/ms-playwright/daemon/*/ud-default-chrome-for-testing; do",
-  'test -d "$profile" || continue;',
-  "node -e 'eval(Buffer.from(process.env.SANDPI_PLAYWRIGHT_LOCK_RECOVERY_SCRIPT_BASE64, \"base64\").toString(\"utf8\"))' \"$profile\";",
-  'recovery_status="$?";',
-  'test "$recovery_status" -eq 12 && browser_running=0;',
-  "done;",
-  'return "$browser_running";',
-  "};",
-  "ensure_browser() {",
-  "recover_stale_profiles && return 0;",
-  'browser_error="$(playwright-cli open about:blank --browser chromium --persistent 2>&1)" && return 0;',
-  'printf "%s\\n" "$browser_error" >&2;',
-  'profile="$(printf "%s\\n" "$browser_error" | sed -n "s/.*Browser is already in use for \\([^,]*\\),.*/\\1/p" | tail -n 1)";',
-  'test -n "$profile" || return 1;',
-  "node -e 'eval(Buffer.from(process.env.SANDPI_PLAYWRIGHT_LOCK_RECOVERY_SCRIPT_BASE64, \"base64\").toString(\"utf8\"))' \"$profile\" || return 1;",
-  "playwright-cli open about:blank --browser chromium --persistent;",
-  "};",
-  "wait_for_dashboard() {",
-  "node -e 'eval(Buffer.from(process.env.SANDPI_PLAYWRIGHT_DASHBOARD_READY_SCRIPT_BASE64, \"base64\").toString(\"utf8\"))' \"$1\";",
-  "};",
-  `(wait_for_dashboard ${BROWSER_DASHBOARD_PORT} && ensure_browser;`,
-  "while :; do",
-  "sleep 15;",
-  "ensure_browser;",
-  "done) &",
-  "exec playwright-cli show",
-  `--host 0.0.0.0 --port ${BROWSER_DASHBOARD_PORT}`,
-].join(" ");
-const PLAYWRIGHT_CLI_ENVIRONMENT = {
-  HOME: "/workspace",
-  PLAYWRIGHT_BROWSERS_PATH: "/opt/ms-playwright",
-  PLAYWRIGHT_MCP_BROWSER: "chromium",
-  PLAYWRIGHT_MCP_ISOLATED: "false",
-  PLAYWRIGHT_MCP_SANDBOX: "false",
-  PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1",
-  NO_UPDATE_NOTIFIER: "1",
-} as const;
 const DEVICE_CODEX_HOME = "/dev/shm/sandpi-codex-device";
 const DEVICE_CODEX_AUTH_FILE = `${DEVICE_CODEX_HOME}/auth.json`;
 const CODEX_AUTH_MAX_BYTES = 4 * 1024 * 1024;
@@ -408,11 +374,12 @@ export class Sandbox0Runtime implements RuntimeAdapter {
               input.credentials,
             ),
             services: [
-              browserDashboardService(
+              environmentBrowserService(
                 browserDashboardRequestToken(
                   this.browserProxyKey,
                   input.environment.id,
                 ),
+                "agent",
                 0,
               ),
             ],
@@ -683,10 +650,10 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     }
   }
 
-  async ensureEnvironmentBrowserDashboard(
+  async updateEnvironmentBrowserControl(
     runtime: EnvironmentRuntimeRecord,
-    restart = false,
-  ): Promise<RuntimeBrowserDashboard> {
+    input: { owner: EnvironmentBrowserOwner; force?: boolean },
+  ): Promise<EnvironmentBrowserControl> {
     const requestToken = browserDashboardRequestToken(
       this.browserProxyKey,
       runtime.id,
@@ -694,23 +661,134 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     try {
       const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
       const existing = await sandbox.getServices();
-      const currentDashboard = existing.services.find(
+      const currentService = existing.services.find(
         (service) => service.id === BROWSER_DASHBOARD_SERVICE_ID,
       );
-      const currentRevision = browserDashboardSessionRevision(currentDashboard);
-      const desiredDashboard = browserDashboardService(
+      const currentControl = environmentBrowserControl(currentService);
+      if (currentControl.owner === input.owner && !input.force) {
+        return currentControl;
+      }
+      if (input.owner === "human") {
+        const preflight = await sandbox.cmd("browser-takeover-preflight", {
+          // Install the managed CLI fence before the authoritative owner
+          // changes. A running agent already has this directory first in PATH,
+          // so its next Playwright command is denied even before VNC starts.
+          command: [
+            "sh",
+            "-c",
+            `${environmentPlaywrightGuardInstallScript()}\n${HUMAN_BROWSER_PREFLIGHT_SCRIPT}`,
+          ],
+          cwd: "/workspace",
+          envVars: {
+            SANDPI_PLAYWRIGHT_CLI_GUARD_BASE64:
+              PLAYWRIGHT_CLI_GUARD_BASE64,
+          },
+          wait: true,
+          ttlSec: 30,
+        });
+        if (preflight.exitCode !== 0) {
+          throw new HttpError(
+            503,
+            "environment_browser_takeover_unavailable",
+            "This Environment does not include the interactive browser runtime. Recreate it with the current coding-agent template.",
+          );
+        }
+      }
+
+      const desiredService = environmentBrowserService(
         requestToken,
-        currentDashboard && restart ? currentRevision + 1 : currentRevision,
+        input.owner,
+        currentControl.revision + 1,
+      );
+      const services = existing.services
+        .filter((service) => service.id !== BROWSER_DASHBOARD_SERVICE_ID)
+        .map(sandboxAppServiceFromView);
+      services.push(desiredService);
+      let updated;
+      try {
+        updated = await sandbox.updateServices(services);
+      } catch (error) {
+        const confirmed = await sandbox.getServices().catch(() => undefined);
+        const confirmedService = confirmed?.services.find(
+          (service) => service.id === BROWSER_DASHBOARD_SERVICE_ID,
+        );
+        if (
+          !confirmed ||
+          !confirmedService?.publicUrl ||
+          !sandboxAppServiceConfigurationMatches(
+            confirmedService,
+            desiredService,
+          )
+        ) {
+          throw error;
+        }
+        updated = confirmed;
+      }
+      const service = updated.services.find(
+        (candidate) => candidate.id === BROWSER_DASHBOARD_SERVICE_ID,
+      );
+      if (!service?.publicUrl) {
+        throw new HttpError(
+          503,
+          "environment_browser_exposure_unavailable",
+          "Sandbox0 did not publish the protected Environment browser service.",
+        );
+      }
+      if (input.owner === "agent") {
+        // The guard is a persistent enforcement derivative, not owner state.
+        // Clear it only after Sandbox0 stores the agent-owned AppService.
+        await sandbox
+          .cmd("browser-agent-control-guard", {
+            command: [
+              "sh",
+              "-c",
+              "rm -f /workspace/.sandpi/browser/human-owner",
+            ],
+            cwd: "/workspace",
+            wait: true,
+            ttlSec: 30,
+          })
+          .catch(() => undefined);
+      }
+      return environmentBrowserControl(service);
+    } catch (error) {
+      if (error instanceof HttpError) throw error;
+      throw translateSandbox0Error(error);
+    }
+  }
+
+  async ensureEnvironmentBrowserService(
+    runtime: EnvironmentRuntimeRecord,
+    restart = false,
+  ): Promise<RuntimeBrowserUpstream> {
+    const requestToken = browserDashboardRequestToken(
+      this.browserProxyKey,
+      runtime.id,
+    );
+    try {
+      const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
+      const existing = await sandbox.getServices();
+      const currentService = existing.services.find(
+        (service) => service.id === BROWSER_DASHBOARD_SERVICE_ID,
+      );
+      const currentControl = environmentBrowserControl(currentService);
+      const desiredService = environmentBrowserService(
+        requestToken,
+        currentControl.owner,
+        currentService && restart
+          ? currentControl.revision + 1
+          : currentControl.revision,
       );
       if (
-        currentDashboard?.publicUrl &&
+        currentService?.publicUrl &&
         sandboxAppServiceConfigurationMatches(
-          currentDashboard,
-          desiredDashboard,
+          currentService,
+          desiredService,
         )
       ) {
         return {
-          publicUrl: currentDashboard.publicUrl,
+          ...currentControl,
+          publicUrl: currentService.publicUrl,
           requestHeaders: {
             [BROWSER_DASHBOARD_AUTH_HEADER]: requestToken,
           },
@@ -719,7 +797,7 @@ export class Sandbox0Runtime implements RuntimeAdapter {
       const services = existing.services
         .filter((service) => service.id !== BROWSER_DASHBOARD_SERVICE_ID)
         .map(sandboxAppServiceFromView);
-      services.push(desiredDashboard);
+      services.push(desiredService);
       let updated;
       try {
         updated = await sandbox.updateServices(services);
@@ -729,37 +807,39 @@ export class Sandbox0Runtime implements RuntimeAdapter {
         // the first Browser mount does not surface a false failure or rewrite
         // the same service again.
         const confirmed = await sandbox.getServices().catch(() => undefined);
-        const confirmedDashboard = confirmed?.services.find(
+        const confirmedService = confirmed?.services.find(
           (service) => service.id === BROWSER_DASHBOARD_SERVICE_ID,
         );
         if (
-          !confirmedDashboard?.publicUrl ||
+          !confirmedService?.publicUrl ||
           !sandboxAppServiceConfigurationMatches(
-            confirmedDashboard,
-            desiredDashboard,
+            confirmedService,
+            desiredService,
           )
         ) {
           throw error;
         }
         return {
-          publicUrl: confirmedDashboard.publicUrl,
+          ...environmentBrowserControl(confirmedService),
+          publicUrl: confirmedService.publicUrl,
           requestHeaders: {
             [BROWSER_DASHBOARD_AUTH_HEADER]: requestToken,
           },
         };
       }
-      const dashboard = updated.services.find(
+      const service = updated.services.find(
         (service) => service.id === BROWSER_DASHBOARD_SERVICE_ID,
       );
-      if (!dashboard?.publicUrl) {
+      if (!service?.publicUrl) {
         throw new HttpError(
           503,
           "environment_browser_exposure_unavailable",
-          "Sandbox0 did not publish the protected Playwright Dashboard service.",
+          "Sandbox0 did not publish the protected Environment browser service.",
         );
       }
       return {
-        publicUrl: dashboard.publicUrl,
+        ...environmentBrowserControl(service),
+        publicUrl: service.publicUrl,
         requestHeaders: {
           [BROWSER_DASHBOARD_AUTH_HEADER]: requestToken,
         },
@@ -962,7 +1042,11 @@ export class Sandbox0Runtime implements RuntimeAdapter {
           `install -d -m 700 ${ENVIRONMENT_CODEX_HOME} && rm -rf ${ENVIRONMENT_CODEX_HOME}/auth.json && ln -s ${ENVIRONMENT_CODEX_AUTH_FILE} ${ENVIRONMENT_CODEX_HOME}/auth.json && while [ ! -s ${ENVIRONMENT_CODEX_AUTH_FILE} ]; do sleep 0.2; done && exec codex app-server --stdio -c 'cli_auth_credentials_store="file"' ${ENVIRONMENT_CODEX_DISABLED_FEATURES}`,
         ],
         cwd: "/workspace",
-        env: { HOME: "/workspace", CODEX_HOME: ENVIRONMENT_CODEX_HOME },
+        env: {
+          HOME: "/workspace",
+          CODEX_HOME: ENVIRONMENT_CODEX_HOME,
+          PATH: ENVIRONMENT_AGENT_PATH,
+        },
         io: { mode: "pipes" },
         lifecycle: {
           restart: {
@@ -2933,13 +3017,22 @@ function sandboxAppServiceComparableConfiguration(
   return JSON.parse(JSON.stringify(sandboxAppServiceFromView(service)));
 }
 
-function browserDashboardSessionRevision(
+function environmentBrowserControl(
   service: Sandbox0AppServiceView | undefined,
-) {
+): EnvironmentBrowserControl {
   const value = Number(
     service?.runtime?.envVars?.SANDPI_BROWSER_SESSION_REVISION ?? 0,
   );
-  return Number.isSafeInteger(value) && value >= 0 ? value : 0;
+  const revision = Number.isSafeInteger(value) && value >= 0 ? value : 0;
+  const owner =
+    service?.runtime?.envVars?.SANDPI_BROWSER_OWNER === "human"
+      ? "human"
+      : "agent";
+  return {
+    owner,
+    transport: owner === "human" ? "vnc" : "playwright",
+    revision,
+  };
 }
 
 function browserDashboardRequestToken(
@@ -2951,8 +3044,9 @@ function browserDashboardRequestToken(
     .digest("base64url");
 }
 
-function browserDashboardService(
+function environmentBrowserService(
   requestToken: string,
+  owner: EnvironmentBrowserOwner,
   sessionRevision: number,
 ): Sandbox0AppService {
   return {
@@ -2961,17 +3055,26 @@ function browserDashboardService(
     port: BROWSER_DASHBOARD_PORT,
     runtime: {
       type: models.SandboxAppServiceRuntimeTypeEnum.Cmd,
-      // The public ingress starts this process lazily. Prewarming Chromium in
-      // the same Sandbox-native service lifetime overlaps it with Dashboard
-      // readiness and avoids multiple high-latency control API commands.
-      command: ["sh", "-c", PLAYWRIGHT_DASHBOARD_START_SCRIPT],
+      // The protected ingress lazily starts exactly one owner-specific
+      // transport. Replacing this service is the ownership handoff fence.
+      command: [
+        "sh",
+        "-c",
+        owner === "human"
+          ? humanBrowserStartScript(BROWSER_DASHBOARD_PORT)
+          : playwrightDashboardStartScript(BROWSER_DASHBOARD_PORT),
+      ],
       cwd: "/workspace",
       envVars: {
         ...PLAYWRIGHT_CLI_ENVIRONMENT,
+        SANDPI_BROWSER_OWNER: owner,
+        SANDPI_BROWSER_USER: "sandbox-browser",
         SANDPI_PLAYWRIGHT_DASHBOARD_READY_SCRIPT_BASE64:
           PLAYWRIGHT_DASHBOARD_READY_SCRIPT_BASE64,
         SANDPI_PLAYWRIGHT_LOCK_RECOVERY_SCRIPT_BASE64:
           PLAYWRIGHT_STALE_PROFILE_LOCK_RECOVERY_SCRIPT_BASE64,
+        SANDPI_VNC_WEBSOCKET_BRIDGE_SCRIPT_BASE64:
+          VNC_WEBSOCKET_BRIDGE_SCRIPT_BASE64,
         SANDPI_BROWSER_SESSION_REVISION: String(sessionRevision),
       },
     },
@@ -3022,7 +3125,7 @@ async function openPlaywrightBrowser(
     url,
     "--browser",
     "chromium",
-    "--persistent",
+    `--profile=${ENVIRONMENT_BROWSER_PROFILE_PATH}`,
   ];
   let result = await runPlaywrightCli(sandbox, args);
   if (result.exitCode === 0) return;
@@ -3126,6 +3229,30 @@ function codexRuntimeEpochChanged(
   return new HttpError(409, "codex_runtime_epoch_changed", message);
 }
 
+/** Reconciles the one managed CLI entrypoint shared by Codex and takeover. */
+function environmentPlaywrightGuardInstallScript() {
+  return `set -eu
+internal=${WORKSPACE_INTERNAL_ROOT}
+bin=${WORKSPACE_INTERNAL_ROOT}/bin
+playwright_guard=${ENVIRONMENT_PLAYWRIGHT_GUARD_PATH}
+test ! -L "$internal"
+install -d -m 711 "$internal"
+test ! -L "$bin"
+install -d -m 700 "$bin"
+test ! -L "$playwright_guard"
+if [ -e "$playwright_guard" ]; then test -f "$playwright_guard"; fi
+temporary="$playwright_guard.tmp.$PPID.$$"
+test ! -e "$temporary"
+printf '%s' "$SANDPI_PLAYWRIGHT_CLI_GUARD_BASE64" | base64 -d > "$temporary"
+chmod 700 "$temporary"
+if [ -f "$playwright_guard" ] && cmp -s "$playwright_guard" "$temporary"; then
+  rm -f "$temporary"
+else
+  mv -f "$temporary" "$playwright_guard"
+fi
+chmod 700 "$playwright_guard"`;
+}
+
 /** Encodes release-owned skills and renders one shared Workspace reconciler. */
 function managedSkillPreparation() {
   const envVars: Record<string, string> = {};
@@ -3157,6 +3284,10 @@ async function prepareEnvironmentCodexHome(
   sandbox: ReturnType<Client["sandboxes"]["sandbox"]>,
 ) {
   const managedSkills = managedSkillPreparation();
+  const preparationEnvVars = {
+    ...managedSkills.envVars,
+    SANDPI_PLAYWRIGHT_CLI_GUARD_BASE64: PLAYWRIGHT_CLI_GUARD_BASE64,
+  };
   const command = `set -eu
 internal=${WORKSPACE_INTERNAL_ROOT}
 harnesses=/workspace/.sandpi/harnesses
@@ -3169,7 +3300,9 @@ test ! -L "$internal"
 test ! -L "$harnesses"
 test ! -L "$browser"
 test ! -L "$skills"
-install -d -m 700 "$internal" "$harnesses" "$browser" "$skills"
+install -d -m 711 "$internal"
+install -d -m 700 "$harnesses" "$skills"
+install -d -m 711 "$browser"
 test ! -L "$home"
 install -d -m 700 "$home"
 install_managed_file() {
@@ -3189,6 +3322,7 @@ install_managed_file() {
   fi
 }
 ${managedSkills.installCommands}
+${environmentPlaywrightGuardInstallScript()}
 if [ -f "$marker" ]; then
   test "$(cat "$marker")" = environment_v1
 else
@@ -3218,7 +3352,7 @@ sync -f /workspace 2>/dev/null || sync`;
   const result = await sandbox.cmd("prepare-environment-codex-home", {
     command: ["/bin/sh", "-lc", command],
     cwd: "/workspace",
-    envVars: managedSkills.envVars,
+    envVars: preparationEnvVars,
     ttlSec: 60,
   });
   if (result.exitCode !== undefined && result.exitCode !== 0) {

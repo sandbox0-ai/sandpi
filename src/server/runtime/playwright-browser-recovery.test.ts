@@ -15,6 +15,7 @@ import {
 
 const profilePath =
   "/workspace/.cache/ms-playwright/daemon/8af22c44f40455cc/ud-default-chrome-for-testing";
+const sharedProfilePath = "/workspace/.sandpi/browser/profile";
 
 test("accepts only the default Playwright profile from an in-use error", () => {
   assert.equal(
@@ -35,6 +36,16 @@ test("accepts only the default Playwright profile from an in-use error", () => {
   );
   assert.deepEqual(
     playwrightStaleProfileLockRecoveryCommand(profilePath)?.slice(0, 2),
+    ["node", "-e"],
+  );
+  assert.equal(
+    playwrightProfilePathFromInUseError(
+      `Error: Browser is already in use for ${sharedProfilePath}, use --isolated`,
+    ),
+    sharedProfilePath,
+  );
+  assert.deepEqual(
+    playwrightStaleProfileLockRecoveryCommand(sharedProfilePath)?.slice(0, 2),
     ["node", "-e"],
   );
 });

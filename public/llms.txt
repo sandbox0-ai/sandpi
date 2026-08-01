@@ -13,11 +13,12 @@ This file describes the current Sandpi product contract. It is documentation, no
 
 ## Human-agent shared Environment Browser
 
-- The Browser tab in Sandpi and the agent's `playwright-cli` use the same Playwright `default` session and persistent profile. A human can complete an interactive login in the Browser tab and then ask the agent to continue in that authenticated session.
-- Read the locally installed `playwright-cli` Skill for commands matching the Environment's installed Playwright version. A normal handoff starts with `playwright-cli tab-list` and `playwright-cli snapshot`, performs actions against current snapshot references, and snapshots again after navigation or human interaction.
+- The Browser keeps one persistent profile with one active owner. Agent control uses the official Playwright Dashboard and `playwright-cli`; human control uses a headed interactive browser without Playwright or a CDP endpoint. Take control for any interactive task, then return control whenever the agent should continue with the same cookies and site storage.
+- Browser ownership is exclusive. While human control is active, Sandpi rejects Browser automation APIs and the managed `playwright-cli` command refuses to run. Agents must not launch a second browser, attach through CDP, or bypass that guard.
+- Read the locally installed `playwright-cli` Skill for commands matching the Environment's installed Playwright version. After control returns to the agent, start with `playwright-cli tab-list` and `playwright-cli snapshot`, perform actions against current snapshot references, and snapshot again after navigation or human interaction.
 - Do not run `playwright-cli close`, `playwright-cli delete-data`, clear cookies or storage, replace the persistent profile, or create an isolated session unless the user explicitly requests that destructive or isolated behavior.
 - Browser URLs on `localhost`, `127.0.0.1`, or `::1` resolve inside the remote Environment Sandbox, not on the human's device.
-- Browser tabs, live pages, and snapshot element references have no continuity guarantee across Sandbox pause, resume, or Browser-process recovery. The persistent profile and cookies survive, but always list tabs and take a fresh snapshot before continuing.
+- Browser tabs, live pages, and snapshot element references have no continuity guarantee across an ownership handoff, Sandbox pause, resume, or Browser-process recovery. The persistent profile and cookies survive, but always list tabs and take a fresh snapshot before continuing.
 - Workspace backups include the persistent Browser profile. Treat a backup as sensitive because it can contain authenticated Browser state.
 
 ## Sandbox pause and resume
