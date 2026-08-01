@@ -923,9 +923,10 @@ function fixture(
       });
       return id;
     },
-    async ensureScheduledSessionMetadata(options: {
+    async ensureAutomationSessionMetadata(options: {
       sessionId: string;
-      scheduleRunId: string;
+      automationRunId: string;
+      automationKind: "schedule" | "webhook";
       userId: string;
       environment: Environment;
       title: string;
@@ -5504,16 +5505,17 @@ test("creates one deterministic native Session for a scheduled run retry", async
       userId: "user",
       environment,
       sessionId: "session-scheduled",
-      scheduleRunId: "run-scheduled",
+      automationRunId: "run-scheduled",
+      automationKind: "schedule" as const,
       title: "Nightly maintenance",
       modelId: "gpt-test",
     };
     assert.equal(
-      await context.service.ensureScheduledSession(input),
+      await context.service.ensureAutomationSession(input),
       "session-scheduled",
     );
     assert.equal(
-      await context.service.ensureScheduledSession(input),
+      await context.service.ensureAutomationSession(input),
       "session-scheduled",
     );
     assert.equal(
@@ -5550,7 +5552,7 @@ test("treats an unmaterialized empty scheduled Thread as having no delivered Tur
   });
   try {
     assert.deepEqual(
-      await context.service.readScheduledTurnStatus({
+      await context.service.readAutomationTurnStatus({
         userId: "user",
         sessionId: "session-one",
         clientMessageId: "sandpi-schedule:run-empty",
@@ -5615,7 +5617,7 @@ test("keeps a scheduled run active while an old-epoch interruption enters native
     },
   });
   try {
-    const result = await context.service.readScheduledTurnStatus({
+    const result = await context.service.readAutomationTurnStatus({
       userId: "user",
       sessionId: "session-one",
       clientMessageId: scheduledClientMessageId,
@@ -5664,7 +5666,7 @@ test("adopts the completed recovery Turn for an interrupted scheduled run", asyn
     },
   });
   try {
-    const result = await context.service.readScheduledTurnStatus({
+    const result = await context.service.readAutomationTurnStatus({
       userId: "user",
       sessionId: "session-one",
       clientMessageId: scheduledClientMessageId,

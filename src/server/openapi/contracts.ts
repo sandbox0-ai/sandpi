@@ -18,8 +18,10 @@ import {
   environmentOrderSchema,
   environmentProvisioningSchema,
   environmentScheduleSchema as environmentScheduleInputSchema,
+  environmentWebhookSchema as environmentWebhookInputSchema,
   environmentUpdateSchema,
   preferencesSchema,
+  rotateEnvironmentWebhookSecretSchema,
   sessionCreateSchema,
   sessionForkSchema,
   sessionGoalUpdateSchema,
@@ -60,6 +62,10 @@ import {
   environmentMetricsSchema,
   environmentScheduleRunSchema,
   environmentScheduleSchema,
+  environmentWebhookDeliverySchema,
+  environmentWebhookRunSchema,
+  environmentWebhookSchema,
+  environmentWebhookSetupSchema,
   environmentSchema,
   errorSchema,
   hooksInventorySchema,
@@ -152,6 +158,12 @@ function pathParameters(url: string) {
 const noContent = z.null().describe("No content.");
 const redirect = z.null().describe("Redirect response.");
 const rawObject = z.record(z.string(), z.unknown());
+const webhookIngressResult = z.object({
+  status: z.enum(["duplicate", "filtered", "suppressed", "batched", "queued"]),
+  deliveryId: z.string(),
+  runId: z.string().optional(),
+});
+const webhookChallenge = z.object({ challenge: z.string() });
 const modelPage = z.object({ data: z.array(z.unknown()) });
 const modelMeta = z.object({
   availability: z.enum(["available", "runtime-unavailable"]),
@@ -666,6 +678,122 @@ export const openApiRouteContracts: readonly OpenApiRouteContract[] = [
         limit: z.coerce.number().int().min(1).max(100).optional(),
       }),
       response: { 200: dataEnvelope(z.array(environmentScheduleRunSchema)) },
+    },
+  }),
+  defineContract({
+    method: "POST",
+    url: "/api/v1/webhooks/:endpointId",
+    public: true,
+    schema: {
+      operationId: "receiveEnvironmentWebhook",
+      summary: "Receive a signed Environment webhook delivery",
+      description:
+        "Accepts GitHub, Alertmanager, Slack, or custom payloads. Authentication is provider-specific and uses request signatures or a bearer/query token.",
+      tags: ["Webhooks"],
+      "x-sandpi-request-content-types": [
+        "application/json",
+        "application/x-www-form-urlencoded",
+        "text/plain",
+      ],
+      headers: z.object({
+        authorization: z.string().optional(),
+        "x-hub-signature-256": z.string().optional(),
+        "x-github-delivery": z.string().optional(),
+        "x-github-event": z.string().optional(),
+        "x-slack-request-timestamp": z.string().optional(),
+        "x-slack-signature": z.string().optional(),
+        "idempotency-key": z.string().optional(),
+        "x-request-id": z.string().optional(),
+        "x-sandpi-delivery": z.string().optional(),
+        "x-sandpi-event": z.string().optional(),
+      }),
+      querystring: z.object({ token: z.string().optional() }),
+      body: z.unknown(),
+      response: {
+        200: z.union([webhookIngressResult, webhookChallenge]),
+        202: webhookIngressResult,
+      },
+    },
+  }),
+  defineContract({
+    method: "GET",
+    url: "/api/v1/environments/:environmentId/webhooks",
+    schema: {
+      operationId: "listEnvironmentWebhooks",
+      summary: "List Environment webhook triggers",
+      tags: ["Webhooks"],
+      response: { 200: dataEnvelope(z.array(environmentWebhookSchema)) },
+    },
+  }),
+  defineContract({
+    method: "POST",
+    url: "/api/v1/environments/:environmentId/webhooks",
+    schema: {
+      operationId: "createEnvironmentWebhook",
+      summary: "Create an Environment webhook trigger",
+      tags: ["Webhooks"],
+      body: environmentWebhookInputSchema,
+      response: { 201: dataEnvelope(environmentWebhookSetupSchema) },
+    },
+  }),
+  defineContract({
+    method: "PUT",
+    url: "/api/v1/environments/:environmentId/webhooks/:webhookId",
+    schema: {
+      operationId: "updateEnvironmentWebhook",
+      summary: "Replace an Environment webhook trigger",
+      tags: ["Webhooks"],
+      body: environmentWebhookInputSchema,
+      response: { 200: dataEnvelope(environmentWebhookSetupSchema) },
+    },
+  }),
+  defineContract({
+    method: "PUT",
+    url: "/api/v1/environments/:environmentId/webhooks/:webhookId/secret",
+    schema: {
+      operationId: "rotateEnvironmentWebhookSecret",
+      summary: "Replace or rotate an Environment webhook secret",
+      tags: ["Webhooks"],
+      body: rotateEnvironmentWebhookSecretSchema,
+      response: { 200: dataEnvelope(environmentWebhookSetupSchema) },
+    },
+  }),
+  defineContract({
+    method: "DELETE",
+    url: "/api/v1/environments/:environmentId/webhooks/:webhookId",
+    schema: {
+      operationId: "deleteEnvironmentWebhook",
+      summary: "Delete an Environment webhook trigger",
+      tags: ["Webhooks"],
+      response: { 200: dataEnvelope(idResultSchema) },
+    },
+  }),
+  defineContract({
+    method: "GET",
+    url: "/api/v1/environments/:environmentId/webhooks/:webhookId/runs",
+    schema: {
+      operationId: "listEnvironmentWebhookRuns",
+      summary: "List recent webhook-triggered runs",
+      tags: ["Webhooks"],
+      querystring: z.object({
+        limit: z.coerce.number().int().min(1).max(100).optional(),
+      }),
+      response: { 200: dataEnvelope(z.array(environmentWebhookRunSchema)) },
+    },
+  }),
+  defineContract({
+    method: "GET",
+    url: "/api/v1/environments/:environmentId/webhooks/:webhookId/deliveries",
+    schema: {
+      operationId: "listEnvironmentWebhookDeliveries",
+      summary: "List recent verified webhook deliveries",
+      tags: ["Webhooks"],
+      querystring: z.object({
+        limit: z.coerce.number().int().min(1).max(100).optional(),
+      }),
+      response: {
+        200: dataEnvelope(z.array(environmentWebhookDeliverySchema)),
+      },
     },
   }),
   defineContract({

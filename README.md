@@ -55,7 +55,7 @@ Codex is the first supported coding agent.
 | Controlled outbound access | Restrict sandbox egress by destination and inject supported credentials only into matching traffic, instead of placing service secrets in the repository or browser. |
 | Workspace protection | Create manual or scheduled Workspace backups with retention and restore them through Sandbox0 Volume snapshots. |
 | Encrypted persisted state | Sandbox0 encrypts persisted Environment rootfs checkpoint objects and default S0FS Workspace Volume objects at the application layer before object storage. |
-| Durable Automation | Schedule a long Codex prompt once or with a human-friendly, time-zone-aware recurrence. Advanced cron remains available when needed. Sandpi persists run intent outside the Sandbox and reconciles native Turn completion after server or runtime recovery. |
+| Durable Automation | Schedule a Codex prompt or trigger it from verified GitHub, Alertmanager, Slack and custom Webhooks. Sandpi persists run intent outside the Sandbox and reconciles native Turn completion after server or runtime recovery. |
 
 An Environment is deliberately larger than a chat:
 
@@ -65,7 +65,7 @@ Environment
 ├── one native coding-agent harness and provider account
 ├── network policy and egress credentials
 ├── runtime resources, terminal, shared Browser and metrics
-├── durable Automation Schedules
+├── durable Automation Schedules and Webhooks
 └── many native coding-agent Sessions
 ```
 
@@ -121,6 +121,9 @@ same files, tools and execution context.
 - Environment Schedules with one-time or human-friendly recurring timing,
   Advanced cron, IANA time zones, upcoming-run previews, durable run history
   and overlap skipping
+- Environment Webhooks for GitHub, Alertmanager, Slack and custom sources, with
+  provider verification, declarative trigger filters, durable delivery history,
+  cooldown batching and bounded run admission
 - Per-Environment network policy and Sandbox0-backed egress credential injection
 - Manual and scheduled Workspace backups, retention and restore
 - Built-in single-user identity or OIDC
@@ -283,10 +286,10 @@ Sandbox0
   `spec.storage.runtime.objectEncryptionEnabled`.
 - Native Codex Session history remains in the Environment Workspace. PostgreSQL
   stores the opaque native reference and product control state, not a duplicate
-  conversation transcript. Environment Schedule definitions are an explicit
-  exception for future user-authored input: Sandpi stores their prompt and an
-  immutable active-run snapshot, while the resulting native Thread remains the
-  only conversation authority.
+  conversation transcript. Environment Automation definitions are an explicit
+  exception for future user-authored input: Sandpi stores Schedule prompts and
+  Webhook policies plus immutable active-run snapshots, while the resulting
+  native Thread remains the only conversation authority.
 - Egress credential injection reduces secret exposure, but the coding agent can
   still exercise any credential and destination explicitly granted to its
   Environment. Treat allowed tools and destinations as part of the security
@@ -318,6 +321,7 @@ Sandbox0
 - [OpenAPI contract](./docs/architecture/openapi-contract.md)
 - [Native Session authority and recovery](./docs/architecture/native-session-authority.md)
 - [Environment Schedules](./docs/architecture/environment-schedules.md)
+- [Environment Webhooks](./docs/architecture/environment-webhooks.md)
 - [Environment egress credentials](./docs/architecture/environment-egress-credentials.md)
 - [Billing and usage boundaries](./docs/architecture/billing-and-usage.md)
 - [Kubernetes deployment](./deploy/kubernetes/README.md)

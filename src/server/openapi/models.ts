@@ -15,6 +15,10 @@ import type {
   EnvironmentResourceMetrics,
   EnvironmentSchedule,
   EnvironmentScheduleRun,
+  EnvironmentWebhook,
+  EnvironmentWebhookDelivery,
+  EnvironmentWebhookRun,
+  EnvironmentWebhookSetup,
   EnvironmentWorkspaceBackup,
   SandpiBootstrap,
   SandpiCloudSnapshot,
@@ -259,6 +263,121 @@ export const environmentScheduleRunSchema = component(
     finishedAt: unixTimestampSchema.optional(),
     createdAt: unixTimestampSchema,
     updatedAt: unixTimestampSchema,
+  }),
+);
+
+const environmentWebhookTargetSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("newSession") }),
+  z.object({ kind: z.literal("session"), sessionId: z.string() }),
+]);
+
+const environmentWebhookConditionSchema = z.object({
+  path: z.string(),
+  operator: z.enum(["equals", "notEquals", "contains", "exists"]),
+  value: z.string().optional(),
+});
+
+const environmentWebhookTriggerPolicySchema = z.object({
+  mode: z.enum(["every", "stateChange"]),
+  eventTypes: z.array(z.string()),
+  conditions: z.array(environmentWebhookConditionSchema),
+  statePath: z.string().optional(),
+  groupKeyPath: z.string().optional(),
+});
+
+const environmentWebhookCooldownPolicySchema = z.discriminatedUnion("mode", [
+  z.object({ mode: z.literal("none") }),
+  z.object({
+    mode: z.enum(["throttle", "debounce", "batch"]),
+    durationSeconds: z.number().int().positive(),
+    behavior: z.enum(["suppress", "latest", "merge"]),
+  }),
+]);
+
+const environmentWebhookRunStatusSchema = z.enum([
+  "queued",
+  "claimed",
+  "running",
+  "succeeded",
+  "failed",
+  "skipped",
+]);
+
+const environmentWebhookDeliveryStatusSchema = z.enum([
+  "queued",
+  "batched",
+  "filtered",
+  "suppressed",
+  "duplicate",
+]);
+
+export const environmentWebhookSchema = component(
+  "EnvironmentWebhook",
+  z.object({
+    id: z.string(),
+    environmentId: z.string(),
+    endpointUrl: z.url(),
+    name: z.string(),
+    provider: z.enum(["github", "alertmanager", "slack", "custom"]),
+    prompt: z.string(),
+    triggerPolicy: environmentWebhookTriggerPolicySchema,
+    cooldownPolicy: environmentWebhookCooldownPolicySchema,
+    target: environmentWebhookTargetSchema,
+    overlapPolicy: z.enum(["queue", "skip"]),
+    maxConcurrentRuns: z.number().int().positive(),
+    maxPendingRuns: z.number().int().positive(),
+    enabled: z.boolean(),
+    secretConfigured: z.boolean(),
+    title: z.string().optional(),
+    modelId: z.string().optional(),
+    reasoningEffort: z.string().optional(),
+    collaborationMode: z.literal("plan").optional(),
+    serviceTier: z.string().optional(),
+    lastDeliveryAt: unixTimestampSchema.optional(),
+    lastDeliveryStatus: environmentWebhookDeliveryStatusSchema.optional(),
+    lastRunStatus: environmentWebhookRunStatusSchema.optional(),
+    lastError: z.string().optional(),
+    createdAt: unixTimestampSchema,
+    updatedAt: unixTimestampSchema,
+  }),
+);
+
+export const environmentWebhookSetupSchema = component(
+  "EnvironmentWebhookSetup",
+  z.object({
+    webhook: environmentWebhookSchema,
+    setupSecret: z.string().optional(),
+  }),
+);
+
+export const environmentWebhookRunSchema = component(
+  "EnvironmentWebhookRun",
+  z.object({
+    id: z.string(),
+    webhookId: z.string(),
+    status: environmentWebhookRunStatusSchema,
+    eventCount: z.number().int().positive(),
+    eventTypes: z.array(z.string()),
+    sessionId: z.string().optional(),
+    nativeTurnId: z.string().optional(),
+    error: z.string().optional(),
+    startedAt: unixTimestampSchema.optional(),
+    finishedAt: unixTimestampSchema.optional(),
+    createdAt: unixTimestampSchema,
+    updatedAt: unixTimestampSchema,
+  }),
+);
+
+export const environmentWebhookDeliverySchema = component(
+  "EnvironmentWebhookDelivery",
+  z.object({
+    id: z.string(),
+    webhookId: z.string(),
+    eventType: z.string(),
+    status: environmentWebhookDeliveryStatusSchema.exclude(["duplicate"]),
+    runId: z.string().optional(),
+    reason: z.string().optional(),
+    receivedAt: unixTimestampSchema,
   }),
 );
 
@@ -1141,6 +1260,10 @@ const publicModelTypeChecks: {
   workspaceBackup: z.ZodType<EnvironmentWorkspaceBackup>;
   schedule: z.ZodType<EnvironmentSchedule>;
   scheduleRun: z.ZodType<EnvironmentScheduleRun>;
+  webhook: z.ZodType<EnvironmentWebhook>;
+  webhookSetup: z.ZodType<EnvironmentWebhookSetup>;
+  webhookRun: z.ZodType<EnvironmentWebhookRun>;
+  webhookDelivery: z.ZodType<EnvironmentWebhookDelivery>;
   session: z.ZodType<CodingSession>;
   preferences: z.ZodType<SandpiPreferences>;
   bootstrap: z.ZodType<SandpiBootstrap>;
@@ -1181,6 +1304,10 @@ const publicModelTypeChecks: {
   workspaceBackup: workspaceBackupSchema,
   schedule: environmentScheduleSchema,
   scheduleRun: environmentScheduleRunSchema,
+  webhook: environmentWebhookSchema,
+  webhookSetup: environmentWebhookSetupSchema,
+  webhookRun: environmentWebhookRunSchema,
+  webhookDelivery: environmentWebhookDeliverySchema,
   session: codingSessionSchema,
   preferences: sandpiPreferencesSchema,
   bootstrap: bootstrapSchema,

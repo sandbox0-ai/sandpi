@@ -84,6 +84,7 @@ test("migration history contains every durable Sandpi boundary", async () => {
       "0057_environment_display_order",
       "0058_session_completion",
       "0059_add_ultra_subscription_plan",
+      "0060_environment_webhooks",
     ],
   );
 
@@ -210,6 +211,23 @@ test("migration history contains every durable Sandpi boundary", async () => {
     ultraSubscriptionPlanSql,
     /pending_plan_id IN \('plus', 'pro', 'ultra'\)/,
   );
+
+  const environmentWebhooksSql = migrations[59]?.sql ?? "";
+  assert.match(environmentWebhooksSql, /CREATE TABLE environment_webhooks\b/);
+  assert.match(
+    environmentWebhooksSql,
+    /CREATE TABLE environment_webhook_deliveries\b/,
+  );
+  assert.match(
+    environmentWebhooksSql,
+    /CREATE TABLE environment_webhook_cooldown_buckets\b/,
+  );
+  assert.match(
+    environmentWebhooksSql,
+    /CREATE TABLE environment_webhook_runs\b/,
+  );
+  assert.match(environmentWebhooksSql, /secret_ciphertext BYTEA NOT NULL/);
+  assert.doesNotMatch(environmentWebhooksSql, /secret_plaintext/i);
 
   const sandbox0LifecycleTruthSql = migrations[53]?.sql ?? "";
   assert.match(

@@ -184,9 +184,10 @@ test(
       "user-schedule-test",
       "environment-schedule-test",
     );
-    await sandpi.ensureScheduledSessionMetadata({
+    await sandpi.ensureAutomationSessionMetadata({
       sessionId: "session-fixed-target",
-      scheduleRunId: "run-reserved",
+      automationRunId: "run-reserved",
+      automationKind: "schedule",
       userId: "user-schedule-test",
       environment,
       title: "Fixed target",
@@ -222,9 +223,10 @@ test(
     assert.equal(disabled.lastError, "The target Session was deleted.");
     assert.equal(disabled.revision, schedule.revision + 1);
 
-    await sandpi.ensureScheduledSessionMetadata({
+    await sandpi.ensureAutomationSessionMetadata({
       sessionId: "session-archived-target",
-      scheduleRunId: "run-reserved-archive",
+      automationRunId: "run-reserved-archive",
+      automationKind: "schedule",
       userId: "user-schedule-test",
       environment,
       title: "Archived target",

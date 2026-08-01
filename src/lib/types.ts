@@ -154,6 +154,111 @@ export interface EnvironmentScheduleRun {
   updatedAt: UnixTimestamp;
 }
 
+export type EnvironmentWebhookProvider =
+  | "github"
+  | "alertmanager"
+  | "slack"
+  | "custom";
+
+export type EnvironmentWebhookTarget = EnvironmentScheduleTarget;
+
+export interface EnvironmentWebhookCondition {
+  path: string;
+  operator: "equals" | "notEquals" | "contains" | "exists";
+  value?: string;
+}
+
+export interface EnvironmentWebhookTriggerPolicy {
+  mode: "every" | "stateChange";
+  eventTypes: string[];
+  conditions: EnvironmentWebhookCondition[];
+  statePath?: string;
+  groupKeyPath?: string;
+}
+
+export type EnvironmentWebhookCooldownPolicy =
+  | { mode: "none" }
+  | {
+      mode: "throttle" | "debounce" | "batch";
+      durationSeconds: number;
+      behavior: "suppress" | "latest" | "merge";
+    };
+
+export type EnvironmentWebhookRunStatus =
+  | "queued"
+  | "claimed"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "skipped";
+
+export type EnvironmentWebhookDeliveryStatus =
+  | "queued"
+  | "batched"
+  | "filtered"
+  | "suppressed"
+  | "duplicate";
+
+/** A provider-aware external trigger whose verified deliveries remain in Sandpi. */
+export interface EnvironmentWebhook {
+  id: string;
+  environmentId: string;
+  endpointUrl: string;
+  name: string;
+  provider: EnvironmentWebhookProvider;
+  prompt: string;
+  triggerPolicy: EnvironmentWebhookTriggerPolicy;
+  cooldownPolicy: EnvironmentWebhookCooldownPolicy;
+  target: EnvironmentWebhookTarget;
+  overlapPolicy: "queue" | "skip";
+  maxConcurrentRuns: number;
+  maxPendingRuns: number;
+  enabled: boolean;
+  secretConfigured: boolean;
+  title?: string;
+  modelId?: string;
+  reasoningEffort?: string;
+  collaborationMode?: "plan";
+  serviceTier?: string;
+  lastDeliveryAt?: UnixTimestamp;
+  lastDeliveryStatus?: EnvironmentWebhookDeliveryStatus;
+  lastRunStatus?: EnvironmentWebhookRunStatus;
+  lastError?: string;
+  createdAt: UnixTimestamp;
+  updatedAt: UnixTimestamp;
+}
+
+export interface EnvironmentWebhookSetup {
+  webhook: EnvironmentWebhook;
+  /** Returned only when a new provider signing or bearer secret was created. */
+  setupSecret?: string;
+}
+
+export interface EnvironmentWebhookRun {
+  id: string;
+  webhookId: string;
+  status: EnvironmentWebhookRunStatus;
+  eventCount: number;
+  eventTypes: string[];
+  sessionId?: string;
+  nativeTurnId?: string;
+  error?: string;
+  startedAt?: UnixTimestamp;
+  finishedAt?: UnixTimestamp;
+  createdAt: UnixTimestamp;
+  updatedAt: UnixTimestamp;
+}
+
+export interface EnvironmentWebhookDelivery {
+  id: string;
+  webhookId: string;
+  eventType: string;
+  status: Exclude<EnvironmentWebhookDeliveryStatus, "duplicate">;
+  runId?: string;
+  reason?: string;
+  receivedAt: UnixTimestamp;
+}
+
 export interface Environment {
   id: string;
   /** Immutable user ownership; never inferred from the Sandbox0 API key. */

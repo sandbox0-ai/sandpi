@@ -21,6 +21,7 @@ import {
   Sparkles,
   Trash2,
   TriangleAlert,
+  Webhook,
   X,
 } from "lucide-react";
 import {
@@ -32,6 +33,7 @@ import {
 
 import { EnvironmentEgressCredentials } from "@/components/environment-egress-credentials";
 import { EnvironmentSchedules } from "@/components/environment-schedules";
+import { EnvironmentWebhooks } from "@/components/environment-webhooks";
 import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
 import {
   SANDPI_FREE_SANDBOX_MEMORY_MIB,
@@ -83,6 +85,7 @@ export type EnvironmentSettingsTab =
   | "archived-sessions"
   | "credentials"
   | "schedules"
+  | "webhooks"
   | "skills"
   | "mcp"
   | "egress-credentials"
@@ -140,6 +143,7 @@ const tabs: Array<{
   { id: "archived-sessions", label: "Archived sessions", icon: Archive },
   { id: "credentials", label: "Agent harness", icon: KeyRound },
   { id: "schedules", label: "Schedules", icon: CalendarClock },
+  { id: "webhooks", label: "Webhooks", icon: Webhook },
   { id: "skills", label: "Skills", icon: Sparkles },
   { id: "mcp", label: "MCP servers", icon: Cable },
   { id: "egress-credentials", label: "Credentials", icon: ShieldCheck },
@@ -2323,6 +2327,21 @@ export function EnvironmentSettings({
               </SettingsSection>
             ) : null}
 
+            {activeTab === "webhooks" ? (
+              <SettingsSection
+                eyebrow="Environment Automation"
+                title="Webhooks"
+                description="Trigger durable Codex runs from verified GitHub, Alertmanager, Slack, or custom events, with declarative filters and cooldown controls."
+              >
+                <EnvironmentWebhooks
+                  environmentId={draft.id}
+                  sessions={sessions}
+                  language={language}
+                  timeZone={timeZone}
+                />
+              </SettingsSection>
+            ) : null}
+
             {activeTab === "mcp" ? (
               <SettingsSection
                 eyebrow={`${draft.codingAgent.label} native capabilities`}
@@ -2570,6 +2589,8 @@ export function EnvironmentSettings({
               <>Credential changes are applied immediately.</>
             ) : activeTab === "schedules" ? (
               <>Schedule changes are persisted and applied immediately.</>
+            ) : activeTab === "webhooks" ? (
+              <>Webhook changes are persisted and applied immediately.</>
             ) : activeTab === "skills" || activeTab === "mcp" ? (
               <>{draft.codingAgent.label} changes are saved immediately.</>
             ) : activeTab === "network" ? (
@@ -2582,7 +2603,8 @@ export function EnvironmentSettings({
             {activeTab === "skills" ||
             activeTab === "mcp" ||
             activeTab === "egress-credentials" ||
-            activeTab === "schedules" ? (
+            activeTab === "schedules" ||
+            activeTab === "webhooks" ? (
               <button type="button" className="button-primary" onClick={onClose}>
                 Done
               </button>

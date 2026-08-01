@@ -121,6 +121,85 @@ export const environmentScheduleSchema = z
   })
   .strict();
 
+const webhookJsonPointerSchema = z
+  .string()
+  .trim()
+  .max(500)
+  .refine((value) => value === "" || value.startsWith("/"), {
+    message: "A JSON Pointer must be empty or start with /.",
+  });
+
+const environmentWebhookConditionSchema = z
+  .object({
+    path: webhookJsonPointerSchema,
+    operator: z.enum(["equals", "notEquals", "contains", "exists"]),
+    value: z.string().max(2_000).optional(),
+  })
+  .strict()
+  .refine(
+    (condition) =>
+      condition.operator === "exists" || condition.value !== undefined,
+    { message: "A comparison condition requires a value." },
+  );
+
+export const environmentWebhookSchema = z
+  .object({
+    name: z.string().trim().min(1).max(80),
+    provider: z.enum(["github", "alertmanager", "slack", "custom"]),
+    secret: z.string().trim().min(16).max(1_000).optional(),
+    prompt: z.string().trim().min(1).max(50_000),
+    triggerPolicy: z
+      .object({
+        mode: z.enum(["every", "stateChange"]).default("every"),
+        eventTypes: z
+          .array(z.string().trim().min(1).max(200))
+          .max(100)
+          .default([]),
+        conditions: z
+          .array(environmentWebhookConditionSchema)
+          .max(20)
+          .default([]),
+        statePath: webhookJsonPointerSchema.optional(),
+        groupKeyPath: webhookJsonPointerSchema.optional(),
+      })
+      .strict(),
+    cooldownPolicy: z.discriminatedUnion("mode", [
+      z.object({ mode: z.literal("none") }).strict(),
+      z
+        .object({
+          mode: z.enum(["throttle", "debounce", "batch"]),
+          durationSeconds: z.number().int().min(1).max(86_400),
+          behavior: z.enum(["suppress", "latest", "merge"]),
+        })
+        .strict(),
+    ]),
+    target: z.discriminatedUnion("kind", [
+      z.object({ kind: z.literal("newSession") }).strict(),
+      z
+        .object({
+          kind: z.literal("session"),
+          sessionId: z.string().trim().min(1).max(200),
+        })
+        .strict(),
+    ]),
+    overlapPolicy: z.enum(["queue", "skip"]).default("queue"),
+    maxConcurrentRuns: z.number().int().min(1).max(10).default(1),
+    maxPendingRuns: z.number().int().min(1).max(1_000).default(100),
+    enabled: z.boolean().default(true),
+    title: z.string().trim().min(1).max(200).optional(),
+    modelId: z.string().trim().min(1).max(200).optional(),
+    reasoningEffort: codexReasoningEffortSchema.optional(),
+    collaborationMode: z.literal("plan").optional(),
+    serviceTier: z.string().trim().min(1).max(100).optional(),
+  })
+  .strict();
+
+export const rotateEnvironmentWebhookSecretSchema = z
+  .object({
+    secret: z.string().trim().min(16).max(1_000).optional(),
+  })
+  .strict();
+
 export const billingCheckoutSchema = z
   .object({
     planId: z.enum(SANDPI_PAID_PLAN_IDS),
