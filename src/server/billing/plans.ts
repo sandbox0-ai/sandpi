@@ -52,7 +52,7 @@ export const PLAN_DEFINITIONS = {
     id: "plus",
     name: "Plus",
     annualPriceUsd: 99,
-    environmentLimit: 3,
+    environmentLimit: 1,
     fixedSandboxMemoryMiB: null,
     ...runtimeQuota(250),
     quotaPeriod: "fixed-week",
