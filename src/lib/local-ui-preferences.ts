@@ -47,6 +47,7 @@ export interface SandpiLocalUiPreferences {
   filters: {
     codexSessionActivity: LocalCodexSessionActivityFilter;
   };
+  dismissedSidebarTips: string[];
   codingAgentComposers: LocalCodingAgentComposerPreference[];
 }
 
@@ -65,6 +66,7 @@ export const DEFAULT_LOCAL_UI_PREFERENCES: SandpiLocalUiPreferences = {
   filters: {
     codexSessionActivity: "all",
   },
+  dismissedSidebarTips: [],
   codingAgentComposers: [],
 };
 
@@ -88,6 +90,7 @@ const CODEX_SESSION_ACTIVITY_FILTERS = [
 ] as const;
 const MAX_CODING_AGENT_COMPOSER_PREFERENCES = 100;
 const MAX_REASONING_EFFORTS_PER_COMPOSER = 50;
+const MAX_DISMISSED_SIDEBAR_TIPS = 50;
 const MIN_TERMINAL_HEIGHT = 190;
 const MAX_STORED_TERMINAL_HEIGHT = 2_000;
 
@@ -186,6 +189,17 @@ export function normalizeLocalUiPreferences(
   const workspace = record(source.workspace);
   const filters = record(source.filters);
   const seenComposerKeys = new Set<string>();
+  const dismissedSidebarTips = Array.from(
+    new Set(
+      (Array.isArray(source.dismissedSidebarTips)
+        ? source.dismissedSidebarTips
+        : []
+      ).flatMap((candidate) => {
+        const id = boundedString(candidate, 100);
+        return id ? [id] : [];
+      }),
+    ),
+  ).slice(0, MAX_DISMISSED_SIDEBAR_TIPS);
   const codingAgentComposers = (
     Array.isArray(source.codingAgentComposers)
       ? source.codingAgentComposers
@@ -256,6 +270,7 @@ export function normalizeLocalUiPreferences(
         DEFAULT_LOCAL_UI_PREFERENCES.filters.codexSessionActivity,
       ),
     },
+    dismissedSidebarTips,
     codingAgentComposers,
   };
 }
@@ -324,6 +339,16 @@ export function updateLocalUiPreferences(
   update: (current: SandpiLocalUiPreferences) => SandpiLocalUiPreferences,
 ) {
   return saveLocalUiPreferences(update(loadLocalUiPreferences()));
+}
+
+export function dismissSidebarTip(tipId: string) {
+  if (!boundedString(tipId, 100)) return loadLocalUiPreferences();
+  return updateLocalUiPreferences((current) => ({
+    ...current,
+    dismissedSidebarTips: current.dismissedSidebarTips.includes(tipId)
+      ? current.dismissedSidebarTips
+      : [tipId, ...current.dismissedSidebarTips],
+  }));
 }
 
 export function codingAgentComposerPreference(input: {

@@ -1,0 +1,120 @@
+.tip {
+  position: relative;
+  flex: 0 0 auto;
+  margin: 0 10px 8px;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--blue) 24%, var(--line));
+  border-radius: 9px;
+  background: linear-gradient(
+    145deg,
+    color-mix(in srgb, var(--blue-soft) 68%, var(--panel-strong)),
+    color-mix(in srgb, var(--blue-soft) 24%, var(--panel))
+  );
+  box-shadow: 0 2px 8px rgb(24 32 42 / 6%);
+}
+
+.header {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  padding-right: 50px;
+}
+
+.header strong {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 10.5px;
+  font-weight: 680;
+  line-height: 1.25;
+  text-wrap: pretty;
+}
+
+.spark {
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--blue) 12%, transparent);
+  color: var(--blue);
+}
+
+.actions {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: inline-flex;
+  gap: 1px;
+}
+
+.iconButton {
+  display: inline-flex;
+  width: 23px;
+  height: 23px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ink-faint);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.iconButton:hover,
+.iconButton:focus-visible {
+  background: color-mix(in srgb, var(--blue) 11%, transparent);
+  color: var(--ink);
+}
+
+.iconButton:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--blue) 72%, transparent);
+  outline-offset: 1px;
+}
+
+.description {
+  margin: 7px 0 0;
+  color: var(--ink-soft);
+  font-size: 9.5px;
+  line-height: 1.45;
+  text-wrap: pretty;
+}
+
+.prompt {
+  margin: 8px 0 0;
+  padding: 7px 8px;
+  border: 1px solid color-mix(in srgb, var(--line) 76%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--panel-strong) 72%, transparent);
+  color: var(--ink-soft);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 8.5px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.error {
+  margin: 6px 1px 0;
+  color: var(--red);
+  font-size: 8.5px;
+  line-height: 1.4;
+}
+
+:global(html[data-density="compact"]) .tip {
+  margin-bottom: 6px;
+  padding: 8px;
+}
+
+:global(html[data-density="compact"]) .description {
+  margin-top: 5px;
+}
+
+:global(html[data-density="compact"]) .prompt {
+  margin-top: 6px;
+  padding: 6px 7px;
+}

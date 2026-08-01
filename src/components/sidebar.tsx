@@ -33,6 +33,7 @@ import {
 } from "lucide-react";
 
 import { SidebarAccountFooter } from "@/components/sidebar-account-footer";
+import { SidebarTips } from "@/components/sidebar-tips";
 import { SessionActionsMenu } from "@/components/session-actions-menu";
 import { SessionSearchDialog } from "@/components/session-search-dialog";
 import { AppSidebar } from "@/components/app-frame";
@@ -564,6 +565,7 @@ export function Sidebar({
             </SortableContext>
           </DndContext>
         </div>
+        <SidebarTips language={language} />
       </AppSidebar>
       {sessionSearchOpen ? (
         <SessionSearchDialog
