@@ -1,6 +1,11 @@
 import { randomBytes, randomUUID } from "node:crypto";
 
 import type { Pool, PoolClient } from "pg";
+import {
+  createRemoteJWKSet,
+  jwtVerify,
+  type JWTVerifyGetKey,
+} from "jose";
 import * as oidc from "openid-client";
 
 import type { SandpiConfig } from "@/server/config";
@@ -21,14 +26,27 @@ export interface WebSessionResult {
   principal: Principal;
 }
 
+type DeviceUserInfo = {
+  sub?: unknown;
+  email?: unknown;
+  email_verified?: unknown;
+  name?: unknown;
+};
+
 export class OidcIdentityService {
   private configuration?: Promise<oidc.Configuration>;
+  private deviceConfiguration?: Promise<oidc.Configuration>;
+  private deviceJwks?: JWTVerifyGetKey;
 
   constructor(
     private readonly pool: Pool,
     private readonly config: Extract<SandpiConfig["auth"], { mode: "oidc" }>,
     private readonly publicUrl: URL,
     private readonly secrets: SecretBox,
+    private readonly fetchDeviceUserInfo?: (
+      accessToken: string,
+      idToken: string,
+    ) => Promise<DeviceUserInfo>,
   ) {}
 
   async startLogin(returnTo: string): Promise<OidcLoginResult> {
@@ -129,25 +147,10 @@ export class OidcIdentityService {
         idTokenExpected: true,
       });
       const claims = tokens.claims();
-      if (!claims?.sub || typeof claims.email !== "string") {
-        throw new HttpError(
-          400,
-          "oidc_claims_invalid",
-          "OIDC must return sub and email claims.",
-        );
-      }
-      if (claims.email_verified !== true) {
-        throw new HttpError(
-          403,
-          "oidc_email_unverified",
-          "OIDC email must be verified.",
-        );
-      }
+      const identity = identityFromClaims(claims ?? {});
       const principal = await upsertOidcUser(client, {
         issuer: this.config.issuer.toString(),
-        subject: claims.sub,
-        email: claims.email,
-        name: typeof claims.name === "string" ? claims.name : claims.email,
+        ...identity,
       });
       const session = await createWebSession(client, principal);
       await client.query("COMMIT");
@@ -182,6 +185,53 @@ export class OidcIdentityService {
     };
   }
 
+  /** Exchanges provider-issued device tokens for a Sandpi session. */
+  async completeDeviceLogin(
+    accessToken: string,
+    idToken: string,
+  ): Promise<WebSessionResult> {
+    if (!this.config.deviceClientId) {
+      throw new HttpError(
+        503,
+        "oidc_device_auth_unavailable",
+        "OIDC device authorization is not configured.",
+      );
+    }
+    let claims: DeviceUserInfo;
+    try {
+      claims = this.fetchDeviceUserInfo
+        ? await this.fetchDeviceUserInfo(accessToken, idToken)
+        : await oidc.fetchUserInfo(
+            await this.getDeviceConfiguration(),
+            accessToken,
+            await this.verifyDeviceIDToken(idToken),
+          );
+    } catch {
+      throw new HttpError(
+        401,
+        "oidc_device_token_invalid",
+        "The OIDC device tokens are invalid or expired.",
+      );
+    }
+    const identity = identityFromClaims(claims);
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const principal = await upsertOidcUser(client, {
+        issuer: this.config.issuer.toString(),
+        ...identity,
+      });
+      const session = await createWebSession(client, principal);
+      await client.query("COMMIT");
+      return session;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async logout(token: string) {
     await this.pool.query(
       "UPDATE auth_sessions SET revoked_at = NOW() WHERE token_hash = $1",
@@ -202,6 +252,80 @@ export class OidcIdentityService {
     );
     return this.configuration;
   }
+
+  private getDeviceConfiguration() {
+    this.deviceConfiguration ??= oidc.discovery(
+      this.config.issuer,
+      this.config.deviceClientId!,
+      { token_endpoint_auth_method: "none" },
+      oidc.None(),
+    );
+    return this.deviceConfiguration;
+  }
+
+  private async verifyDeviceIDToken(idToken: string) {
+    const configuration = await this.getDeviceConfiguration();
+    const jwksUri = configuration.serverMetadata().jwks_uri;
+    if (!jwksUri) {
+      throw new Error("OIDC discovery did not return a JWKS endpoint.");
+    }
+    this.deviceJwks ??= createRemoteJWKSet(new URL(jwksUri));
+    return verifyOidcIDToken(
+      idToken,
+      this.deviceJwks,
+      this.config.issuer.toString(),
+      this.config.deviceClientId!,
+    );
+  }
+}
+
+/** Validates that a device ID token belongs to the configured public client. */
+export async function verifyOidcIDToken(
+  idToken: string,
+  jwks: JWTVerifyGetKey,
+  issuer: string,
+  audience: string,
+) {
+  const { payload } = await jwtVerify(idToken, jwks, {
+    issuer,
+    audience,
+    algorithms: ["RS256"],
+  });
+  if (typeof payload.sub !== "string") {
+    throw new Error("OIDC ID token did not return a subject.");
+  }
+  const multipleAudiences = Array.isArray(payload.aud) && payload.aud.length > 1;
+  if ((payload.azp !== undefined || multipleAudiences) && payload.azp !== audience) {
+    throw new Error("OIDC ID token authorized party does not match the client.");
+  }
+  return payload.sub;
+}
+
+function identityFromClaims(claims: {
+  sub?: unknown;
+  email?: unknown;
+  email_verified?: unknown;
+  name?: unknown;
+}) {
+  if (typeof claims.sub !== "string" || typeof claims.email !== "string") {
+    throw new HttpError(
+      400,
+      "oidc_claims_invalid",
+      "OIDC must return sub and email claims.",
+    );
+  }
+  if (claims.email_verified !== true) {
+    throw new HttpError(
+      403,
+      "oidc_email_unverified",
+      "OIDC email must be verified.",
+    );
+  }
+  return {
+    subject: claims.sub,
+    email: claims.email,
+    name: typeof claims.name === "string" ? claims.name : claims.email,
+  };
 }
 
 export function oidcClientAuthentication(

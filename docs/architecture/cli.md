@@ -73,10 +73,14 @@ resource requires human merge judgment.
 
 ## Credentials and authentication
 
-CLI authentication is Sandpi authentication. It reuses Sandpi's native PKCE
-handoff and stores only the resulting Sandpi session with user-only filesystem
-permissions. There are no CLI commands for Codex login, Codex `auth.json`, or
-provider-account migration.
+CLI authentication is Sandpi authentication. The CLI uses the deployment's
+public OIDC Device Authorization configuration and contains no client secret.
+After approval, Sandpi validates the ID token issuer, signature and Native
+Application audience, then binds the access token to the same subject through
+OIDC UserInfo and returns a normal Sandpi session. Neither side retains the
+provider tokens; the CLI stores only the resulting Sandpi session with
+user-only filesystem permissions. There are no CLI commands for Codex login,
+Codex `auth.json`, or provider-account migration.
 
 MCP definitions exclude inline secret fields. Service credentials belong in
 Environment egress credentials, where Sandpi sends secret material directly to

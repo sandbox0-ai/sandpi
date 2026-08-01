@@ -44,6 +44,7 @@ const environmentSchema = z.object({
   SANDPI_OIDC_ISSUER: optionalUrl,
   SANDPI_OIDC_CLIENT_ID: z.string().min(1).optional(),
   SANDPI_OIDC_CLIENT_SECRET: z.string().min(1).optional(),
+  SANDPI_OIDC_DEVICE_CLIENT_ID: optionalString,
   SANDPI_OIDC_TOKEN_ENDPOINT_AUTH_METHOD:
     oidcTokenEndpointAuthMethod.optional(),
   SANDPI_OIDC_SCOPES: z.string().default("openid profile email"),
@@ -89,6 +90,7 @@ export interface SandpiConfig {
         issuer: URL;
         clientId: string;
         clientSecret?: string;
+        deviceClientId?: string;
         tokenEndpointAuthMethod: z.infer<
           typeof oidcTokenEndpointAuthMethod
         >;
@@ -171,6 +173,7 @@ export function loadConfig(
       issuer: new URL(value.SANDPI_OIDC_ISSUER),
       clientId: value.SANDPI_OIDC_CLIENT_ID,
       clientSecret: value.SANDPI_OIDC_CLIENT_SECRET,
+      deviceClientId: value.SANDPI_OIDC_DEVICE_CLIENT_ID,
       tokenEndpointAuthMethod,
       scopes: scopes.join(" "),
     };

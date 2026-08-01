@@ -1,19 +1,15 @@
 package command
 
 import (
-	"bufio"
-	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 	"os/exec"
 	"runtime"
-	"strings"
 
 	localconfig "github.com/sandbox0-ai/sandpi/cli/internal/config"
+	"github.com/sandbox0-ai/sandpi/cli/internal/deviceauth"
 	"github.com/spf13/cobra"
 )
 
@@ -35,59 +31,68 @@ func (a *App) authStatusCommand() *cobra.Command {
 
 func (a *App) authLoginCommand() *cobra.Command {
 	var noOpen bool
-	var callbackURL string
 	command := &cobra.Command{
 		Use:   "login",
-		Short: "Sign in through the deployment's browser authentication",
-		Long:  "Start Sandpi native PKCE authentication. After browser sign-in, copy the sandpi:// callback URL from the browser and paste it into this command.",
+		Short: "Sign in with the deployment's device authorization flow",
+		Long:  "Start the deployment's OIDC Device Authorization Flow, open its verification page, and wait for the user to approve this CLI.",
 		RunE: func(command *cobra.Command, _ []string) error {
 			client, err := a.apiClient()
 			if err != nil {
 				return err
 			}
-			verifier, err := randomBase64URL(32)
+			configured, err := client.Data(command.Context(), http.MethodGet, "/api/v1/auth/device/config", nil)
 			if err != nil {
 				return err
 			}
-			state, err := randomBase64URL(32)
-			if err != nil {
-				return err
+			var configuration struct {
+				Mode     string `json:"mode"`
+				Issuer   string `json:"issuer"`
+				ClientID string `json:"clientId"`
+				Scopes   string `json:"scopes"`
 			}
-			prepared, err := client.Data(command.Context(), http.MethodPost, "/api/v1/auth/native/prepare", map[string]string{
-				"returnTo": "/",
-				"verifier": verifier,
-				"state":    state,
-			})
-			if err != nil {
-				return err
+			if err := json.Unmarshal(configured, &configuration); err != nil {
+				return errors.New("Sandpi returned an invalid device authorization configuration")
 			}
-			var flow struct {
-				AuthorizationURL string `json:"authorizationUrl"`
-			}
-			if err := json.Unmarshal(prepared, &flow); err != nil || flow.AuthorizationURL == "" {
-				return errors.New("Sandpi returned an invalid native authentication flow")
-			}
-			fmt.Fprintf(a.options.Err, "Open this URL to sign in:\n%s\n", flow.AuthorizationURL)
-			if !noOpen {
-				_ = openBrowser(flow.AuthorizationURL)
-			}
-			callback := strings.TrimSpace(callbackURL)
-			if callback == "" {
-				fmt.Fprint(a.options.Err, "Paste the sandpi:// callback URL: ")
-				line, readErr := bufio.NewReader(a.options.In).ReadString('\n')
-				if readErr != nil && strings.TrimSpace(line) == "" {
-					return fmt.Errorf("read callback URL: %w", readErr)
+			if configuration.Mode == "admin" {
+				if err := localconfig.Save(localconfig.Config{Endpoint: client.Endpoint()}); err != nil {
+					return err
 				}
-				callback = strings.TrimSpace(line)
+				a.resetClient()
+				return a.data(command.Context(), http.MethodGet, "/api/v1/auth/me", nil)
 			}
-			attemptID, code, err := parseNativeCallback(callback, state)
+			if configuration.Mode != "oidc" {
+				return errors.New("Sandpi returned an unsupported authentication mode")
+			}
+			provider, err := deviceauth.New(
+				configuration.Issuer,
+				configuration.ClientID,
+				configuration.Scopes,
+				a.options.HTTPClient,
+			)
 			if err != nil {
 				return err
 			}
-			response, err := client.Do(command.Context(), http.MethodPost, "/api/v1/auth/native/complete", map[string]string{
-				"attemptId": attemptID,
-				"code":      code,
-				"verifier":  verifier,
+			flow, err := provider.Start(command.Context())
+			if err != nil {
+				return err
+			}
+			verificationURL := flow.VerificationURL()
+			fmt.Fprintf(
+				a.options.Err,
+				"Open this URL to sign in:\n%s\nVerification code: %s\nWaiting for authorization...\n",
+				verificationURL,
+				flow.UserCode,
+			)
+			if !noOpen {
+				_ = openBrowser(verificationURL)
+			}
+			tokens, err := provider.Poll(command.Context(), flow)
+			if err != nil {
+				return err
+			}
+			response, err := client.Do(command.Context(), http.MethodPost, "/api/v1/auth/device/complete", map[string]string{
+				"accessToken": tokens.AccessToken,
+				"idToken":     tokens.IDToken,
 			})
 			if err != nil {
 				return err
@@ -98,6 +103,9 @@ func (a *App) authLoginCommand() *cobra.Command {
 					sessionCookie = cookie.Value
 					break
 				}
+			}
+			if sessionCookie == "" {
+				return errors.New("Sandpi did not return an authenticated session")
 			}
 			if err := localconfig.Save(localconfig.Config{
 				Endpoint:      client.Endpoint(),
@@ -110,7 +118,6 @@ func (a *App) authLoginCommand() *cobra.Command {
 		},
 	}
 	command.Flags().BoolVar(&noOpen, "no-open", false, "do not open the system browser")
-	command.Flags().StringVar(&callbackURL, "callback-url", "", "completed callback URL (primarily for non-interactive clients)")
 	return command
 }
 
@@ -137,31 +144,6 @@ func (a *App) authLogoutCommand() *cobra.Command {
 			return a.printJSON(map[string]bool{"loggedOut": true})
 		},
 	}
-}
-
-func randomBase64URL(size int) (string, error) {
-	content := make([]byte, size)
-	if _, err := rand.Read(content); err != nil {
-		return "", fmt.Errorf("generate authentication secret: %w", err)
-	}
-	return base64.RawURLEncoding.EncodeToString(content), nil
-}
-
-func parseNativeCallback(value, expectedState string) (string, string, error) {
-	callback, err := url.Parse(value)
-	if err != nil || callback.Scheme != "sandpi" || callback.Host != "auth" || callback.Path != "/callback" {
-		return "", "", errors.New("invalid Sandpi native authentication callback URL")
-	}
-	query := callback.Query()
-	if query.Get("state") != expectedState {
-		return "", "", errors.New("Sandpi authentication callback state does not match")
-	}
-	attemptID := query.Get("attempt_id")
-	code := query.Get("code")
-	if attemptID == "" || code == "" {
-		return "", "", errors.New("Sandpi authentication callback is incomplete")
-	}
-	return attemptID, code, nil
 }
 
 func openBrowser(target string) error {

@@ -50,6 +50,13 @@ test(
     });
 
     const verifier = "v".repeat(43);
+    const deviceConfiguration = await server.app.inject({
+      method: "GET",
+      url: "/api/v1/auth/device/config",
+    });
+    assert.equal(deviceConfiguration.statusCode, 200, deviceConfiguration.body);
+    assert.deepEqual(deviceConfiguration.json().data, { mode: "admin" });
+
     const prepare = await server.app.inject({
       method: "POST",
       url: "/api/v1/auth/native/prepare",

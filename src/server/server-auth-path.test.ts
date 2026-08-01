@@ -12,6 +12,8 @@ import {
 test("only authenticated webhook and browser-auth entry routes bypass authentication", () => {
   assert.equal(publicAuthPath("/api/v1/auth/login"), true);
   assert.equal(publicAuthPath("/api/v1/auth/callback?code=example"), true);
+  assert.equal(publicAuthPath("/api/v1/auth/device/config"), true);
+  assert.equal(publicAuthPath("/api/v1/auth/device/complete"), true);
   assert.equal(publicAuthPath("/api/v1/auth/native/prepare"), true);
   assert.equal(
     publicAuthPath("/api/v1/auth/native/login?attempt_id=example"),

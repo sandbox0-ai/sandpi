@@ -24,7 +24,7 @@ test("OpenAPI publishes every supported operation with a unique id", async () =>
   const operations = allOperations(document);
   const operationIds = operations.map((operation) => operation.operationId);
 
-  assert.equal(operations.length, 125);
+  assert.equal(operations.length, 127);
   assert.ok(operationIds.every(Boolean));
   assert.equal(new Set(operationIds).size, operationIds.length);
   assert.ok(Object.keys(document.paths).every((path) => !path.includes(":")));
@@ -144,6 +144,14 @@ test("OpenAPI preserves the shared Browser and streaming semantics", async () =>
 
 test("OpenAPI publishes resource-level CLI operations", async () => {
   const { document } = await builtOpenApi;
+  assert.deepEqual(
+    operation(document, "/api/v1/auth/device/config", "get").security,
+    [],
+  );
+  assert.deepEqual(
+    operation(document, "/api/v1/auth/device/complete", "post").security,
+    [],
+  );
   for (const [path, method, operationId] of [
     [
       "/api/v1/environments/{environmentId}",

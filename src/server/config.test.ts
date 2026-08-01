@@ -11,6 +11,7 @@ const oidcEnvironment = {
   SANDPI_SECRET_KEY: "deployment-secret-with-at-least-32-characters",
   SANDPI_OIDC_ISSUER: "https://identity.example.com/",
   SANDPI_OIDC_CLIENT_ID: "sandpi",
+  SANDPI_OIDC_DEVICE_CLIENT_ID: "sandpi-cli",
 } as const satisfies NodeJS.ProcessEnv;
 
 test("configures a confidential OIDC client explicitly", () => {
@@ -25,6 +26,7 @@ test("configures a confidential OIDC client explicitly", () => {
   if (config.auth.mode !== "oidc") return;
   assert.equal(config.auth.tokenEndpointAuthMethod, "client_secret_basic");
   assert.equal(config.auth.clientSecret, "oidc-client-secret");
+  assert.equal(config.auth.deviceClientId, "sandpi-cli");
   assert.equal(config.auth.scopes, "openid email profile");
 });
 
