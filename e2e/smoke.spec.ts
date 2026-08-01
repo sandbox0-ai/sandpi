@@ -7926,6 +7926,76 @@ test("keeps pinned Session markers compact and removes sidebar shortcuts", async
   ).toHaveCount(0);
 });
 
+test("keeps Session rename open while a running conversation scrolls", async ({
+  page,
+}) => {
+  const bootstrap = getMockBootstrap();
+  useEnglishUi(bootstrap);
+  const session = bootstrap.sessions.find(
+    (candidate) => candidate.status === "running" && !candidate.archived,
+  );
+  expect(session).toBeTruthy();
+  if (!session) return;
+  const originalTitle = session.title;
+  const renamedTitle = `${originalTitle} renamed`;
+  bootstrap.selectedEnvironmentId = session.environmentId;
+  bootstrap.selectedSessionId = session.id;
+  let requestedTitle = "";
+
+  await installControlledEventSource(page);
+  await page.route(
+    (url) => url.pathname === "/api/v1/bootstrap",
+    async (route) => {
+      await route.fulfill({ json: { data: bootstrap } });
+    },
+  );
+  await page.route(
+    (url) =>
+      url.pathname ===
+      `/api/v1/sessions/${encodeURIComponent(session.id)}/metadata`,
+    async (route) => {
+      const metadata = route.request().postDataJSON() as { title?: string };
+      requestedTitle = metadata.title ?? "";
+      Object.assign(session, metadata);
+      await route.fulfill({ json: { data: session } });
+    },
+  );
+
+  await page.goto(
+    `/?environment=${encodeURIComponent(session.environmentId)}&session=${encodeURIComponent(session.id)}`,
+  );
+  const sessionRow = page
+    .locator(".session-row")
+    .filter({ hasText: originalTitle });
+  await sessionRow.hover();
+  await page
+    .getByRole("button", { name: `Session actions for ${originalTitle}` })
+    .click();
+  await page.getByRole("menuitem", { name: "Rename" }).click();
+  const renameInput = page.getByRole("textbox", { name: "Session name" });
+  await expect(renameInput).toBeVisible();
+  await renameInput.fill(renamedTitle);
+
+  await page.locator(".conversation-scroll").dispatchEvent("scroll");
+
+  await expect(renameInput).toBeVisible();
+  await renameInput.press("Enter");
+  await expect.poll(() => requestedTitle).toBe(renamedTitle);
+  await expect(
+    page.locator(".session-row").filter({ hasText: renamedTitle }),
+  ).toBeVisible();
+
+  const renamedSessionRow = page
+    .locator(".session-row")
+    .filter({ hasText: renamedTitle });
+  await renamedSessionRow.hover();
+  await page
+    .getByRole("button", { name: `Session actions for ${renamedTitle}` })
+    .click();
+  await page.locator(".sidebar-scroll-region").dispatchEvent("scroll");
+  await expect(page.locator(".session-action-menu")).toHaveCount(0);
+});
+
 test("keeps completion separate from archiving and reopens a Session for a new Turn", async ({
   page,
 }) => {

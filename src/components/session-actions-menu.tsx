@@ -106,17 +106,28 @@ export function SessionActionsMenu({
     };
 
     const handleViewportChange = () => closeMenu();
+    const handleScroll = (event: Event) => {
+      const target = event.target;
+      const trigger = triggerRef.current;
+      if (
+        !trigger ||
+        target === window ||
+        (target instanceof Node && target.contains(trigger))
+      ) {
+        closeMenu();
+      }
+    };
 
     document.addEventListener("pointerdown", handlePointerDown);
     document.addEventListener("keydown", handleKeyDown);
     window.addEventListener("resize", handleViewportChange);
-    window.addEventListener("scroll", handleViewportChange, true);
+    window.addEventListener("scroll", handleScroll, true);
 
     return () => {
       document.removeEventListener("pointerdown", handlePointerDown);
       document.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("resize", handleViewportChange);
-      window.removeEventListener("scroll", handleViewportChange, true);
+      window.removeEventListener("scroll", handleScroll, true);
     };
   }, [closeMenu, open]);
 
