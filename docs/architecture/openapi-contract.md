@@ -40,7 +40,7 @@ OpenAPI describes HTTP request/response operations directly. Sandpi retains the
 same paths for its non-JSON transports and adds explicit extensions:
 
 - `x-sandpi-sse` lists the named events on the native Session event stream.
-- `x-sandpi-websocket` describes Workspace IDE, Browser dashboard and terminal
+- `x-sandpi-websocket` describes Workspace IDE, Browser transport and terminal
   WebSocket message directions.
 - `x-sandpi-native-schema` marks payloads whose extensible fields remain owned
   by the pinned native harness protocol.
@@ -51,14 +51,15 @@ currently expanded shallow directories. The server always watches
 clients treat server change messages as invalidations, not as a durable
 file-event log.
 
-The Browser dashboard HTTP and WebSocket bodies are an opaque, authenticated
-proxy protocol. They are not normalized into a second Sandpi browser model.
-The built-in Browser is one Playwright session and profile shared by the human
-and the agent. A human can take over the embedded tab to complete an
-interactive login, then the agent continues in that same authenticated
-profile. URLs using `localhost`, `127.0.0.1`, or `::1` resolve inside the
-Environment sandbox, never on the client device. The contract marks these
-operations with `x-sandpi-shared-browser`.
+The Browser Dashboard HTTP bodies and owner-specific WebSocket bodies are
+opaque, authenticated proxy protocols. They are not normalized into a second
+Sandpi page model. `GET` and `PUT .../browser/control` expose only the current
+owner (`agent` or `human`), transport and revision. Agent ownership proxies the
+official Playwright Dashboard; human ownership proxies an ordered binary VNC
+stream from a headed browser. Both use one persistent profile, and Sandpi
+rejects the inactive owner's operations. URLs using `localhost`, `127.0.0.1`,
+or `::1` resolve inside the Environment sandbox, never on the client device.
+The contract marks these operations with `x-sandpi-shared-browser`.
 
 Dashboard HTML, redirects and control responses remain `no-store`.
 Fingerprint-named Dashboard assets use a bounded private immutable cache, and

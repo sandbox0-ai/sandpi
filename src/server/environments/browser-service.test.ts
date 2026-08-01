@@ -16,6 +16,7 @@ import type {
   EnvironmentRuntimeRecord,
   RuntimeAdapter,
 } from "@/server/runtime/types";
+import { HttpError } from "@/server/http-error";
 
 const runtimeRecord: EnvironmentRuntimeRecord = {
   id: "environment-browser",
@@ -46,7 +47,7 @@ test("reuses protected coordinates but admits every HTTP and WebSocket request",
     },
   } as unknown as EnvironmentRuntimeAccessService;
   const runtime = {
-    async ensureEnvironmentBrowserDashboard(
+    async ensureEnvironmentBrowserService(
       runtime: EnvironmentRuntimeRecord,
       restart = false,
     ) {
@@ -54,6 +55,9 @@ test("reuses protected coordinates but admits every HTTP and WebSocket request",
       dashboardEnsures += 1;
       dashboardRestarts.push(restart);
       return {
+        owner: "agent" as const,
+        transport: "playwright" as const,
+        revision: 0,
         publicUrl: "https://dashboard.example.invalid/generated",
         requestHeaders: { "X-Sandpi-Browser-Proxy": "secret" },
       };
@@ -122,13 +126,16 @@ test("reuses the session probe and restarts the Dashboard only on forced recover
       sessionEnsures += 1;
       return browserRestarted;
     },
-    async ensureEnvironmentBrowserDashboard(
+    async ensureEnvironmentBrowserService(
       _runtime: EnvironmentRuntimeRecord,
       restart = false,
     ) {
       operations.push("dashboard");
       dashboardRestarts.push(restart);
       return {
+        owner: "agent" as const,
+        transport: "playwright" as const,
+        revision: Number(restart),
         publicUrl: "https://dashboard.example.invalid",
         requestHeaders: {},
       };
@@ -174,12 +181,15 @@ test("refreshes invalidated coordinates without restarting the AppService", asyn
     },
   } as unknown as EnvironmentRuntimeAccessService;
   const runtime = {
-    async ensureEnvironmentBrowserDashboard(
+    async ensureEnvironmentBrowserService(
       _runtime: EnvironmentRuntimeRecord,
       restart = false,
     ) {
       dashboardRestarts.push(restart);
       return {
+        owner: "agent" as const,
+        transport: "playwright" as const,
+        revision: 0,
         publicUrl: "https://dashboard.example.invalid",
         requestHeaders: {},
       };
@@ -192,6 +202,157 @@ test("refreshes invalidated coordinates without restarting the AppService", asyn
   await service.httpUpstream("user-browser", runtimeRecord.id, undefined);
 
   assert.deepEqual(dashboardRestarts, [false, false]);
+});
+
+test("admits only the transport owned by the current Browser controller", async () => {
+  let owner: "agent" | "human" = "agent";
+  let revision = 0;
+  const runtimeAccess = {
+    async withRuntimeAccess(
+      _userId: string,
+      _environmentId: string,
+      operation: (runtime: EnvironmentRuntimeRecord) => Promise<unknown>,
+    ) {
+      return operation(runtimeRecord);
+    },
+  } as unknown as EnvironmentRuntimeAccessService;
+  const control = () => ({
+    owner,
+    transport: owner === "human" ? ("vnc" as const) : ("playwright" as const),
+    revision,
+  });
+  const runtime = {
+    async updateEnvironmentBrowserControl(
+      _runtime: EnvironmentRuntimeRecord,
+      input: { owner: "agent" | "human" },
+    ) {
+      owner = input.owner;
+      revision += 1;
+      return control();
+    },
+    async ensureEnvironmentBrowserService() {
+      return {
+        ...control(),
+        publicUrl: "https://browser.example.invalid",
+        requestHeaders: {},
+      };
+    },
+    async ensureEnvironmentBrowserSession() {
+      throw new Error("human control must reject before Playwright runs");
+    },
+  } as unknown as RuntimeAdapter;
+  const service = new EnvironmentBrowserService(runtimeAccess, runtime);
+
+  assert.equal(
+    (await service.control("user-browser", runtimeRecord.id)).owner,
+    "agent",
+  );
+  assert.equal(
+    (
+      await service.updateControl("user-browser", runtimeRecord.id, {
+        owner: "human",
+      })
+    ).transport,
+    "vnc",
+  );
+  assert.deepEqual(
+    await service.websocketUpstream("user-browser", runtimeRecord.id, "vnc"),
+    { url: "wss://browser.example.invalid/vnc", headers: {} },
+  );
+  await assert.rejects(
+    service.httpUpstream("user-browser", runtimeRecord.id, undefined),
+    (error) =>
+      error instanceof HttpError &&
+      error.code === "environment_browser_under_human_control",
+  );
+  await assert.rejects(
+    service.ensureSession("user-browser", runtimeRecord.id),
+    (error) =>
+      error instanceof HttpError &&
+      error.code === "environment_browser_under_human_control",
+  );
+
+  await service.updateControl("user-browser", runtimeRecord.id, {
+    owner: "agent",
+  });
+  await assert.rejects(
+    service.websocketUpstream("user-browser", runtimeRecord.id, "vnc"),
+    (error) =>
+      error instanceof HttpError &&
+      error.code === "environment_browser_under_agent_control",
+  );
+  assert.equal(
+    (
+      await service.httpUpstream("user-browser", runtimeRecord.id, undefined)
+    ).url,
+    "https://browser.example.invalid/",
+  );
+});
+
+test("linearizes the first Browser install with a concurrent takeover", async () => {
+  let owner: "agent" | "human" = "agent";
+  let revision = 0;
+  let releaseInstall: (() => void) | undefined;
+  const installBlocked = new Promise<void>((resolve) => {
+    releaseInstall = resolve;
+  });
+  let installStarted: (() => void) | undefined;
+  const started = new Promise<void>((resolve) => {
+    installStarted = resolve;
+  });
+  const events: string[] = [];
+  const runtimeAccess = {
+    async withRuntimeAccess(
+      _userId: string,
+      _environmentId: string,
+      operation: (runtime: EnvironmentRuntimeRecord) => Promise<unknown>,
+    ) {
+      return operation(runtimeRecord);
+    },
+  } as unknown as EnvironmentRuntimeAccessService;
+  const current = () => ({
+    owner,
+    transport: owner === "human" ? ("vnc" as const) : ("playwright" as const),
+    revision,
+    publicUrl: "https://browser.example.invalid",
+    requestHeaders: {},
+  });
+  const runtime = {
+    async ensureEnvironmentBrowserService() {
+      events.push("install-start");
+      installStarted?.();
+      await installBlocked;
+      events.push("install-finish");
+      return current();
+    },
+    async updateEnvironmentBrowserControl(
+      _runtime: EnvironmentRuntimeRecord,
+      input: { owner: "agent" | "human" },
+    ) {
+      events.push("takeover");
+      owner = input.owner;
+      revision += 1;
+      return current();
+    },
+  } as unknown as RuntimeAdapter;
+  const service = new EnvironmentBrowserService(runtimeAccess, runtime);
+
+  const initial = service.control("user-browser", runtimeRecord.id);
+  await started;
+  const takeover = service.updateControl("user-browser", runtimeRecord.id, {
+    owner: "human",
+  });
+  await Promise.resolve();
+  assert.deepEqual(events, ["install-start"]);
+
+  releaseInstall?.();
+  assert.equal((await initial).owner, "agent");
+  assert.equal((await takeover).owner, "human");
+  assert.deepEqual(events, ["install-start", "install-finish", "takeover"]);
+  assert.equal(
+    (await service.control("user-browser", runtimeRecord.id)).owner,
+    "human",
+  );
 });
 
 test("deduplicates viewport updates within one runtime generation", async () => {
@@ -212,6 +373,15 @@ test("deduplicates viewport updates within one runtime generation", async () => 
     },
   } as unknown as EnvironmentRuntimeAccessService;
   const runtime = {
+    async ensureEnvironmentBrowserService() {
+      return {
+        owner: "agent" as const,
+        transport: "playwright" as const,
+        revision: 0,
+        publicUrl: "https://dashboard.example.invalid",
+        requestHeaders: {},
+      };
+    },
     async resizeEnvironmentBrowserViewport(
       runtime: EnvironmentRuntimeRecord,
       viewport: { width: number; height: number },
@@ -255,6 +425,15 @@ test("coalesces intermediate viewport updates while one resize is running", asyn
     },
   } as unknown as EnvironmentRuntimeAccessService;
   const runtime = {
+    async ensureEnvironmentBrowserService() {
+      return {
+        owner: "agent" as const,
+        transport: "playwright" as const,
+        revision: 0,
+        publicUrl: "https://dashboard.example.invalid",
+        requestHeaders: {},
+      };
+    },
     async resizeEnvironmentBrowserViewport(
       _runtime: EnvironmentRuntimeRecord,
       viewport: BrowserDashboardViewport,
@@ -278,6 +457,7 @@ test("coalesces intermediate viewport updates while one resize is running", asyn
     height: 700,
   });
 
+  await new Promise<void>((resolve) => setImmediate(resolve));
   assert.deepEqual(calls, [{ width: 500, height: 700 }]);
   releaseFirst?.();
   await Promise.all([first, middle, latest]);
@@ -300,9 +480,12 @@ test("refreshes Dashboard coordinates after the runtime generation changes", asy
     },
   } as unknown as EnvironmentRuntimeAccessService;
   const runtime = {
-    async ensureEnvironmentBrowserDashboard() {
+    async ensureEnvironmentBrowserService() {
       dashboardEnsures += 1;
       return {
+        owner: "agent" as const,
+        transport: "playwright" as const,
+        revision: 0,
         publicUrl: "https://dashboard.example.invalid",
         requestHeaders: {},
       };

@@ -20,6 +20,13 @@ test("preserves explicit Browser asset caching while protecting control response
   );
   assert.equal(
     shouldApplyApiNoStore(
+      "/api/v1/environments/env-1/browser/control",
+      true,
+    ),
+    true,
+  );
+  assert.equal(
+    shouldApplyApiNoStore(
       "/api/v1/environments/env-1/workspace-backups",
       true,
     ),

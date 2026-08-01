@@ -50,7 +50,9 @@ test("keeps the public guide aligned with shared Browser, lifecycle, and canonic
   );
 
   assert.match(guide, /human-agent shared Environment Browser/i);
-  assert.match(guide, /Playwright `default` session/);
+  assert.match(guide, /one active owner/);
+  assert.match(guide, /must not launch a second browser, attach through CDP/);
+  assert.doesNotMatch(guide, /complete an interactive login/i);
   assert.match(guide, /soft TTL and hard TTL to zero/);
   assert.match(guide, /does not idle-pause an Environment while/);
   assert.match(guide, /Process memory, sockets, live Browser pages/);

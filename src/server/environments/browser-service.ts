@@ -4,9 +4,12 @@ import { HttpError } from "@/server/http-error";
 import type {
   EnvironmentRuntimeRecord,
   RuntimeAdapter,
-  RuntimeBrowserDashboard,
+  RuntimeBrowserUpstream,
 } from "@/server/runtime/types";
-import type { BrowserDashboardViewport } from "@/lib/environment-browser";
+import type {
+  BrowserDashboardViewport,
+  EnvironmentBrowserOwner,
+} from "@/lib/environment-browser";
 
 export interface BrowserDashboardUpstream {
   url: string;
@@ -16,7 +19,7 @@ export interface BrowserDashboardUpstream {
 interface CachedBrowserDashboard {
   runtimeGeneration: number;
   restartRevision: number;
-  pending: Promise<RuntimeBrowserDashboard>;
+  pending: Promise<RuntimeBrowserUpstream>;
 }
 
 interface CachedBrowserSession {
@@ -40,8 +43,9 @@ const DASHBOARD_FINGERPRINTED_ASSET =
 const DASHBOARD_MAX_BROWSER_CACHE_SECONDS = 24 * 60 * 60;
 
 /**
- * Owns only lifecycle, authorization and transport coordinates for the
- * official Playwright Dashboard. Browser control remains in Playwright.
+ * Owns lifecycle, authorization and the exclusive human/agent handoff for one
+ * Environment browser profile. Page automation remains in Playwright, while
+ * human input remains an opaque VNC transport.
  */
 export class EnvironmentBrowserService {
   private readonly dashboards = new Map<string, CachedBrowserDashboard>();
@@ -49,6 +53,8 @@ export class EnvironmentBrowserService {
   private readonly appliedDashboardRestartRevisions = new Map<string, number>();
   private readonly sessions = new Map<string, CachedBrowserSession>();
   private readonly viewports = new Map<string, BrowserViewportState>();
+  private readonly owners = new Map<string, EnvironmentBrowserOwner>();
+  private readonly serviceOperations = new Map<string, Promise<unknown>>();
 
   constructor(
     private readonly runtimeAccess: EnvironmentRuntimeAccessService,
@@ -64,7 +70,7 @@ export class EnvironmentBrowserService {
     // Sandbox0 does not reliably admit updateServices and cmd concurrently.
     // Serialize only the short service configuration; Chromium startup then
     // overlaps the Dashboard's ingress and health-check startup.
-    await this.dashboard(userId, environmentId);
+    requireAgentControl(await this.dashboard(userId, environmentId));
     await this.runtimeAccess.withRuntimeAccess(
       userId,
       environmentId,
@@ -73,7 +79,7 @@ export class EnvironmentBrowserService {
   }
 
   async openUrl(userId: string, environmentId: string, url: string) {
-    await this.dashboard(userId, environmentId);
+    requireAgentControl(await this.dashboard(userId, environmentId));
     await this.runtimeAccess.withRuntimeAccess(
       userId,
       environmentId,
@@ -92,6 +98,12 @@ export class EnvironmentBrowserService {
     environmentId: string,
     viewport: BrowserDashboardViewport,
   ) {
+    const owner = this.owners.get(environmentId);
+    if (owner) {
+      requireAgentControl({ owner });
+    } else {
+      requireAgentControl(await this.dashboard(userId, environmentId));
+    }
     await this.runtimeAccess.withRuntimeAccess(
       userId,
       environmentId,
@@ -105,6 +117,7 @@ export class EnvironmentBrowserService {
     assetPath: string | undefined,
   ): Promise<BrowserDashboardUpstream> {
     const dashboard = await this.dashboard(userId, environmentId);
+    requireAgentControl(dashboard);
     const target = new URL(dashboard.publicUrl);
     target.pathname = dashboardAssetPath(assetPath);
     target.search = "";
@@ -124,10 +137,15 @@ export class EnvironmentBrowserService {
       throw new HttpError(
         400,
         "invalid_environment_browser_socket",
-        "Invalid Playwright Dashboard socket id.",
+        "Invalid Environment browser socket id.",
       );
     }
     const dashboard = await this.dashboard(userId, environmentId);
+    if (socketId === "vnc") {
+      requireHumanControl(dashboard);
+    } else {
+      requireAgentControl(dashboard);
+    }
     const target = new URL(dashboard.publicUrl);
     target.protocol = target.protocol === "https:" ? "wss:" : "ws:";
     target.pathname = `/${socketId}`;
@@ -146,56 +164,147 @@ export class EnvironmentBrowserService {
     // WebSocket closed.
     this.dashboards.delete(environmentId);
     this.viewports.delete(environmentId);
+    this.owners.delete(environmentId);
+  }
+
+  async control(userId: string, environmentId: string) {
+    const { owner, transport, revision } = await this.dashboard(
+      userId,
+      environmentId,
+    );
+    return { owner, transport, revision };
+  }
+
+  async updateControl(
+    userId: string,
+    environmentId: string,
+    input: { owner: EnvironmentBrowserOwner; force?: boolean },
+  ) {
+    return this.serializeServiceOperation(environmentId, async () => {
+      const control = await this.runtimeAccess.withRuntimeAccess(
+        userId,
+        environmentId,
+        (runtime) =>
+          this.runtime.updateEnvironmentBrowserControl(runtime, input),
+      );
+      this.invalidateControlState(environmentId);
+      this.owners.set(environmentId, control.owner);
+      return control;
+    });
   }
 
   private async dashboard(userId: string, environmentId: string) {
+    // A fresh AppService install and an ownership handoff are both full-spec
+    // replacements. Linearize them so a concurrent first mount cannot restore
+    // an agent-owned service after human takeover has committed.
+    if (
+      !this.dashboards.has(environmentId) ||
+      this.serviceOperations.has(environmentId)
+    ) {
+      return this.ensureDashboard(userId, environmentId);
+    }
+
     // Every request still crosses ownership and lifecycle admission. The cache
     // only avoids rewriting an identical AppService and is fenced by Sandbox0's
     // authoritative runtime generation.
-    return this.runtimeAccess.withRuntimeAccess(
+    const cached = await this.runtimeAccess.withRuntimeAccess<
+      RuntimeBrowserUpstream | undefined
+    >(
       userId,
       environmentId,
       async (runtime) => {
         const restartRevision =
           this.dashboardRestartRevisions.get(environmentId) ?? 0;
-        const cached = this.dashboards.get(environmentId);
+        const entry = this.dashboards.get(environmentId);
         if (
-          cached?.runtimeGeneration === runtime.runtimeGeneration &&
-          cached.restartRevision === restartRevision
+          entry?.runtimeGeneration === runtime.runtimeGeneration &&
+          entry.restartRevision === restartRevision
         ) {
-          return cached.pending;
+          return entry.pending;
         }
-
-        const restart =
-          restartRevision >
-          (this.appliedDashboardRestartRevisions.get(environmentId) ?? 0);
-        const pending = this.runtime.ensureEnvironmentBrowserDashboard(
-          runtime,
-          restart,
-        );
-        const entry: CachedBrowserDashboard = {
-          runtimeGeneration: runtime.runtimeGeneration,
-          restartRevision,
-          pending,
-        };
-        this.dashboards.set(environmentId, entry);
-        try {
-          const dashboard = await pending;
-          if (this.dashboards.get(environmentId) === entry) {
-            this.appliedDashboardRestartRevisions.set(
-              environmentId,
-              restartRevision,
-            );
-          }
-          return dashboard;
-        } catch (error) {
-          if (this.dashboards.get(environmentId) === entry) {
-            this.dashboards.delete(environmentId);
-          }
-          throw error;
-        }
+        return undefined;
       },
     );
+    if (cached) return cached;
+
+    // Runtime-generation changes are rare. Re-admit after entering the service
+    // queue so the replacement cannot race an ownership update.
+    return this.ensureDashboard(userId, environmentId);
+  }
+
+  private ensureDashboard(
+    userId: string,
+    environmentId: string,
+  ): Promise<RuntimeBrowserUpstream> {
+    return this.serializeServiceOperation<RuntimeBrowserUpstream>(
+      environmentId,
+      () =>
+        this.runtimeAccess.withRuntimeAccess<RuntimeBrowserUpstream>(
+          userId,
+          environmentId,
+          async (runtime) => {
+            const restartRevision =
+              this.dashboardRestartRevisions.get(environmentId) ?? 0;
+            const cached = this.dashboards.get(environmentId);
+            if (
+              cached?.runtimeGeneration === runtime.runtimeGeneration &&
+              cached.restartRevision === restartRevision
+            ) {
+              return cached.pending;
+            }
+
+            const restart =
+              restartRevision >
+              (this.appliedDashboardRestartRevisions.get(environmentId) ?? 0);
+            const pending = this.runtime.ensureEnvironmentBrowserService(
+              runtime,
+              restart,
+            );
+            const entry: CachedBrowserDashboard = {
+              runtimeGeneration: runtime.runtimeGeneration,
+              restartRevision,
+              pending,
+            };
+            this.dashboards.set(environmentId, entry);
+            try {
+              const dashboard = await pending;
+              this.owners.set(environmentId, dashboard.owner);
+              if (this.dashboards.get(environmentId) === entry) {
+                this.appliedDashboardRestartRevisions.set(
+                  environmentId,
+                  restartRevision,
+                );
+              }
+              return dashboard;
+            } catch (error) {
+              if (this.dashboards.get(environmentId) === entry) {
+                this.dashboards.delete(environmentId);
+              }
+              throw error;
+            }
+          },
+        ),
+    );
+  }
+
+  private serializeServiceOperation<T>(
+    environmentId: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const previous = this.serviceOperations.get(environmentId);
+    const pending = (previous
+      ? previous.catch(() => undefined)
+      : Promise.resolve()
+    ).then(operation);
+    this.serviceOperations.set(environmentId, pending);
+    void pending
+      .finally(() => {
+        if (this.serviceOperations.get(environmentId) === pending) {
+          this.serviceOperations.delete(environmentId);
+        }
+      })
+      .catch(() => undefined);
+    return pending;
   }
 
   private restartDashboard(environmentId: string) {
@@ -204,6 +313,13 @@ export class EnvironmentBrowserService {
       environmentId,
       (this.dashboardRestartRevisions.get(environmentId) ?? 0) + 1,
     );
+  }
+
+  private invalidateControlState(environmentId: string) {
+    this.invalidate(environmentId);
+    this.sessions.delete(environmentId);
+    this.dashboardRestartRevisions.delete(environmentId);
+    this.appliedDashboardRestartRevisions.delete(environmentId);
   }
 
   private async ensureRuntimeSession(
@@ -288,6 +404,24 @@ function sameViewport(
   right: BrowserDashboardViewport,
 ) {
   return left?.width === right.width && left.height === right.height;
+}
+
+function requireAgentControl(control: { owner: EnvironmentBrowserOwner }) {
+  if (control.owner === "agent") return;
+  throw new HttpError(
+    409,
+    "environment_browser_under_human_control",
+    "The Environment browser is under human control. Return it to the agent before using Playwright.",
+  );
+}
+
+function requireHumanControl(control: { owner: EnvironmentBrowserOwner }) {
+  if (control.owner === "human") return;
+  throw new HttpError(
+    409,
+    "environment_browser_under_agent_control",
+    "Take control of the Environment browser before opening the interactive viewer.",
+  );
 }
 
 export function dashboardProxyPrefix(environmentId: string) {

@@ -510,6 +510,13 @@ export const browserSessionSchema = z
   .object({ force: z.boolean().optional() })
   .strict();
 
+export const browserControlSchema = z
+  .object({
+    owner: z.enum(["agent", "human"]),
+    force: z.boolean().optional(),
+  })
+  .strict();
+
 export const browserOpenSchema = z
   .object({
     url: z

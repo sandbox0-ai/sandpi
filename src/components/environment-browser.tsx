@@ -1,6 +1,8 @@
 "use client";
 
 import {
+  Bot,
+  Hand,
   LoaderCircle,
   Plus,
   RefreshCw,
@@ -10,6 +12,8 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { apiFetch, apiUrl } from "@/lib/api-client";
+import type { ApiEnvelope } from "@/lib/api-client";
+import { EnvironmentBrowserVnc } from "@/components/environment-browser-vnc";
 import {
   BROWSER_DASHBOARD_COMMAND_MESSAGE,
   BROWSER_DASHBOARD_VIEWPORT_MODE_MESSAGE,
@@ -24,6 +28,8 @@ import {
   type BrowserDashboardViewport,
   type BrowserDashboardViewportAppliedMessage,
   type BrowserDashboardViewportModeMessage,
+  type EnvironmentBrowserControl,
+  type EnvironmentBrowserOwner,
   isBrowserDashboardLoadingMessage,
   isBrowserDashboardReadyMessage,
   isBrowserDashboardSessionReadyMessage,
@@ -63,6 +69,12 @@ interface EnvironmentBrowserProps {
     viewportDesktop: string;
     viewportResponsive: string;
     viewportMobile: string;
+    takeControl: string;
+    returnToAgent: string;
+    humanControl: string;
+    agentControl: string;
+    switchingControl: string;
+    humanStarting: string;
   };
 }
 
@@ -87,6 +99,10 @@ export function EnvironmentBrowser({
   // mounted immediately below while this flag prevents duplicate recovery.
   const [ready, setReady] = useState(false);
   const [dashboardReady, setDashboardReady] = useState(false);
+  const [vncReady, setVncReady] = useState(false);
+  const [control, setControl] = useState<EnvironmentBrowserControl>();
+  const [controlBusy, setControlBusy] = useState(false);
+  const [controlReload, setControlReload] = useState(0);
   const [dashboardIntegrated, setDashboardIntegrated] = useState(false);
   const [tabs, setTabs] = useState<BrowserDashboardTab[]>([]);
   const [remoteLoading, setRemoteLoading] = useState(false);
@@ -109,6 +125,85 @@ export function EnvironmentBrowser({
       : undefined;
   const viewportMode =
     useLocalUiPreferences().workspace.browserViewportMode;
+  const browserBase =
+    `/api/v1/environments/${encodeURIComponent(environmentId)}/browser`;
+
+  const resetTransportState = useCallback(() => {
+    setReady(false);
+    setDashboardReady(false);
+    setDashboardIntegrated(false);
+    setVncReady(false);
+    setTabs([]);
+    tabsRef.current = [];
+    setRemoteLoading(false);
+    setViewport(undefined);
+    setViewportError("");
+  }, []);
+
+  const updateBrowserControl = useCallback(
+    async (owner: EnvironmentBrowserOwner, force = false) => {
+      setControlBusy(true);
+      setError("");
+      try {
+        const response = await apiFetch<ApiEnvelope<EnvironmentBrowserControl>>(
+          `${browserBase}/control`,
+          {
+            method: "PUT",
+            body: JSON.stringify({ owner, ...(force ? { force: true } : {}) }),
+          },
+        );
+        resetTransportState();
+        setControl(response.data);
+      } catch (cause) {
+        setError(
+          cause instanceof Error
+            ? cause.message
+            : "Browser control could not be transferred.",
+        );
+      } finally {
+        setControlBusy(false);
+      }
+    },
+    [browserBase, resetTransportState],
+  );
+
+  const handleVncReady = useCallback(() => {
+    setVncReady(true);
+    setError("");
+  }, []);
+  const handleVncError = useCallback((message: string) => {
+    setVncReady(false);
+    setError(message);
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    setControl(undefined);
+    setControlBusy(true);
+    setError("");
+    resetTransportState();
+    void apiFetch<ApiEnvelope<EnvironmentBrowserControl>>(
+      `${browserBase}/control`,
+    )
+      .then((response) => {
+        if (active) setControl(response.data);
+      })
+      .catch((cause) => {
+        if (active) {
+          setError(
+            cause instanceof Error
+              ? cause.message
+              : "Browser control could not be loaded.",
+          );
+        }
+      })
+      .finally(() => {
+        if (active) setControlBusy(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [browserBase, controlReload, resetTransportState]);
 
   const postDashboardMessage = useCallback(
     (
@@ -279,18 +374,22 @@ export function EnvironmentBrowser({
     if (dashboardReady) sendDashboardViewportMode();
   }, [dashboardReady, sendDashboardViewportMode]);
 
+  const transportReady =
+    control?.owner === "human" ? vncReady : dashboardReady;
+
   useEffect(() => {
-    if (dashboardReady || error) return;
+    if (!control || transportReady || error || controlBusy) return;
     const timeout = setTimeout(() => {
       setError(copy.unavailable);
     }, BROWSER_DASHBOARD_STARTUP_TIMEOUT_MS);
     return () => clearTimeout(timeout);
-  }, [copy.unavailable, dashboardReady, error, retry]);
+  }, [control, controlBusy, copy.unavailable, error, retry, transportReady]);
 
   useEffect(() => {
     // The Dashboard AppService starts the default persistent browser in its
     // own Sandbox-native lifetime. Avoid a separate control API command on the
     // normal mount; the session endpoint is reserved for explicit recovery.
+    if (control?.owner !== "agent") return;
     if (!requestedNavigation && retry === 0) return;
     if (requestedNavigation && !dashboardReady) return;
     if (!requestedNavigation && ready) return;
@@ -300,7 +399,6 @@ export function EnvironmentBrowser({
     ) {
       return;
     }
-    const base = `/api/v1/environments/${encodeURIComponent(environmentId)}/browser`;
     const requestKey = requestedNavigation
       ? `open:${requestedNavigation.id}`
       : `session:${environmentId}:${retry}`;
@@ -315,11 +413,11 @@ export function EnvironmentBrowser({
       request = {
         key: requestKey,
         promise: requestedNavigation
-          ? apiFetch<void>(`${base}/open`, {
+          ? apiFetch<void>(`${browserBase}/open`, {
               method: "POST",
               body: JSON.stringify({ url: requestedNavigation.url }),
             })
-          : apiFetch<void>(`${base}/session`, {
+          : apiFetch<void>(`${browserBase}/session`, {
               method: "POST",
               body: JSON.stringify({ force: retry > 0 }),
             }),
@@ -361,6 +459,8 @@ export function EnvironmentBrowser({
     };
   }, [
     environmentId,
+    browserBase,
+    control?.owner,
     dashboardReady,
     onNavigationHandled,
     ready,
@@ -369,14 +469,14 @@ export function EnvironmentBrowser({
   ]);
 
   const visibleError = error || viewportError;
-  const loading = busy || remoteLoading;
+  const loading = busy || remoteLoading || controlBusy;
 
   return (
     <div className="environment-browser">
       <div
         className={`environment-browser-toolbar ${loading ? "is-loading" : ""}`}
       >
-        {dashboardIntegrated ? (
+        {control?.owner === "agent" && dashboardIntegrated ? (
           <div
             className="environment-browser-tabs"
             role="tablist"
@@ -424,7 +524,7 @@ export function EnvironmentBrowser({
           </div>
         ) : (
           <span className="environment-browser-toolbar-title">
-            {copy.title}
+            {control?.owner === "human" ? copy.humanControl : copy.title}
           </span>
         )}
         <span
@@ -439,40 +539,76 @@ export function EnvironmentBrowser({
               aria-hidden="true"
             />
           ) : null}
-          <span>{loading ? copy.loading : ""}</span>
+          <span>
+            {loading
+              ? controlBusy
+                ? copy.switchingControl
+                : copy.loading
+              : ""}
+          </span>
         </span>
-        {viewport ? (
+        {control?.owner === "agent" && viewport ? (
           <span className="environment-browser-viewport-size">
             {viewport.width} × {viewport.height}
           </span>
         ) : null}
-        <label className="environment-browser-viewport-mode">
-          <span className="sr-only">{copy.viewport}</span>
-          <select
-            aria-label={copy.viewport}
-            value={viewportMode}
-            onChange={(event) => {
-              const mode = event.target.value;
-              if (!isBrowserDashboardViewportMode(mode)) return;
-              updateLocalUiPreferences((current) => ({
-                ...current,
-                workspace: {
-                  ...current.workspace,
-                  browserViewportMode: mode,
-                },
-              }));
-            }}
+        {control?.owner === "agent" ? (
+          <label className="environment-browser-viewport-mode">
+            <span className="sr-only">{copy.viewport}</span>
+            <select
+              aria-label={copy.viewport}
+              value={viewportMode}
+              onChange={(event) => {
+                const mode = event.target.value;
+                if (!isBrowserDashboardViewportMode(mode)) return;
+                updateLocalUiPreferences((current) => ({
+                  ...current,
+                  workspace: {
+                    ...current.workspace,
+                    browserViewportMode: mode,
+                  },
+                }));
+              }}
+            >
+              <option value="desktop">{copy.viewportDesktop}</option>
+              <option value="responsive">{copy.viewportResponsive}</option>
+              <option value="mobile">{copy.viewportMobile}</option>
+            </select>
+          </label>
+        ) : null}
+        {control ? (
+          <button
+            type="button"
+            className="environment-browser-control"
+            disabled={controlBusy}
+            title={
+              control.owner === "human"
+                ? copy.agentControl
+                : copy.humanControl
+            }
+            onClick={() =>
+              void updateBrowserControl(
+                control.owner === "human" ? "agent" : "human",
+              )
+            }
           >
-            <option value="desktop">{copy.viewportDesktop}</option>
-            <option value="responsive">{copy.viewportResponsive}</option>
-            <option value="mobile">{copy.viewportMobile}</option>
-          </select>
-        </label>
+            {control.owner === "human" ? (
+              <Bot size={14} aria-hidden="true" />
+            ) : (
+              <Hand size={14} aria-hidden="true" />
+            )}
+            <span>
+              {control.owner === "human"
+                ? copy.returnToAgent
+                : copy.takeControl}
+            </span>
+          </button>
+        ) : null}
       </div>
       <div className="environment-browser-stage">
-        {retry === 0 || ready ? (
+        {control?.owner === "agent" && (retry === 0 || ready) ? (
           <iframe
-            key={retry}
+            key={`${control.revision}:${retry}`}
             ref={dashboardFrame}
             className="environment-browser-frame"
             src={apiUrl(
@@ -487,7 +623,15 @@ export function EnvironmentBrowser({
             }}
           />
         ) : null}
-        {!dashboardReady || visibleError ? (
+        {control?.owner === "human" ? (
+          <EnvironmentBrowserVnc
+            environmentId={environmentId}
+            revision={control.revision}
+            onReady={handleVncReady}
+            onError={handleVncError}
+          />
+        ) : null}
+        {!transportReady || visibleError ? (
           <div
             className={`environment-browser-state ${visibleError ? "is-error" : ""}`}
             role={visibleError ? "alert" : "status"}
@@ -501,20 +645,25 @@ export function EnvironmentBrowser({
                 aria-hidden="true"
               />
             )}
-            <span>{visibleError || copy.starting}</span>
+            <span>
+              {visibleError ||
+                (control?.owner === "human"
+                  ? copy.humanStarting
+                  : copy.starting)}
+            </span>
             {visibleError ? (
               <button
                 type="button"
                 onClick={() => {
-                  setReady(false);
-                  setDashboardReady(false);
-                  setDashboardIntegrated(false);
-                  setTabs([]);
-                  tabsRef.current = [];
-                  setRemoteLoading(false);
                   setError("");
-                  setViewportError("");
-                  setRetry((value) => value + 1);
+                  resetTransportState();
+                  if (!control) {
+                    setControlReload((value) => value + 1);
+                  } else if (control.owner === "human") {
+                    void updateBrowserControl("human", true);
+                  } else {
+                    setRetry((value) => value + 1);
+                  }
                 }}
               >
                 <RefreshCw size={13} aria-hidden="true" />

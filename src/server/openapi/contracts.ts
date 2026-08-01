@@ -4,6 +4,7 @@ import { ENVIRONMENT_METRIC_RANGES_SECONDS } from "@/lib/environment-metrics";
 import { WORKSPACE_ROOT } from "@/lib/workspace-path-policy";
 import {
   billingCheckoutSchema,
+  browserControlSchema,
   browserOpenSchema,
   browserSessionSchema,
   codexComposerUploadSchema,
@@ -196,7 +197,12 @@ const workspaceRawFile = z.object({
 });
 
 const browserDescription =
-  "Sandpi's built-in Browser is one shared Playwright browser session for the human and the agent. The human can take over the embedded tab to complete an interactive sign-in, then hand the same authenticated profile back to the agent. Browser localhost and loopback URLs resolve inside the Environment sandbox, not on the client device.";
+  "Sandpi's built-in Browser keeps one shared profile with one active owner. A human can take control for any interactive browser task and later return the same profile to the agent; Sandpi rejects agent-side Browser operations while human control is active. Browser localhost and loopback URLs resolve inside the Environment sandbox, not on the client device.";
+const browserControl = z.object({
+  owner: z.enum(["agent", "human"]),
+  transport: z.enum(["playwright", "vnc"]),
+  revision: z.number().int().nonnegative(),
+});
 
 export const openApiRouteContracts: readonly OpenApiRouteContract[] = [
   defineContract({
@@ -263,6 +269,31 @@ export const openApiRouteContracts: readonly OpenApiRouteContract[] = [
         state: z.string().optional(),
       }),
       response: { 302: redirect },
+    },
+  }),
+  defineContract({
+    method: "GET",
+    url: "/api/v1/environments/:environmentId/browser/control",
+    schema: {
+      operationId: "getEnvironmentBrowserControl",
+      summary: "Get the shared Browser owner",
+      description: browserDescription,
+      tags: ["Browser"],
+      response: { 200: dataEnvelope(browserControl) },
+      "x-sandpi-shared-browser": true,
+    },
+  }),
+  defineContract({
+    method: "PUT",
+    url: "/api/v1/environments/:environmentId/browser/control",
+    schema: {
+      operationId: "updateEnvironmentBrowserControl",
+      summary: "Transfer control of the shared Browser",
+      description: browserDescription,
+      tags: ["Browser"],
+      body: browserControlSchema,
+      response: { 200: dataEnvelope(browserControl) },
+      "x-sandpi-shared-browser": true,
     },
   }),
   defineContract({
@@ -1705,7 +1736,7 @@ export const openApiRouteContracts: readonly OpenApiRouteContract[] = [
       tags: ["Browser"],
       response: { 101: noContent },
       "x-sandpi-websocket": {
-        protocol: "opaque-playwright-dashboard",
+        protocol: "opaque-environment-browser",
         direction: "bidirectional",
       },
       "x-sandpi-shared-browser": true,

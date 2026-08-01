@@ -259,32 +259,64 @@ the visibility transition.
 
 ## Shared Environment browser
 
-The Browser Inspector embeds the official Playwright Dashboard. Playwright
-remains authoritative for browser processes, pages, tabs, snapshots,
-interaction and profiles; Sandpi does not define an MCP browser tool, CDP
-contract, general automation RPC or replacement CLI. Sandpi invokes only the
-official `playwright-cli`. Codex Workspace preparation materializes the bundled
-Agent Skill once per installed Playwright package version, before app-server
-startup. Every newly provisioned Environment includes the protected Dashboard
-AppService definition. Its lazy ingress process starts the Dashboard and
-starts prewarming the default persistent session as soon as the Dashboard port
-is listening, while the client loads Dashboard assets. This avoids making
-separate high-latency control API commands on a normal Browser mount and avoids
-cold-loading two Playwright CLI processes at exactly the same time. The same
-process periodically verifies the local Playwright session and reopens it after
-an ordinary browser-process exit without crossing the Sandbox0 control API.
-Sandpi otherwise invokes the CLI directly only for explicit session recovery,
-viewport changes and selected loopback URLs. The coding agent can use that same
-command directly.
+The Browser has one persistent profile and one active owner. The protected
+Sandbox0 AppService is the single owner record: its `SANDPI_BROWSER_OWNER`
+environment value is `agent` or `human`, and its monotonically increasing
+revision fences restarts and handoffs. Sandpi does not copy Browser ownership
+into PostgreSQL or use a Workspace file as a second source of truth. `GET` and
+`PUT /api/v1/environments/{environmentId}/browser/control` expose that state.
+The wording is deliberately generic: taking control is not synonymous with
+finishing a login, and a user may keep control for any interactive task.
 
-The default Playwright session is shared at Environment scope. The coding-agent
-template sets `HOME=/workspace`, so Playwright's official daemon registry and
-persistent profile live on the Environment Workspace Volume. Human Dashboard
-interaction and agent CLI commands therefore observe the same tabs, cookies
-and authenticated sites. Sandpi stores no browser history, cookies, storage
-state or page model in PostgreSQL. Workspace backups do include the persistent
-browser profile, so access to those snapshots must be treated as access to the
-Environment's logged-in browser credentials.
+Agent control embeds the official Playwright Dashboard. Playwright remains
+authoritative for automation, pages, tabs, snapshots and interaction; Sandpi
+does not define an MCP browser tool, CDP contract, general automation RPC or
+replacement CLI. Sandpi invokes only the official `playwright-cli`. Codex
+Workspace preparation materializes the bundled Agent Skill once per installed
+Playwright package version and puts a Sandpi-managed `playwright-cli` guard
+first on the Supervisor `PATH`. The AppService starts the Dashboard, then
+prewarms the persistent session after the port is listening so Browser assets
+and Chromium startup overlap. It periodically recovers an ordinary browser
+exit without another Sandbox0 control API call.
+
+Both owners use `/workspace/.sandpi/browser/profile`. On first use, the agent
+transport moves a compatible legacy Playwright persistent profile to that
+fixed path. The profile contains cookies and site storage and is part of the
+Workspace Volume and its backups; Sandpi stores none of that data or a parallel
+page model in PostgreSQL. Live tabs are best effort across a process handoff,
+so the agent always lists tabs and takes a new snapshot after control returns.
+
+Human control replaces the same AppService rather than starting a second
+service. Its lazy process first closes the Playwright daemon and validates the
+profile lock, then runs one headed browser as the unprivileged
+`sandbox-browser` user on Xvfb and Openbox. It prefers an operator-supplied
+`google-chrome-stable` binary when one exists and otherwise uses the bundled
+Chrome for Testing executable. The launch has no headless, automation or
+remote-debugging flag and exposes no CDP port. x11vnc binds only to loopback; a
+small WebSocket-to-TCP bridge publishes `/vnc` through the existing protected
+AppService. The Web client dynamically loads noVNC only in human mode. This
+mode is suitable for sites that require real human interaction, but it cannot
+promise that a third-party identity provider will accept every browser build
+or future policy.
+
+Returning control replaces the AppService with the agent command. The human
+process receives a graceful stop so Chrome can flush the profile before the
+agent transport reopens it. A persistent `human-owner` file is an enforcement
+derivative: the supported coding-agent `playwright-cli` wrapper refuses to run
+while it exists, including after a Sandbox pause, and the agent transport
+removes it only after the authoritative AppService owner has changed. Sandpi's
+Browser session, navigation and viewport APIs also return conflict while human
+control is active. This is a coordination boundary for the supported agent
+path, not isolation against a hostile root process; a root process could invoke
+the underlying executable or start another browser. A hard adversarial boundary
+would require moving the browser into a separately privileged sidecar or
+Sandbox.
+
+Only one browser renderer runs during a handoff. The coding-agent image omits
+Playwright's otherwise redundant headless-shell payload, adds only Xvfb,
+Openbox, x11vnc and the already-used `ws` transport dependency, and loads the
+noVNC client on demand. Two GiB or more of Sandbox memory is recommended when a
+headed browser and coding agent are used together.
 
 Sandpi adapts only the embedded Dashboard shell: it binds the Dashboard to the
 shared `default` session explicitly, projects the current Sandpi theme tokens
@@ -315,29 +347,23 @@ fixed wait for a resized screencast frame. A bounded compatibility fallback
 reveals the native Dashboard if Sandpi cannot recognize a future session
 markup. Users never need to operate the session picker in the supported shape.
 
-The adapter is injected by Sandpi's authenticated HTML proxy; it does not edit
-the coding-agent template or the installed Playwright package. Hiding the
+The Dashboard adapter is injected by Sandpi's authenticated HTML proxy; it does
+not edit the installed Playwright package. Hiding the
 native sidebar is capability-gated. If a future Dashboard no longer exposes
 the expected accessible tab controls, Sandpi leaves the official sidebar
 visible and stops presenting the compact tab strip, so the upstream UI remains
 usable after an image upgrade. Playwright continues to own the browser toolbar,
 pages, profiles and interaction behavior.
 
-An Environment resume can terminate Chromium while leaving its persistent
-profile's `Singleton*` symlinks on the Workspace Volume. If Playwright reports
-that `default` is stopped and then reports its validated default profile is
-still in use, Sandpi checks that `SingletonLock` names another Sandbox host or
-a dead local PID, removes only the three ephemeral singleton symlinks, and
-retries the official CLI once. It never deletes profile data. Sandpi reuses an
-identical published AppService rather than rewriting it on each mount or server
-restart. A forced user retry increments the persisted service revision so the
-embedded client reconnects cleanly. An HTTP authorization rejection refreshes
-only the cached coordinates; ordinary WebSocket failures retain
-generation-fenced coordinates, while browser startup is discovered dynamically
-by Playwright's Dashboard. None of these paths restarts a healthy AppService.
-Missing CLI or Chromium dependencies remain a template compatibility error;
-other failed starts are reported as runtime recovery failures instead of
-telling the user to recreate the Environment unconditionally.
+An Environment resume can leave Chromium `Singleton*` symlinks on the Workspace
+Volume. Before either owner opens the fixed profile, Sandpi verifies that a
+lock names another Sandbox host or a dead local PID and removes only the three
+ephemeral singleton symlinks. It never deletes profile data. Sandpi reuses an
+identical AppService instead of rewriting it on each mount. A forced retry
+increments the service revision; an HTTP authorization rejection refreshes
+only cached coordinates. Missing human-mode dependencies produce a template
+compatibility error before ownership changes, while agent recovery continues
+to distinguish missing Playwright dependencies from a failed browser start.
 
 An authenticated chat link using HTTP or HTTPS on `localhost`, `127.0.0.1` or
 `::1` opens in a new tab in that remote browser, where loopback resolves inside
@@ -346,8 +372,8 @@ for those exact hosts are normalized to HTTP. The Dashboard address bar remains
 an official Playwright surface and can navigate elsewhere subject to the
 Environment's network policy.
 
-Sandbox0 currently exposes the Dashboard through an app-service ingress rather
-than a private port-tunnel API. That public DNS name is transport, not the user
+Sandbox0 currently exposes the owner-specific Browser transport through an
+app-service ingress rather than a private port-tunnel API. That public DNS name is transport, not the user
 authorization boundary: Sandpi derives a per-Environment HMAC request token,
 Sandbox0 stores only its SHA-256 verifier, and the upstream URL and request
 token remain server-only. The token is scoped to the Sandpi Environment rather
@@ -355,14 +381,14 @@ than exposed or persisted in the browser. After Sandpi authenticates the user
 and authorizes Environment ownership, the protected ingress may perform
 Sandbox0-native auto-resume. This avoids a separate control API wake-up command
 without exposing the ingress credential to the browser.
-Every Dashboard asset and WebSocket upgrade first crosses Sandpi login,
+Every Dashboard asset and Browser WebSocket upgrade first crosses Sandpi login,
 ownership and lifecycle admission, then Sandpi forwards it with the protected
 header. The client receives only the authenticated Sandpi proxy path. Static
-paths and Dashboard socket identifiers are allowlisted. Rewritten HTML remains
-uncached, while static assets use bounded private browser caching. The
-WebSocket relay preserves all control traffic but retains only the latest
-unsent screencast frame when a downstream is slower than Playwright, preventing
-stale frames from accumulating. A live downstream WebSocket heartbeat keeps the
+Dashboard paths and socket identifiers are allowlisted; human mode reserves the
+single `vnc` socket id. Rewritten HTML remains uncached, while static Dashboard
+assets use bounded private browser caching. The WebSocket relay bounds both
+directions, preserves binary VNC ordering, and coalesces only superseded
+Playwright screencast frames. A live downstream WebSocket heartbeat keeps the
 already-running Environment active.
 
 ## Start, resume and event routing

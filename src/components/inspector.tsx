@@ -685,6 +685,12 @@ export function Inspector({
               viewportDesktop: ui.browserViewportDesktop,
               viewportResponsive: ui.browserViewportResponsive,
               viewportMobile: ui.browserViewportMobile,
+              takeControl: ui.browserTakeControl,
+              returnToAgent: ui.browserReturnToAgent,
+              humanControl: ui.browserHumanControl,
+              agentControl: ui.browserAgentControl,
+              switchingControl: ui.browserSwitchingControl,
+              humanStarting: ui.browserHumanStarting,
             }}
           />
         </div>
