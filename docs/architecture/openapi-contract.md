@@ -77,6 +77,14 @@ authenticate the local administrator implicitly until logout. OpenAPI's
 `cookieAuth` scheme documents this current behavior and does not claim a bearer
 token flow that Sandpi has not implemented.
 
+The CLI reads a public Device Authorization configuration from Sandpi, talks
+directly to the configured OIDC provider, and exchanges the resulting
+short-lived tokens once through `/api/v1/auth/device/complete`. Sandpi validates
+the ID token issuer, signature and Native Application audience, binds UserInfo
+to the same subject, creates the same HttpOnly session used by other clients,
+and retains no provider token. The public Native Application client has no
+secret.
+
 Native clients start account authentication in the system browser rather than
 inside their WebView. The client prepares a ten-minute handoff with a random
 state and PKCE verifier; Sandpi stores only its SHA-256 challenge. After the

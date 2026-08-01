@@ -544,6 +544,57 @@ export function registerAuthRoutes(
     return reply.redirect(result.returnTo);
   });
 
+  app.get("/api/v1/auth/device/config", async () => {
+    if (config.auth.mode === "admin") {
+      return { data: { mode: "admin" as const } };
+    }
+    if (!config.auth.deviceClientId) {
+      throw new HttpError(
+        503,
+        "oidc_device_auth_unavailable",
+        "OIDC device authorization is not configured.",
+      );
+    }
+    return {
+      data: {
+        mode: "oidc" as const,
+        issuer: config.auth.issuer.toString(),
+        clientId: config.auth.deviceClientId,
+        scopes: config.auth.scopes,
+      },
+    };
+  });
+
+  app.post("/api/v1/auth/device/complete", async (request, reply) => {
+    reply.header("Cache-Control", "no-store");
+    validateNativeAuthOrigin(request, config);
+    if (!oidcIdentity) {
+      throw new HttpError(
+        400,
+        "oidc_device_auth_unavailable",
+        "OIDC device authorization is not available in built-in admin mode.",
+      );
+    }
+    const body = z
+      .object({
+        accessToken: z.string().min(1).max(16_384),
+        idToken: z.string().min(1).max(16_384),
+      })
+      .parse(request.body);
+    const result = await oidcIdentity.completeDeviceLogin(
+      body.accessToken,
+      body.idToken,
+    );
+    await environments.reconcilePending();
+    reply.setCookie(
+      SESSION_COOKIE,
+      result.token,
+      sessionCookie(config, result.expiresAt),
+    );
+    clearAuthCookie(reply, BUILTIN_SIGNED_OUT_COOKIE);
+    return { data: { returnTo: "/" } };
+  });
+
   app.post("/api/v1/auth/native/prepare", async (request, reply) => {
     reply.header("Cache-Control", "no-store");
     validateNativeAuthOrigin(request, config);
@@ -3156,6 +3207,8 @@ export function publicAuthPath(url: string) {
   return (
     path === "/api/v1/auth/login" ||
     path === "/api/v1/auth/callback" ||
+    path === "/api/v1/auth/device/config" ||
+    path === "/api/v1/auth/device/complete" ||
     path === "/api/v1/auth/native/prepare" ||
     path === "/api/v1/auth/native/login" ||
     path === "/api/v1/auth/native/complete" ||

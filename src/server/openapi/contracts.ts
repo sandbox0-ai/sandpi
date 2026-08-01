@@ -267,6 +267,54 @@ export const openApiRouteContracts: readonly OpenApiRouteContract[] = [
   }),
   defineContract({
     method: "POST",
+    url: "/api/v1/auth/device/complete",
+    public: true,
+    schema: {
+      operationId: "completeDeviceLogin",
+      summary: "Exchange OIDC device tokens for a Sandpi session",
+      description:
+        "Validates the ID token issuer, signature, and Native Application audience, binds the access token to the same subject through OIDC UserInfo, and creates a Sandpi session. Provider tokens are not retained.",
+      tags: ["Authentication"],
+      body: z.object({
+        accessToken: z.string().min(1).max(16_384),
+        idToken: z.string().min(1).max(16_384),
+      }),
+      response: {
+        200: dataEnvelope(
+          z.object({
+            returnTo: z.string(),
+          }),
+        ),
+      },
+    },
+  }),
+  defineContract({
+    method: "GET",
+    url: "/api/v1/auth/device/config",
+    public: true,
+    schema: {
+      operationId: "getDeviceLoginConfiguration",
+      summary: "Get the CLI device authorization configuration",
+      description:
+        "Returns the public OIDC settings needed by the CLI. Built-in admin deployments require no external authorization.",
+      tags: ["Authentication"],
+      response: {
+        200: dataEnvelope(
+          z.discriminatedUnion("mode", [
+            z.object({ mode: z.literal("admin") }),
+            z.object({
+              mode: z.literal("oidc"),
+              issuer: z.url(),
+              clientId: z.string(),
+              scopes: z.string(),
+            }),
+          ]),
+        ),
+      },
+    },
+  }),
+  defineContract({
+    method: "POST",
     url: "/api/v1/auth/native/prepare",
     public: true,
     schema: {

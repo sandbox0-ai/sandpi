@@ -6,7 +6,9 @@ import { Pool } from "pg";
 
 import { migrateDatabase } from "@/server/db/migrate";
 import { seedCommunityDefaults } from "@/server/db/seed";
+import { SecretBox } from "@/server/secrets";
 import { NativeAuthService } from "./native";
+import { OidcIdentityService } from "./oidc";
 
 test(
   "native auth consumes one PKCE handoff without storing its verifier",
@@ -109,6 +111,67 @@ test(
     assert.equal(session.rows.length, 1);
     assert.equal(session.rows[0].revoked_at, null);
     assert.ok(session.rows[0].expires_at > new Date());
+  },
+);
+
+test(
+  "OIDC device login exchanges UserInfo for a Sandpi session without retaining the provider token",
+  { skip: !process.env.DATABASE_URL },
+  async (context) => {
+    const database = await isolatedDatabase(context);
+    const seenTokens: string[] = [];
+    const auth = new OidcIdentityService(
+      database,
+      {
+        mode: "oidc",
+        cookieSecret: "cookie-secret-with-at-least-32-characters",
+        issuer: new URL("https://identity.example/"),
+        clientId: "sandpi-web",
+        clientSecret: "web-secret",
+        deviceClientId: "sandpi-cli",
+        tokenEndpointAuthMethod: "client_secret_post",
+        scopes: "openid profile email",
+      },
+      new URL("https://sandpi.example"),
+      new SecretBox("deployment-secret-with-at-least-32-characters"),
+      async (accessToken, idToken) => {
+        seenTokens.push(accessToken);
+        assert.equal(idToken, "provider-id-token");
+        return {
+          sub: "device-user",
+          email: "device@example.com",
+          email_verified: true,
+          name: "Device User",
+        };
+      },
+    );
+
+    const session = await auth.completeDeviceLogin(
+      "provider-access-token",
+      "provider-id-token",
+    );
+    assert.deepEqual(seenTokens, ["provider-access-token"]);
+    assert.equal(session.principal.email, "device@example.com");
+    assert.equal(session.principal.name, "Device User");
+    assert.match(session.token, /^[A-Za-z0-9_-]+$/);
+
+    const stored = await database.query(
+      `
+        SELECT u.identity_provider, u.identity_subject,
+               COUNT(DISTINCT e.id)::INTEGER AS environments,
+               COUNT(DISTINCT s.id)::INTEGER AS sessions
+        FROM users u
+        LEFT JOIN environments e ON e.created_by_user_id = u.id
+        LEFT JOIN auth_sessions s ON s.user_id = u.id
+        WHERE u.id = $1
+        GROUP BY u.identity_provider, u.identity_subject
+      `,
+      [session.principal.userId],
+    );
+    assert.equal(stored.rows[0].identity_provider, "https://identity.example/");
+    assert.equal(stored.rows[0].identity_subject, "device-user");
+    assert.equal(stored.rows[0].environments, 1);
+    assert.equal(stored.rows[0].sessions, 1);
   },
 );
 

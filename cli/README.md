@@ -56,13 +56,17 @@ sandpi auth login
 sandpi auth status
 ```
 
-Browser sign-in returns a `sandpi://auth/callback` URL. Paste that URL into the
-waiting CLI. Use `--no-open` when the CLI should print the sign-in URL without
-opening a browser.
+The CLI discovers the deployment's public OIDC Device Authorization settings,
+prints a verification URL and user code, and polls the identity provider while
+you approve the device in a browser. No callback URL needs to be copied back to
+the terminal. Use `--no-open` when the CLI should print the verification URL
+without opening a browser.
 
-This authenticates the CLI to Sandpi. It does not log Codex in or import a Codex
-account. Codex account connection remains an Environment-scoped Sandpi product
-flow.
+The short-lived provider tokens are exchanged for a normal Sandpi session and
+are not stored by Sandpi or the CLI. Sandpi validates the ID token against the
+public Native Application and binds UserInfo to the same subject. This does not
+log Codex in or import a Codex account. Codex account connection remains an
+Environment-scoped Sandpi product flow.
 
 The CLI stores its endpoint and Sandpi session in the operating system user
 configuration directory under `sandpi/config.json`, with mode `0600` on Unix.

@@ -1,0 +1,14 @@
+{
+  "name": "Sandpi CLI",
+  "description": "Sandpi CLI device authorization client",
+  "app_type": "native",
+  "grant_types": [
+    "urn:ietf:params:oauth:grant-type:device_code"
+  ],
+  "is_first_party": true,
+  "oidc_conformant": true,
+  "token_endpoint_auth_method": "none",
+  "jwt_configuration": {
+    "alg": "RS256"
+  }
+}

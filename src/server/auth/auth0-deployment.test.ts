@@ -11,7 +11,7 @@ interface Auth0DeployConfig {
 interface Auth0Client {
   name: string;
   app_type: string;
-  callbacks: string[];
+  callbacks?: string[];
   grant_types: string[];
   is_first_party: boolean;
   oidc_conformant: boolean;
@@ -56,4 +56,23 @@ test("Auth0 application matches Sandpi's standard OIDC contract", async () => {
     "##SANDPI_PUBLIC_URL##/api/v1/auth/callback",
   ]);
   assert.equal(JSON.stringify(client).includes("*"), false);
+});
+
+test("Auth0 CLI application is a secretless Device Authorization client", async () => {
+  const client = await readJson<Auth0Client>(
+    "../../../auth0/tenant/clients/Sandpi%20CLI.json",
+  );
+
+  assert.equal(client.name, "Sandpi CLI");
+  assert.equal(client.app_type, "native");
+  assert.deepEqual(client.grant_types, [
+    "urn:ietf:params:oauth:grant-type:device_code",
+  ]);
+  assert.equal(client.is_first_party, true);
+  assert.equal(client.oidc_conformant, true);
+  assert.equal(client.token_endpoint_auth_method, "none");
+  assert.equal(client.jwt_configuration.alg, "RS256");
+  assert.equal(client.callbacks, undefined);
+  assert.equal(client.client_id, undefined);
+  assert.equal(client.client_secret, undefined);
 });

@@ -48,7 +48,7 @@ For a terminal or coding agent that cannot open a browser, use:
 sandpi auth login --no-open
 ```
 
-Open the printed URL, finish Sandpi authentication, and paste the resulting `sandpi://auth/callback` URL into the waiting process. This signs the CLI into Sandpi only. It does not import a Codex account, copy `auth.json`, or add a Codex login command.
+Open the printed verification URL, confirm its user code, and leave the CLI running while it polls the configured OIDC provider. The provider tokens are exchanged immediately for a Sandpi session and are not retained. This signs the CLI into Sandpi only. It does not import a Codex account, copy `auth.json`, or add a Codex login command.
 
 Use `--endpoint` or `SANDPI_ENDPOINT` for a self-hosted deployment. Successful output is JSON, and `--compact` produces one-line JSON for agent workflows.
 

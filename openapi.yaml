@@ -3353,6 +3353,116 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /api/v1/auth/device/complete:
+    post:
+      operationId: completeDeviceLogin
+      summary: Exchange OIDC device tokens for a Sandpi session
+      tags:
+        - Authentication
+      description: Validates the ID token issuer, signature, and Native Application
+        audience, binds the access token to the same subject through OIDC
+        UserInfo, and creates a Sandpi session. Provider tokens are not
+        retained.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                accessToken:
+                  type: string
+                  minLength: 1
+                  maxLength: 16384
+                idToken:
+                  type: string
+                  minLength: 1
+                  maxLength: 16384
+              required:
+                - accessToken
+                - idToken
+      security: []
+      responses:
+        "200":
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      returnTo:
+                        type: string
+                    required:
+                      - returnTo
+                    additionalProperties: false
+                required:
+                  - data
+                additionalProperties: false
+        default:
+          description: Sandpi error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/auth/device/config:
+    get:
+      operationId: getDeviceLoginConfiguration
+      summary: Get the CLI device authorization configuration
+      tags:
+        - Authentication
+      description: Returns the public OIDC settings needed by the CLI. Built-in admin
+        deployments require no external authorization.
+      security: []
+      responses:
+        "200":
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    oneOf:
+                      - type: object
+                        properties:
+                          mode:
+                            type: string
+                            enum:
+                              - admin
+                        required:
+                          - mode
+                        additionalProperties: false
+                      - type: object
+                        properties:
+                          mode:
+                            type: string
+                            enum:
+                              - oidc
+                          issuer:
+                            type: string
+                            format: uri
+                          clientId:
+                            type: string
+                          scopes:
+                            type: string
+                        required:
+                          - mode
+                          - issuer
+                          - clientId
+                          - scopes
+                        additionalProperties: false
+                required:
+                  - data
+                additionalProperties: false
+        default:
+          description: Sandpi error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /api/v1/auth/login:
     get:
       operationId: startLogin
