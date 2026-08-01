@@ -2115,6 +2115,10 @@ export function WorkspaceIde({
     },
     [environment.id, loadDocument, narrowFileBrowser],
   );
+  const openPreviewWorkspacePath = useCallback(
+    (filePath: string) => void openFile(filePath),
+    [openFile],
+  );
 
   const createWorkspaceEntry = useCallback(
     async (
@@ -3721,7 +3725,7 @@ export function WorkspaceIde({
                     file={selectedFile}
                     text={text}
                     language={language}
-                    onOpenWorkspacePath={(path) => void openFile(path)}
+                    onOpenWorkspacePath={openPreviewWorkspacePath}
                   />
                 ) : selectedFile ? (
                   <div className={styles.code} aria-label={selectedFile.name}>

@@ -1947,7 +1947,7 @@ test("opens Environment settings from the Inspector and controls Sandbox recover
   await expect(settingsAction).not.toHaveClass(/is-active/);
 });
 
-test("preserves Markdown table scroll and settings focus while a Turn is running", async ({
+test("preserves conversation, Inspector, and settings state while a Turn is running", async ({
   page,
 }) => {
   const bootstrap = getMockBootstrap();
@@ -1992,6 +1992,113 @@ test("preserves Markdown table scroll and settings focus while a Turn is running
   });
 
   const now = Date.now() / 1_000;
+  const workspaceFile: WorkspaceIdeFile = {
+    path: "/workspace/README.md",
+    name: "README.md",
+    revision: `sha256:${"f".repeat(43)}`,
+    encoding: "base64",
+    content: Buffer.from(
+      [
+        "# Inspector stability",
+        "",
+        "| First column with wide content | Second column with wide content | Third column with wide content | Fourth column with wide content | Fifth column with wide content |",
+        "| --- | --- | --- | --- | --- |",
+        "| alpha alpha alpha alpha | beta beta beta beta | gamma gamma gamma gamma | delta delta delta delta | epsilon epsilon epsilon epsilon |",
+        "",
+      ].join("\n"),
+    ).toString("base64"),
+    kind: "text",
+    editable: true,
+    size: "512 B",
+    modifiedAt: now,
+    lineChanges: [],
+  };
+  const workspaceSnapshot: WorkspaceIdeSnapshot = {
+    refreshedAt: now,
+    files: [
+      {
+        id: "workspace",
+        name: "workspace",
+        path: "/workspace",
+        kind: "folder",
+        children: [
+          {
+            id: "readme",
+            name: workspaceFile.name,
+            path: workspaceFile.path,
+            kind: "file",
+            size: workspaceFile.size,
+            modifiedAt: workspaceFile.modifiedAt,
+          },
+        ],
+      },
+    ],
+    git: { repositories: [] },
+  };
+  await page.route(
+    (url) =>
+      url.pathname ===
+      `/api/v1/environments/${encodeURIComponent(environment.id)}/ide/file`,
+    async (route) => {
+      await route.fulfill({ json: { data: workspaceFile } });
+    },
+  );
+  await page.route(
+    (url) =>
+      url.pathname ===
+      `/api/v1/environments/${encodeURIComponent(environment.id)}/files`,
+    async (route) => {
+      await route.fulfill({
+        json: {
+          data: {
+            path: "/workspace",
+            entries: workspaceSnapshot.files[0]?.children ?? [],
+            refreshedAt: workspaceSnapshot.refreshedAt,
+          },
+        },
+      });
+    },
+  );
+  await page.route(
+    (url) =>
+      url.pathname ===
+      `/api/v1/environments/${encodeURIComponent(environment.id)}/ide/git`,
+    async (route) => {
+      await route.fulfill({ json: { data: workspaceSnapshot.git } });
+    },
+  );
+  await page.routeWebSocket(
+    (url) =>
+      url.pathname ===
+      `/api/v1/environments/${encodeURIComponent(environment.id)}/ide/events`,
+    (socket) => {
+      socket.send(
+        JSON.stringify({ type: "ready", at: workspaceSnapshot.refreshedAt }),
+      );
+    },
+  );
+  await page.route(
+    (url) =>
+      url.pathname ===
+      `/api/v1/environments/${encodeURIComponent(environment.id)}/browser/`,
+    async (route) => {
+      await route.fulfill({
+        contentType: "text/html",
+        body: "<!doctype html><title>Browser stability fixture</title>",
+      });
+    },
+  );
+  let metricsRequestCount = 0;
+  await page.route(
+    (url) =>
+      url.pathname ===
+      `/api/v1/environments/${encodeURIComponent(environment.id)}/metrics`,
+    async (route) => {
+      metricsRequestCount += 1;
+      await route.fulfill({ json: { data: mockEnvironmentMetrics } });
+    },
+  );
+
   const nativeThreadId = "thread-e2e-render-stability";
   const runningTurn: CodexTurn = {
     id: "turn-e2e-render-stability-running",
@@ -2072,18 +2179,94 @@ test("preserves Markdown table scroll and settings focus while a Turn is running
     scrolledLeft,
   );
 
-  await page
-    .getByRole("button", { name: `${environment.name} settings` })
-    .click();
-  const nameInput = page.locator('input[name="environment-name"]');
-  await nameInput.focus();
-  await expect(nameInput).toBeFocused();
+  await page.getByRole("button", { name: "Open inspector" }).click();
+  await page.locator('button[title="/workspace/README.md"]').click();
+  const workspaceTableScroll = page
+    .getByTestId("workspace-markdown-preview")
+    .locator(".markdown-table-scroll");
+  await expect(workspaceTableScroll).toBeVisible();
+  await expect
+    .poll(() =>
+      workspaceTableScroll.evaluate((element) => {
+        const table = element.querySelector("table");
+        if (table) table.style.width = "2000px";
+        element.scrollLeft = element.scrollWidth;
+        return element.scrollLeft;
+      }),
+    )
+    .toBeGreaterThan(0);
+  const workspaceScrolledLeft = await workspaceTableScroll.evaluate(
+    (element) => element.scrollLeft,
+  );
+  await workspaceTableScroll.evaluate((element) => {
+    element.dataset.renderIdentity = "workspace-table";
+  });
   await emitControlledEvent(page, eventPath, "snapshot", {
     ...snapshot,
     historyRevision: 2,
   });
   await page.waitForTimeout(50);
+  expect(
+    await workspaceTableScroll.evaluate((element) => element.scrollLeft),
+  ).toBe(workspaceScrolledLeft);
+  await expect(workspaceTableScroll).toHaveAttribute(
+    "data-render-identity",
+    "workspace-table",
+  );
+
+  const inspectorViews = page.getByRole("navigation", {
+    name: "Inspector views",
+  });
+  await inspectorViews
+    .getByRole("button", { name: "Browser", exact: true })
+    .click();
+  const browserFrame = page.locator(".environment-browser-frame");
+  await expect(browserFrame).toBeVisible();
+  await browserFrame.evaluate((element) => {
+    element.dataset.renderIdentity = "browser-frame";
+  });
+  await emitControlledEvent(page, eventPath, "snapshot", {
+    ...snapshot,
+    historyRevision: 3,
+  });
+  await page.waitForTimeout(50);
+  await expect(browserFrame).toHaveAttribute(
+    "data-render-identity",
+    "browser-frame",
+  );
+
+  await inspectorViews
+    .getByRole("button", { name: "Metrics", exact: true })
+    .click();
+  await expect.poll(() => metricsRequestCount).toBe(1);
+  await page.getByRole("button", { name: "Hide Received" }).click();
+  await expect(
+    page.getByRole("button", { name: "Show Received" }),
+  ).toBeVisible();
+  await emitControlledEvent(page, eventPath, "snapshot", {
+    ...snapshot,
+    historyRevision: 4,
+  });
+  await page.waitForTimeout(50);
+  await expect(
+    page.getByRole("button", { name: "Show Received" }),
+  ).toBeVisible();
+  expect(metricsRequestCount).toBe(1);
+
+  await page
+    .getByRole("button", { name: `${environment.name} settings` })
+    .click();
+  const nameInput = page.locator('input[name="environment-name"]');
+  const unsavedEnvironmentName = `${environment.name} unsaved`;
+  await nameInput.fill(unsavedEnvironmentName);
   await expect(nameInput).toBeFocused();
+  await emitControlledEvent(page, eventPath, "snapshot", {
+    ...snapshot,
+    historyRevision: 5,
+  });
+  await page.waitForTimeout(50);
+  await expect(nameInput).toBeFocused();
+  await expect(nameInput).toHaveValue(unsavedEnvironmentName);
 });
 
 test("waits for native New Session models and scopes reasoning effort by model", async ({
