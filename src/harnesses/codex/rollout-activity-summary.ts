@@ -519,16 +519,24 @@ function safeSubject(args: Record<string, unknown> | null) {
   return null;
 }
 
+function isWebToolName(name: string) {
+  return (
+    name === "web_run" ||
+    name === "web__run" ||
+    name.startsWith("web.") ||
+    name.includes("web_search")
+  );
+}
+
 function externalTool(names: string[], activity: CodexRolloutToolActivity) {
   return (
     names.some(
       (name) =>
         name.startsWith("mcp__") ||
-        name.startsWith("web.") ||
+        isWebToolName(name) ||
         name.startsWith("browser.") ||
         name.startsWith("image_gen.") ||
         name.startsWith("image_gen__") ||
-        name.includes("web_search") ||
         name.includes("imagegen") ||
         name.includes("image_generation"),
     ) ||
@@ -551,7 +559,7 @@ function toolKind(
     return "agent";
   }
   if (
-    names.some((item) => item.startsWith("web.") || item.includes("web_search")) ||
+    names.some(isWebToolName) ||
     activity.callType === "web_search_call"
   ) {
     return "web";
@@ -670,6 +678,35 @@ function webActionSubject(activity: CodexRolloutToolActivity) {
   return null;
 }
 
+function webRunSubject(args: Record<string, unknown> | null) {
+  const candidates: Array<[string, string]> = [
+    ["search_query", "q"],
+    ["image_query", "q"],
+    ["open", "ref_id"],
+    ["find", "pattern"],
+    ["weather", "location"],
+    ["finance", "ticker"],
+    ["time", "utc_offset"],
+    ["sports", "league"],
+  ];
+  for (const [collection, property] of candidates) {
+    const items = args?.[collection];
+    if (!Array.isArray(items)) continue;
+    const values = items
+      .map((item) => objectRecord(item)?.[property])
+      .filter(
+        (value): value is string =>
+          typeof value === "string" && value.trim().length > 0,
+      );
+    if (values.length > 0) {
+      return values.length === 1
+        ? values[0]!
+        : `${values[0]} +${values.length - 1}`;
+    }
+  }
+  return null;
+}
+
 export function summarizeCodexRolloutActivity(
   activity: CodexRolloutToolActivity,
 ): CodexRolloutActivitySummary {
@@ -725,6 +762,7 @@ export function summarizeCodexRolloutActivity(
     (cellId ? `#${cellId}` : null) ??
     (sessionId ? `#${sessionId}` : null) ??
     webActionSubject(activity) ??
+    (kind === "web" ? webRunSubject(args) : null) ??
     safeSubject(args) ??
     (names.length > 1 ? names.join(" · ") : toolName);
   const detail =

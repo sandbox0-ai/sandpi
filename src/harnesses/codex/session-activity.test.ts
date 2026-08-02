@@ -488,6 +488,7 @@ test("restores the real 30-call rollout shape alongside its modeled file change"
 test("categorizes namespaced Codex code-mode tools without cross-harness normalization", () => {
   const activity = rolloutFeed([
     rolloutTool(1, { codeModeTools: ["web.run"] }),
+    rolloutTool(6, { codeModeTools: ["web__run"] }),
     rolloutTool(2, { codeModeTools: ["image_gen.imagegen"] }),
     rolloutTool(3, { codeModeTools: ["collaboration.spawn_agent"] }),
     rolloutTool(4, { codeModeTools: ["functions.exec_command"] }),
@@ -508,10 +509,10 @@ test("categorizes namespaced Codex code-mode tools without cross-harness normali
   for (const record of activity.records) record.turnId = turnId;
 
   assert.deepEqual(summarizeCodexSessionActivity(emptyProjection, activity), {
-    total: 5,
-    records: 5,
+    total: 6,
+    records: 6,
     issues: 0,
-    external: 3,
+    external: 4,
     commands: 2,
     files: 0,
     agents: 1,
