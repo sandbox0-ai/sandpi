@@ -17,7 +17,6 @@ test("normalizes browser-only UI preferences field by field", () => {
         inspectorWidthRatio: 0.625,
         fileBrowserSidebarCollapsed: true,
         fileBrowserSidebarWidth: 312.6,
-        browserViewportMode: "responsive",
         metricsRangeSeconds: 86_400,
         terminalHeight: 487.6,
       },
@@ -33,7 +32,6 @@ test("normalizes browser-only UI preferences field by field", () => {
         inspectorWidthRatio: 0.625,
         fileBrowserSidebarCollapsed: true,
         fileBrowserSidebarWidth: 313,
-        browserViewportMode: "responsive",
         metricsRangeSeconds: 86_400,
         terminalHeight: 488,
       },
@@ -91,21 +89,6 @@ test("keeps Browser as a durable Inspector tab", () => {
       workspace: { inspectorTab: "browser" },
     }).workspace.inspectorTab,
     "browser",
-  );
-});
-
-test("defaults malformed browser viewport preferences to desktop fit", () => {
-  assert.equal(
-    normalizeLocalUiPreferences({
-      workspace: { browserViewportMode: "television" },
-    }).workspace.browserViewportMode,
-    "desktop",
-  );
-  assert.equal(
-    normalizeLocalUiPreferences({
-      workspace: { browserViewportMode: "mobile" },
-    }).workspace.browserViewportMode,
-    "mobile",
   );
 });
 

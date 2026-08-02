@@ -51,16 +51,19 @@ currently expanded shallow directories. The server always watches
 clients treat server change messages as invalidations, not as a durable
 file-event log.
 
-The Browser Dashboard HTTP bodies and owner-specific WebSocket bodies are
-opaque, authenticated proxy protocols. They are not normalized into a second
-Sandpi page model. `GET` and `PUT .../browser/control` expose the current owner
-(`agent` or `human`), transport, revision and whether the Environment runtime
-supports headed-browser takeover. Agent ownership proxies the official
-Playwright Dashboard; human ownership proxies an ordered binary VNC stream
-from a headed browser. Both use one persistent profile, and Sandpi rejects the
-inactive owner's operations. URLs using `localhost`, `127.0.0.1`, or `::1`
-resolve inside the Environment sandbox, never on the client device. The
-contract marks these operations with `x-sandpi-shared-browser`.
+The Browser Dashboard HTTP bodies and server-to-client WebSocket events remain
+opaque authenticated proxy protocols; they are not normalized into a second
+Sandpi page model. Under agent ownership, the WebSocket proxy nevertheless
+parses client requests so it can forward only visibility lifecycle updates and
+one initial screencast-source selection. Navigation, tab mutation, input,
+capture and recording requests are rejected. `GET` and
+`PUT .../browser/control` expose the current owner (`agent` or `human`),
+transport, revision and whether the Environment runtime supports
+headed-browser takeover. Agent ownership proxies a read-only official
+Playwright Dashboard renderer; human ownership proxies an ordered binary VNC
+stream from a headed browser. Both use one persistent profile, and Sandpi
+rejects the inactive owner's operations. The contract marks these operations
+with `x-sandpi-shared-browser`.
 
 Dashboard HTML, redirects and control responses remain `no-store`.
 Fingerprint-named Dashboard assets use a bounded private immutable cache, and

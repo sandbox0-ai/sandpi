@@ -26,7 +26,6 @@ import type {
   CodexTurn,
 } from "../src/harnesses/codex/types";
 import { PENDING_GUEST_PROMPT_STORAGE_KEY } from "../src/lib/auth-navigation";
-import { BROWSER_DASHBOARD_SESSION_READY_MESSAGE } from "../src/lib/environment-browser";
 import {
   getMockBootstrap,
   mockEnvironmentMetrics,
@@ -2625,13 +2624,46 @@ test("keeps New Session header operations aligned with the conversation", async 
     },
   );
   let browserSessionStarts = 0;
+  let browserControlRevision = 0;
+  let browserOwner: "agent" | "human" = "agent";
+  const browserControlUpdates: Array<"agent" | "human"> = [];
   const browserViewports: Array<{ width: number; height: number }> = [];
+  await page.routeWebSocket(
+    (url) =>
+      url.pathname ===
+      `/api/v1/environments/${encodeURIComponent(environment.id)}/browser/ws/vnc`,
+    () => {
+      // Keeping the socket open is enough to verify that takeover swaps the
+      // read-only Dashboard for Sandpi's dedicated interactive transport.
+    },
+  );
   await page.route(
     (url) =>
       url.pathname.startsWith(
         `/api/v1/environments/${encodeURIComponent(environment.id)}/browser`,
-      ),
+    ),
     async (route) => {
+      if (route.request().url().endsWith("/browser/control")) {
+        if (route.request().method() === "PUT") {
+          const body = route.request().postDataJSON() as {
+            owner: "agent" | "human";
+          };
+          browserOwner = body.owner;
+          browserControlRevision += 1;
+          browserControlUpdates.push(body.owner);
+        }
+        await route.fulfill({
+          json: {
+            data: {
+              owner: browserOwner,
+              transport: browserOwner === "human" ? "vnc" : "playwright",
+              revision: browserControlRevision,
+              takeoverAvailable: true,
+            },
+          },
+        });
+        return;
+      }
       if (route.request().url().endsWith("/browser/session")) {
         browserSessionStarts += 1;
         await route.fulfill({ status: 204 });
@@ -2653,65 +2685,14 @@ test("keeps New Session header operations aligned with the conversation", async 
         body: `<!doctype html>
           <p>Official Playwright Dashboard fixture</p>
           <script>
-            let tabs = [{
-              index: 0,
-              title: "Fixture tab",
-              url: "https://example.test/",
-              selected: true,
-            }];
             const post = (message) => parent.postMessage(message, "*");
-            const postTabs = () => post({
-              type: "sandpi:browser-dashboard-tabs",
-              integrated: true,
-              tabs,
-            });
-            const finishActivity = () => setTimeout(() => post({
-              type: "sandpi:browser-dashboard-loading",
-              loading: false,
-            }), 400);
-            addEventListener("message", (event) => {
-              const message = event.data;
-              if (message?.type === "sandpi:browser-dashboard-viewport-mode") {
-                const viewport = message.mode === "mobile"
-                  ? { width: 390, height: 844 }
-                  : message.mode === "responsive"
-                    ? { width: 640, height: 700 }
-                    : { width: 1280, height: 800 };
-                post({
-                  type: "sandpi:browser-dashboard-viewport",
-                  ...viewport,
-                });
-              }
-              if (message?.type !== "sandpi:browser-dashboard-command") return;
-              post({
-                type: "sandpi:browser-dashboard-loading",
-                loading: true,
-              });
-              if (message.action === "new") {
-                tabs = tabs.map((tab) => ({ ...tab, selected: false }));
-                tabs.push({
-                  index: tabs.length,
-                  title: "New Tab",
-                  url: "about:blank",
-                  selected: true,
-                });
-              } else if (message.action === "select") {
-                tabs = tabs.map((tab) => ({
-                  ...tab,
-                  selected: tab.index === message.index,
-                }));
-              } else if (message.action === "close" && tabs.length > 1) {
-                const selected = tabs[message.index]?.selected;
-                tabs.splice(message.index, 1);
-                tabs = tabs.map((tab, index) => ({ ...tab, index }));
-                if (selected) tabs[0].selected = true;
-              }
-              postTabs();
-              finishActivity();
-            });
             post({ type: "sandpi:browser-dashboard-ready" });
             post({ type: "sandpi:browser-dashboard-session-ready" });
-            postTabs();
+            post({
+              type: "sandpi:browser-dashboard-viewport",
+              width: 640,
+              height: 700,
+            });
           </script>`,
       });
     },
@@ -2767,14 +2748,13 @@ test("keeps New Session header operations aligned with the conversation", async 
   ).toBeVisible();
   expect(browserSessionStarts).toBe(0);
   await expect(
-    page.getByRole("tab", { name: "Fixture tab", exact: true }),
-  ).toHaveAttribute("aria-selected", "true");
-  await expect(
-    page.getByRole("combobox", { name: "Browser viewport" }),
-  ).toHaveValue("desktop");
+    page.getByRole("button", { name: "New tab", exact: true }),
+  ).toHaveCount(0);
+  await expect(page.getByRole("combobox", { name: "Browser viewport" }))
+    .toHaveCount(0);
   await expect.poll(() => browserViewports.at(-1)).toEqual({
-    width: 1280,
-    height: 800,
+    width: 640,
+    height: 700,
   });
 
   const browserFrame = page.locator(
@@ -2783,6 +2763,22 @@ test("keeps New Session header operations aligned with the conversation", async 
   const browserPanel = page.locator(".browser-panel");
   const filesPanel = page.locator(".files-panel");
   await expect(browserFrame).toHaveCount(1);
+  await expect(browserFrame).toHaveAttribute("aria-hidden", "true");
+  await expect(browserFrame).toHaveAttribute("tabindex", "-1");
+  await expect(browserFrame).toHaveCSS("pointer-events", "none");
+  const browserStage = page.locator(".environment-browser-stage");
+  await expect.poll(async () => {
+    const [frame, stage] = await Promise.all([
+      browserFrame.boundingBox(),
+      browserStage.boundingBox(),
+    ]);
+    return frame && stage
+      ? {
+          width: Math.round(frame.width - stage.width),
+          height: Math.round(frame.height - stage.height),
+        }
+      : undefined;
+  }).toEqual({ width: 0, height: 0 });
   await expect(browserPanel).toBeVisible();
   await expect(filesPanel).toBeHidden();
   await inspectorViews
@@ -2798,38 +2794,22 @@ test("keeps New Session header operations aligned with the conversation", async 
   await expect(filesPanel).toBeHidden();
   expect(browserSessionStarts).toBe(0);
 
-  await page.getByRole("button", { name: "New tab", exact: true }).click();
-  await expect(page.getByRole("tab", { name: "New Tab" })).toHaveAttribute(
-    "aria-selected",
-    "true",
-  );
-  await expect(page.locator(".environment-browser-toolbar")).toHaveClass(
-    /is-loading/,
-  );
-  await page.getByRole("tab", { name: "Fixture tab", exact: true }).click();
-  await expect(
-    page.getByRole("tab", { name: "Fixture tab", exact: true }),
-  ).toHaveAttribute("aria-selected", "true");
-  await page.getByRole("button", { name: "Close New Tab" }).click();
-  await expect(page.getByRole("tab", { name: "New Tab" })).toHaveCount(0);
-
   await page
-    .getByRole("combobox", { name: "Browser viewport" })
-    .selectOption("responsive");
-  await expect.poll(() => browserViewports.at(-1)).toEqual({
-    width: 640,
-    height: 700,
-  });
-  await expect
-    .poll(() =>
-      page.evaluate(
-        (key) =>
-          JSON.parse(window.localStorage.getItem(key) ?? "{}").workspace
-            ?.browserViewportMode,
-        LOCAL_UI_PREFERENCES_STORAGE_KEY,
-      ),
-    )
-    .toBe("responsive");
+    .getByRole("button", { name: "Take control", exact: true })
+    .click();
+  await expect.poll(() => browserControlUpdates).toEqual(["human"]);
+  await expect(browserFrame).toHaveCount(0);
+  await expect(page.locator(".environment-browser-vnc")).toHaveCount(1);
+  await page
+    .getByRole("button", { name: "Return to agent", exact: true })
+    .click();
+  await expect.poll(() => browserControlUpdates).toEqual(["human", "agent"]);
+  await expect(browserFrame).toBeVisible();
+  await expect(
+    page
+      .frameLocator('iframe[title="Shared Environment browser"]')
+      .getByText("Official Playwright Dashboard fixture"),
+  ).toBeVisible();
 
   await header.getByRole("button", { name: "Close inspector" }).click();
   await expect(inspectorViews).toBeHidden();
@@ -5402,7 +5382,7 @@ await Promise.all(jobs.map((job) => tools.exec_command(job.args)));`,
   expect(browserErrors).toEqual([]);
 });
 
-test("opens line-qualified Environment file and loopback links in their native inspectors", async ({
+test("opens Environment files while keeping loopback links inert", async ({
   page,
 }) => {
   const bootstrap = getMockBootstrap();
@@ -5443,12 +5423,17 @@ test("opens line-qualified Environment file and loopback links in their native i
   const directoryListingsReleased = new Promise<void>((resolve) => {
     releaseDirectoryListings = resolve;
   });
-  let browserOpenBody: unknown;
+  let browserRequests = 0;
   const browserErrors: string[] = [];
   page.on("console", (message) => {
     if (message.type() === "error") browserErrors.push(message.text());
   });
   page.on("pageerror", (error) => browserErrors.push(error.message));
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname.includes("/browser")) {
+      browserRequests += 1;
+    }
+  });
 
   const nativeSnapshot: CodexNativeSnapshot = {
     protocol: "codex-app-server",
@@ -5659,27 +5644,6 @@ test("opens line-qualified Environment file and loopback links in their native i
       socket.send(JSON.stringify({ type: "ready", at: now }));
     },
   );
-  await page.route(
-    (url) =>
-      url.pathname.startsWith(
-        `/api/v1/environments/${encodeURIComponent(environment.id)}/browser`,
-      ),
-    async (route) => {
-      if (route.request().url().endsWith("/browser/open")) {
-        browserOpenBody = route.request().postDataJSON();
-        await route.fulfill({ status: 204 });
-        return;
-      }
-      await route.fulfill({
-        status: 200,
-        contentType: "text/html",
-        body: `<!doctype html><p>Shared Browser fixture</p><script>window.parent.postMessage({type:${JSON.stringify(
-          BROWSER_DASHBOARD_SESSION_READY_MESSAGE,
-        )}}, "*")</script>`,
-      });
-    },
-  );
-
   await page.goto(
     `/?environment=${encodeURIComponent(environment.id)}&session=${encodeURIComponent(session.id)}`,
   );
@@ -5826,20 +5790,18 @@ test("opens line-qualified Environment file and loopback links in their native i
     page.getByRole("button", { name: "Collapse file browser" }),
   ).toBeFocused();
 
-  await page
-    .locator('[data-browser-url="http://localhost:3000/preview"]')
-    .click();
-  await expect.poll(() => browserOpenBody).toEqual({
-    url: "http://localhost:3000/preview",
-  });
+  const loopbackReference = page.locator(
+    '[data-browser-url="http://localhost:3000/preview"]',
+  );
+  await expect(loopbackReference).toHaveJSProperty("tagName", "CODE");
   await expect(
-    inspectorViews.getByRole("button", { name: "Browser", exact: true }),
+    page.getByRole("button", { name: "the app", exact: true }),
+  ).toHaveCount(0);
+  await loopbackReference.click();
+  await expect(
+    inspectorViews.getByRole("button", { name: "Files", exact: true }),
   ).toHaveClass(/is-active/);
-  await expect(
-    page
-      .frameLocator('iframe[title="Shared Environment browser"]')
-      .getByText("Shared Browser fixture"),
-  ).toBeVisible();
+  expect(browserRequests).toBe(0);
 
   const fileRequestsBeforeTabRoundTrip = fileRequests.length;
   await inspectorViews

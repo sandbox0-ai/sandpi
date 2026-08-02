@@ -150,7 +150,7 @@ prewarm_browser() {
   done
 }
 prewarm_browser &
-exec playwright-cli show --host 0.0.0.0 --port ${port}`;
+exec playwright-cli -s=default show --host 0.0.0.0 --port ${port}`;
 }
 
 export function humanBrowserStartScript(port: number) {

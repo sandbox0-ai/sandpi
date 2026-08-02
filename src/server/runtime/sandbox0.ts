@@ -868,28 +868,6 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     }
   }
 
-  async openEnvironmentBrowserUrl(
-    runtime: EnvironmentRuntimeRecord,
-    url: string,
-  ): Promise<boolean> {
-    try {
-      const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
-      // The Dashboard AppService supervises the shared browser. Optimistically
-      // create the tab so the warm navigation path uses one Sandbox command
-      // instead of probing and then issuing a second command.
-      const openedTab = await runPlaywrightCli(sandbox, ["tab-new", url]);
-      if (openedTab.exitCode === 0) return false;
-      if (!isPlaywrightBrowserNotOpen(openedTab)) {
-        requirePlaywrightCliSuccess(openedTab);
-      }
-      await openPlaywrightBrowser(sandbox, url);
-      return true;
-    } catch (error) {
-      if (error instanceof HttpError) throw error;
-      throw translateSandbox0Error(error);
-    }
-  }
-
   async resizeEnvironmentBrowserViewport(
     runtime: EnvironmentRuntimeRecord,
     viewport: BrowserDashboardViewport,

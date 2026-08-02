@@ -226,10 +226,6 @@ export interface RuntimeAdapter {
   ensureEnvironmentBrowserSession(
     runtime: EnvironmentRuntimeRecord,
   ): Promise<boolean>;
-  openEnvironmentBrowserUrl(
-    runtime: EnvironmentRuntimeRecord,
-    url: string,
-  ): Promise<boolean>;
   resizeEnvironmentBrowserViewport(
     runtime: EnvironmentRuntimeRecord,
     viewport: BrowserDashboardViewport,

@@ -89,21 +89,6 @@ export class EnvironmentBrowserService {
     );
   }
 
-  async openUrl(userId: string, environmentId: string, url: string) {
-    requireAgentControl(await this.dashboard(userId, environmentId));
-    await this.runtimeAccess.withRuntimeAccess(
-      userId,
-      environmentId,
-      async (runtime) => {
-        await this.runtime.openEnvironmentBrowserUrl(runtime, url);
-        this.sessions.set(environmentId, {
-          runtimeGeneration: runtime.runtimeGeneration,
-          pending: Promise.resolve(false),
-        });
-      },
-    );
-  }
-
   async resizeViewport(
     userId: string,
     environmentId: string,

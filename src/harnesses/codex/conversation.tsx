@@ -41,7 +41,6 @@ import {
   UserAvatar,
 } from "@/components/identity-avatar";
 import { MarkdownContent } from "@/components/markdown-content";
-import type { EnvironmentBrowserNavigationRequest } from "@/components/environment-browser";
 import type { WorkspaceFileNavigationRequest } from "@/components/workspace-ide";
 import {
   CodexComposer,
@@ -177,13 +176,8 @@ interface ConversationProps {
   onOpenInspector: (tab: InspectorTab) => void;
   workspaceNavigationRequest?: WorkspaceFileNavigationRequest;
   onOpenWorkspacePath: (path: string) => void;
-  onOpenBrowserUrl: (url: string) => void;
   onWorkspaceNavigationHandled: (
     request: WorkspaceFileNavigationRequest,
-  ) => void;
-  browserNavigationRequest?: EnvironmentBrowserNavigationRequest;
-  onBrowserNavigationHandled: (
-    request: EnvironmentBrowserNavigationRequest,
   ) => void;
   onSessionChange: (session: CodexSession) => void;
   onToggleSessionCompleted: (sessionId: string) => Promise<void>;
@@ -268,10 +262,7 @@ export function CodexConversation({
   onOpenInspector,
   workspaceNavigationRequest,
   onOpenWorkspacePath,
-  onOpenBrowserUrl,
   onWorkspaceNavigationHandled,
-  browserNavigationRequest,
-  onBrowserNavigationHandled,
   onSessionChange,
   onToggleSessionCompleted,
   onDerivedSessionCreated,
@@ -2132,7 +2123,6 @@ export function CodexConversation({
             <MarkdownContent
               content={message.content}
               onOpenWorkspacePath={onOpenWorkspacePath}
-              onOpenBrowserUrl={onOpenBrowserUrl}
             />
           ) : message.streaming ? (
             <div
@@ -2714,10 +2704,6 @@ export function CodexConversation({
             closeAgentThreads();
             onOpenWorkspacePath(path);
           }}
-          onOpenBrowserUrl={(url) => {
-            closeAgentThreads();
-            onOpenBrowserUrl(url);
-          }}
           onOpenFiles={(path) => {
             closeAgentThreads();
             openChangedFile(path);
@@ -2737,8 +2723,6 @@ export function CodexConversation({
           widthRatio={inspectorWidthRatio}
           workspaceNavigationRequest={workspaceNavigationRequest}
           onWorkspaceNavigationHandled={onWorkspaceNavigationHandled}
-          browserNavigationRequest={browserNavigationRequest}
-          onBrowserNavigationHandled={onBrowserNavigationHandled}
           onTabChange={onInspectorTabChange}
           onWidthRatioChange={onInspectorWidthRatioChange}
           onOpenEnvironmentSettings={() =>

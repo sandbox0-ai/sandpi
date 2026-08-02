@@ -20,7 +20,6 @@ interface MarkdownContentProps {
   variant?: "message" | "document";
   baseWorkspacePath?: string;
   onOpenWorkspacePath?: (path: string) => void;
-  onOpenBrowserUrl?: (url: string) => void;
   renderWorkspaceImage?: (path: string, alt: string) => ReactNode;
 }
 
@@ -52,9 +51,8 @@ function isExternalHref(href: string | undefined) {
 function markdownUrlTransform(
   value: string,
   key: string,
-  allowLoopbackLinks: boolean,
 ) {
-  if (allowLoopbackLinks && key === "href" && sandboxLoopbackUrl(value)) {
+  if (key === "href" && sandboxLoopbackUrl(value)) {
     return value;
   }
   return defaultUrlTransform(value);
@@ -66,7 +64,6 @@ function MarkdownContentView({
   variant = "message",
   baseWorkspacePath,
   onOpenWorkspacePath,
-  onOpenBrowserUrl,
   renderWorkspaceImage,
 }: MarkdownContentProps) {
   const components = useMemo<Components>(
@@ -99,17 +96,15 @@ function MarkdownContentView({
           );
         }
         const browserUrl = sandboxLoopbackUrl(href);
-        if (browserUrl && onOpenBrowserUrl) {
+        if (browserUrl) {
           return (
-            <button
-              type="button"
-              className="markdown-browser-link"
+            <code
+              className="markdown-local-url"
               title={title ?? browserUrl}
               data-browser-url={browserUrl}
-              onClick={() => onOpenBrowserUrl(browserUrl)}
             >
               {children}
-            </button>
+            </code>
           );
         }
         const external = isExternalHref(href);
@@ -166,15 +161,13 @@ function MarkdownContentView({
     }),
     [
       baseWorkspacePath,
-      onOpenBrowserUrl,
       onOpenWorkspacePath,
       renderWorkspaceImage,
     ],
   );
   const transformUrl = useCallback(
-    (value: string, key: string) =>
-      markdownUrlTransform(value, key, Boolean(onOpenBrowserUrl)),
-    [onOpenBrowserUrl],
+    (value: string, key: string) => markdownUrlTransform(value, key),
+    [],
   );
 
   return (
