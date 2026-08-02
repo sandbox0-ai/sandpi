@@ -17,8 +17,8 @@ import type {
 } from "@/lib/environment-credentials";
 import type {
   BrowserDashboardViewport,
-  EnvironmentBrowserControl,
   EnvironmentBrowserOwner,
+  EnvironmentBrowserOwnership,
 } from "@/lib/environment-browser";
 import type { UnixTimestamp } from "@/lib/time";
 import type {
@@ -59,7 +59,7 @@ export interface RuntimeCodexSkillFile {
  * Server-only connection details for the owner-specific Browser transport.
  * Sandpi API handlers must never serialize the protected upstream headers.
  */
-export interface RuntimeBrowserUpstream extends EnvironmentBrowserControl {
+export interface RuntimeBrowserUpstream extends EnvironmentBrowserOwnership {
   publicUrl: string;
   requestHeaders: Record<string, string>;
 }
@@ -215,7 +215,10 @@ export interface RuntimeAdapter {
   updateEnvironmentBrowserControl(
     runtime: EnvironmentRuntimeRecord,
     input: { owner: EnvironmentBrowserOwner; force?: boolean },
-  ): Promise<EnvironmentBrowserControl>;
+  ): Promise<EnvironmentBrowserOwnership>;
+  isEnvironmentBrowserTakeoverAvailable(
+    runtime: EnvironmentRuntimeRecord,
+  ): Promise<boolean>;
   ensureEnvironmentBrowserService(
     runtime: EnvironmentRuntimeRecord,
     restart?: boolean,

@@ -17,8 +17,8 @@ import {
 
 import type {
   BrowserDashboardViewport,
-  EnvironmentBrowserControl,
   EnvironmentBrowserOwner,
+  EnvironmentBrowserOwnership,
 } from "@/lib/environment-browser";
 import type {
   Environment,
@@ -653,7 +653,7 @@ export class Sandbox0Runtime implements RuntimeAdapter {
   async updateEnvironmentBrowserControl(
     runtime: EnvironmentRuntimeRecord,
     input: { owner: EnvironmentBrowserOwner; force?: boolean },
-  ): Promise<EnvironmentBrowserControl> {
+  ): Promise<EnvironmentBrowserOwnership> {
     const requestToken = browserDashboardRequestToken(
       this.browserProxyKey,
       runtime.id,
@@ -669,23 +669,10 @@ export class Sandbox0Runtime implements RuntimeAdapter {
         return currentControl;
       }
       if (input.owner === "human") {
-        const preflight = await sandbox.cmd("browser-takeover-preflight", {
-          // Install the managed CLI fence before the authoritative owner
-          // changes. A running agent already has this directory first in PATH,
-          // so its next Playwright command is denied even before VNC starts.
-          command: [
-            "sh",
-            "-c",
-            `${environmentPlaywrightGuardInstallScript()}\n${HUMAN_BROWSER_PREFLIGHT_SCRIPT}`,
-          ],
-          cwd: "/workspace",
-          envVars: {
-            SANDPI_PLAYWRIGHT_CLI_GUARD_BASE64:
-              PLAYWRIGHT_CLI_GUARD_BASE64,
-          },
-          wait: true,
-          ttlSec: 30,
-        });
+        // Install the managed CLI fence before the authoritative owner
+        // changes. A running agent already has this directory first in PATH,
+        // so its next Playwright command is denied even before VNC starts.
+        const preflight = await runHumanBrowserPreflight(sandbox, true);
         if (preflight.exitCode !== 0) {
           throw new HttpError(
             503,
@@ -751,6 +738,19 @@ export class Sandbox0Runtime implements RuntimeAdapter {
           .catch(() => undefined);
       }
       return environmentBrowserControl(service);
+    } catch (error) {
+      if (error instanceof HttpError) throw error;
+      throw translateSandbox0Error(error);
+    }
+  }
+
+  async isEnvironmentBrowserTakeoverAvailable(
+    runtime: EnvironmentRuntimeRecord,
+  ): Promise<boolean> {
+    try {
+      const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
+      const preflight = await runHumanBrowserPreflight(sandbox, false);
+      return preflight.exitCode === 0;
     } catch (error) {
       if (error instanceof HttpError) throw error;
       throw translateSandbox0Error(error);
@@ -3019,7 +3019,7 @@ function sandboxAppServiceComparableConfiguration(
 
 function environmentBrowserControl(
   service: Sandbox0AppServiceView | undefined,
-): EnvironmentBrowserControl {
+): EnvironmentBrowserOwnership {
   const value = Number(
     service?.runtime?.envVars?.SANDPI_BROWSER_SESSION_REVISION ?? 0,
   );
@@ -3114,6 +3114,37 @@ function runPlaywrightCli(
     wait: true,
     ttlSec: PLAYWRIGHT_CLI_TIMEOUT_SECONDS,
   });
+}
+
+function runHumanBrowserPreflight(
+  sandbox: ReturnType<Client["sandboxes"]["sandbox"]>,
+  installGuard: boolean,
+) {
+  return sandbox.cmd(
+    installGuard
+      ? "browser-takeover-preflight"
+      : "browser-takeover-capability",
+    {
+      command: [
+        "sh",
+        "-c",
+        installGuard
+          ? `${environmentPlaywrightGuardInstallScript()}\n${HUMAN_BROWSER_PREFLIGHT_SCRIPT}`
+          : HUMAN_BROWSER_PREFLIGHT_SCRIPT,
+      ],
+      cwd: "/workspace",
+      ...(installGuard
+        ? {
+            envVars: {
+              SANDPI_PLAYWRIGHT_CLI_GUARD_BASE64:
+                PLAYWRIGHT_CLI_GUARD_BASE64,
+            },
+          }
+        : {}),
+      wait: true,
+      ttlSec: 30,
+    },
+  );
 }
 
 async function openPlaywrightBrowser(

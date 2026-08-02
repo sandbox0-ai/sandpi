@@ -105,6 +105,17 @@ test("OpenAPI preserves the shared Browser and streaming semantics", async () =>
     type: "string",
     enum: ["agent", "human"],
   });
+  const controlResponse = browserControl.responses["200"];
+  assert.ok(controlResponse && !("$ref" in controlResponse));
+  const controlResponseSchema =
+    controlResponse.content?.["application/json"]?.schema;
+  assert.ok(controlResponseSchema && !("$ref" in controlResponseSchema));
+  const controlDataSchema = controlResponseSchema.properties?.data;
+  assert.ok(controlDataSchema && !("$ref" in controlDataSchema));
+  assert.deepEqual(controlDataSchema.properties?.takeoverAvailable, {
+    type: "boolean",
+  });
+  assert.ok(controlDataSchema.required?.includes("takeoverAvailable"));
 
   for (const [path, method] of [
     ["/api/v1/environments/{environmentId}/browser/session", "post"],

@@ -51,7 +51,7 @@ Codex is the first supported coding agent.
 | Durable sessions | Native session state and the Workspace live outside the browser. Refreshes, client disconnects and runtime recovery do not erase the session. |
 | Focused isolation | Create one Environment per project, task or concern. Each gets its own Sandbox, Workspace, coding-agent account, network policy and credentials. |
 | Multiple coding plans | Connect different Environments to different Codex/ChatGPT accounts, or keep work separated while using the same account. |
-| Shared browser debugging | A human and coding agent take exclusive turns using one persistent browser profile. Human control is a real headed browser without Playwright or an exposed CDP endpoint. |
+| Shared browser debugging | A human and coding agent take exclusive turns using one persistent browser profile. Take control is the only manual-input path; human control is a real headed browser without Playwright or an exposed CDP endpoint. |
 | Controlled outbound access | Restrict sandbox egress by destination and inject supported credentials only into matching traffic, instead of placing service secrets in the repository or browser. |
 | Workspace protection | Create manual or scheduled Workspace backups with retention and restore them through Sandbox0 Volume snapshots. |
 | Encrypted persisted state | Sandbox0 encrypts persisted Environment rootfs checkpoint objects and default S0FS Workspace Volume objects at the application layer before object storage. |

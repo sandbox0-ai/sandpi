@@ -4451,6 +4451,10 @@ code.codex-compact-activity-subject {
   opacity: 0.55;
 }
 
+.environment-browser-control.is-unavailable:disabled {
+  cursor: not-allowed;
+}
+
 .environment-browser-control:focus-visible {
   outline: 2px solid var(--blue);
   outline-offset: 1px;

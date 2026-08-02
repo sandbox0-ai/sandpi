@@ -197,11 +197,12 @@ const workspaceRawFile = z.object({
 });
 
 const browserDescription =
-  "Sandpi's built-in Browser keeps one shared profile with one active owner. A human can take control for any interactive browser task and later return the same profile to the agent; Sandpi rejects agent-side Browser operations while human control is active. Browser localhost and loopback URLs resolve inside the Environment sandbox, not on the client device.";
+  "Sandpi's built-in Browser keeps one shared profile with one active owner. A human can take control for any interactive browser task and later return the same profile to the agent; Sandpi rejects agent-side Browser operations while human control is active. Control responses report whether the Environment image supports headed-browser takeover. Browser localhost and loopback URLs resolve inside the Environment sandbox, not on the client device.";
 const browserControl = z.object({
   owner: z.enum(["agent", "human"]),
   transport: z.enum(["playwright", "vnc"]),
   revision: z.number().int().nonnegative(),
+  takeoverAvailable: z.boolean(),
 });
 
 export const openApiRouteContracts: readonly OpenApiRouteContract[] = [

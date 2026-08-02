@@ -70,6 +70,7 @@ interface EnvironmentBrowserProps {
     viewportResponsive: string;
     viewportMobile: string;
     takeControl: string;
+    takeControlUnavailable: string;
     returnToAgent: string;
     humanControl: string;
     agentControl: string;
@@ -470,6 +471,8 @@ export function EnvironmentBrowser({
 
   const visibleError = error || viewportError;
   const loading = busy || remoteLoading || controlBusy;
+  const takeoverUnavailable =
+    control?.owner === "agent" && !control.takeoverAvailable;
 
   return (
     <div className="environment-browser">
@@ -579,12 +582,14 @@ export function EnvironmentBrowser({
         {control ? (
           <button
             type="button"
-            className="environment-browser-control"
-            disabled={controlBusy}
+            className={`environment-browser-control ${takeoverUnavailable ? "is-unavailable" : ""}`}
+            disabled={controlBusy || takeoverUnavailable}
             title={
               control.owner === "human"
                 ? copy.agentControl
-                : copy.humanControl
+                : takeoverUnavailable
+                  ? copy.takeControlUnavailable
+                  : copy.humanControl
             }
             onClick={() =>
               void updateBrowserControl(
@@ -600,7 +605,9 @@ export function EnvironmentBrowser({
             <span>
               {control.owner === "human"
                 ? copy.returnToAgent
-                : copy.takeControl}
+                : takeoverUnavailable
+                  ? copy.takeControlUnavailable
+                  : copy.takeControl}
             </span>
           </button>
         ) : null}
