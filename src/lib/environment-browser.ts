@@ -64,10 +64,14 @@ export type BrowserDashboardResolvedTheme = "light" | "dark";
 export type EnvironmentBrowserOwner = "agent" | "human";
 export type EnvironmentBrowserTransport = "playwright" | "vnc";
 
-export interface EnvironmentBrowserControl {
+export interface EnvironmentBrowserOwnership {
   owner: EnvironmentBrowserOwner;
   transport: EnvironmentBrowserTransport;
   revision: number;
+}
+
+export interface EnvironmentBrowserControl extends EnvironmentBrowserOwnership {
+  takeoverAvailable: boolean;
 }
 
 export type BrowserDashboardViewportMode =

@@ -4148,9 +4148,10 @@ paths:
       description: Sandpi's built-in Browser keeps one shared profile with one active
         owner. A human can take control for any interactive browser task and
         later return the same profile to the agent; Sandpi rejects agent-side
-        Browser operations while human control is active. Browser localhost and
-        loopback URLs resolve inside the Environment sandbox, not on the client
-        device.
+        Browser operations while human control is active. Control responses
+        report whether the Environment image supports headed-browser takeover.
+        Browser localhost and loopback URLs resolve inside the Environment
+        sandbox, not on the client device.
       parameters:
         - schema:
             type: string
@@ -4193,9 +4194,10 @@ paths:
       description: Sandpi's built-in Browser keeps one shared profile with one active
         owner. A human can take control for any interactive browser task and
         later return the same profile to the agent; Sandpi rejects agent-side
-        Browser operations while human control is active. Browser localhost and
-        loopback URLs resolve inside the Environment sandbox, not on the client
-        device.
+        Browser operations while human control is active. Control responses
+        report whether the Environment image supports headed-browser takeover.
+        Browser localhost and loopback URLs resolve inside the Environment
+        sandbox, not on the client device.
       parameters:
         - schema:
             type: string
@@ -4229,10 +4231,13 @@ paths:
                         type: integer
                         minimum: 0
                         maximum: 9007199254740991
+                      takeoverAvailable:
+                        type: boolean
                     required:
                       - owner
                       - transport
                       - revision
+                      - takeoverAvailable
                     additionalProperties: false
                 required:
                   - data
@@ -4251,9 +4256,10 @@ paths:
       description: Sandpi's built-in Browser keeps one shared profile with one active
         owner. A human can take control for any interactive browser task and
         later return the same profile to the agent; Sandpi rejects agent-side
-        Browser operations while human control is active. Browser localhost and
-        loopback URLs resolve inside the Environment sandbox, not on the client
-        device.
+        Browser operations while human control is active. Control responses
+        report whether the Environment image supports headed-browser takeover.
+        Browser localhost and loopback URLs resolve inside the Environment
+        sandbox, not on the client device.
       requestBody:
         required: true
         content:
@@ -4304,10 +4310,13 @@ paths:
                         type: integer
                         minimum: 0
                         maximum: 9007199254740991
+                      takeoverAvailable:
+                        type: boolean
                     required:
                       - owner
                       - transport
                       - revision
+                      - takeoverAvailable
                     additionalProperties: false
                 required:
                   - data
@@ -4327,9 +4336,10 @@ paths:
       description: Sandpi's built-in Browser keeps one shared profile with one active
         owner. A human can take control for any interactive browser task and
         later return the same profile to the agent; Sandpi rejects agent-side
-        Browser operations while human control is active. Browser localhost and
-        loopback URLs resolve inside the Environment sandbox, not on the client
-        device.
+        Browser operations while human control is active. Control responses
+        report whether the Environment image supports headed-browser takeover.
+        Browser localhost and loopback URLs resolve inside the Environment
+        sandbox, not on the client device.
       requestBody:
         required: true
         content:
@@ -4373,9 +4383,10 @@ paths:
       description: Sandpi's built-in Browser keeps one shared profile with one active
         owner. A human can take control for any interactive browser task and
         later return the same profile to the agent; Sandpi rejects agent-side
-        Browser operations while human control is active. Browser localhost and
-        loopback URLs resolve inside the Environment sandbox, not on the client
-        device.
+        Browser operations while human control is active. Control responses
+        report whether the Environment image supports headed-browser takeover.
+        Browser localhost and loopback URLs resolve inside the Environment
+        sandbox, not on the client device.
       requestBody:
         required: false
         content:
@@ -4413,9 +4424,10 @@ paths:
       description: Sandpi's built-in Browser keeps one shared profile with one active
         owner. A human can take control for any interactive browser task and
         later return the same profile to the agent; Sandpi rejects agent-side
-        Browser operations while human control is active. Browser localhost and
-        loopback URLs resolve inside the Environment sandbox, not on the client
-        device.
+        Browser operations while human control is active. Control responses
+        report whether the Environment image supports headed-browser takeover.
+        Browser localhost and loopback URLs resolve inside the Environment
+        sandbox, not on the client device.
       requestBody:
         required: true
         content:
@@ -4461,9 +4473,10 @@ paths:
       description: Sandpi's built-in Browser keeps one shared profile with one active
         owner. A human can take control for any interactive browser task and
         later return the same profile to the agent; Sandpi rejects agent-side
-        Browser operations while human control is active. Browser localhost and
-        loopback URLs resolve inside the Environment sandbox, not on the client
-        device.
+        Browser operations while human control is active. Control responses
+        report whether the Environment image supports headed-browser takeover.
+        Browser localhost and loopback URLs resolve inside the Environment
+        sandbox, not on the client device.
       parameters:
         - schema:
             type: string

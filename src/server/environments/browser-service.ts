@@ -8,7 +8,9 @@ import type {
 } from "@/server/runtime/types";
 import type {
   BrowserDashboardViewport,
+  EnvironmentBrowserControl,
   EnvironmentBrowserOwner,
+  EnvironmentBrowserOwnership,
 } from "@/lib/environment-browser";
 
 export interface BrowserDashboardUpstream {
@@ -23,6 +25,11 @@ interface CachedBrowserDashboard {
 }
 
 interface CachedBrowserSession {
+  runtimeGeneration: number;
+  pending: Promise<boolean>;
+}
+
+interface CachedBrowserTakeoverCapability {
   runtimeGeneration: number;
   pending: Promise<boolean>;
 }
@@ -52,6 +59,10 @@ export class EnvironmentBrowserService {
   private readonly dashboardRestartRevisions = new Map<string, number>();
   private readonly appliedDashboardRestartRevisions = new Map<string, number>();
   private readonly sessions = new Map<string, CachedBrowserSession>();
+  private readonly takeoverCapabilities = new Map<
+    string,
+    CachedBrowserTakeoverCapability
+  >();
   private readonly viewports = new Map<string, BrowserViewportState>();
   private readonly owners = new Map<string, EnvironmentBrowserOwner>();
   private readonly serviceOperations = new Map<string, Promise<unknown>>();
@@ -167,12 +178,15 @@ export class EnvironmentBrowserService {
     this.owners.delete(environmentId);
   }
 
-  async control(userId: string, environmentId: string) {
-    const { owner, transport, revision } = await this.dashboard(
+  async control(
+    userId: string,
+    environmentId: string,
+  ): Promise<EnvironmentBrowserControl> {
+    const ownership = await this.dashboard(
       userId,
       environmentId,
     );
-    return { owner, transport, revision };
+    return this.withTakeoverCapability(userId, environmentId, ownership);
   }
 
   async updateControl(
@@ -184,13 +198,71 @@ export class EnvironmentBrowserService {
       const control = await this.runtimeAccess.withRuntimeAccess(
         userId,
         environmentId,
-        (runtime) =>
-          this.runtime.updateEnvironmentBrowserControl(runtime, input),
+        async (runtime) => {
+          const ownership =
+            await this.runtime.updateEnvironmentBrowserControl(runtime, input);
+          const takeoverAvailable =
+            ownership.owner === "human"
+              ? this.cacheTakeoverCapability(runtime, true)
+              : await this.takeoverCapabilityForRuntime(runtime);
+          return { ...ownership, takeoverAvailable };
+        },
       );
       this.invalidateControlState(environmentId);
       this.owners.set(environmentId, control.owner);
       return control;
     });
+  }
+
+  private async withTakeoverCapability(
+    userId: string,
+    environmentId: string,
+    ownership: EnvironmentBrowserOwnership,
+  ): Promise<EnvironmentBrowserControl> {
+    if (ownership.owner === "human") {
+      return { ...ownership, takeoverAvailable: true };
+    }
+    const takeoverAvailable = await this.serializeServiceOperation(
+      environmentId,
+      () =>
+        this.runtimeAccess.withRuntimeAccess(
+          userId,
+          environmentId,
+          (runtime) => this.takeoverCapabilityForRuntime(runtime),
+        ),
+    );
+    return { ...ownership, takeoverAvailable };
+  }
+
+  private async takeoverCapabilityForRuntime(
+    runtime: EnvironmentRuntimeRecord,
+  ) {
+    const cached = this.takeoverCapabilities.get(runtime.id);
+    if (cached?.runtimeGeneration === runtime.runtimeGeneration) {
+      return cached.pending;
+    }
+    const pending = this.runtime.isEnvironmentBrowserTakeoverAvailable(runtime);
+    const entry = { runtimeGeneration: runtime.runtimeGeneration, pending };
+    this.takeoverCapabilities.set(runtime.id, entry);
+    try {
+      return await pending;
+    } catch (error) {
+      if (this.takeoverCapabilities.get(runtime.id) === entry) {
+        this.takeoverCapabilities.delete(runtime.id);
+      }
+      throw error;
+    }
+  }
+
+  private cacheTakeoverCapability(
+    runtime: EnvironmentRuntimeRecord,
+    available: boolean,
+  ) {
+    this.takeoverCapabilities.set(runtime.id, {
+      runtimeGeneration: runtime.runtimeGeneration,
+      pending: Promise.resolve(available),
+    });
+    return available;
   }
 
   private async dashboard(userId: string, environmentId: string) {

@@ -155,3 +155,10 @@ test("hides the native sidebar only after compatibility is detected", () => {
     /root\.classList\.toggle\([\s\S]*sandpi-browser-dashboard-integrated/,
   );
 });
+
+test("hides the native interaction toolbar in favor of Take control", () => {
+  assert.match(
+    BROWSER_DASHBOARD_EMBED_STYLE,
+    /\.browser-window > \.toolbar[\s\S]*display: none !important/,
+  );
+});

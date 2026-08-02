@@ -264,9 +264,15 @@ Sandbox0 AppService is the single owner record: its `SANDPI_BROWSER_OWNER`
 environment value is `agent` or `human`, and its monotonically increasing
 revision fences restarts and handoffs. Sandpi does not copy Browser ownership
 into PostgreSQL or use a Workspace file as a second source of truth. `GET` and
-`PUT /api/v1/environments/{environmentId}/browser/control` expose that state.
-The wording is deliberately generic: taking control is not synonymous with
-finishing a login, and a user may keep control for any interactive task.
+`PUT /api/v1/environments/{environmentId}/browser/control` expose that state
+and whether the current runtime supports headed-browser takeover. Sandpi probes
+that image capability only when the Browser control surface is first opened and
+caches it for the Sandbox runtime generation, so Environment provisioning and
+the normal cold-start path do not pay for the check. Older runtimes present a
+disabled recreate-required Take control action instead of failing after a
+handoff attempt. The wording is deliberately generic: taking control is not
+synonymous with finishing a login, and a user may keep control for any
+interactive task.
 
 Agent control embeds the official Playwright Dashboard. Playwright remains
 authoritative for automation, pages, tabs, snapshots and interaction; Sandpi
@@ -321,7 +327,9 @@ headed browser and coding agent are used together.
 Sandpi adapts only the embedded Dashboard shell: it binds the Dashboard to the
 shared `default` session explicitly, projects the current Sandpi theme tokens
 into the frame, and exposes the upstream tabs as a compact horizontal tab
-strip. Tab selection, creation and closing still invoke Dashboard-owned
+strip. It hides the Dashboard's native manual-interaction toolbar, including
+its Unlock control, so Sandpi's Take control action is the only human-input
+entry point. Tab selection, creation and closing still invoke Dashboard-owned
 controls; Sandpi projects but does not persist an independent page or tab
 model. Navigation and tab activity produce a non-blocking loading indicator
 until the next live frame.
@@ -348,12 +356,13 @@ reveals the native Dashboard if Sandpi cannot recognize a future session
 markup. Users never need to operate the session picker in the supported shape.
 
 The Dashboard adapter is injected by Sandpi's authenticated HTML proxy; it does
-not edit the installed Playwright package. Hiding the
-native sidebar is capability-gated. If a future Dashboard no longer exposes
+not edit the installed Playwright package. Hiding the native sidebar is
+capability-gated. If a future Dashboard no longer exposes
 the expected accessible tab controls, Sandpi leaves the official sidebar
 visible and stops presenting the compact tab strip, so the upstream UI remains
-usable after an image upgrade. Playwright continues to own the browser toolbar,
-pages, profiles and interaction behavior.
+usable after an image upgrade. Playwright continues to own pages, profiles and
+agent-side interaction behavior, while Sandpi owns the single manual takeover
+action.
 
 An Environment resume can leave Chromium `Singleton*` symlinks on the Workspace
 Volume. Before either owner opens the fixed profile, Sandpi verifies that a

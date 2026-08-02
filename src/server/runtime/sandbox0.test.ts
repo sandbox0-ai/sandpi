@@ -1327,6 +1327,11 @@ test("publishes the agent Browser transport behind a server-only hashed header",
 });
 
 test("uses the AppService spec as the Browser owner handoff fence", async () => {
+  let capabilityChecks = 0;
+  let capabilityCommand: {
+    command?: string[];
+    envVars?: Record<string, string>;
+  } | undefined;
   let preflights = 0;
   let preflightCommand: {
     command?: string[];
@@ -1348,7 +1353,10 @@ test("uses the AppService spec as the Browser owner handoff fence", async () => 
               envVars?: Record<string, string>;
             },
           ) {
-            if (alias === "browser-takeover-preflight") {
+            if (alias === "browser-takeover-capability") {
+              capabilityChecks += 1;
+              capabilityCommand = options;
+            } else if (alias === "browser-takeover-preflight") {
               preflights += 1;
               preflightCommand = options;
             } else {
@@ -1379,6 +1387,21 @@ test("uses the AppService spec as the Browser owner handoff fence", async () => 
       runtimeGeneration: 1,
     },
   };
+
+  assert.equal(
+    await runtime.isEnvironmentBrowserTakeoverAvailable(coordinates),
+    true,
+  );
+  assert.equal(capabilityChecks, 1);
+  assert.match(
+    String(capabilityCommand?.command?.at(-1)),
+    /command -v Xvfb[\s\S]+command -v x11vnc/,
+  );
+  assert.doesNotMatch(
+    String(capabilityCommand?.command?.at(-1)),
+    /playwright_guard/,
+  );
+  assert.equal(capabilityCommand?.envVars, undefined);
 
   const initial = await runtime.ensureEnvironmentBrowserService(coordinates);
   assert.deepEqual(
@@ -1457,6 +1480,52 @@ test("uses the AppService spec as the Browser owner handoff fence", async () => 
   });
   assert.equal(preflights, 1);
   assert.equal(serviceUpdates, 3);
+});
+
+test("reports an unavailable headed-browser runtime without changing owner", async () => {
+  let serviceUpdates = 0;
+  const runtime = runtimeWithClient({
+    sandboxes: {
+      sandbox(sandboxId: string) {
+        return {
+          async getServices() {
+            return { sandboxId, services: [] };
+          },
+          async cmd(alias: string) {
+            assert.match(alias, /^browser-takeover-/);
+            return { exitCode: 1, stdout: "", stderr: "missing runtime" };
+          },
+          async updateServices() {
+            serviceUpdates += 1;
+            return { sandboxId, services: [] };
+          },
+        };
+      },
+    },
+  });
+  const coordinates: EnvironmentRuntimeRecord = {
+    id: environment.id,
+    sandboxId: environment.sandboxId,
+    workspaceVolumeId: environment.workspaceVolumeId,
+    runtimeGeneration: 1,
+    decoder: {
+      supervisorCursor: 0,
+      tailBase64: "",
+      runtimeGeneration: 1,
+    },
+  };
+
+  assert.equal(
+    await runtime.isEnvironmentBrowserTakeoverAvailable(coordinates),
+    false,
+  );
+  await assert.rejects(
+    runtime.updateEnvironmentBrowserControl(coordinates, { owner: "human" }),
+    (error) =>
+      error instanceof HttpError &&
+      error.code === "environment_browser_takeover_unavailable",
+  );
+  assert.equal(serviceUpdates, 0);
 });
 
 test("uses only official Playwright CLI commands for the shared browser", async () => {

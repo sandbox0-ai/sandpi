@@ -31,7 +31,8 @@ export const BROWSER_DASHBOARD_EMBED_STYLE = `
 
   html.sandpi-browser-dashboard.sandpi-browser-dashboard-integrated #root > .split-view.horizontal.sidebar-first > .split-view-sidebar,
   html.sandpi-browser-dashboard.sandpi-browser-dashboard-integrated #root > .split-view.horizontal.sidebar-first > .split-view-resizer,
-  html.sandpi-browser-dashboard .settings-button-container {
+  html.sandpi-browser-dashboard .settings-button-container,
+  html.sandpi-browser-dashboard .browser-window > .toolbar {
     display: none !important;
   }
 

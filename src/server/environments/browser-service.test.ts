@@ -222,6 +222,9 @@ test("admits only the transport owned by the current Browser controller", async 
     revision,
   });
   const runtime = {
+    async isEnvironmentBrowserTakeoverAvailable() {
+      return true;
+    },
     async updateEnvironmentBrowserControl(
       _runtime: EnvironmentRuntimeRecord,
       input: { owner: "agent" | "human" },
@@ -334,6 +337,10 @@ test("linearizes the first Browser install with a concurrent takeover", async ()
       revision += 1;
       return current();
     },
+    async isEnvironmentBrowserTakeoverAvailable() {
+      events.push("capability");
+      return true;
+    },
   } as unknown as RuntimeAdapter;
   const service = new EnvironmentBrowserService(runtimeAccess, runtime);
 
@@ -353,6 +360,61 @@ test("linearizes the first Browser install with a concurrent takeover", async ()
     (await service.control("user-browser", runtimeRecord.id)).owner,
     "human",
   );
+});
+
+test("caches takeover capability within one runtime generation", async () => {
+  let currentRuntime = runtimeRecord;
+  let available = false;
+  let capabilityChecks = 0;
+  const runtimeAccess = {
+    async withRuntimeAccess(
+      _userId: string,
+      _environmentId: string,
+      operation: (runtime: EnvironmentRuntimeRecord) => Promise<unknown>,
+    ) {
+      return operation(currentRuntime);
+    },
+  } as unknown as EnvironmentRuntimeAccessService;
+  const runtime = {
+    async ensureEnvironmentBrowserService() {
+      return {
+        owner: "agent" as const,
+        transport: "playwright" as const,
+        revision: 0,
+        publicUrl: "https://dashboard.example.invalid",
+        requestHeaders: {},
+      };
+    },
+    async isEnvironmentBrowserTakeoverAvailable() {
+      capabilityChecks += 1;
+      return available;
+    },
+  } as unknown as RuntimeAdapter;
+  const service = new EnvironmentBrowserService(runtimeAccess, runtime);
+
+  assert.equal(
+    (await service.control("user-browser", runtimeRecord.id))
+      .takeoverAvailable,
+    false,
+  );
+  assert.equal(
+    (await service.control("user-browser", runtimeRecord.id))
+      .takeoverAvailable,
+    false,
+  );
+  assert.equal(capabilityChecks, 1);
+
+  available = true;
+  currentRuntime = {
+    ...runtimeRecord,
+    runtimeGeneration: runtimeRecord.runtimeGeneration + 1,
+  };
+  assert.equal(
+    (await service.control("user-browser", runtimeRecord.id))
+      .takeoverAvailable,
+    true,
+  );
+  assert.equal(capabilityChecks, 2);
 });
 
 test("deduplicates viewport updates within one runtime generation", async () => {

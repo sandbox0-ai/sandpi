@@ -53,13 +53,14 @@ file-event log.
 
 The Browser Dashboard HTTP bodies and owner-specific WebSocket bodies are
 opaque, authenticated proxy protocols. They are not normalized into a second
-Sandpi page model. `GET` and `PUT .../browser/control` expose only the current
-owner (`agent` or `human`), transport and revision. Agent ownership proxies the
-official Playwright Dashboard; human ownership proxies an ordered binary VNC
-stream from a headed browser. Both use one persistent profile, and Sandpi
-rejects the inactive owner's operations. URLs using `localhost`, `127.0.0.1`,
-or `::1` resolve inside the Environment sandbox, never on the client device.
-The contract marks these operations with `x-sandpi-shared-browser`.
+Sandpi page model. `GET` and `PUT .../browser/control` expose the current owner
+(`agent` or `human`), transport, revision and whether the Environment runtime
+supports headed-browser takeover. Agent ownership proxies the official
+Playwright Dashboard; human ownership proxies an ordered binary VNC stream
+from a headed browser. Both use one persistent profile, and Sandpi rejects the
+inactive owner's operations. URLs using `localhost`, `127.0.0.1`, or `::1`
+resolve inside the Environment sandbox, never on the client device. The
+contract marks these operations with `x-sandpi-shared-browser`.
 
 Dashboard HTML, redirects and control responses remain `no-store`.
 Fingerprint-named Dashboard assets use a bounded private immutable cache, and
