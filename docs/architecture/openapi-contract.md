@@ -34,14 +34,14 @@ is required by CI. The npm package includes the generated file. Sandpi does not
 commit generated platform SDKs; those can be produced later from a released
 contract.
 
-## Streaming and proxy transports
+## Streaming transports
 
 OpenAPI describes HTTP request/response operations directly. Sandpi retains the
 same paths for its non-JSON transports and adds explicit extensions:
 
 - `x-sandpi-sse` lists the named events on the native Session event stream.
-- `x-sandpi-websocket` describes Workspace IDE, Browser transport and terminal
-  WebSocket message directions.
+- `x-sandpi-websocket` describes Workspace IDE and Terminal WebSocket message
+  directions.
 - `x-sandpi-native-schema` marks payloads whose extensible fields remain owned
   by the pinned native harness protocol.
 
@@ -51,28 +51,13 @@ currently expanded shallow directories. The server always watches
 clients treat server change messages as invalidations, not as a durable
 file-event log.
 
-The Browser Dashboard HTTP bodies and server-to-client WebSocket events remain
-opaque authenticated proxy protocols; they are not normalized into a second
-Sandpi page model. Under agent ownership, the WebSocket proxy nevertheless
-parses client requests so it can forward only visibility lifecycle updates and
-one initial screencast-source selection. Navigation, tab mutation, input,
-capture and recording requests are rejected. `GET` and
-`PUT .../browser/control` expose the current owner (`agent` or `human`),
-transport, revision and whether the Environment runtime supports
-headed-browser takeover. Agent ownership proxies a read-only official
-Playwright Dashboard renderer; human ownership proxies an ordered binary VNC
-stream from a headed browser. Both use one persistent profile, and Sandpi
-rejects the inactive owner's operations. The contract marks these operations
-with `x-sandpi-shared-browser`.
+Sandpi does not currently publish Environment Browser or application Preview
+transport paths. Sandbox-loopback URLs displayed by the client remain inert
+and are not represented as OpenAPI operations until a dedicated Preview
+contract exists.
 
-Dashboard HTML, redirects and control responses remain `no-store`.
-Fingerprint-named Dashboard assets use a bounded private immutable cache, and
-Sandpi preserves their explicit cache policy through the final response hook.
-The embedded Browser remains mounted for a short grace period after the
-Inspector closes, while large unmodified assets stream through the proxy
-instead of being buffered in full. Sandpi's own content-addressed Next assets
-are public immutable resources; stable HTML and Monaco loader paths retain
-revalidation semantics.
+Sandpi's own content-addressed Next assets are public immutable resources;
+stable HTML and Monaco loader paths retain revalidation semantics.
 
 ## Authentication
 

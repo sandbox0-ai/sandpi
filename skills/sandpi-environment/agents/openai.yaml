@@ -1,4 +1,4 @@
 interface:
   display_name: "Sandpi Environment"
-  short_description: "Navigate Sandpi environment and shared Browser guidance"
+  short_description: "Navigate Sandpi Environment and Playwright guidance"
   default_prompt: "Use $sandpi-environment to understand this Sandpi Environment before working."

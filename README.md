@@ -22,8 +22,8 @@ It lets you continue the same coding session from any Sandpi client.
 
 The Web app and first-party native clients for iOS, iPadOS, Android,
 OpenHarmony, Windows and macOS use the same Sandpi product UI and API. Every
-client stays lightweight: the coding-agent harness, terminal, files and shared
-Playwright browser live in the cloud, alongside a persistent Workspace Volume.
+client stays lightweight: the coding-agent harness and terminal run in the
+cloud, with files stored on a persistent Workspace Volume.
 You can close your laptop, switch devices or disconnect a client without
 ending your coding session.
 
@@ -32,10 +32,6 @@ Codex is the first supported coding agent.
 ![A Codex Session and Workspace file browser in Sandpi](./docs/images/sandpi-session-files.png)
 
 <p align="center"><sub>A Codex Session alongside its persistent Workspace files.</sub></p>
-
-![A Codex Session and shared Browser in Sandpi](./docs/images/sandpi-session-browser.png)
-
-<p align="center"><sub>A human and coding agent working with the same cloud Browser.</sub></p>
 
 ![Environment Settings in Sandpi](./docs/images/sandpi-environment-settings.png)
 
@@ -51,7 +47,6 @@ Codex is the first supported coding agent.
 | Durable sessions | Native session state and the Workspace live outside the browser. Refreshes, client disconnects and runtime recovery do not erase the session. |
 | Focused isolation | Create one Environment per project, task or concern. Each gets its own Sandbox, Workspace, coding-agent account, network policy and credentials. |
 | Multiple coding plans | Connect different Environments to different Codex/ChatGPT accounts, or keep work separated while using the same account. |
-| Shared browser debugging | A human and coding agent take exclusive turns using one persistent browser profile. Take control is the only manual-input path; human control is a real headed browser without Playwright or an exposed CDP endpoint. |
 | Controlled outbound access | Restrict sandbox egress by destination and inject supported credentials only into matching traffic, instead of placing service secrets in the repository or browser. |
 | Workspace protection | Create manual or scheduled Workspace backups with retention and restore them through Sandbox0 Volume snapshots. |
 | Encrypted persisted state | Sandbox0 encrypts persisted Environment rootfs checkpoint objects and default S0FS Workspace Volume objects at the application layer before object storage. |
@@ -64,7 +59,7 @@ Environment
 ├── Sandbox and persistent Workspace Volume
 ├── one native coding-agent harness and provider account
 ├── network policy and egress credentials
-├── runtime resources, terminal, shared Browser and metrics
+├── runtime resources, terminal and metrics
 ├── durable Automation Schedules and Webhooks
 └── many native coding-agent Sessions
 ```
@@ -120,9 +115,9 @@ coding-agent configuration into a new or existing Sandpi Environment. See
   explicit refresh feedback; fast source, GitHub-like Markdown and CSV views;
   image, audio, video, PDF and PPTX previews; on-demand Monaco editing; and Git
   changes
-- Shared Browser with exclusive human/agent control, a full-size adaptive
-  read-only agent view, and one Take control path into the interactive headed
-  browser
+- Version-matched Playwright Agent Skill materialization when the Environment
+  image provides the official `playwright-cli`; Sandpi does not wrap it in a
+  second automation protocol
 - Environment terminal, runtime metrics, configurable idle pause, and manual
   Sandbox pause/restart recovery controls
 - Environment Schedules with one-time or human-friendly recurring timing,
@@ -150,10 +145,7 @@ harnesses and clients can be added as independent integrations.
 - A Sandbox0 deployment API key with Sandbox and Volume access plus
   `credentialsource:read`, `credentialsource:write` and
   `credentialsource:delete`
-- A current Sandbox0 `coding-agent` template with the official Playwright CLI,
-  Chromium, TigerVNC and Openbox. Sandpi retains an Xvfb/x11vnc compatibility
-  path for older template images. At least 2 GiB of Sandbox memory is
-  recommended for interactive Browser work alongside a coding agent.
+- A current Sandbox0 `coding-agent` template with the official Playwright CLI
 - Docker Engine with Compose v2 for the container workflow
 
 Optional subscription quota mode also requires `usage:read`.
@@ -219,7 +211,7 @@ For Kubernetes deployment, see
 ## OpenAPI contract
 
 The generated [OpenAPI 3.0.3 contract](./openapi.yaml) covers Sandpi's HTTP,
-SSE, WebSocket and embedded Browser surfaces. Generate and verify it with:
+SSE and WebSocket surfaces. Generate and verify it with:
 
 ```bash
 npm run openapi:generate
@@ -266,22 +258,18 @@ Sandpi server ───────── PostgreSQL
 Sandbox0
     ├── Sandbox + native Codex app-server
     ├── persistent Workspace Volume
-    ├── exclusive Playwright or headed Browser transport + shared profile
+    ├── official Playwright CLI and version-matched Agent Skill
     ├── terminal and runtime metrics
     ├── network policy and credential injection
     └── Workspace snapshots
 ```
 
 - Sandpi clients talk only to Sandpi. They receive neither the Sandbox0
-  deployment API key nor a direct Sandbox0 endpoint. For the Web app, Sandpi
-  authenticates and proxies the agent-owned Playwright Dashboard or the
-  human-owned VNC stream. The Dashboard is only a read-only screencast renderer:
-  Sandpi removes its controls and rejects client-side navigation, tab mutation,
-  input, capture and recording requests. Both transports use one persistent
-  profile, but only one owner is active: taking control stops Playwright and
-  launches a headed browser without CDP; returning control stops that browser
-  before Playwright resumes. Environment-local URLs shown in chat remain inert
-  until the user takes control.
+  deployment API key nor a direct Sandbox0 endpoint. Sandpi materializes the
+  official Playwright Agent Skill when `playwright-cli` is available, but it
+  does not start a browser, manage a profile, proxy a Dashboard or VNC stream,
+  or define a second browser-control protocol. Environment-local URLs shown in
+  chat remain inert until a dedicated Preview surface exists.
 - Sandpi uses Sandbox0 through the official JavaScript SDK; it does not read a
   Sandbox0 database, internal metering endpoint or ClickHouse credential.
 - Sandbox0 owns Sandbox lifecycle, Volumes, network enforcement, credential
@@ -320,11 +308,9 @@ Sandbox0
 - Sessions inside one Environment share one mutable Workspace and harness
   account. They are not isolated checkouts. Use separate Environments when work
   must not affect each other.
-- Interactive Browser takeover requires the current Sandbox0 `coding-agent`
-  image. Older compatible images can still use scaled Xvfb/x11vnc takeover;
-  recreate the Environment with v0.4 or newer for a human desktop that follows
-  the full Browser panel size. Agent-only Playwright remains available on older
-  compatible images.
+- Sandpi currently exposes neither an Environment Browser nor an application
+  Preview tab. Playwright remains available to the coding agent when the
+  Environment separately provides a compatible browser executable.
 - Built-in administrator mode is for a trusted single-user deployment. Use OIDC
   and a proper network/TLS boundary for public or multi-user deployments.
 - The `/api/v1` contract is versioned but may still change between pre-1.0

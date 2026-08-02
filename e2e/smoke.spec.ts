@@ -2120,17 +2120,6 @@ test("preserves conversation, Inspector, and settings state while a Turn is runn
       );
     },
   );
-  await page.route(
-    (url) =>
-      url.pathname ===
-      `/api/v1/environments/${encodeURIComponent(environment.id)}/browser/`,
-    async (route) => {
-      await route.fulfill({
-        contentType: "text/html",
-        body: "<!doctype html><title>Browser stability fixture</title>",
-      });
-    },
-  );
   let metricsRequestCount = 0;
   await page.route(
     (url) =>
@@ -2261,24 +2250,6 @@ test("preserves conversation, Inspector, and settings state while a Turn is runn
     name: "Inspector views",
   });
   await inspectorViews
-    .getByRole("button", { name: "Browser", exact: true })
-    .click();
-  const browserFrame = page.locator(".environment-browser-frame");
-  await expect(browserFrame).toBeVisible();
-  await browserFrame.evaluate((element) => {
-    element.dataset.renderIdentity = "browser-frame";
-  });
-  await emitControlledEvent(page, eventPath, "snapshot", {
-    ...snapshot,
-    historyRevision: 3,
-  });
-  await page.waitForTimeout(50);
-  await expect(browserFrame).toHaveAttribute(
-    "data-render-identity",
-    "browser-frame",
-  );
-
-  await inspectorViews
     .getByRole("button", { name: "Metrics", exact: true })
     .click();
   await expect.poll(() => metricsRequestCount).toBe(1);
@@ -2288,7 +2259,7 @@ test("preserves conversation, Inspector, and settings state while a Turn is runn
   ).toBeVisible();
   await emitControlledEvent(page, eventPath, "snapshot", {
     ...snapshot,
-    historyRevision: 4,
+    historyRevision: 3,
   });
   await page.waitForTimeout(50);
   await expect(
@@ -2623,81 +2594,6 @@ test("keeps New Session header operations aligned with the conversation", async 
       socket.send(JSON.stringify({ type: "ready", at: Date.now() / 1_000 }));
     },
   );
-  let browserSessionStarts = 0;
-  let browserControlRevision = 0;
-  let browserOwner: "agent" | "human" = "agent";
-  const browserControlUpdates: Array<"agent" | "human"> = [];
-  const browserViewports: Array<{ width: number; height: number }> = [];
-  await page.routeWebSocket(
-    (url) =>
-      url.pathname ===
-      `/api/v1/environments/${encodeURIComponent(environment.id)}/browser/ws/vnc`,
-    () => {
-      // Keeping the socket open is enough to verify that takeover swaps the
-      // read-only Dashboard for Sandpi's dedicated interactive transport.
-    },
-  );
-  await page.route(
-    (url) =>
-      url.pathname.startsWith(
-        `/api/v1/environments/${encodeURIComponent(environment.id)}/browser`,
-    ),
-    async (route) => {
-      if (route.request().url().endsWith("/browser/control")) {
-        if (route.request().method() === "PUT") {
-          const body = route.request().postDataJSON() as {
-            owner: "agent" | "human";
-          };
-          browserOwner = body.owner;
-          browserControlRevision += 1;
-          browserControlUpdates.push(body.owner);
-        }
-        await route.fulfill({
-          json: {
-            data: {
-              owner: browserOwner,
-              transport: browserOwner === "human" ? "vnc" : "playwright",
-              revision: browserControlRevision,
-              takeoverAvailable: true,
-            },
-          },
-        });
-        return;
-      }
-      if (route.request().url().endsWith("/browser/session")) {
-        browserSessionStarts += 1;
-        await route.fulfill({ status: 204 });
-        return;
-      }
-      if (route.request().url().endsWith("/browser/viewport")) {
-        browserViewports.push(
-          route.request().postDataJSON() as {
-            width: number;
-            height: number;
-          },
-        );
-        await route.fulfill({ status: 204 });
-        return;
-      }
-      await route.fulfill({
-        status: 200,
-        contentType: "text/html",
-        body: `<!doctype html>
-          <p>Official Playwright Dashboard fixture</p>
-          <script>
-            const post = (message) => parent.postMessage(message, "*");
-            post({ type: "sandpi:browser-dashboard-ready" });
-            post({ type: "sandpi:browser-dashboard-session-ready" });
-            post({
-              type: "sandpi:browser-dashboard-viewport",
-              width: 640,
-              height: 700,
-            });
-          </script>`,
-      });
-    },
-  );
-
   await page.goto(
     `/?environment=${encodeURIComponent(environment.id)}&new=1`,
   );
@@ -2728,11 +2624,9 @@ test("keeps New Session header operations aligned with the conversation", async 
   await expect(
     inspectorViews.getByRole("button", { name: "Metrics", exact: true }),
   ).toBeVisible();
-  const browserView = inspectorViews.getByRole("button", {
-    name: "Browser",
-    exact: true,
-  });
-  await expect(browserView).toBeVisible();
+  await expect(
+    inspectorViews.getByRole("button", { name: "Browser", exact: true }),
+  ).toHaveCount(0);
   await expect(
     inspectorViews.getByRole("button", { name: "Activity", exact: true }),
   ).toHaveCount(0);
@@ -2740,88 +2634,16 @@ test("keeps New Session header operations aligned with the conversation", async 
     header.getByRole("button", { name: "Close inspector" }),
   ).toHaveAttribute("aria-pressed", "true");
 
-  await browserView.click();
-  await expect(
-    page
-      .frameLocator('iframe[title="Shared Environment browser"]')
-      .getByText("Official Playwright Dashboard fixture"),
-  ).toBeVisible();
-  expect(browserSessionStarts).toBe(0);
-  await expect(
-    page.getByRole("button", { name: "New tab", exact: true }),
-  ).toHaveCount(0);
-  await expect(page.getByRole("combobox", { name: "Browser viewport" }))
-    .toHaveCount(0);
-  await expect.poll(() => browserViewports.at(-1)).toEqual({
-    width: 640,
-    height: 700,
-  });
-
-  const browserFrame = page.locator(
-    'iframe[title="Shared Environment browser"]',
-  );
-  const browserPanel = page.locator(".browser-panel");
-  const filesPanel = page.locator(".files-panel");
-  await expect(browserFrame).toHaveCount(1);
-  await expect(browserFrame).toHaveAttribute("aria-hidden", "true");
-  await expect(browserFrame).toHaveAttribute("tabindex", "-1");
-  await expect(browserFrame).toHaveCSS("pointer-events", "none");
-  const browserStage = page.locator(".environment-browser-stage");
-  await expect.poll(async () => {
-    const [frame, stage] = await Promise.all([
-      browserFrame.boundingBox(),
-      browserStage.boundingBox(),
-    ]);
-    return frame && stage
-      ? {
-          width: Math.round(frame.width - stage.width),
-          height: Math.round(frame.height - stage.height),
-        }
-      : undefined;
-  }).toEqual({ width: 0, height: 0 });
-  await expect(browserPanel).toBeVisible();
-  await expect(filesPanel).toBeHidden();
-  await inspectorViews
-    .getByRole("button", { name: "Files", exact: true })
-    .click();
-  await expect(browserFrame).toHaveCount(1);
-  await expect(browserFrame).toBeHidden();
-  await expect(browserPanel).toBeHidden();
-  await expect(filesPanel).toBeVisible();
-  await browserView.click();
-  await expect(browserFrame).toBeVisible();
-  await expect(browserPanel).toBeVisible();
-  await expect(filesPanel).toBeHidden();
-  expect(browserSessionStarts).toBe(0);
-
-  await page
-    .getByRole("button", { name: "Take control", exact: true })
-    .click();
-  await expect.poll(() => browserControlUpdates).toEqual(["human"]);
-  await expect(browserFrame).toHaveCount(0);
-  await expect(page.locator(".environment-browser-vnc")).toHaveCount(1);
-  await page
-    .getByRole("button", { name: "Return to agent", exact: true })
-    .click();
-  await expect.poll(() => browserControlUpdates).toEqual(["human", "agent"]);
-  await expect(browserFrame).toBeVisible();
-  await expect(
-    page
-      .frameLocator('iframe[title="Shared Environment browser"]')
-      .getByText("Official Playwright Dashboard fixture"),
-  ).toBeVisible();
-
   await header.getByRole("button", { name: "Close inspector" }).click();
   await expect(inspectorViews).toBeHidden();
   await expect(
     header.getByRole("button", { name: "Open inspector" }),
   ).toHaveAttribute("aria-pressed", "false");
-  await expect(browserFrame).toHaveCount(1);
-  await expect(browserFrame).toBeHidden();
 
   await header.getByRole("button", { name: "Open inspector" }).click();
-  await expect(browserFrame).toBeVisible();
-  expect(browserSessionStarts).toBe(0);
+  await expect(
+    inspectorViews.getByRole("button", { name: "Files", exact: true }),
+  ).toHaveClass(/is-active/);
 
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(inspectorViews).toBeHidden();
@@ -5423,17 +5245,11 @@ test("opens Environment files while keeping loopback links inert", async ({
   const directoryListingsReleased = new Promise<void>((resolve) => {
     releaseDirectoryListings = resolve;
   });
-  let browserRequests = 0;
   const browserErrors: string[] = [];
   page.on("console", (message) => {
     if (message.type() === "error") browserErrors.push(message.text());
   });
   page.on("pageerror", (error) => browserErrors.push(error.message));
-  page.on("request", (request) => {
-    if (new URL(request.url()).pathname.includes("/browser")) {
-      browserRequests += 1;
-    }
-  });
 
   const nativeSnapshot: CodexNativeSnapshot = {
     protocol: "codex-app-server",
@@ -5791,7 +5607,7 @@ test("opens Environment files while keeping loopback links inert", async ({
   ).toBeFocused();
 
   const loopbackReference = page.locator(
-    '[data-browser-url="http://localhost:3000/preview"]',
+    '[data-sandbox-loopback-url="http://localhost:3000/preview"]',
   );
   await expect(loopbackReference).toHaveJSProperty("tagName", "CODE");
   await expect(
@@ -5801,8 +5617,6 @@ test("opens Environment files while keeping loopback links inert", async ({
   await expect(
     inspectorViews.getByRole("button", { name: "Files", exact: true }),
   ).toHaveClass(/is-active/);
-  expect(browserRequests).toBe(0);
-
   const fileRequestsBeforeTabRoundTrip = fileRequests.length;
   await inspectorViews
     .getByRole("button", { name: "Activity", exact: true })

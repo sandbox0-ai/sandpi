@@ -4,8 +4,6 @@ import { ENVIRONMENT_METRIC_RANGES_SECONDS } from "@/lib/environment-metrics";
 import { WORKSPACE_ROOT } from "@/lib/workspace-path-policy";
 import {
   billingCheckoutSchema,
-  browserControlSchema,
-  browserSessionSchema,
   codexComposerUploadSchema,
   codexHookUpdateSchema,
   codexMcpServerConfigurationSchema,
@@ -15,7 +13,6 @@ import {
   codexRateLimitResetSchema,
   codexSkillConfigurationSchema,
   codexSkillPutSchema,
-  environmentBrowserViewportSchema,
   environmentCreateSchema,
   environmentOrderSchema,
   environmentProvisioningSchema,
@@ -195,15 +192,6 @@ const workspaceRawFile = z.object({
   kind: z.enum(["binary", "text"]),
 });
 
-const browserDescription =
-  "Sandpi's built-in Browser keeps one shared profile with one active owner. Agent ownership exposes a view-only, automatically sized screencast; every human interaction requires Take control and the headed VNC transport. A human can later return the same profile to the agent, and Sandpi rejects agent-side Browser operations while human control is active. Control responses report whether the Environment image supports headed-browser takeover.";
-const browserControl = z.object({
-  owner: z.enum(["agent", "human"]),
-  transport: z.enum(["playwright", "vnc"]),
-  revision: z.number().int().nonnegative(),
-  takeoverAvailable: z.boolean(),
-});
-
 export const openApiRouteContracts: readonly OpenApiRouteContract[] = [
   defineContract({
     method: "GET",
@@ -269,31 +257,6 @@ export const openApiRouteContracts: readonly OpenApiRouteContract[] = [
         state: z.string().optional(),
       }),
       response: { 302: redirect },
-    },
-  }),
-  defineContract({
-    method: "GET",
-    url: "/api/v1/environments/:environmentId/browser/control",
-    schema: {
-      operationId: "getEnvironmentBrowserControl",
-      summary: "Get the shared Browser owner",
-      description: browserDescription,
-      tags: ["Browser"],
-      response: { 200: dataEnvelope(browserControl) },
-      "x-sandpi-shared-browser": true,
-    },
-  }),
-  defineContract({
-    method: "PUT",
-    url: "/api/v1/environments/:environmentId/browser/control",
-    schema: {
-      operationId: "updateEnvironmentBrowserControl",
-      summary: "Transfer control of the shared Browser",
-      description: browserDescription,
-      tags: ["Browser"],
-      body: browserControlSchema,
-      response: { 200: dataEnvelope(browserControl) },
-      "x-sandpi-shared-browser": true,
     },
   }),
   defineContract({
@@ -1684,74 +1647,6 @@ export const openApiRouteContracts: readonly OpenApiRouteContract[] = [
         },
       },
     },
-  }),
-  defineContract({
-    method: "POST",
-    url: "/api/v1/environments/:environmentId/browser/session",
-    schema: {
-      operationId: "ensureEnvironmentBrowserSession",
-      summary: "Ensure the shared Environment Browser session",
-      description: browserDescription,
-      tags: ["Browser"],
-      body: browserSessionSchema,
-      response: { 204: noContent },
-      "x-sandpi-optional-request-body": true,
-      "x-sandpi-shared-browser": true,
-    },
-  }),
-  defineContract({
-    method: "POST",
-    url: "/api/v1/environments/:environmentId/browser/viewport",
-    schema: {
-      operationId: "resizeEnvironmentBrowserViewport",
-      summary: "Resize the shared Browser viewport",
-      description: browserDescription,
-      tags: ["Browser"],
-      body: environmentBrowserViewportSchema,
-      response: { 204: noContent },
-      "x-sandpi-shared-browser": true,
-    },
-  }),
-  defineContract({
-    method: "GET",
-    url: "/api/v1/environments/:environmentId/browser/ws/:dashboardSocketId",
-    schema: {
-      operationId: "connectEnvironmentBrowserDashboard",
-      summary: "Connect the embedded Browser dashboard WebSocket",
-      description: browserDescription,
-      tags: ["Browser"],
-      response: { 101: noContent },
-      "x-sandpi-websocket": {
-        protocol: "opaque-environment-browser",
-        direction: "bidirectional",
-      },
-      "x-sandpi-shared-browser": true,
-    },
-  }),
-  defineContract({
-    method: "GET",
-    url: "/api/v1/environments/:environmentId/browser",
-    schema: {
-      operationId: "getEnvironmentBrowserDashboard",
-      summary: "Load the embedded shared Browser dashboard",
-      description: browserDescription,
-      tags: ["Browser"],
-      querystring: z.looseObject({ embed: z.literal("1").optional() }),
-      response: { 200: z.string(), 302: redirect },
-      "x-sandpi-content-type": "text/html",
-      "x-sandpi-proxy-protocol": "opaque-playwright-dashboard",
-      "x-sandpi-shared-browser": true,
-    },
-  }),
-  defineContract({
-    method: "GET",
-    url: "/api/v1/environments/:environmentId/browser/",
-    schema: { hide: true },
-  }),
-  defineContract({
-    method: "GET",
-    url: "/api/v1/environments/:environmentId/browser/*",
-    schema: { hide: true },
   }),
   defineContract({
     method: "GET",

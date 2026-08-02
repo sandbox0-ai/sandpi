@@ -83,12 +83,12 @@ test("falls back safely for malformed local UI preferences", () => {
   );
 });
 
-test("keeps Browser as a durable Inspector tab", () => {
+test("migrates the removed Browser Inspector tab to Files", () => {
   assert.equal(
     normalizeLocalUiPreferences({
       workspace: { inspectorTab: "browser" },
     }).workspace.inspectorTab,
-    "browser",
+    "files",
   );
 });
 

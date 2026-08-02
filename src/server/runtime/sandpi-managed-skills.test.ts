@@ -43,19 +43,22 @@ test("loads every release-owned Sandpi skill and interface", () => {
   );
 });
 
-test("keeps the public guide aligned with shared Browser, lifecycle, and canonical references", () => {
+test("keeps the public guide aligned with Playwright, lifecycle, and canonical references", () => {
   const guide = readFileSync(
     new URL("../../../public/llms.txt", import.meta.url),
     "utf8",
   );
 
-  assert.match(guide, /human-agent shared Environment Browser/i);
-  assert.match(guide, /one active owner/);
-  assert.match(guide, /must not launch a second browser, attach through CDP/);
-  assert.doesNotMatch(guide, /complete an interactive login/i);
+  assert.match(guide, /## Playwright CLI/);
+  assert.match(guide, /materializes its version-matched upstream Agent Skill/);
+  assert.match(
+    guide,
+    /neither an Environment Browser nor an application Preview tab/,
+  );
+  assert.match(guide, /browser executable must be provisioned separately/);
   assert.match(guide, /soft TTL and hard TTL to zero/);
   assert.match(guide, /does not idle-pause an Environment while/);
-  assert.match(guide, /Process memory, sockets, live Browser pages/);
+  assert.match(guide, /Process memory, sockets, terminal process state/);
   assert.match(guide, /\/cli\/README\.md/);
   assert.match(guide, /docs\/local-environment-migration\.md/);
   assert.match(guide, /docs\/architecture\/cli\.md/);
