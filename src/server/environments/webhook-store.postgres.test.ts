@@ -103,7 +103,10 @@ test(
       (
         await store.ingestDelivery({
           webhook: created,
-          event: webhookEvent("batch-one", "build", "repo", startedAt),
+          event: {
+            ...webhookEvent("batch-one", "build", "repo", startedAt),
+            callerPrompt: "Investigate the first failure.",
+          },
           now: startedAt,
         })
       ).kind,
@@ -125,7 +128,10 @@ test(
       (
         await store.ingestDelivery({
           webhook: updated,
-          event: webhookEvent("batch-two", "build", "repo", secondAt),
+          event: {
+            ...webhookEvent("batch-two", "build", "repo", secondAt),
+            callerPrompt: "Compare the second failure.",
+          },
           now: secondAt,
         })
       ).kind,
@@ -161,6 +167,14 @@ test(
     assert.match(snapshot.rows[0]?.prompt ?? "", /^Original response policy/);
     assert.match(snapshot.rows[0]?.prompt ?? "", /batch-one/);
     assert.match(snapshot.rows[0]?.prompt ?? "", /batch-two/);
+    assert.ok(
+      (snapshot.rows[0]?.prompt ?? "").indexOf(
+        "Investigate the first failure.",
+      ) <
+        (snapshot.rows[0]?.prompt ?? "").indexOf(
+          "Compare the second failure.",
+        ),
+    );
     assert.doesNotMatch(
       snapshot.rows[0]?.prompt ?? "",
       /Replacement response policy/,

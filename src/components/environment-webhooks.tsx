@@ -578,6 +578,13 @@ function WebhookSetup({
 }) {
   const githubSource =
     setup.webhook.source.kind === "github" ? setup.webhook.source : undefined;
+  const curlExample =
+    !githubSource && setup.webhook.endpointUrl
+      ? customWebhookCurlExample(
+          setup.webhook.endpointUrl,
+          setup.setupSecret,
+        )
+      : undefined;
   return (
     <section className={styles.setup} aria-labelledby="webhook-setup-title">
       <header>
@@ -592,7 +599,7 @@ function WebhookSetup({
       <p>
         {githubSource
           ? `GitHub events from ${githubSource.repositories.length} selected ${githubSource.repositories.length === 1 ? "repository" : "repositories"} are ready to route through ${githubSource.accountLogin}.`
-          : "POST JSON, form, or text data with Authorization: Bearer <token>. X-Sandpi-Event can name the event type."}
+          : "POST JSON, form, or text data with Authorization: Bearer <token>. A top-level prompt in JSON or form data adds per-delivery instructions; the Base prompt takes precedence."}
       </p>
       {setup.webhook.endpointUrl ? (
         <CopyField
@@ -614,6 +621,13 @@ function WebhookSetup({
             This token is shown once. Store it in the event source now.
           </p>
         </>
+      ) : null}
+      {curlExample ? (
+        <CopyCodeExample
+          value={curlExample}
+          copied={copied === "setup-curl"}
+          onCopy={() => onCopy("setup-curl", curlExample)}
+        />
       ) : null}
     </section>
   );
@@ -637,6 +651,28 @@ function CopyField({
       <button type="button" className="text-action-button" onClick={onCopy}>
         <Copy size={13} /> {copied ? "Copied" : "Copy"}
       </button>
+    </div>
+  );
+}
+
+function CopyCodeExample({
+  value,
+  copied,
+  onCopy,
+}: {
+  value: string;
+  copied: boolean;
+  onCopy: () => void;
+}) {
+  return (
+    <div className={styles.codeExample}>
+      <div>
+        <span>curl example</span>
+        <button type="button" className="text-action-button" onClick={onCopy}>
+          <Copy size={13} /> {copied ? "Copied" : "Copy"}
+        </button>
+      </div>
+      <pre><code>{value}</code></pre>
     </div>
   );
 }
@@ -911,15 +947,20 @@ function WebhookEditor({
       </div>
 
       <label className="full-field">
-        Prompt
+        Base prompt
         <textarea
           className={shared.promptInput}
           maxLength={50_000}
           rows={7}
-          placeholder="Tell Codex how to investigate or respond. The authenticated event is appended as untrusted data."
+          placeholder="Tell Codex how to handle every delivery."
           value={draft.prompt}
           onChange={(event) => onChange({ ...draft, prompt: event.target.value })}
         />
+        <small>
+          {draft.sourceKind === "custom"
+            ? "Takes precedence. An optional top-level request-body prompt adds per-delivery instructions; all other payload fields remain untrusted data."
+            : "Always applied before the selected GitHub event, which remains untrusted data."}
+        </small>
         <small className={shared.characterCount}>{draft.prompt.length.toLocaleString()} / 50,000</small>
       </label>
 
@@ -1233,6 +1274,20 @@ function webhookSourceSummary(webhook: EnvironmentWebhook) {
   }
   const count = webhook.source.repositories.length;
   return `GitHub · ${webhook.source.accountLogin} · ${count} ${count === 1 ? "repository" : "repositories"}`;
+}
+
+function customWebhookCurlExample(endpointUrl: string, setupSecret?: string) {
+  const token = setupSecret ?? "<bearer-token>";
+  return `curl --request POST '${endpointUrl}' \\
+  --header 'Authorization: Bearer ${token}' \\
+  --header 'Content-Type: application/json' \\
+  --header 'X-Sandpi-Event: deploy.failed' \\
+  --header 'Idempotency-Key: deploy-123' \\
+  --data '{
+    "prompt": "Investigate this failed deployment and prepare a safe fix.",
+    "deploymentId": "deploy-123",
+    "environment": "production"
+  }'`;
 }
 
 function webhookCollectionPath(environmentId: string) {

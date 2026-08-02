@@ -172,6 +172,51 @@ test(
         .sort(),
       ["build.failed", "deploy.finished"],
     );
+
+    const promptSecret = "custom-request-prompt-secret-for-api-test";
+    const promptCreate = await server.app.inject({
+      method: "POST",
+      url: "/api/v1/environments/env-default/webhooks",
+      payload: webhookDefinition({
+        name: "Prompted deployment events",
+        secret: promptSecret,
+        batchWindowSeconds: 0,
+      }),
+    });
+    assert.equal(promptCreate.statusCode, 201, promptCreate.body);
+    const promptPath = new URL(
+      promptCreate.json().data.webhook.endpointUrl,
+    ).pathname;
+    const prompted = await server.app.inject({
+      method: "POST",
+      url: promptPath,
+      headers: {
+        authorization: `Bearer ${promptSecret}`,
+        "content-type": "application/json",
+        "idempotency-key": "prompted-delivery",
+      },
+      payload: {
+        prompt: "Investigate this production deployment failure.",
+        type: "deploy.failed",
+        deployment: { environment: "production" },
+      },
+    });
+    assert.equal(prompted.statusCode, 202, prompted.body);
+    assert.equal(prompted.json().status, "queued");
+    const queued = await database.query<{ prompt: string }>(
+      "SELECT prompt FROM environment_webhook_runs WHERE id = $1",
+      [prompted.json().runId],
+    );
+    assert.match(
+      queued.rows[0]?.prompt ?? "",
+      /^Review this event and run the relevant checks\./,
+    );
+    assert.equal(
+      queued.rows[0]?.prompt.match(
+        /Investigate this production deployment failure\./g,
+      )?.length,
+      1,
+    );
   },
 );
 

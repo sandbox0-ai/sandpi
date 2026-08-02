@@ -64,6 +64,37 @@
   white-space: nowrap;
 }
 
+.codeExample {
+  display: grid;
+  gap: 6px;
+}
+
+.codeExample > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.codeExample > div > span {
+  color: var(--ink-faint);
+  font-size: 9px;
+  font-weight: 650;
+}
+
+.codeExample pre {
+  overflow: auto;
+  margin: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  background: var(--sidebar);
+  color: var(--ink-soft);
+  font-size: 9px;
+  line-height: 1.55;
+  white-space: pre;
+}
+
 .oneTimeSecret {
   color: var(--amber) !important;
   font-weight: 600;
