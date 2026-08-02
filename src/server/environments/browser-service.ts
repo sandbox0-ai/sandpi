@@ -205,7 +205,7 @@ export class EnvironmentBrowserService {
             ownership.owner === "human"
               ? this.cacheTakeoverCapability(runtime, true)
               : await this.takeoverCapabilityForRuntime(runtime);
-          return { ...ownership, takeoverAvailable };
+          return publicBrowserControl(ownership, takeoverAvailable);
         },
       );
       this.invalidateControlState(environmentId);
@@ -220,7 +220,7 @@ export class EnvironmentBrowserService {
     ownership: EnvironmentBrowserOwnership,
   ): Promise<EnvironmentBrowserControl> {
     if (ownership.owner === "human") {
-      return { ...ownership, takeoverAvailable: true };
+      return publicBrowserControl(ownership, true);
     }
     const takeoverAvailable = await this.serializeServiceOperation(
       environmentId,
@@ -231,7 +231,7 @@ export class EnvironmentBrowserService {
           (runtime) => this.takeoverCapabilityForRuntime(runtime),
         ),
     );
-    return { ...ownership, takeoverAvailable };
+    return publicBrowserControl(ownership, takeoverAvailable);
   }
 
   private async takeoverCapabilityForRuntime(
@@ -469,6 +469,18 @@ export class EnvironmentBrowserService {
       state.inFlight = undefined;
     }
   }
+}
+
+function publicBrowserControl(
+  ownership: EnvironmentBrowserOwnership,
+  takeoverAvailable: boolean,
+): EnvironmentBrowserControl {
+  return {
+    owner: ownership.owner,
+    transport: ownership.transport,
+    revision: ownership.revision,
+    takeoverAvailable,
+  };
 }
 
 function sameViewport(
