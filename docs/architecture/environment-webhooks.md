@@ -22,11 +22,13 @@ durable Automation run -> native Codex Turn
 native Thread remains conversation authority
 ```
 
-A custom request must pass its Webhook's bearer-token check. A GitHub request
-must pass the deployment GitHub App's raw-body HMAC verification before Sandpi
-acknowledges it. Definitions, encrypted custom secrets, source bindings,
-deliveries, open batches and runs stay in Sandpi PostgreSQL. A Sandbox never
-receives database, Webhook or GitHub App credentials.
+A custom request must pass its Webhook's bearer-token check. Possession of that
+token authorizes the caller to submit the optional per-delivery `prompt`, so it
+must be handled as an agent-input credential. A GitHub request must pass the
+deployment GitHub App's raw-body HMAC verification before Sandpi acknowledges
+it. Definitions, encrypted custom secrets, source bindings, deliveries, open
+batches and runs stay in Sandpi PostgreSQL. A Sandbox never receives database,
+Webhook or GitHub App credentials.
 
 The run ledger stores delivery and recovery coordinates, not the resulting
 conversation transcript. After a Turn is accepted, the native coding-agent
@@ -38,7 +40,9 @@ output, just as it does for Schedules and interactive input.
 A Webhook has four user-facing decisions:
 
 1. **Event source** is either GitHub or a Custom URL.
-2. **Prompt** tells Codex what to do with the received event.
+2. **Base prompt** tells Codex what to do with every received event. A Custom
+   URL caller may append a per-delivery request prompt without replacing this
+   owner-controlled base prompt.
 3. **Delivery batching** either runs every delivery immediately or combines a
    fixed window into one run.
 4. **Run destination** creates a Session per run, reuses a GitHub thread
@@ -112,6 +116,29 @@ The Custom URL accepts every JSON, form or text request authenticated with
 cannot configure headers, but query strings may be retained by upstream access
 logs.
 
+A JSON object or form body may include a top-level `prompt` string containing
+1-50,000 characters after trimming. Sandpi appends it after the Webhook's base
+prompt as an authenticated caller instruction; it never replaces the base
+prompt, which takes precedence on conflict. The reserved field is removed from
+the event payload so Codex does not receive it again as untrusted data. Other
+payload fields remain untrusted event data. Text bodies and structured bodies
+without `prompt` use only the base prompt.
+
+For example:
+
+```bash
+curl --request POST 'https://<sandpi-host>/api/v1/webhooks/<endpointId>' \
+  --header 'Authorization: Bearer <token>' \
+  --header 'Content-Type: application/json' \
+  --header 'X-Sandpi-Event: deploy.failed' \
+  --header 'Idempotency-Key: deploy-123' \
+  --data '{
+    "prompt": "Investigate this failed deployment and prepare a safe fix.",
+    "deploymentId": "deploy-123",
+    "environment": "production"
+  }'
+```
+
 `X-Sandpi-Event`, then a top-level `type`, `event` or `kind`, names the event in
 history and in the agent prompt. It does not filter the request.
 `Idempotency-Key`, `X-Sandpi-Delivery` or `X-Request-ID` identifies a delivery.
@@ -128,7 +155,10 @@ retry window.
 
 GitHub events are batched separately per pull request, issue, or repository.
 All requests to one Custom URL share its batch. A batch retains at most the 50
-most recent payloads while preserving the total event count.
+most recent payloads while preserving the total event count. Authenticated
+request prompts in those retained deliveries are appended in delivery order;
+the generated native prompt remains bounded and marks a truncated preview when
+the combined prompts and event data exceed that bound.
 
 An open batch snapshots its execution configuration and deadline. Editing the
 Webhook does not move that deadline or change the prompt and destination used

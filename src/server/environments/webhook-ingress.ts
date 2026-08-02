@@ -8,6 +8,7 @@ export interface NormalizedWebhookEvent {
   groupKey: string;
   summary: string;
   receivedAt: string;
+  callerPrompt?: string;
   payload: unknown;
   source?: {
     provider: "custom" | "github";
@@ -34,8 +35,9 @@ export function normalizeAuthenticatedWebhookRequest(input: {
 }): NormalizedWebhookEvent {
   const now = input.now ?? new Date();
   verifyBearerOrQueryToken(input);
-  const payload = parsedBody(input.rawBody, input.contentType);
-  const object = isRecord(payload) ? payload : undefined;
+  const parsed = parsedBody(input.rawBody, input.contentType);
+  const object = isRecord(parsed) ? parsed : undefined;
+  const { callerPrompt, payload } = customRequestContent(parsed, object);
   const eventType =
     header(input.headers, "x-sandpi-event") ??
     scalarString(object?.type) ??
@@ -53,9 +55,35 @@ export function normalizeAuthenticatedWebhookRequest(input: {
     groupKey: "default",
     summary: eventType,
     receivedAt: now.toISOString(),
+    ...(callerPrompt ? { callerPrompt } : {}),
     payload,
     source: { provider: "custom" },
   };
+}
+
+function customRequestContent(
+  parsed: unknown,
+  object: Record<string, unknown> | undefined,
+) {
+  if (!object || !Object.hasOwn(object, "prompt")) {
+    return { payload: parsed };
+  }
+  if (typeof object.prompt !== "string") throw invalidCallerPrompt();
+  const callerPrompt = object.prompt.trim();
+  if (!callerPrompt || callerPrompt.length > 50_000) {
+    throw invalidCallerPrompt();
+  }
+  const payload = { ...object };
+  delete payload.prompt;
+  return { callerPrompt, payload };
+}
+
+function invalidCallerPrompt() {
+  return new HttpError(
+    400,
+    "environment_webhook_prompt_invalid",
+    "Webhook request prompt must be a non-empty string of at most 50,000 characters.",
+  );
 }
 
 function verifyBearerOrQueryToken(input: {

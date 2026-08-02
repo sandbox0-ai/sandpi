@@ -795,7 +795,7 @@ export const openApiRouteContracts: readonly OpenApiRouteContract[] = [
       operationId: "receiveEnvironmentWebhook",
       summary: "Receive an authenticated Environment webhook delivery",
       description:
-        "Accepts JSON, form, or text payloads authenticated with a bearer or query token.",
+        "Accepts JSON, form, or text payloads authenticated with a bearer or query token. A JSON object or form body may include a top-level prompt string of 1-50,000 characters; Sandpi appends it as per-delivery instructions after the owner-configured Webhook base prompt, which takes precedence on conflict.",
       tags: ["Webhooks"],
       "x-sandpi-request-content-types": [
         "application/json",
