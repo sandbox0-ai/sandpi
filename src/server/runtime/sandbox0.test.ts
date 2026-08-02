@@ -1395,7 +1395,7 @@ test("uses the AppService spec as the Browser owner handoff fence", async () => 
   assert.equal(capabilityChecks, 1);
   assert.match(
     String(capabilityCommand?.command?.at(-1)),
-    /command -v Xvfb[\s\S]+command -v x11vnc/,
+    /command -v Xtigervnc[\s\S]+command -v Xvfb[\s\S]+command -v x11vnc/,
   );
   assert.doesNotMatch(
     String(capabilityCommand?.command?.at(-1)),
@@ -1429,7 +1429,7 @@ test("uses the AppService spec as the Browser owner handoff fence", async () => 
   const takeoverPreparation = String(preflightCommand?.command?.at(-1));
   assert.match(
     takeoverPreparation,
-    /playwright_guard=\/workspace\/\.sandpi\/bin\/playwright-cli[\s\S]+command -v Xvfb/,
+    /playwright_guard=\/workspace\/\.sandpi\/bin\/playwright-cli[\s\S]+command -v Xtigervnc/,
   );
   assert.match(
     Buffer.from(
@@ -1448,11 +1448,16 @@ test("uses the AppService spec as the Browser owner handoff fence", async () => 
     humanService.runtime.envVars.SANDPI_BROWSER_SESSION_REVISION,
     "1",
   );
-  assert.match(humanCommand, /Xvfb.*openbox.*x11vnc.*setpriv/s);
+  assert.match(
+    humanCommand,
+    /command -v Xtigervnc[\s\S]+Xtigervnc[\s\S]+AcceptSetDesktopSize[\s\S]+Xvfb[\s\S]+openbox[\s\S]+x11vnc[\s\S]+setpriv/,
+  );
   assert.match(humanCommand, /google-chrome-stable.*chrome-linux/s);
+  assert.match(humanCommand, /--start-maximized/);
+  assert.doesNotMatch(humanCommand, /--window-size/);
   assert.doesNotMatch(
     humanCommand,
-    /--headless|--remote-debugging|--enable-automation/,
+    /--headless|--remote-debugging|--enable-automation|--no-sandbox/,
   );
   assert.equal(spawnSync("sh", ["-n", "-c", humanCommand]).status, 0);
   assert.equal(

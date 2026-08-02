@@ -295,15 +295,21 @@ so the agent always lists tabs and takes a new snapshot after control returns.
 Human control replaces the same AppService rather than starting a second
 service. Its lazy process first closes the Playwright daemon and validates the
 profile lock, then runs one headed browser as the unprivileged
-`sandbox-browser` user on Xvfb and Openbox. It prefers an operator-supplied
-`google-chrome-stable` binary when one exists and otherwise uses the bundled
-Chrome for Testing executable. The launch has no headless, automation or
-remote-debugging flag and exposes no CDP port. x11vnc binds only to loopback; a
-small WebSocket-to-TCP bridge publishes `/vnc` through the existing protected
-AppService. The Web client dynamically loads noVNC only in human mode. This
-mode is suitable for sites that require real human interaction, but it cannot
-promise that a third-party identity provider will accept every browser build
-or future policy.
+`sandbox-browser` user on a TigerVNC X server and Openbox. It prefers an
+operator-supplied `google-chrome-stable` binary when one exists and otherwise
+uses the bundled Chrome for Testing executable. Chrome starts maximized and
+keeps that window-manager state as the X desktop changes size. The bundled
+browser runs under the image's normal Linux browser-sandbox setup; Sandpi does
+not force `--no-sandbox`. The launch has no headless, automation or
+remote-debugging flag and exposes no CDP port.
+TigerVNC binds only to loopback and accepts the noVNC client's requested panel
+size; a small WebSocket-to-TCP bridge publishes `/vnc` through the existing
+protected AppService. The client keeps viewport scaling enabled as a fallback
+for older images, where Sandpi uses the legacy fixed-size Xvfb/x11vnc runtime.
+The Web client dynamically loads noVNC only in human mode. This mode is
+suitable for sites that require real human interaction, but it cannot promise
+that a third-party identity provider will accept every browser build or future
+policy.
 
 Returning control replaces the AppService with the agent command. The human
 process receives a graceful stop so Chrome can flush the profile before the
@@ -319,10 +325,12 @@ would require moving the browser into a separately privileged sidecar or
 Sandbox.
 
 Only one browser renderer runs during a handoff. The coding-agent image omits
-Playwright's otherwise redundant headless-shell payload, adds only Xvfb,
-Openbox, x11vnc and the already-used `ws` transport dependency, and loads the
-noVNC client on demand. Two GiB or more of Sandbox memory is recommended when a
-headed browser and coding agent are used together.
+Playwright's otherwise redundant headless-shell payload. The v0.4 image adds
+TigerVNC while temporarily retaining Xvfb/x11vnc for rollout compatibility;
+the current human path runs one combined X/VNC server instead of separate Xvfb
+and x11vnc processes. Sandpi reuses the existing `ws` transport dependency and
+loads the noVNC client on demand. Two GiB or more of Sandbox memory is
+recommended when a headed browser and coding agent are used together.
 
 Sandpi adapts only the embedded Dashboard shell: it binds the Dashboard to the
 shared `default` session explicitly, projects the current Sandpi theme tokens
