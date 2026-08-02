@@ -7,7 +7,6 @@ import {
   ChevronDown,
   FileCode2,
   Gauge,
-  Globe2,
   ListTree,
   Network,
   Settings2,
@@ -27,9 +26,6 @@ import {
   InteractiveMetricChart,
   type MetricChartSeries,
 } from "@/components/metric-chart";
-import {
-  EnvironmentBrowser,
-} from "@/components/environment-browser";
 import {
   WorkspaceIde,
   type WorkspaceFileNavigationRequest,
@@ -57,7 +53,7 @@ import type {
   RuntimeMetricSeries,
 } from "@/lib/types";
 
-export type InspectorTab = "files" | "browser" | "activity" | "metrics";
+export type InspectorTab = "files" | "activity" | "metrics";
 export const INSPECTOR_KEEP_ALIVE_MS = 30_000;
 
 export interface InspectorSessionActivity {
@@ -338,8 +334,6 @@ export function Inspector({
   const resizePointerRef = useRef<number | null>(null);
   const resizeRatioRef = useRef(widthRatio);
   const [resizing, setResizing] = useState(false);
-  const [mountedBrowserEnvironmentId, setMountedBrowserEnvironmentId] =
-    useState(activeTab === "browser" ? environment.id : "");
   const [mountedFilesEnvironmentId, setMountedFilesEnvironmentId] = useState(
     activeTab === "files" ? environment.id : "",
   );
@@ -413,12 +407,6 @@ export function Inspector({
       onTabChange("files");
     }
   }, [activeTab, onTabChange, sessionActivity]);
-
-  useEffect(() => {
-    if (activeTab === "browser") {
-      setMountedBrowserEnvironmentId(environment.id);
-    }
-  }, [activeTab, environment.id]);
 
   useEffect(() => {
     if (activeTab === "files") {
@@ -593,13 +581,6 @@ export function Inspector({
           >
             <FileCode2 size={14} /> {ui.files}
           </button>
-          <button
-            type="button"
-            className={activeTab === "browser" ? "is-active" : ""}
-            onClick={() => onTabChange("browser")}
-          >
-            <Globe2 size={14} /> {ui.browser}
-          </button>
           {sessionActivity ? (
             <button
               type="button"
@@ -652,32 +633,6 @@ export function Inspector({
       {activeTab === "activity" && sessionActivity
         ? sessionActivity.content
         : null}
-
-      {activeTab === "browser" ||
-      mountedBrowserEnvironmentId === environment.id ? (
-        <div
-          className="inspector-panel browser-panel"
-          hidden={activeTab !== "browser"}
-        >
-          <EnvironmentBrowser
-            key={environment.id}
-            environmentId={environment.id}
-            copy={{
-              title: ui.browserTitle,
-              starting: ui.browserStarting,
-              unavailable: ui.browserUnavailable,
-              retry: ui.browserRetry,
-              loading: ui.browserLoading,
-              takeControl: ui.browserTakeControl,
-              takeControlUnavailable: ui.browserTakeControlUnavailable,
-              returnToAgent: ui.browserReturnToAgent,
-              humanControl: ui.browserHumanControl,
-              switchingControl: ui.browserSwitchingControl,
-              humanStarting: ui.browserHumanStarting,
-            }}
-          />
-        </div>
-      ) : null}
 
       {activeTab === "files" ||
       mountedFilesEnvironmentId === environment.id ? (

@@ -24,7 +24,7 @@ test("OpenAPI publishes every supported operation with a unique id", async () =>
   const operations = allOperations(document);
   const operationIds = operations.map((operation) => operation.operationId);
 
-  assert.equal(operations.length, 128);
+  assert.equal(operations.length, 121);
   assert.ok(operationIds.every(Boolean));
   assert.equal(new Set(operationIds).size, operationIds.length);
   assert.ok(Object.keys(document.paths).every((path) => !path.includes(":")));
@@ -73,55 +73,18 @@ test("OpenAPI publishes every supported operation with a unique id", async () =>
   ]);
 });
 
-test("OpenAPI preserves the shared Browser and streaming semantics", async () => {
+test("OpenAPI excludes the removed Browser API and preserves streaming semantics", async () => {
   const { document } = await builtOpenApi;
   const cloudSync = operation(document, "/api/v1/sync", "get");
   assert.equal(cloudSync.responses["304"] !== undefined, true);
   assert.match(cloudSync.description ?? "", /database-only/i);
 
   assert.equal(
-    document.paths?.["/api/v1/environments/{environmentId}/browser/open"],
-    undefined,
+    Object.keys(document.paths).some((path) => path.includes("/browser")),
+    false,
   );
-  const browserDashboard = operation(
-    document,
-    "/api/v1/environments/{environmentId}/browser",
-    "get",
-  );
-  assert.equal(browserDashboard["x-sandpi-shared-browser"], true);
-  assert.match(browserDashboard.description ?? "", /one active owner/i);
-  assert.match(browserDashboard.description ?? "", /view-only/i);
-  assert.match(browserDashboard.description ?? "", /Take control/i);
-
-  const browserControl = operation(
-    document,
-    "/api/v1/environments/{environmentId}/browser/control",
-    "put",
-  );
-  assert.equal(browserControl["x-sandpi-shared-browser"], true);
-  const controlBody = browserControl.requestBody;
-  assert.ok(controlBody && !("$ref" in controlBody));
-  const controlSchema = controlBody.content["application/json"]?.schema;
-  assert.ok(controlSchema && !("$ref" in controlSchema));
-  assert.deepEqual(controlSchema.required, ["owner"]);
-  assert.deepEqual(controlSchema.properties?.owner, {
-    type: "string",
-    enum: ["agent", "human"],
-  });
-  const controlResponse = browserControl.responses["200"];
-  assert.ok(controlResponse && !("$ref" in controlResponse));
-  const controlResponseSchema =
-    controlResponse.content?.["application/json"]?.schema;
-  assert.ok(controlResponseSchema && !("$ref" in controlResponseSchema));
-  const controlDataSchema = controlResponseSchema.properties?.data;
-  assert.ok(controlDataSchema && !("$ref" in controlDataSchema));
-  assert.deepEqual(controlDataSchema.properties?.takeoverAvailable, {
-    type: "boolean",
-  });
-  assert.ok(controlDataSchema.required?.includes("takeoverAvailable"));
 
   for (const [path, method] of [
-    ["/api/v1/environments/{environmentId}/browser/session", "post"],
     ["/api/v1/sessions/{sessionId}/review", "post"],
     ["/api/v1/sessions/{sessionId}/fork", "post"],
     [
@@ -146,7 +109,6 @@ test("OpenAPI preserves the shared Browser and streaming semantics", async () =>
 
   for (const path of [
     "/api/v1/environments/{environmentId}/ide/events",
-    "/api/v1/environments/{environmentId}/browser/ws/{dashboardSocketId}",
     "/api/v1/environments/{environmentId}/terminal",
   ]) {
     assert.ok(operation(document, path, "get")["x-sandpi-websocket"]);

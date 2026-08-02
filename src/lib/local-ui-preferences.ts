@@ -15,7 +15,7 @@ export const LOCAL_UI_PREFERENCES_STORAGE_KEY =
 export const LOCAL_UI_PREFERENCES_CHANGED_EVENT =
   "sandpi:local-ui-preferences-changed";
 
-export type LocalInspectorTab = "files" | "browser" | "activity" | "metrics";
+export type LocalInspectorTab = "files" | "activity" | "metrics";
 export type LocalCodexSessionActivityFilter =
   "all" | "issues" | "external" | "commands" | "files" | "agents" | "system";
 
@@ -67,7 +67,7 @@ export const DEFAULT_LOCAL_UI_PREFERENCES: SandpiLocalUiPreferences = {
 let cachedRawPreferences: string | null | undefined;
 let cachedPreferences = DEFAULT_LOCAL_UI_PREFERENCES;
 
-const INSPECTOR_TABS = ["files", "browser", "activity", "metrics"] as const;
+const INSPECTOR_TABS = ["files", "activity", "metrics"] as const;
 const CODEX_SESSION_ACTIVITY_FILTERS = [
   "all",
   "issues",

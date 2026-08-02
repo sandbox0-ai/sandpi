@@ -7,27 +7,23 @@ This file describes the current Sandpi product contract. It is documentation, no
 ## Environment contract
 
 - Sandpi runs a native coding-agent harness in a Sandbox0 cloud Sandbox.
-- `/workspace` is the persistent Environment Workspace. Multiple Sandpi Sessions in one Environment share that mutable Workspace, coding-agent account, network policy, credentials, Terminal, Browser, and runtime resources. Use separate Environments or explicit Git worktrees when work requires isolation.
+- `/workspace` is the persistent Environment Workspace. Multiple Sandpi Sessions in one Environment share that mutable Workspace, coding-agent account, network policy, credentials, Terminal, and runtime resources. Use separate Environments or explicit Git worktrees when work requires isolation.
 - Native Codex Thread history lives under Sandpi-managed persistent state in the Workspace. Do not edit `/workspace/.sandpi` manually.
 - Refreshing or disconnecting a Sandpi client does not stop an active coding agent. Inspect current files and Git state before mutating them because a human or another Session may have changed the shared Workspace.
 
-## Human-agent shared Environment Browser
+## Playwright CLI
 
-- The Browser keeps one persistent profile with one active owner. Agent control uses the official Playwright Dashboard and `playwright-cli`; its native manual-interaction toolbar is hidden, so Sandpi's Take control action is the only human-input path. Human control uses a headed interactive browser without Playwright or a CDP endpoint. Take control for any interactive task, then return control whenever the agent should continue with the same cookies and site storage.
-- Browser ownership is exclusive. While human control is active, Sandpi rejects Browser automation APIs and the managed `playwright-cli` command refuses to run. Agents must not launch a second browser, attach through CDP, or bypass that guard.
-- Read the locally installed `playwright-cli` Skill for commands matching the Environment's installed Playwright version. After control returns to the agent, start with `playwright-cli tab-list` and `playwright-cli snapshot`, perform actions against current snapshot references, and snapshot again after navigation or human interaction.
-- Do not run `playwright-cli close`, `playwright-cli delete-data`, clear cookies or storage, replace the persistent profile, or create an isolated session unless the user explicitly requests that destructive or isolated behavior.
-- Browser URLs on `localhost`, `127.0.0.1`, or `::1` resolve inside the remote Environment Sandbox, not on the human's device.
-- Browser tabs, live pages, and snapshot element references have no continuity guarantee across an ownership handoff, Sandbox pause, resume, or Browser-process recovery. The persistent profile and cookies survive, but always list tabs and take a fresh snapshot before continuing.
-- Workspace backups include the persistent Browser profile. Treat a backup as sensitive because it can contain authenticated Browser state.
+- When the Environment image provides the official `playwright-cli`, Sandpi materializes its version-matched upstream Agent Skill. Read that Skill before using Playwright so commands match the installed version.
+- Sandpi currently exposes neither an Environment Browser nor an application Preview tab. It does not start a browser, manage a profile, proxy a Playwright Dashboard or VNC stream, or provide a browser-control API. A compatible browser executable must be provisioned separately before Playwright automation can run.
+- URLs on `localhost`, `127.0.0.1`, or `::1` refer to services inside the remote Environment Sandbox, not on the human's device. Sandpi keeps these links inert until a dedicated Preview route exists.
 
 ## Sandbox pause and resume
 
 - Sandpi sets both the Sandbox0 soft TTL and hard TTL to zero for Environment Sandboxes. Sandpi's configurable idle-pause policy is separate from resource expiry and owns intentional pauses.
-- Sandpi does not idle-pause an Environment while a product Session is starting or running, or a native Turn is active or pending. Terminal input and Browser client control traffic keep an already-running Environment active; passive open connections do not.
-- A supported Workspace, Browser, Terminal, or coding-agent access can trigger Sandbox0 auto-resume. A wake-up may take time; wait for the native transition instead of creating replacement resources or calling an independent resume path.
+- Sandpi does not idle-pause an Environment while a product Session is starting or running, or a native Turn is active or pending. Terminal input keeps an already-running Environment active; a passive open connection does not.
+- A supported Workspace, Terminal, or coding-agent access can trigger Sandbox0 auto-resume. A wake-up may take time; wait for the native transition instead of creating replacement resources or calling an independent resume path.
 - A user can explicitly pause or restart the shared Sandbox from Environment Settings for manual fault recovery. Restart performs one committed pause and resume under Sandpi's lifecycle lock. Agents should not invoke this recovery control as a substitute for native auto-resume unless the user requests it.
-- The Workspace Volume, native Session history, and Browser profile are durable. Process memory, sockets, live Browser pages, terminal process state, and an in-flight model Turn are not durable runtime checkpoints. Re-read persisted state before continuing after recovery and avoid repeating external side effects.
+- The Workspace Volume and native Session history are durable. Process memory, sockets, terminal process state, and an in-flight model Turn are not durable runtime checkpoints. Re-read persisted state before continuing after recovery and avoid repeating external side effects.
 - A Sandbox-caused interruption may receive one visible, bounded Sandpi recovery Turn. Sandpi never silently replays the original user request.
 - Quota policy can pause or reject runtime access. External deletion of the Sandbox resource is reported as missing instead of silently provisioning a replacement with potentially different security settings.
 
@@ -36,8 +32,8 @@ This file describes the current Sandpi product contract. It is documentation, no
 - Native Codex account connection, model and reasoning discovery, persistent
   Sessions and Turns, branching, tools, Skills, MCP, approvals, and supported
   slash-command surfaces.
-- Workspace file tree and editor, Git changes, Terminal, shared Browser, and
-  current runtime metrics.
+- Workspace file tree and editor, Git changes, Terminal, current runtime
+  metrics, and version-matched Playwright Agent Skill materialization.
 - Per-Environment memory, idle pause, manual Sandbox pause/restart recovery,
   network policy, Sandbox0-backed egress credential injection, Workspace
   backups and restore.
@@ -57,7 +53,7 @@ Codex and the Web client are the currently implemented harness and client. Sandp
 - Complete local environment migration guide: https://github.com/sandbox0-ai/sandpi/blob/main/docs/local-environment-migration.md
 - CLI command reference and installers: https://github.com/sandbox0-ai/sandpi/blob/main/cli/README.md
 - CLI architecture and API boundaries: https://github.com/sandbox0-ai/sandpi/blob/main/docs/architecture/cli.md
-- Native Session, Browser, recovery, and lifecycle authority: https://github.com/sandbox0-ai/sandpi/blob/main/docs/architecture/native-session-authority.md
+- Native Session, recovery, and lifecycle authority: https://github.com/sandbox0-ai/sandpi/blob/main/docs/architecture/native-session-authority.md
 - Environment egress credentials: https://github.com/sandbox0-ai/sandpi/blob/main/docs/architecture/environment-egress-credentials.md
 - Environment Schedules: https://github.com/sandbox0-ai/sandpi/blob/main/docs/architecture/environment-schedules.md
 - Environment Webhooks: https://github.com/sandbox0-ai/sandpi/blob/main/docs/architecture/environment-webhooks.md

@@ -3,9 +3,6 @@ import { z } from "zod";
 import { SANDPI_PAID_PLAN_IDS } from "@/lib/billing";
 import type { SandpiPreferences } from "@/lib/types";
 import {
-  BROWSER_DASHBOARD_VIEWPORT_LIMITS,
-} from "@/lib/environment-browser";
-import {
   ENVIRONMENT_SANDBOX_MEMORY_MAX_MIB,
   ENVIRONMENT_SANDBOX_MEMORY_MIN_MIB,
 } from "@/lib/environment-resources";
@@ -23,21 +20,6 @@ import {
   MAX_CODEX_INPUT_IMAGES,
 } from "@/server/harnesses/codex/input-images";
 import { networkPolicySchema } from "@/server/network-policy-schema";
-
-export const environmentBrowserViewportSchema = z
-  .object({
-    width: z
-      .number()
-      .int()
-      .min(BROWSER_DASHBOARD_VIEWPORT_LIMITS.minWidth)
-      .max(BROWSER_DASHBOARD_VIEWPORT_LIMITS.maxWidth),
-    height: z
-      .number()
-      .int()
-      .min(BROWSER_DASHBOARD_VIEWPORT_LIMITS.minHeight)
-      .max(BROWSER_DASHBOARD_VIEWPORT_LIMITS.maxHeight),
-  })
-  .strict();
 
 export const workspaceFileSearchQuerySchema = z
   .string()
@@ -505,17 +487,6 @@ export const sessionGoalUpdateSchema = z
 export const sessionForkSchema = z
   .object({ title: z.string().trim().min(1).max(200).optional() })
   .default({});
-
-export const browserSessionSchema = z
-  .object({ force: z.boolean().optional() })
-  .strict();
-
-export const browserControlSchema = z
-  .object({
-    owner: z.enum(["agent", "human"]),
-    force: z.boolean().optional(),
-  })
-  .strict();
 
 export const preferencesSchema: z.ZodType<SandpiPreferences> = z.object({
   general: z.object({

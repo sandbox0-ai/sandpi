@@ -12,7 +12,7 @@ import ReactMarkdown, {
 } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-import { sandboxLoopbackUrl } from "@/lib/environment-browser";
+import { sandboxLoopbackUrl } from "@/lib/sandbox-loopback-url";
 import { resolveWorkspaceMarkdownPath } from "@/lib/workspace-file-presentation";
 
 interface MarkdownContentProps {
@@ -95,13 +95,13 @@ function MarkdownContentView({
             </code>
           );
         }
-        const browserUrl = sandboxLoopbackUrl(href);
-        if (browserUrl) {
+        const sandboxUrl = sandboxLoopbackUrl(href);
+        if (sandboxUrl) {
           return (
             <code
               className="markdown-local-url"
-              title={title ?? browserUrl}
-              data-browser-url={browserUrl}
+              title={title ?? sandboxUrl}
+              data-sandbox-loopback-url={sandboxUrl}
             >
               {children}
             </code>

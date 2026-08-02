@@ -832,7 +832,7 @@ export function EnvironmentSettings({
       setSandboxLifecycleConfirming(null);
       setSandboxLifecycleMessage(
         action === "pause"
-          ? "Sandbox paused. Workspace and Browser profile data remain durable; supported access can wake it again."
+          ? "Sandbox paused. Workspace data remains durable; supported access can wake it again."
           : "Sandbox restarted. Live processes and connections will reconnect on demand.",
       );
     } catch (error) {
@@ -1237,8 +1237,8 @@ export function EnvironmentSettings({
                       <strong>Sandbox lifecycle</strong>
                       <p>
                         Pause the Sandbox when it is not needed, or restart it
-                        to recover from broken processes, terminals, Browser
-                        connections, or Workspace portals.
+                        to recover from broken processes, terminals, or
+                        Workspace portals.
                       </p>
                     </div>
                     <span
@@ -1324,10 +1324,9 @@ export function EnvironmentSettings({
                             : "Restart the shared Sandbox?"}
                         </strong>
                         <small>
-                          Running Turns, terminals, Browser pages, and live
-                          connections may be interrupted. Workspace files,
-                          native Session history, and the Browser profile remain
-                          durable.
+                          Running Turns, terminals, and live connections may be
+                          interrupted. Workspace files and native Session
+                          history remain durable.
                         </small>
                       </span>
                       <div>

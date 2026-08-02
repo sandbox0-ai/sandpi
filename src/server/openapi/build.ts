@@ -60,11 +60,6 @@ const TAGS: OpenAPIV3.TagObject[] = [
     name: "Workspace IDE",
     description: "Cross-client editor snapshots, mutations and invalidations.",
   },
-  {
-    name: "Browser",
-    description:
-      "The embedded, shared human-and-agent Playwright Browser session.",
-  },
   { name: "Metrics", description: "Environment runtime metrics." },
   { name: "Terminal", description: "The shared Environment terminal." },
   { name: "Preferences", description: "Authenticated viewer preferences." },
@@ -107,7 +102,7 @@ export async function buildOpenApi(): Promise<BuiltOpenApi> {
         title: "Sandpi API",
         version: packageJson.version,
         description:
-          "The public Sandpi server contract. JSON endpoints use a data envelope and errors use an error envelope. Unix timestamps are seconds. Browser-cookie authentication is deployment-scoped; native harness payloads and opaque Browser dashboard frames are identified explicitly.",
+          "The public Sandpi server contract. JSON endpoints use a data envelope and errors use an error envelope. Unix timestamps are seconds. Browser-cookie authentication is deployment-scoped, and native harness payloads are identified explicitly.",
         license: {
           name: "Apache-2.0",
           url: "https://www.apache.org/licenses/LICENSE-2.0",
@@ -200,7 +195,6 @@ function normalizeMethods(method: string | string[]): string[] {
 
 function finalizeOpenApi(document: OpenAPIV3.Document): OpenAPIV3.Document {
   normalizeTransportResponses(document);
-  addBrowserAssetProxy(document);
   pruneUnusedSchemas(document);
   sortOpenApiCollections(document);
   return document;
@@ -300,63 +294,6 @@ function normalizeTransportResponses(document: OpenAPIV3.Document) {
       }
     }
   }
-}
-
-function addBrowserAssetProxy(document: OpenAPIV3.Document) {
-  const operation: OpenAPIV3.OperationObject & Record<string, unknown> = {
-    operationId: "getEnvironmentBrowserDashboardAsset",
-    summary: "Load an embedded Browser dashboard asset",
-    description:
-      "Transparent, authenticated proxy for the built-in shared Playwright Browser dashboard. The asset protocol is owned by the pinned dashboard and is not a JSON application API.",
-    tags: ["Browser"],
-    parameters: [
-      {
-        name: "environmentId",
-        in: "path",
-        required: true,
-        schema: { type: "string", minLength: 1 },
-      },
-      {
-        name: "assetPath",
-        in: "path",
-        required: true,
-        description: "A slash-containing dashboard asset path.",
-        schema: { type: "string", minLength: 1 },
-        "x-sandpi-greedy": true,
-      } as OpenAPIV3.ParameterObject,
-    ],
-    responses: {
-      "200": {
-        description: "Dashboard asset.",
-        content: {
-          "application/octet-stream": {
-            schema: { type: "string", format: "binary" },
-          },
-        },
-      },
-      "3XX": {
-        description: "Dashboard-relative redirect.",
-        headers: {
-          Location: {
-            schema: { type: "string" },
-          },
-        },
-      },
-      default: {
-        description: "Opaque dashboard response or Sandpi error.",
-        content: {
-          "*/*": {
-            schema: { type: "string", format: "binary" },
-          },
-        },
-      },
-    },
-    "x-sandpi-shared-browser": true,
-    "x-sandpi-proxy-protocol": "opaque-playwright-dashboard",
-  };
-  document.paths[
-    "/api/v1/environments/{environmentId}/browser/{assetPath}"
-  ] = { get: operation };
 }
 
 function pruneUnusedSchemas(document: OpenAPIV3.Document) {

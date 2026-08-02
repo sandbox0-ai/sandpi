@@ -15,11 +15,6 @@ import type {
   EnvironmentCredentialResolverKind,
   EnvironmentEgressCredential,
 } from "@/lib/environment-credentials";
-import type {
-  BrowserDashboardViewport,
-  EnvironmentBrowserOwner,
-  EnvironmentBrowserOwnership,
-} from "@/lib/environment-browser";
 import type { UnixTimestamp } from "@/lib/time";
 import type {
   CodexDecoderState,
@@ -53,15 +48,6 @@ export interface RuntimeCodexSkillFile {
   path: string;
   content: Uint8Array;
   executable: boolean;
-}
-
-/**
- * Server-only connection details for the owner-specific Browser transport.
- * Sandpi API handlers must never serialize the protected upstream headers.
- */
-export interface RuntimeBrowserUpstream extends EnvironmentBrowserOwnership {
-  publicUrl: string;
-  requestHeaders: Record<string, string>;
 }
 
 export interface ProvisionedEnvironment {
@@ -212,24 +198,6 @@ export interface RuntimeAdapter {
     runtime: EnvironmentRuntimeRecord,
     input: { port: number },
   ): Promise<RuntimeMcpOAuthCallbackService>;
-  updateEnvironmentBrowserControl(
-    runtime: EnvironmentRuntimeRecord,
-    input: { owner: EnvironmentBrowserOwner; force?: boolean },
-  ): Promise<EnvironmentBrowserOwnership>;
-  isEnvironmentBrowserTakeoverAvailable(
-    runtime: EnvironmentRuntimeRecord,
-  ): Promise<boolean>;
-  ensureEnvironmentBrowserService(
-    runtime: EnvironmentRuntimeRecord,
-    restart?: boolean,
-  ): Promise<RuntimeBrowserUpstream>;
-  ensureEnvironmentBrowserSession(
-    runtime: EnvironmentRuntimeRecord,
-  ): Promise<boolean>;
-  resizeEnvironmentBrowserViewport(
-    runtime: EnvironmentRuntimeRecord,
-    viewport: BrowserDashboardViewport,
-  ): Promise<void>;
   createEnvironmentWorkspaceBackup(
     runtime: EnvironmentRuntimeRecord,
     input: { name: string; description: string },

@@ -102,13 +102,19 @@ test("delegates relative Workspace images to a safe file renderer", () => {
   assert.match(html, />Chart<\/span>/);
 });
 
-test("keeps sandbox loopback links inert until Browser takeover", () => {
+test("keeps sandbox loopback links inert without a Preview route", () => {
   const html = render(
     "[Next.js](http://localhost:3000/dashboard) [API](127.0.0.1:8080/health)",
   );
 
-  assert.match(html, /data-browser-url="http:\/\/localhost:3000\/dashboard"/);
-  assert.match(html, /data-browser-url="http:\/\/127\.0\.0\.1:8080\/health"/);
+  assert.match(
+    html,
+    /data-sandbox-loopback-url="http:\/\/localhost:3000\/dashboard"/,
+  );
+  assert.match(
+    html,
+    /data-sandbox-loopback-url="http:\/\/127\.0\.0\.1:8080\/health"/,
+  );
   assert.match(html, /class="markdown-local-url"/);
   assert.match(html, /<code/);
   assert.doesNotMatch(html, /<button/);
@@ -124,14 +130,17 @@ test("marks external image destinations for native system browsers", () => {
   assert.match(html, /href="https:\/\/example\.com\/diagram\.png"/);
 });
 
-test("normalizes scheme-less loopback targets as inert references", () => {
+test("normalizes scheme-less sandbox targets as inert references", () => {
   const html = renderToStaticMarkup(
     createElement(MarkdownContent, {
       content: "[App](localhost:3000)",
     }),
   );
 
-  assert.match(html, /<code[^>]+data-browser-url="http:\/\/localhost:3000\/"/);
+  assert.match(
+    html,
+    /<code[^>]+data-sandbox-loopback-url="http:\/\/localhost:3000\/"/,
+  );
   assert.match(html, />App<\/code>/);
 });
 

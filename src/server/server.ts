@@ -1,7 +1,6 @@
 import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { Buffer, isUtf8 } from "node:buffer";
-import { Readable, Transform } from "node:stream";
 
 import fastifyCompress from "@fastify/compress";
 import fastifyCookie from "@fastify/cookie";
@@ -15,7 +14,7 @@ import Fastify, {
   type FastifyRequest,
 } from "fastify";
 import type { Pool } from "pg";
-import WebSocket, { type RawData } from "ws";
+import WebSocket from "ws";
 import { ZodError, z } from "zod";
 
 import type { SandpiDeploymentSummary } from "@/lib/types";
@@ -46,22 +45,6 @@ import { EnvironmentEgressCredentialService } from "@/server/environments/egress
 import { EnvironmentService } from "@/server/environments/service";
 import { EnvironmentLifecycleService } from "@/server/environments/lifecycle-service";
 import { EnvironmentRuntimeAccessService } from "@/server/environments/runtime-access-service";
-import {
-  EnvironmentBrowserService,
-  dashboardAssetCacheControl,
-  dashboardProxyPrefix,
-  dashboardRedirectLocation,
-  rewriteDashboardCss,
-  rewriteDashboardHtml,
-} from "@/server/environments/browser-service";
-import {
-  BrowserWebSocketDownstreamRelay,
-  websocketRawDataSize,
-} from "@/server/environments/browser-websocket-relay";
-import {
-  BrowserDashboardReadOnlyGate,
-  browserDashboardRejectedResponse,
-} from "@/server/environments/browser-dashboard-protocol";
 import {
   EnvironmentScheduleService,
   type EnvironmentScheduleConfiguration,
@@ -114,8 +97,6 @@ import { SandpiStore } from "@/server/store";
 import { TerminalInputQueue } from "@/server/terminal-input-queue";
 import {
   billingCheckoutSchema,
-  browserControlSchema,
-  browserSessionSchema,
   codexComposerUploadSchema,
   codexHookUpdateSchema,
   codexMcpServerConfigurationSchema,
@@ -125,7 +106,6 @@ import {
   codexRateLimitResetSchema,
   codexSkillConfigurationSchema,
   codexSkillPutSchema,
-  environmentBrowserViewportSchema,
   environmentCreateSchema,
   environmentOrderSchema,
   environmentProvisioningSchema,
@@ -250,7 +230,6 @@ export async function createSandpiServer(
   const runtimeAccess = new EnvironmentRuntimeAccessService(store, runtime, {
     quotaGate: billingQuota,
   });
-  const browser = new EnvironmentBrowserService(runtimeAccess, runtime);
   const codex = new CodexService(store, runtime, app.log, codexAuth, {
     runtimeQuotaGate: billingQuota,
   });
@@ -300,7 +279,6 @@ export async function createSandpiServer(
   lifecycle.setBeforePause(async (environmentId) => {
     await codex.flushEnvironmentCredentials(environmentId);
     codex.suspendEnvironmentWorker(environmentId);
-    browser.invalidate(environmentId);
   });
   sandboxUsage?.setPauseForQuota((environmentId) =>
     lifecycle.pauseForQuota(environmentId),
@@ -411,7 +389,6 @@ export async function createSandpiServer(
     store,
     runtime,
     runtimeAccess,
-    browser,
     codex,
     codexAuth,
     environments,
@@ -708,7 +685,6 @@ export function registerApiRoutes(
     store: SandpiStore;
     runtime: RuntimeAdapter;
     runtimeAccess: EnvironmentRuntimeAccessService;
-    browser: EnvironmentBrowserService;
     codex: CodexService;
     codexAuth: CodexEnvironmentAuthService;
     environments: EnvironmentService;
@@ -763,10 +739,7 @@ export function registerApiRoutes(
   };
   app.addHook("onSend", async (request, reply, payload) => {
     if (
-      shouldApplyApiNoStore(
-        request.url,
-        reply.hasHeader("Cache-Control"),
-      )
+      shouldApplyApiNoStore(request.url)
     ) {
       reply.header("Cache-Control", "no-store");
     }
@@ -2322,102 +2295,6 @@ export function registerApiRoutes(
     },
   );
   app.get<{ Params: { environmentId: string } }>(
-    "/api/v1/environments/:environmentId/browser/control",
-    async (request) => ({
-      data: await services.browser.control(
-        request.principal.userId,
-        request.params.environmentId,
-      ),
-    }),
-  );
-  app.put<{ Params: { environmentId: string }; Body: unknown }>(
-    "/api/v1/environments/:environmentId/browser/control",
-    async (request) => {
-      const input = browserControlSchema.parse(request.body);
-      return {
-        data: await services.browser.updateControl(
-          request.principal.userId,
-          request.params.environmentId,
-          input,
-        ),
-      };
-    },
-  );
-  app.post<{ Params: { environmentId: string }; Body: unknown }>(
-    "/api/v1/environments/:environmentId/browser/session",
-    async (request, reply) => {
-      const input = browserSessionSchema.parse(request.body ?? {});
-      await services.browser.ensureSession(
-        request.principal.userId,
-        request.params.environmentId,
-        input.force ?? false,
-      );
-      return reply.status(204).send();
-    },
-  );
-  app.post<{ Params: { environmentId: string }; Body: unknown }>(
-    "/api/v1/environments/:environmentId/browser/viewport",
-    async (request, reply) => {
-      const viewport = environmentBrowserViewportSchema.parse(request.body);
-      await services.browser.resizeViewport(
-        request.principal.userId,
-        request.params.environmentId,
-        viewport,
-      );
-      return reply.status(204).send();
-    },
-  );
-  app.get<{
-    Params: { environmentId: string; dashboardSocketId: string };
-  }>(
-    "/api/v1/environments/:environmentId/browser/ws/:dashboardSocketId",
-    { websocket: true },
-    async (socket, request) => {
-      await proxyEnvironmentBrowserWebSocket(
-        socket,
-        request,
-        services.browser,
-        () =>
-          services.runtimeAccess.touchRunningRuntimeActivity(
-            request.params.environmentId,
-          ),
-      );
-    },
-  );
-  // Next's development rewrite can remove the trailing slash before proxying
-  // this request. Serve both root spellings directly so the iframe cannot loop
-  // between the frontend proxy and a permanent slash redirect.
-  app.get<{ Params: { environmentId: string } }>(
-    "/api/v1/environments/:environmentId/browser",
-    async (request, reply) =>
-      proxyEnvironmentBrowserAsset(
-        services.browser,
-        request,
-        reply,
-        undefined,
-      ),
-  );
-  app.get<{ Params: { environmentId: string } }>(
-    "/api/v1/environments/:environmentId/browser/",
-    async (request, reply) =>
-      proxyEnvironmentBrowserAsset(
-        services.browser,
-        request,
-        reply,
-        undefined,
-      ),
-  );
-  app.get<{ Params: { environmentId: string; "*": string } }>(
-    "/api/v1/environments/:environmentId/browser/*",
-    async (request, reply) =>
-      proxyEnvironmentBrowserAsset(
-        services.browser,
-        request,
-        reply,
-        request.params["*"],
-      ),
-  );
-  app.get<{ Params: { environmentId: string } }>(
     "/api/v1/environments/:environmentId/metrics/current",
     async (request) => {
       const runtime = await services.store.getEnvironmentRuntime(
@@ -2890,311 +2767,6 @@ async function streamHarnessEvents(
     await codex.waitForSessionUpdate(sessionId, controller.signal);
   }
   if (!reply.raw.destroyed) reply.raw.end();
-}
-
-const BROWSER_DASHBOARD_PROXY_TIMEOUT_MS = 130_000;
-const BROWSER_DASHBOARD_MAX_ASSET_BYTES = 8 * 1024 * 1024;
-const BROWSER_DASHBOARD_MAX_QUEUED_CLIENT_WS_BYTES = 1024 * 1024;
-const BROWSER_DASHBOARD_MAX_QUEUED_DOWNSTREAM_WS_BYTES = 8 * 1024 * 1024;
-
-async function proxyEnvironmentBrowserAsset(
-  browser: EnvironmentBrowserService,
-  request: FastifyRequest<{ Params: { environmentId: string } }>,
-  reply: FastifyReply,
-  assetPath: string | undefined,
-) {
-  const environmentId = request.params.environmentId;
-  let upstream = await browser.httpUpstream(
-    request.principal.userId,
-    environmentId,
-    assetPath,
-  );
-  let response = await fetchBrowserDashboardAsset(upstream);
-  if (response.status === 401 || response.status === 403) {
-    browser.invalidate(environmentId);
-    upstream = await browser.httpUpstream(
-      request.principal.userId,
-      environmentId,
-      assetPath,
-    );
-    response = await fetchBrowserDashboardAsset(upstream);
-  }
-
-  const prefix = dashboardProxyPrefix(environmentId);
-  if (response.status >= 300 && response.status < 400) {
-    const location = dashboardRedirectLocation(
-      response.headers.get("location"),
-      prefix,
-    );
-    if (!location) {
-      throw new HttpError(
-        502,
-        "environment_browser_proxy_invalid",
-        "The Playwright Dashboard returned an invalid redirect.",
-      );
-    }
-    return reply
-      .status(response.status)
-      .header("Cache-Control", "private, no-store")
-      .header("Location", location)
-      .send();
-  }
-
-  const contentLength = Number(response.headers.get("content-length") ?? 0);
-  if (
-    Number.isFinite(contentLength) &&
-    contentLength > BROWSER_DASHBOARD_MAX_ASSET_BYTES
-  ) {
-    throw new HttpError(
-      502,
-      "environment_browser_asset_too_large",
-      "The Playwright Dashboard asset is too large.",
-    );
-  }
-  const contentType = response.headers.get("content-type");
-  if (contentType) reply.header("Content-Type", contentType);
-  reply.header(
-    "Cache-Control",
-    response.ok
-      ? dashboardAssetCacheControl(
-          assetPath,
-          response.headers.get("cache-control"),
-        )
-      : "private, no-store",
-  );
-  const normalizedAssetPath = assetPath?.replace(/^\/+|\/+$/g, "");
-  if (
-    normalizedAssetPath === "index.html" ||
-    normalizedAssetPath?.endsWith(".css")
-  ) {
-    const body = await readBrowserDashboardBody(response);
-    const payload =
-      normalizedAssetPath === "index.html"
-        ? rewriteDashboardHtml(body.toString("utf8"), prefix)
-        : rewriteDashboardCss(body.toString("utf8"), prefix);
-    return reply.status(response.status).send(payload);
-  }
-
-  if (!response.body) {
-    return reply.status(response.status).send();
-  }
-  let streamedBytes = 0;
-  const bounded = new Transform({
-    transform(chunk: Buffer, _encoding, callback) {
-      streamedBytes += chunk.byteLength;
-      if (streamedBytes > BROWSER_DASHBOARD_MAX_ASSET_BYTES) {
-        callback(
-          new HttpError(
-            502,
-            "environment_browser_asset_too_large",
-            "The Playwright Dashboard asset is too large.",
-          ),
-        );
-        return;
-      }
-      callback(null, chunk);
-    },
-  });
-  return reply
-    .status(response.status)
-    .send(
-      Readable.fromWeb(
-        response.body as unknown as import("node:stream/web").ReadableStream,
-      ).pipe(bounded),
-    );
-}
-
-async function readBrowserDashboardBody(response: Response) {
-  const body = Buffer.from(await response.arrayBuffer());
-  if (body.byteLength > BROWSER_DASHBOARD_MAX_ASSET_BYTES) {
-    throw new HttpError(
-      502,
-      "environment_browser_asset_too_large",
-      "The Playwright Dashboard asset is too large.",
-    );
-  }
-  return body;
-}
-
-async function fetchBrowserDashboardAsset(upstream: {
-  url: string;
-  headers: Record<string, string>;
-}) {
-  try {
-    return await fetch(upstream.url, {
-      method: "GET",
-      headers: upstream.headers,
-      redirect: "manual",
-      signal: AbortSignal.timeout(BROWSER_DASHBOARD_PROXY_TIMEOUT_MS),
-    });
-  } catch {
-    throw new HttpError(
-      502,
-      "environment_browser_proxy_unavailable",
-      "The Playwright Dashboard is temporarily unavailable.",
-    );
-  }
-}
-
-async function proxyEnvironmentBrowserWebSocket(
-  socket: WebSocket,
-  request: FastifyRequest<{
-    Params: { environmentId: string; dashboardSocketId: string };
-  }>,
-  browser: EnvironmentBrowserService,
-  touchRuntime: () => Promise<boolean>,
-) {
-  const clientGate = new BrowserDashboardReadOnlyGate();
-  const queued: Array<{ data: RawData; isBinary: boolean }> = [];
-  let queuedBytes = 0;
-  let upstream: WebSocket | undefined;
-  let downstreamClosed = false;
-  const downstreamRelay = new BrowserWebSocketDownstreamRelay({
-    maxQueuedBytes: BROWSER_DASHBOARD_MAX_QUEUED_DOWNSTREAM_WS_BYTES,
-    send(data, isBinary, callback) {
-      if (socket.readyState !== WebSocket.OPEN) {
-        callback(new Error("Dashboard downstream is closed"));
-        return;
-      }
-      socket.send(data, { binary: isBinary }, callback);
-    },
-    onOverflow() {
-      if (socket.readyState === WebSocket.OPEN) {
-        socket.close(1009, "Dashboard downstream queue exceeded");
-      }
-    },
-    onSendError(error) {
-      request.log.debug(
-        { err: error, environmentId: request.params.environmentId },
-        "Playwright Dashboard downstream send failed",
-      );
-      upstream?.terminate();
-      if (socket.readyState === WebSocket.OPEN) {
-        socket.close(1011, "Dashboard downstream unavailable");
-      }
-    },
-  });
-  const heartbeat = new RuntimeWebSocketHeartbeat(socket, touchRuntime, {
-    pingIntervalMs: 30_000,
-    activityTouchIntervalMs: 30_000,
-    onActivityTouchError: (error) => {
-      request.log.debug(
-        { err: error, environmentId: request.params.environmentId },
-        "Environment browser activity could not extend idle access",
-      );
-    },
-  });
-  heartbeat.start();
-
-  socket.on("message", (data, isBinary) => {
-    const decision = clientGate.inspect(data, isBinary);
-    if (decision.action === "reject") {
-      request.log.debug(
-        {
-          environmentId: request.params.environmentId,
-          method: decision.method,
-          reason: decision.reason,
-        },
-        "Blocked interactive Playwright Dashboard client message",
-      );
-      const response = browserDashboardRejectedResponse(decision);
-      if (response && socket.readyState === WebSocket.OPEN) {
-        socket.send(response);
-      }
-      return;
-    }
-    if (upstream?.readyState === WebSocket.OPEN) {
-      heartbeat.markActivity();
-      upstream.send(data, { binary: isBinary });
-      return;
-    }
-    queuedBytes += websocketRawDataSize(data);
-    if (queuedBytes > BROWSER_DASHBOARD_MAX_QUEUED_CLIENT_WS_BYTES) {
-      socket.close(1009, "Dashboard connection queue exceeded");
-      return;
-    }
-    queued.push({ data, isBinary });
-    heartbeat.markActivity();
-  });
-  socket.once("close", () => {
-    downstreamClosed = true;
-    heartbeat.stop();
-    downstreamRelay.close();
-    request.log.debug(
-      {
-        environmentId: request.params.environmentId,
-        ...downstreamRelay.stats(),
-      },
-      "Playwright Dashboard downstream relay closed",
-    );
-    upstream?.close();
-  });
-  socket.once("error", () => {
-    heartbeat.stop();
-    downstreamRelay.close();
-    upstream?.terminate();
-  });
-
-  try {
-    const target = await browser.websocketUpstream(
-      request.principal.userId,
-      request.params.environmentId,
-      request.params.dashboardSocketId,
-    );
-    if (downstreamClosed) return;
-    upstream = new WebSocket(target.url, {
-      headers: target.headers,
-      handshakeTimeout: BROWSER_DASHBOARD_PROXY_TIMEOUT_MS,
-    });
-    upstream.once("open", () => {
-      for (const message of queued) {
-        if (upstream?.readyState !== WebSocket.OPEN) break;
-        upstream.send(message.data, { binary: message.isBinary });
-      }
-      queued.length = 0;
-      queuedBytes = 0;
-    });
-    upstream.on("message", (data, isBinary) => {
-      downstreamRelay.enqueue(data, isBinary);
-    });
-    upstream.once("close", (code, reason) => {
-      heartbeat.stop();
-      downstreamRelay.close();
-      if (socket.readyState === WebSocket.OPEN) {
-        socket.close(websocketCloseCode(code), reason.toString().slice(0, 123));
-      }
-    });
-    upstream.once("error", (error) => {
-      heartbeat.stop();
-      // HTTP auth failures and runtime-generation fencing refresh stale
-      // coordinates. A transient socket failure must not force the next
-      // Browser mount through another regional control API lookup.
-      request.log.warn(
-        { err: error, environmentId: request.params.environmentId },
-        "Playwright Dashboard WebSocket upstream failed",
-      );
-      if (socket.readyState === WebSocket.OPEN) {
-        socket.close(1011, "Dashboard upstream unavailable");
-      }
-    });
-  } catch (error) {
-    heartbeat.stop();
-    request.log.warn(
-      { err: error, environmentId: request.params.environmentId },
-      "Playwright Dashboard WebSocket setup failed",
-    );
-    if (socket.readyState === WebSocket.OPEN) {
-      socket.close(1011, "Dashboard unavailable");
-    }
-  }
-}
-
-function websocketCloseCode(code: number) {
-  return code >= 1_000 &&
-    code < 5_000 &&
-    ![1_004, 1_005, 1_006, 1_015].includes(code)
-    ? code
-    : 1_011;
 }
 
 async function authenticateRequest(
