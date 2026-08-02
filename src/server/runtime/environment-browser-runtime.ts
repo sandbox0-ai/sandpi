@@ -208,20 +208,38 @@ fi
 test -n "$browser"
 
 mkdir -p /tmp/sandpi-browser-openbox
-HOME=/tmp/sandpi-browser-openbox Xvfb "$display" -screen 0 1440x900x24 -nolisten tcp -ac +extension RANDR >/tmp/sandpi-browser-xvfb.log 2>&1 &
-xvfb_pid="$!"
-pids="$xvfb_pid $pids"
+using_tigervnc=false
+if command -v Xtigervnc >/dev/null; then
+  using_tigervnc=true
+  HOME=/tmp/sandpi-browser-openbox Xtigervnc "$display" \
+    -geometry 1440x900 \
+    -depth 24 \
+    -rfbport "$vnc_port" \
+    -localhost \
+    -SecurityTypes None \
+    -AlwaysShared \
+    -AcceptSetDesktopSize \
+    -ac \
+    -nolisten tcp >/tmp/sandpi-browser-tigervnc.log 2>&1 &
+  display_pid="$!"
+else
+  HOME=/tmp/sandpi-browser-openbox Xvfb "$display" -screen 0 1440x900x24 -nolisten tcp -ac +extension RANDR >/tmp/sandpi-browser-xvfb.log 2>&1 &
+  display_pid="$!"
+fi
+pids="$display_pid $pids"
 attempts=0
 while test ! -S /tmp/.X11-unix/X99; do
-  kill -0 "$xvfb_pid"
+  kill -0 "$display_pid"
   test "$attempts" -lt 100
   sleep 0.05
   attempts=$((attempts + 1))
 done
 DISPLAY="$display" HOME=/tmp/sandpi-browser-openbox openbox >/tmp/sandpi-browser-openbox.log 2>&1 &
 pids="$! $pids"
-DISPLAY="$display" x11vnc -display "$display" -rfbport "$vnc_port" -localhost -forever -shared -nopw -noxdamage -repeat -quiet >/tmp/sandpi-browser-x11vnc.log 2>&1 &
-pids="$! $pids"
+if test "$using_tigervnc" = false; then
+  DISPLAY="$display" x11vnc -display "$display" -rfbport "$vnc_port" -localhost -forever -shared -nopw -noxdamage -repeat -quiet >/tmp/sandpi-browser-x11vnc.log 2>&1 &
+  pids="$! $pids"
+fi
 
 setpriv --reuid="$browser_user" --regid="$browser_user" --init-groups env DISPLAY="$display" HOME="/home/$browser_user" "$browser" \
   --user-data-dir="$profile" \
@@ -229,7 +247,7 @@ setpriv --reuid="$browser_user" --regid="$browser_user" --init-groups env DISPLA
   --no-default-browser-check \
   --password-store=basic \
   --disable-dev-shm-usage \
-  --window-size=1440,900 \
+  --start-maximized \
   --restore-last-session >/tmp/sandpi-browser-chrome.log 2>&1 &
 pids="$! $pids"
 
@@ -241,9 +259,11 @@ wait "$bridge_pid"`;
 }
 
 export const HUMAN_BROWSER_PREFLIGHT_SCRIPT = String.raw`set -eu
-command -v Xvfb >/dev/null
 command -v openbox >/dev/null
-command -v x11vnc >/dev/null
+if ! command -v Xtigervnc >/dev/null; then
+  command -v Xvfb >/dev/null
+  command -v x11vnc >/dev/null
+fi
 command -v node >/dev/null
 command -v setpriv >/dev/null
 browser_user="${"${SANDPI_BROWSER_USER:-sandbox-browser}"}"

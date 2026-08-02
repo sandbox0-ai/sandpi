@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 
 import { apiUrl } from "@/lib/api-client";
+import { configureEnvironmentBrowserRfb } from "@/lib/environment-browser-vnc";
 
 interface EnvironmentBrowserVncProps {
   environmentId: string;
@@ -37,12 +38,7 @@ export function EnvironmentBrowserVnc({
         );
         endpoint.protocol = endpoint.protocol === "https:" ? "wss:" : "ws:";
         rfb = new Rfb(element, endpoint.toString(), { shared: true });
-        rfb.scaleViewport = true;
-        rfb.resizeSession = false;
-        rfb.focusOnClick = true;
-        rfb.showDotCursor = true;
-        rfb.qualityLevel = 6;
-        rfb.compressionLevel = 2;
+        configureEnvironmentBrowserRfb(rfb);
         rfb.addEventListener("connect", () => {
           connected = true;
           onReady();

@@ -151,7 +151,8 @@ harnesses and clients can be added as independent integrations.
   `credentialsource:read`, `credentialsource:write` and
   `credentialsource:delete`
 - A current Sandbox0 `coding-agent` template with the official Playwright CLI,
-  Chromium, Xvfb, Openbox and x11vnc. At least 2 GiB of Sandbox memory is
+  Chromium, TigerVNC and Openbox. Sandpi retains an Xvfb/x11vnc compatibility
+  path for older template images. At least 2 GiB of Sandbox memory is
   recommended for interactive Browser work alongside a coding agent.
 - Docker Engine with Compose v2 for the container workflow
 
@@ -317,8 +318,10 @@ Sandbox0
   account. They are not isolated checkouts. Use separate Environments when work
   must not affect each other.
 - Interactive Browser takeover requires the current Sandbox0 `coding-agent`
-  image. Recreate an older Environment to pick up its headed-browser runtime;
-  agent-only Playwright remains available on older compatible images.
+  image. Older compatible images can still use scaled Xvfb/x11vnc takeover;
+  recreate the Environment with v0.4 or newer for a human desktop that follows
+  the full Browser panel size. Agent-only Playwright remains available on older
+  compatible images.
 - Built-in administrator mode is for a trusted single-user deployment. Use OIDC
   and a proper network/TLS boundary for public or multi-user deployments.
 - The `/api/v1` contract is versioned but may still change between pre-1.0
