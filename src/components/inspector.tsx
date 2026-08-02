@@ -29,7 +29,6 @@ import {
 } from "@/components/metric-chart";
 import {
   EnvironmentBrowser,
-  type EnvironmentBrowserNavigationRequest,
 } from "@/components/environment-browser";
 import {
   WorkspaceIde,
@@ -77,10 +76,6 @@ interface InspectorProps {
   workspaceNavigationRequest?: WorkspaceFileNavigationRequest;
   onWorkspaceNavigationHandled?: (
     request: WorkspaceFileNavigationRequest,
-  ) => void;
-  browserNavigationRequest?: EnvironmentBrowserNavigationRequest;
-  onBrowserNavigationHandled?: (
-    request: EnvironmentBrowserNavigationRequest,
   ) => void;
   activeTab: InspectorTab;
   onTabChange: (tab: InspectorTab) => void;
@@ -329,8 +324,6 @@ export function Inspector({
   sessionActivity,
   workspaceNavigationRequest,
   onWorkspaceNavigationHandled,
-  browserNavigationRequest,
-  onBrowserNavigationHandled,
   activeTab,
   onTabChange,
   widthRatio,
@@ -669,27 +662,16 @@ export function Inspector({
           <EnvironmentBrowser
             key={environment.id}
             environmentId={environment.id}
-            navigationRequest={browserNavigationRequest}
-            onNavigationHandled={onBrowserNavigationHandled}
             copy={{
               title: ui.browserTitle,
               starting: ui.browserStarting,
               unavailable: ui.browserUnavailable,
               retry: ui.browserRetry,
-              tabs: ui.browserTabs,
-              newTab: ui.browserNewTab,
-              closeTab: ui.browserCloseTab,
-              untitledTab: ui.browserUntitledTab,
               loading: ui.browserLoading,
-              viewport: ui.browserViewport,
-              viewportDesktop: ui.browserViewportDesktop,
-              viewportResponsive: ui.browserViewportResponsive,
-              viewportMobile: ui.browserViewportMobile,
               takeControl: ui.browserTakeControl,
               takeControlUnavailable: ui.browserTakeControlUnavailable,
               returnToAgent: ui.browserReturnToAgent,
               humanControl: ui.browserHumanControl,
-              agentControl: ui.browserAgentControl,
               switchingControl: ui.browserSwitchingControl,
               humanStarting: ui.browserHumanStarting,
             }}

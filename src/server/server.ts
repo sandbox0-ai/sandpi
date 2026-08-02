@@ -19,7 +19,6 @@ import WebSocket, { type RawData } from "ws";
 import { ZodError, z } from "zod";
 
 import type { SandpiDeploymentSummary } from "@/lib/types";
-import { sandboxLoopbackUrl } from "@/lib/environment-browser";
 import { BillingQuotaService } from "@/server/billing/quota-service";
 import { BillingRepository } from "@/server/billing/repository";
 import { StripeBillingService } from "@/server/billing/stripe-service";
@@ -59,6 +58,10 @@ import {
   BrowserWebSocketDownstreamRelay,
   websocketRawDataSize,
 } from "@/server/environments/browser-websocket-relay";
+import {
+  BrowserDashboardReadOnlyGate,
+  browserDashboardRejectedResponse,
+} from "@/server/environments/browser-dashboard-protocol";
 import {
   EnvironmentScheduleService,
   type EnvironmentScheduleConfiguration,
@@ -112,7 +115,6 @@ import { TerminalInputQueue } from "@/server/terminal-input-queue";
 import {
   billingCheckoutSchema,
   browserControlSchema,
-  browserOpenSchema,
   browserSessionSchema,
   codexComposerUploadSchema,
   codexHookUpdateSchema,
@@ -2354,26 +2356,6 @@ export function registerApiRoutes(
     },
   );
   app.post<{ Params: { environmentId: string }; Body: unknown }>(
-    "/api/v1/environments/:environmentId/browser/open",
-    async (request, reply) => {
-      const input = browserOpenSchema.parse(request.body);
-      const url = sandboxLoopbackUrl(input.url);
-      if (!url) {
-        throw new HttpError(
-          400,
-          "invalid_environment_browser_url",
-          "Browser links must use HTTP or HTTPS on localhost, 127.0.0.1 or ::1.",
-        );
-      }
-      await services.browser.openUrl(
-        request.principal.userId,
-        request.params.environmentId,
-        url,
-      );
-      return reply.status(204).send();
-    },
-  );
-  app.post<{ Params: { environmentId: string }; Body: unknown }>(
     "/api/v1/environments/:environmentId/browser/viewport",
     async (request, reply) => {
       const viewport = environmentBrowserViewportSchema.parse(request.body);
@@ -3062,6 +3044,7 @@ async function proxyEnvironmentBrowserWebSocket(
   browser: EnvironmentBrowserService,
   touchRuntime: () => Promise<boolean>,
 ) {
+  const clientGate = new BrowserDashboardReadOnlyGate();
   const queued: Array<{ data: RawData; isBinary: boolean }> = [];
   let queuedBytes = 0;
   let upstream: WebSocket | undefined;
@@ -3104,6 +3087,22 @@ async function proxyEnvironmentBrowserWebSocket(
   heartbeat.start();
 
   socket.on("message", (data, isBinary) => {
+    const decision = clientGate.inspect(data, isBinary);
+    if (decision.action === "reject") {
+      request.log.debug(
+        {
+          environmentId: request.params.environmentId,
+          method: decision.method,
+          reason: decision.reason,
+        },
+        "Blocked interactive Playwright Dashboard client message",
+      );
+      const response = browserDashboardRejectedResponse(decision);
+      if (response && socket.readyState === WebSocket.OPEN) {
+        socket.send(response);
+      }
+      return;
+    }
     if (upstream?.readyState === WebSocket.OPEN) {
       heartbeat.markActivity();
       upstream.send(data, { binary: isBinary });

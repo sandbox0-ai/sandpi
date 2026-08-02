@@ -24,7 +24,7 @@ test("OpenAPI publishes every supported operation with a unique id", async () =>
   const operations = allOperations(document);
   const operationIds = operations.map((operation) => operation.operationId);
 
-  assert.equal(operations.length, 129);
+  assert.equal(operations.length, 128);
   assert.ok(operationIds.every(Boolean));
   assert.equal(new Set(operationIds).size, operationIds.length);
   assert.ok(Object.keys(document.paths).every((path) => !path.includes(":")));
@@ -79,16 +79,19 @@ test("OpenAPI preserves the shared Browser and streaming semantics", async () =>
   assert.equal(cloudSync.responses["304"] !== undefined, true);
   assert.match(cloudSync.description ?? "", /database-only/i);
 
-  const browserOpen = operation(
-    document,
-    "/api/v1/environments/{environmentId}/browser/open",
-    "post",
+  assert.equal(
+    document.paths?.["/api/v1/environments/{environmentId}/browser/open"],
+    undefined,
   );
-  assert.equal(browserOpen["x-sandpi-shared-browser"], true);
-  assert.match(browserOpen.description ?? "", /one active owner/i);
-  assert.match(browserOpen.description ?? "", /any interactive browser task/i);
-  assert.doesNotMatch(browserOpen.description ?? "", /sign-in/i);
-  assert.match(browserOpen.description ?? "", /inside the Environment sandbox/i);
+  const browserDashboard = operation(
+    document,
+    "/api/v1/environments/{environmentId}/browser",
+    "get",
+  );
+  assert.equal(browserDashboard["x-sandpi-shared-browser"], true);
+  assert.match(browserDashboard.description ?? "", /one active owner/i);
+  assert.match(browserDashboard.description ?? "", /view-only/i);
+  assert.match(browserDashboard.description ?? "", /Take control/i);
 
   const browserControl = operation(
     document,

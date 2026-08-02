@@ -1263,7 +1263,7 @@ test("publishes the agent Browser transport behind a server-only hashed header",
   );
   assert.match(
     service.runtime.command[2] ?? "",
-    /wait_for_dashboard\(\).*SANDPI_PLAYWRIGHT_DASHBOARD_READY_SCRIPT_BASE64.*wait_for_dashboard 43420 \|\| return 1.*until ensure_browser.*sleep 15.*exec playwright-cli show --host 0\.0\.0\.0 --port 43420/s,
+    /wait_for_dashboard\(\).*SANDPI_PLAYWRIGHT_DASHBOARD_READY_SCRIPT_BASE64.*wait_for_dashboard 43420 \|\| return 1.*until ensure_browser.*sleep 15.*exec playwright-cli -s=default show --host 0\.0\.0\.0 --port 43420/s,
   );
   assert.equal(
     spawnSync("sh", ["-n", "-c", service.runtime.command[2] ?? ""]).status,
@@ -1533,14 +1533,14 @@ test("reports an unavailable headed-browser runtime without changing owner", asy
   assert.equal(serviceUpdates, 0);
 });
 
-test("uses only official Playwright CLI commands for the shared browser", async () => {
+test("uses only official Playwright CLI commands for Browser recovery and resize", async () => {
   const commands: Array<{
     alias: string;
     command: string[];
     cwd: string;
     envVars: Record<string, string>;
   }> = [];
-  let browserOpen = false;
+  let browserRunning = false;
   const runtime = runtimeWithClient({
     sandboxes: {
       sandbox() {
@@ -1557,14 +1557,14 @@ test("uses only official Playwright CLI commands for the shared browser", async 
             const operation = options.command[1];
             if (operation === "tab-list") {
               return {
-                exitCode: browserOpen ? 0 : 1,
+                exitCode: browserRunning ? 0 : 1,
                 stdout: "",
-                stderr: browserOpen
+                stderr: browserRunning
                   ? ""
                   : "Error: Browser 'default' is not open.",
               };
             }
-            if (operation === "open") browserOpen = true;
+            if (operation === "open") browserRunning = true;
             return { exitCode: 0, stdout: "", stderr: "" };
           },
         };
@@ -1587,13 +1587,6 @@ test("uses only official Playwright CLI commands for the shared browser", async 
     await runtime.ensureEnvironmentBrowserSession(coordinates),
     true,
   );
-  assert.equal(
-    await runtime.openEnvironmentBrowserUrl(
-      coordinates,
-      "http://localhost:3000/",
-    ),
-    false,
-  );
   await runtime.resizeEnvironmentBrowserViewport(coordinates, {
     width: 519,
     height: 759,
@@ -1611,7 +1604,6 @@ test("uses only official Playwright CLI commands for the shared browser", async 
         "chromium",
         "--profile=/workspace/.sandpi/browser/profile",
       ],
-      ["playwright-cli", "tab-new", "http://localhost:3000/"],
       ["playwright-cli", "resize", "519", "759"],
     ],
   );

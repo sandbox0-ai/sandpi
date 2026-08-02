@@ -2,21 +2,16 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  BROWSER_DASHBOARD_LOADING_MESSAGE,
   BROWSER_DASHBOARD_READY_MESSAGE,
   BROWSER_DASHBOARD_SESSION_NAME,
   BROWSER_DASHBOARD_SESSION_READY_MESSAGE,
-  BROWSER_DASHBOARD_TABS_MESSAGE,
   BROWSER_DASHBOARD_THEME_TOKEN_MAP,
   BROWSER_DASHBOARD_VIEWPORT_LIMITS,
   BROWSER_DASHBOARD_VIEWPORT_MESSAGE,
-  isBrowserDashboardLoadingMessage,
   isBrowserDashboardReadyMessage,
   isBrowserDashboardSessionReadyMessage,
-  isBrowserDashboardTabsMessage,
   isBrowserDashboardViewport,
   isBrowserDashboardViewportMessage,
-  isBrowserDashboardViewportMode,
   resolveBrowserDashboardViewport,
   sandboxLoopbackUrl,
 } from "./environment-browser";
@@ -106,83 +101,18 @@ test("accepts only bounded integer Dashboard viewport messages", () => {
   );
 });
 
-test("resolves responsive, desktop-fit and mobile browser viewports", () => {
-  assert.equal(isBrowserDashboardViewportMode("desktop"), true);
-  assert.equal(isBrowserDashboardViewportMode("television"), false);
+test("fits the Browser viewport to the available screen bounds", () => {
   assert.deepEqual(
-    resolveBrowserDashboardViewport(
-      { width: 1_000, height: 700 },
-      "responsive",
-    ),
+    resolveBrowserDashboardViewport({ width: 1_000, height: 700 }),
     { width: 1_000, height: 700 },
   );
   assert.deepEqual(
-    resolveBrowserDashboardViewport(
-      { width: 1_000, height: 700 },
-      "desktop",
-    ),
-    { width: 1_280, height: 896 },
+    resolveBrowserDashboardViewport({ width: 319.4, height: 239.4 }),
+    { width: 320, height: 240 },
   );
   assert.deepEqual(
-    resolveBrowserDashboardViewport(
-      { width: 600, height: 800 },
-      "desktop",
-    ),
-    { width: 1_280, height: 1_707 },
-  );
-  assert.deepEqual(
-    resolveBrowserDashboardViewport(
-      { width: 1_000, height: 700 },
-      "mobile",
-    ),
-    { width: 390, height: 844 },
-  );
-});
-
-test("accepts only bounded browser tab and loading messages", () => {
-  assert.equal(
-    isBrowserDashboardTabsMessage({
-      type: BROWSER_DASHBOARD_TABS_MESSAGE,
-      integrated: true,
-      tabs: [
-        {
-          index: 0,
-          title: "Sandbox Docs",
-          url: "https://sandbox0.ai/docs/sandbox",
-          selected: true,
-        },
-      ],
-    }),
-    true,
-  );
-  assert.equal(
-    isBrowserDashboardTabsMessage({
-      type: BROWSER_DASHBOARD_TABS_MESSAGE,
-      integrated: true,
-      tabs: [
-        {
-          index: 3,
-          title: "Wrong index",
-          url: "about:blank",
-          selected: true,
-        },
-      ],
-    }),
-    false,
-  );
-  assert.equal(
-    isBrowserDashboardLoadingMessage({
-      type: BROWSER_DASHBOARD_LOADING_MESSAGE,
-      loading: true,
-    }),
-    true,
-  );
-  assert.equal(
-    isBrowserDashboardLoadingMessage({
-      type: BROWSER_DASHBOARD_LOADING_MESSAGE,
-      loading: "yes",
-    }),
-    false,
+    resolveBrowserDashboardViewport({ width: 4_000, height: 3_000 }),
+    { width: 3_840, height: 2_160 },
   );
 });
 

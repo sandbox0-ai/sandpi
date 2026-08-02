@@ -120,9 +120,9 @@ coding-agent configuration into a new or existing Sandpi Environment. See
   explicit refresh feedback; fast source, GitHub-like Markdown and CSV views;
   image, audio, video, PDF and PPTX previews; on-demand Monaco editing; and Git
   changes
-- Shared Browser with exclusive human/agent control, an interactive headed
-  takeover viewer, Playwright multi-tab controls, loading feedback, and
-  persisted desktop-fit, responsive and mobile viewport modes
+- Shared Browser with exclusive human/agent control, a full-size adaptive
+  read-only agent view, and one Take control path into the interactive headed
+  browser
 - Environment terminal, runtime metrics, configurable idle pause, and manual
   Sandbox pause/restart recovery controls
 - Environment Schedules with one-time or human-friendly recurring timing,
@@ -275,10 +275,13 @@ Sandbox0
 - Sandpi clients talk only to Sandpi. They receive neither the Sandbox0
   deployment API key nor a direct Sandbox0 endpoint. For the Web app, Sandpi
   authenticates and proxies the agent-owned Playwright Dashboard or the
-  human-owned VNC stream. Both transports use one persistent profile, but only
-  one owner is active: taking control stops Playwright and launches a headed
-  browser without CDP; returning control stops that browser before Playwright
-  resumes. Loopback Browser URLs resolve inside the Environment sandbox.
+  human-owned VNC stream. The Dashboard is only a read-only screencast renderer:
+  Sandpi removes its controls and rejects client-side navigation, tab mutation,
+  input, capture and recording requests. Both transports use one persistent
+  profile, but only one owner is active: taking control stops Playwright and
+  launches a headed browser without CDP; returning control stops that browser
+  before Playwright resumes. Environment-local URLs shown in chat remain inert
+  until the user takes control.
 - Sandpi uses Sandbox0 through the official JavaScript SDK; it does not read a
   Sandbox0 database, internal metering endpoint or ClickHouse credential.
 - Sandbox0 owns Sandbox lifecycle, Volumes, network enforcement, credential

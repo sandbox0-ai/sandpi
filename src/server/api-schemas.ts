@@ -517,19 +517,6 @@ export const browserControlSchema = z
   })
   .strict();
 
-export const browserOpenSchema = z
-  .object({
-    url: z
-      .string()
-      .trim()
-      .min(1)
-      .max(8_192)
-      .describe(
-        "HTTP or HTTPS URL on localhost, 127.0.0.1, or ::1 inside the Environment sandbox.",
-      ),
-  })
-  .strict();
-
 export const preferencesSchema: z.ZodType<SandpiPreferences> = z.object({
   general: z.object({
     language: z.enum(["en", "zh-CN"]),

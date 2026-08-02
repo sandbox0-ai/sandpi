@@ -5,7 +5,6 @@ import { WORKSPACE_ROOT } from "@/lib/workspace-path-policy";
 import {
   billingCheckoutSchema,
   browserControlSchema,
-  browserOpenSchema,
   browserSessionSchema,
   codexComposerUploadSchema,
   codexHookUpdateSchema,
@@ -197,7 +196,7 @@ const workspaceRawFile = z.object({
 });
 
 const browserDescription =
-  "Sandpi's built-in Browser keeps one shared profile with one active owner. A human can take control for any interactive browser task and later return the same profile to the agent; Sandpi rejects agent-side Browser operations while human control is active. Control responses report whether the Environment image supports headed-browser takeover. Browser localhost and loopback URLs resolve inside the Environment sandbox, not on the client device.";
+  "Sandpi's built-in Browser keeps one shared profile with one active owner. Agent ownership exposes a view-only, automatically sized screencast; every human interaction requires Take control and the headed VNC transport. A human can later return the same profile to the agent, and Sandpi rejects agent-side Browser operations while human control is active. Control responses report whether the Environment image supports headed-browser takeover.";
 const browserControl = z.object({
   owner: z.enum(["agent", "human"]),
   transport: z.enum(["playwright", "vnc"]),
@@ -1697,20 +1696,6 @@ export const openApiRouteContracts: readonly OpenApiRouteContract[] = [
       body: browserSessionSchema,
       response: { 204: noContent },
       "x-sandpi-optional-request-body": true,
-      "x-sandpi-shared-browser": true,
-    },
-  }),
-  defineContract({
-    method: "POST",
-    url: "/api/v1/environments/:environmentId/browser/open",
-    schema: {
-      operationId: "openEnvironmentBrowserUrl",
-      summary: "Open a loopback URL in the shared Browser",
-      description: browserDescription,
-      tags: ["Browser"],
-      body: browserOpenSchema,
-      response: { 204: noContent },
-      "x-sandpi-loopback-scope": "environment",
       "x-sandpi-shared-browser": true,
     },
   }),

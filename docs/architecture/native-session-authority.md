@@ -317,8 +317,8 @@ agent transport reopens it. A persistent `human-owner` file is an enforcement
 derivative: the supported coding-agent `playwright-cli` wrapper refuses to run
 while it exists, including after a Sandbox pause, and the agent transport
 removes it only after the authoritative AppService owner has changed. Sandpi's
-Browser session, navigation and viewport APIs also return conflict while human
-control is active. This is a coordination boundary for the supported agent
+Browser session and viewport APIs also return conflict while human control is
+active. This is a coordination boundary for the supported agent
 path, not isolation against a hostile root process; a root process could invoke
 the underlying executable or start another browser. A hard adversarial boundary
 would require moving the browser into a separately privileged sidecar or
@@ -332,45 +332,38 @@ and x11vnc processes. Sandpi reuses the existing `ws` transport dependency and
 loads the noVNC client on demand. Two GiB or more of Sandbox memory is
 recommended when a headed browser and coding agent are used together.
 
-Sandpi adapts only the embedded Dashboard shell: it binds the Dashboard to the
-shared `default` session explicitly, projects the current Sandpi theme tokens
-into the frame, and exposes the upstream tabs as a compact horizontal tab
-strip. It hides the Dashboard's native manual-interaction toolbar, including
-its Unlock control, so Sandpi's Take control action is the only human-input
-entry point. Tab selection, creation and closing still invoke Dashboard-owned
-controls; Sandpi projects but does not persist an independent page or tab
-model. Navigation and tab activity produce a non-blocking loading indicator
-until the next live frame.
+Sandpi treats the embedded official Dashboard only as a read-only rendering
+backend. It starts `playwright-cli show` pinned to the shared `default` session,
+projects the current Sandpi theme tokens into the frame and removes the native
+session sidebar, tab controls, interaction toolbar, screenshot and recording
+actions, browser chrome and omnibox. Sandpi exposes no replacement tab strip,
+new-tab action, navigation control or viewport-mode selector. The iframe is
+not focusable and does not receive pointer input, so Take control is the only
+human-input entry point.
 
-The embedded shell measures the Dashboard's live screen bounds and sends
-bounded, debounced updates through Sandpi's authenticated API. Sandpi
-deduplicates an already-applied viewport within one Sandbox runtime generation
-and coalesces intermediate updates while one CLI resize is running. The default
-`Desktop fit` mode preserves that aspect ratio while targeting a minimum 1280
-CSS-pixel width within bounded viewport limits.
-This keeps desktop sites out of mobile breakpoints while still filling the
-available screen without stretching or cropping. `Responsive` uses the
-Inspector screen at 1:1 CSS pixels, while `Mobile` uses a fixed 390 by 844
-viewport. The selected mode is a browser-local UI preference. Sandpi applies
-all three modes through the official `playwright-cli resize` command.
+This boundary is enforced behind the presentation layer as well. The Browser
+WebSocket proxy parses Dashboard client requests and forwards only visibility
+lifecycle updates plus one initial page-source selection for a newly connected
+viewer. It rejects navigation, tab mutation, mouse, keyboard, screenshot,
+annotation and recording methods before they reach Playwright. Page-source
+selection changes only which existing screencast the hidden viewer renders; it
+does not mutate a page. Playwright remains authoritative for agent automation,
+pages and profiles, while Sandpi owns the sole manual takeover action.
 
-Sandpi starts `playwright-cli show` without pinning a session so Dashboard
-readiness does not wait for Chromium startup. Every newly embedded connection
-selects the first tab in `default` after Playwright publishes it, then reveals
-the official Dashboard as soon as that shared session and first tab exist.
-Viewport reconciliation continues in the background instead of imposing a
-fixed wait for a resized screencast frame. A bounded compatibility fallback
-reveals the native Dashboard if Sandpi cannot recognize a future session
-markup. Users never need to operate the session picker in the supported shape.
+The embedded shell measures the available screen at one-to-one CSS pixels and
+sends bounded, debounced viewport updates through Sandpi's authenticated API.
+Sandpi deduplicates an already-applied viewport within one Sandbox runtime
+generation and coalesces intermediate updates while one official
+`playwright-cli resize` command is running. The browser image uses the entire
+Inspector stage and preserves the frame aspect ratio without a second saved UI
+mode.
 
 The Dashboard adapter is injected by Sandpi's authenticated HTML proxy; it does
-not edit the installed Playwright package. Hiding the native sidebar is
-capability-gated. If a future Dashboard no longer exposes
-the expected accessible tab controls, Sandpi leaves the official sidebar
-visible and stops presenting the compact tab strip, so the upstream UI remains
-usable after an image upgrade. Playwright continues to own pages, profiles and
-agent-side interaction behavior, while Sandpi owns the single manual takeover
-action.
+not edit the installed Playwright package. The Dashboard root remains hidden
+until the pinned session, a page and the expected screen surface are present.
+If a future Dashboard markup change prevents that recognition, Sandpi keeps the
+viewer closed and reports startup failure instead of revealing upstream
+controls. This is deliberately fail closed.
 
 An Environment resume can leave Chromium `Singleton*` symlinks on the Workspace
 Volume. Before either owner opens the fixed profile, Sandpi verifies that a
@@ -382,11 +375,11 @@ only cached coordinates. Missing human-mode dependencies produce a template
 compatibility error before ownership changes, while agent recovery continues
 to distinguish missing Playwright dependencies from a failed browser start.
 
-An authenticated chat link using HTTP or HTTPS on `localhost`, `127.0.0.1` or
-`::1` opens in a new tab in that remote browser, where loopback resolves inside
-the Sandbox rather than on the user's device. Scheme-less Markdown link targets
-for those exact hosts are normalized to HTTP. The Dashboard address bar remains
-an official Playwright surface and can navigate elsewhere subject to the
+Chat output may still identify HTTP or HTTPS URLs on `localhost`, `127.0.0.1`
+or `::1` as Environment-local references, including scheme-less forms that are
+normalized to HTTP for display. They are intentionally inert in agent mode so
+the client cannot navigate the shared Browser through a second path. A user
+must Take control and navigate in the headed VNC Chrome window, subject to the
 Environment's network policy.
 
 Sandbox0 currently exposes the owner-specific Browser transport through an

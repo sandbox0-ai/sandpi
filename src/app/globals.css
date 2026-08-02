@@ -1522,7 +1522,6 @@ pre {
 
 .markdown-content a,
 .markdown-workspace-link,
-.markdown-browser-link,
 .markdown-image-link {
   color: var(--blue);
   text-decoration: underline;
@@ -1532,13 +1531,11 @@ pre {
 
 .markdown-content a:hover,
 .markdown-workspace-link:hover,
-.markdown-browser-link:hover,
 .markdown-image-link:hover {
   text-decoration-color: currentColor;
 }
 
-.markdown-workspace-link,
-.markdown-browser-link {
+.markdown-workspace-link {
   display: inline;
   padding: 0;
   border: 0;
@@ -1732,7 +1729,6 @@ pre {
 
 .markdown-content-document a,
 .markdown-content-document .markdown-workspace-link,
-.markdown-content-document .markdown-browser-link,
 .markdown-content-document .markdown-image-link {
   color: var(--blue);
   text-decoration: none;
@@ -1740,7 +1736,6 @@ pre {
 
 .markdown-content-document a:hover,
 .markdown-content-document .markdown-workspace-link:hover,
-.markdown-content-document .markdown-browser-link:hover,
 .markdown-content-document .markdown-image-link:hover {
   text-decoration: underline;
   text-underline-offset: 0.2em;
@@ -4277,107 +4272,6 @@ code.codex-compact-activity-subject {
   white-space: nowrap;
 }
 
-.environment-browser-tabs {
-  display: flex;
-  min-width: 44px;
-  flex: 1;
-  align-self: stretch;
-  align-items: flex-end;
-  gap: 3px;
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: none;
-}
-
-.environment-browser-tabs::-webkit-scrollbar {
-  display: none;
-}
-
-.environment-browser-tab {
-  display: flex;
-  min-width: 72px;
-  max-width: 190px;
-  height: 29px;
-  flex: 0 1 150px;
-  align-items: center;
-  border: 1px solid transparent;
-  border-bottom: 0;
-  border-radius: 6px 6px 0 0;
-  color: var(--ink-soft);
-}
-
-.environment-browser-tab:hover {
-  background: var(--hover);
-  color: var(--ink);
-}
-
-.environment-browser-tab.is-selected {
-  border-color: var(--line);
-  background: var(--panel);
-  color: var(--ink);
-}
-
-.environment-browser-tab-select,
-.environment-browser-tab-close,
-.environment-browser-new-tab {
-  border: 0;
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-}
-
-.environment-browser-tab-select {
-  min-width: 0;
-  height: 100%;
-  flex: 1;
-  padding: 0 3px 0 8px;
-  overflow: hidden;
-  text-align: left;
-}
-
-.environment-browser-tab-select span {
-  display: block;
-  overflow: hidden;
-  font-size: 10px;
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.environment-browser-tab-close,
-.environment-browser-new-tab {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 5px;
-}
-
-.environment-browser-tab-close {
-  width: 22px;
-  height: 22px;
-  flex: 0 0 auto;
-  opacity: 0;
-}
-
-.environment-browser-tab:hover .environment-browser-tab-close,
-.environment-browser-tab.is-selected .environment-browser-tab-close,
-.environment-browser-tab-close:focus-visible {
-  opacity: 1;
-}
-
-.environment-browser-tab-close:hover,
-.environment-browser-new-tab:hover {
-  background: var(--selected);
-}
-
-.environment-browser-new-tab {
-  width: 26px;
-  height: 27px;
-  flex: 0 0 26px;
-  align-self: center;
-  color: var(--ink-soft);
-}
-
 .environment-browser-loading {
   display: inline-flex;
   min-width: 0;
@@ -4391,37 +4285,6 @@ code.codex-compact-activity-subject {
 
 .environment-browser-loading.is-visible {
   opacity: 1;
-}
-
-.environment-browser-viewport-size {
-  color: var(--ink-faint);
-  font-family: var(--font-mono);
-  font-size: 9px;
-  white-space: nowrap;
-}
-
-.environment-browser-viewport-mode {
-  display: flex;
-  flex: 0 0 auto;
-}
-
-.environment-browser-viewport-mode select {
-  max-width: 126px;
-  height: 26px;
-  padding: 0 22px 0 8px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  outline: none;
-  background: var(--panel);
-  color: var(--ink);
-  font: inherit;
-  font-size: 9.5px;
-  cursor: pointer;
-}
-
-.environment-browser-viewport-mode select:focus-visible {
-  border-color: var(--blue);
-  box-shadow: 0 0 0 2px var(--blue-soft);
 }
 
 .environment-browser-control {
@@ -4473,6 +4336,8 @@ code.codex-compact-activity-subject {
   height: 100%;
   border: 0;
   background: var(--panel);
+  pointer-events: none;
+  user-select: none;
 }
 
 .environment-browser-vnc {
@@ -4519,6 +4384,11 @@ code.codex-compact-activity-subject {
   cursor: pointer;
 }
 
+.environment-browser-state button:hover {
+  border-color: var(--blue);
+  background: var(--blue-soft);
+}
+
 .environment-browser-spinner {
   animation: spin 0.9s linear infinite;
 }
@@ -4548,13 +4418,8 @@ code.codex-compact-activity-subject {
 }
 
 @container environment-browser (max-width: 560px) {
-  .environment-browser-viewport-size,
   .environment-browser-loading > span {
     display: none;
-  }
-
-  .environment-browser-viewport-mode select {
-    max-width: 104px;
   }
 
   .environment-browser-control span {

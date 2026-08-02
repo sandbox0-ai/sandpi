@@ -93,21 +93,22 @@ test("selects the shared default session before announcing readiness", () => {
   );
   assert.match(
     BROWSER_DASHBOARD_EMBED_SCRIPT,
-    /if \(!sessionReady && session && firstTab\)/,
+    /screenBounds\.width > 0/,
   );
-  assert.doesNotMatch(
-    BROWSER_DASHBOARD_EMBED_SCRIPT,
-    /liveFrameMatchesViewport|crossProductDifference/,
-  );
+  assert.match(BROWSER_DASHBOARD_EMBED_SCRIPT, /screenBounds\.height > 0/);
   assert.match(
     BROWSER_DASHBOARD_EMBED_SCRIPT,
-    /optional session projection unavailable/,
+    /sandpi-browser-dashboard-ready/,
   );
-  assert.match(BROWSER_DASHBOARD_EMBED_SCRIPT, /5_000/);
+  assert.doesNotMatch(BROWSER_DASHBOARD_EMBED_SCRIPT, /setTimeout/);
 });
 
-test("reports a mode-aware viewport without blocking Dashboard readiness", () => {
+test("reports a bounded viewport that matches the visible screen", () => {
   assert.match(BROWSER_DASHBOARD_EMBED_SCRIPT, /new ResizeObserver/);
+  assert.match(
+    BROWSER_DASHBOARD_EMBED_SCRIPT,
+    /new ResizeObserver\(\(\) => \{[\s\S]*selectDefaultSession\(\)/,
+  );
   assert.match(
     BROWSER_DASHBOARD_EMBED_SCRIPT,
     /observedScreen\.getBoundingClientRect\(\)/,
@@ -116,49 +117,41 @@ test("reports a mode-aware viewport without blocking Dashboard readiness", () =>
     BROWSER_DASHBOARD_EMBED_SCRIPT,
     /sandpi:browser-dashboard-viewport/,
   );
-  assert.match(
-    BROWSER_DASHBOARD_EMBED_SCRIPT,
-    /sandpi:browser-dashboard-viewport-applied/,
-  );
   assert.match(BROWSER_DASHBOARD_EMBED_SCRIPT, /desiredViewport\?\.width/);
-  assert.doesNotMatch(BROWSER_DASHBOARD_EMBED_SCRIPT, /appliedViewport/);
-  assert.match(BROWSER_DASHBOARD_EMBED_SCRIPT, /desktopMinimumWidth/);
-  assert.match(BROWSER_DASHBOARD_EMBED_SCRIPT, /viewportMode === "mobile"/);
-  assert.match(
-    BROWSER_DASHBOARD_EMBED_SCRIPT,
-    /sandpi:browser-dashboard-viewport-mode/,
-  );
+  assert.doesNotMatch(BROWSER_DASHBOARD_EMBED_SCRIPT, /viewportMode|mobile/);
 });
 
-test("adapts native tabs and loading without patching Playwright assets", () => {
-  assert.match(BROWSER_DASHBOARD_EMBED_SCRIPT, /collectTabs/);
-  assert.match(BROWSER_DASHBOARD_EMBED_SCRIPT, /sandpi:browser-dashboard-tabs/);
-  assert.match(
-    BROWSER_DASHBOARD_EMBED_SCRIPT,
-    /sandpi:browser-dashboard-command/,
-  );
-  assert.match(
-    BROWSER_DASHBOARD_EMBED_SCRIPT,
-    /sandpi:browser-dashboard-loading/,
-  );
-  assert.match(BROWSER_DASHBOARD_EMBED_SCRIPT, /finishLoadingAfterFrame/);
-  assert.match(BROWSER_DASHBOARD_EMBED_SCRIPT, /target\.click\(\)/);
-});
-
-test("hides the native sidebar only after compatibility is detected", () => {
+test("keeps the embedded Dashboard hidden until the read-only shape is ready", () => {
   assert.match(
     BROWSER_DASHBOARD_EMBED_STYLE,
-    /\.sandpi-browser-dashboard-integrated/,
+    /#root \{[\s\S]*visibility: hidden/,
   );
   assert.match(
-    BROWSER_DASHBOARD_EMBED_SCRIPT,
-    /root\.classList\.toggle\([\s\S]*sandpi-browser-dashboard-integrated/,
+    BROWSER_DASHBOARD_EMBED_STYLE,
+    /sandpi-browser-dashboard-ready #root[\s\S]*visibility: visible/,
   );
 });
 
-test("hides the native interaction toolbar in favor of Take control", () => {
+test("removes every native Dashboard interaction surface", () => {
   assert.match(
     BROWSER_DASHBOARD_EMBED_STYLE,
-    /\.browser-window > \.toolbar[\s\S]*display: none !important/,
+    /\.dashboard-main > \.toolbar/,
   );
+  assert.match(
+    BROWSER_DASHBOARD_EMBED_STYLE,
+    /\.browser-window > \.browser-chrome/,
+  );
+  assert.match(
+    BROWSER_DASHBOARD_EMBED_STYLE,
+    /\.dashboard-view > :not\(\.dashboard-main\)/,
+  );
+  assert.match(
+    BROWSER_DASHBOARD_EMBED_STYLE,
+    /\.split-view-sidebar[\s\S]*display: none !important/,
+  );
+  assert.match(
+    BROWSER_DASHBOARD_EMBED_STYLE,
+    /\.screen,[\s\S]*\.screen-overlay[\s\S]*pointer-events: none !important/,
+  );
+  assert.doesNotMatch(BROWSER_DASHBOARD_EMBED_SCRIPT, /commandMessage|newTab/);
 });
