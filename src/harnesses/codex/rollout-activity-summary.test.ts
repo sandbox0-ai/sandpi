@@ -347,6 +347,39 @@ test("summarizes structured local shell and web-search calls", () => {
   assert.equal(web.external, true);
 });
 
+test("summarizes current Codex code-mode web tools and their batched arguments", () => {
+  for (const toolName of ["web__run", "web_run", "web.run"]) {
+    const summary = summarizeCodexRolloutActivity(
+      rollout({
+        codeModeTools: [toolName],
+        callPayload: {
+          input: `const r = await tools.${toolName}({search_query:[{q:"Codex rollout activity"},{q:"Codex code mode"}],response_length:"long"}); text(r);`,
+        },
+      }),
+    );
+
+    assert.equal(summary.kind, "web");
+    assert.equal(summary.subject, "Codex rollout activity +1");
+    assert.equal(summary.external, true);
+  }
+});
+
+test("summarizes non-search web run operations", () => {
+  const summary = summarizeCodexRolloutActivity(
+    rollout({
+      codeModeTools: ["web__run"],
+      callPayload: {
+        input:
+          'tools.web__run({open:[{ref_id:"https://sandpi.ai/llms.txt"}]});',
+      },
+    }),
+  );
+
+  assert.equal(summary.kind, "web");
+  assert.equal(summary.subject, "https://sandpi.ai/llms.txt");
+  assert.equal(summary.external, true);
+});
+
 declare global {
   // Test sentinel proving arbitrary code-mode input is never evaluated.
   var __sandpiActivityParserExecuted: boolean | undefined;

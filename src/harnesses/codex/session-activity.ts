@@ -117,6 +117,7 @@ function codexRolloutActivityIsVisible(entry: CodexRolloutToolActivity) {
 function rolloutToolCategories(
   entry: CodexRolloutToolActivity,
 ): CodexSessionActivityCategory[] {
+  const summary = summarizeCodexRolloutActivity(entry);
   const names =
     entry.codeModeTools.length > 0 ? entry.codeModeTools : [entry.name];
   const nameVariants = names.flatMap((name) => [
@@ -124,23 +125,9 @@ function rolloutToolCategories(
     name.split(".").at(-1) ?? name,
   ]);
   const categories: CodexSessionActivityCategory[] = [];
-  const external =
-    names.some(
-      (name) =>
-        name.startsWith("mcp__") ||
-        name.startsWith("web.") ||
-        name.startsWith("image_gen.") ||
-        name.startsWith("image_gen__") ||
-        name.startsWith("browser.") ||
-        name.includes("web_search") ||
-        name.includes("imagegen") ||
-        name.includes("image_generation") ||
-        name.includes("browser"),
-    ) ||
-    entry.callType === "tool_search_call" ||
-    entry.callType === "web_search_call" ||
-    entry.callType === "image_generation_call";
-  if (external) categories.push("external");
+  if (summary.external || entry.callType === "tool_search_call") {
+    categories.push("external");
+  }
   if (nameVariants.some((name) => CODEX_ROLLOUT_AGENT_TOOLS.has(name))) {
     categories.push("agents");
   }
