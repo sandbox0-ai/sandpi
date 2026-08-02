@@ -47,6 +47,9 @@ test("reuses protected coordinates but admits every HTTP and WebSocket request",
     },
   } as unknown as EnvironmentRuntimeAccessService;
   const runtime = {
+    async isEnvironmentBrowserTakeoverAvailable() {
+      return true;
+    },
     async ensureEnvironmentBrowserService(
       runtime: EnvironmentRuntimeRecord,
       restart = false,
@@ -64,6 +67,16 @@ test("reuses protected coordinates but admits every HTTP and WebSocket request",
     },
   } as unknown as RuntimeAdapter;
   const service = new EnvironmentBrowserService(runtimeAccess, runtime);
+
+  assert.deepEqual(
+    await service.control("user-browser", runtimeRecord.id),
+    {
+      owner: "agent",
+      transport: "playwright",
+      revision: 0,
+      takeoverAvailable: true,
+    },
+  );
 
   assert.deepEqual(
     await service.httpUpstream(
@@ -101,7 +114,7 @@ test("reuses protected coordinates but admits every HTTP and WebSocket request",
       headers: { "X-Sandpi-Browser-Proxy": "secret" },
     },
   );
-  assert.equal(admissions, 4);
+  assert.equal(admissions, 6);
   assert.equal(dashboardEnsures, 1);
   assert.deepEqual(dashboardRestarts, [false]);
 });
