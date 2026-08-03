@@ -21,7 +21,6 @@ import type {
   CodexFileUpdateChange,
   CodexNativeSnapshot,
   CodexSession,
-  CodexThread,
   CodexThreadItem,
   CodexTurn,
 } from "../src/harnesses/codex/types";
@@ -3768,27 +3767,28 @@ test("interrupts a persisted running Session before its native snapshot arrives"
   await expect.poll(() => interruptBody).toEqual({});
 });
 
-test("deduplicates native models and sends Plan plus composer Fast mode", async ({
+test("deduplicates native models and submits leading slash text verbatim", async ({
   page,
-  request,
 }) => {
-  const workspace = await activeWorkspace(request);
-  test.skip(
-    !workspace ||
-      workspace.environment.status !== "ready" ||
-      workspace.environment.codingAgent.status !== "connected",
-    "A ready Environment with Codex connected is required for this check.",
+  const bootstrap = getMockBootstrap();
+  useEnglishUi(bootstrap);
+  const environment = bootstrap.environments.find(
+    (candidate) =>
+      candidate.status === "ready" &&
+      candidate.codingAgent.status === "connected",
   );
-  if (
-    !workspace ||
-    workspace.environment.status !== "ready" ||
-    workspace.environment.codingAgent.status !== "connected"
-  ) {
-    return;
-  }
-  const { environment } = workspace;
+  expect(environment).toBeTruthy();
+  if (!environment) return;
+  bootstrap.selectedEnvironmentId = environment.id;
+  bootstrap.selectedSessionId = "";
   let createBody: Record<string, unknown> | undefined;
 
+  await page.route(
+    (url) => url.pathname === "/api/v1/bootstrap",
+    async (route) => {
+      await route.fulfill({ json: { data: bootstrap } });
+    },
+  );
   await page.route(
     `**/api/v1/environments/${encodeURIComponent(environment.id)}/harnesses/codex/models`,
     async (route) => {
@@ -3856,285 +3856,26 @@ test("deduplicates native models and sends Plan plus composer Fast mode", async 
   const composer = page.locator(
     'textarea[name="new-session-instruction"]',
   );
-  await composer.fill("/plan");
-  await composer.press("Enter");
-  await expect(page.locator(".codex-composer-mode")).toBeVisible();
-  await expect(composer).toHaveValue("");
+  await composer.fill("/plan Design the persistence change");
+  await expect(page.locator(".codex-slash-command-menu")).toHaveCount(0);
+  await expect(page.locator(".codex-composer-mode")).toHaveCount(0);
   const fastToggle = page.getByTestId("codex-fast-toggle");
   await expect(fastToggle).toHaveAttribute("aria-pressed", "false");
   await fastToggle.click();
   await expect(fastToggle).toHaveAttribute("aria-pressed", "true");
-  await expect(page.locator(".codex-composer-mode")).toHaveCount(1);
 
-  await composer.fill("Design the persistence change");
   await page.locator(".composer-shell .send-button").click();
   await expect
     .poll(() => createBody)
     .toMatchObject({
       environmentId: environment.id,
-      prompt: "Design the persistence change",
+      prompt: "/plan Design the persistence change",
       modelId: "e2e-plan-model",
       reasoningEffort: "high",
-      collaborationMode: "plan",
       serviceTier: "e2e-native-priority",
     });
-});
-
-test("maps Codex slash commands to Sandpi new and fork Session flows", async ({
-  page,
-  request,
-}) => {
-  const workspace = await activeWorkspace(request);
-  test.skip(!workspace, "An active Session is required for this check.");
-  if (!workspace) return;
-  const { environment, session } = workspace;
-  const eventPath = `/api/v1/sessions/${session.id}/events`;
-  const nativeThreadId = "thread-e2e-slash-commands";
-  const forkedSessionId = "session-e2e-slash-fork";
-  const now = Date.now() / 1_000;
-  const snapshot: CodexNativeSnapshot = {
-    protocol: "codex-app-server",
-    nativeSessionId: nativeThreadId,
-    historyRevision: 1,
-    modelId: "e2e-slash-model",
-    reasoningEffort: "high",
-    sessionStatus: "waiting",
-    forkableTurnIds: [],
-    activity: {
-      source: "codex-rollout",
-      availability: "available",
-      error: null,
-      records: [],
-    },
-    thread: {
-      id: nativeThreadId,
-      createdAt: now,
-      updatedAt: now,
-      status: { type: "idle" },
-      turns: [],
-    },
-  };
-  let forkBody: unknown;
-  const browserErrors: string[] = [];
-  page.on("console", (message) => {
-    if (message.type() === "error") browserErrors.push(message.text());
-  });
-  page.on("pageerror", (error) => browserErrors.push(error.message));
-
-  await installDarkUiPreferences(page);
-  await installControlledEventSource(page);
-  await page.route("**/api/v1/**/models", async (route) => {
-    await route.fulfill({
-      json: {
-        data: {
-          data: [
-            {
-              id: snapshot.modelId,
-              displayName: "E2E slash model",
-              isDefault: true,
-              defaultReasoningEffort: "high",
-              supportedReasoningEfforts: [
-                {
-                  reasoningEffort: "high",
-                  description: "Deep reasoning",
-                },
-              ],
-            },
-          ],
-        },
-        meta: { availability: "available", source: "codex" },
-      },
-    });
-  });
-  await page.route(
-    `**/api/v1/sessions/${encodeURIComponent(session.id)}/fork`,
-    async (route) => {
-      forkBody = route.request().postDataJSON();
-      await route.fulfill({
-        status: 201,
-        json: {
-          data: {
-            ...session,
-            id: forkedSessionId,
-            title: "Forked from slash command",
-            status: "waiting",
-            archived: false,
-            createdAt: now,
-            updatedAt: now,
-          },
-        },
-      });
-    },
-  );
-  const agentThread: CodexThread = {
-    id: "thread-e2e-subagent",
-    parentThreadId: nativeThreadId,
-    agentNickname: "Scout",
-    agentRole: "explorer",
-    preview: "Inspect the native Agent flow",
-    createdAt: now + 1,
-    updatedAt: now + 2,
-    status: { type: "idle" },
-    turns: [
-      {
-        id: "turn-e2e-subagent",
-        itemsView: "full",
-        status: "completed",
-        error: null,
-        startedAt: now + 1,
-        completedAt: now + 2,
-        durationMs: 1_000,
-        items: [
-          {
-            type: "userMessage",
-            id: "item-e2e-subagent-prompt",
-            clientId: null,
-            content: [
-              {
-                type: "text",
-                text: "Inspect the native Agent flow",
-                text_elements: [],
-              },
-            ],
-          },
-          {
-            type: "agentMessage",
-            id: "item-e2e-subagent-answer",
-            text: "Sub-agent result from its own native Thread.",
-            phase: "final_answer",
-            memoryCitation: null,
-          },
-        ],
-      },
-    ],
-  };
-  await page.route(
-    `**/api/v1/sessions/${encodeURIComponent(session.id)}/agents**`,
-    async (route) => {
-      const path = new URL(route.request().url()).pathname;
-      if (path.endsWith("/agents")) {
-        await route.fulfill({
-          json: {
-            data: {
-              root: snapshot.thread,
-              descendants: [{ ...agentThread, turns: [] }],
-            },
-          },
-        });
-        return;
-      }
-      const requestedThreadId = decodeURIComponent(path.split("/").at(-1)!);
-      await route.fulfill({
-        json: {
-          data:
-            requestedThreadId === agentThread.id
-              ? agentThread
-              : snapshot.thread,
-        },
-      });
-    },
-  );
-
-  const sourceUrl =
-    `/?environment=${encodeURIComponent(environment.id)}` +
-    `&session=${encodeURIComponent(session.id)}`;
-  await page.goto(sourceUrl);
-  await emitControlledEvent(page, eventPath, "snapshot", snapshot);
-  await expect(page.getByText("Loading conversation…")).toBeHidden();
-
-  const composer = page.locator('textarea[name="message"]');
-  await composer.fill("/");
-  const menu = page.getByRole("listbox", {
-    name: /Codex slash commands|Codex 斜杠命令/,
-  });
-  await expect(menu).toBeVisible();
-  await expect(
-    menu.locator(".codex-slash-command-name", { hasText: "/new" }),
-  ).toHaveCount(1);
-  await expect(
-    menu.locator(".codex-slash-command-name", { hasText: "/fork" }),
-  ).toHaveCount(1);
-  await expect(menu).not.toContainText("/resume");
-  await expect(menu).not.toContainText("/side");
-  await expect(menu).not.toContainText("/btw");
-  await expect(menu).not.toContainText("/fast");
-  await expect(menu).not.toContainText("/status");
-
-  await composer.fill("/agent");
-  await composer.press("Enter");
-  const agentDialog = page.getByRole("dialog", { name: "Agent Threads" });
-  await expect(agentDialog).toBeVisible();
-  await expect
-    .poll(() => new URL(page.url()).searchParams.get("agents"))
-    .toBe("1");
-  await expect(
-    page.getByRole("complementary", { name: "Inspector" }),
-  ).toBeHidden();
-  await agentDialog.getByRole("button", { name: /Scout/ }).click();
-  await expect
-    .poll(() => new URL(page.url()).searchParams.get("agent"))
-    .toBe(agentThread.id);
-  await expect(
-    agentDialog.getByText("Sub-agent result from its own native Thread."),
-  ).toBeVisible();
-  await expect(page.locator("html")).toHaveAttribute(
-    "data-resolved-theme",
-    "dark",
-  );
-  const parentAgentMessage = agentDialog.locator(
-    'article[data-role="user"] .markdown-content',
-  );
-  await expect(parentAgentMessage).toHaveCSS(
-    "background-color",
-    "rgb(32, 56, 42)",
-  );
-  await expect(parentAgentMessage).toHaveCSS(
-    "color",
-    "rgb(240, 239, 233)",
-  );
-  await page.reload();
-  await emitControlledEvent(page, eventPath, "snapshot", snapshot);
-  await expect(agentDialog).toBeVisible();
-  await expect(
-    agentDialog.getByText("Sub-agent result from its own native Thread."),
-  ).toBeVisible();
-  await agentDialog
-    .getByRole("button", { name: "Close Agent Threads" })
-    .click();
-  await expect
-    .poll(() => new URL(page.url()).searchParams.get("agents"))
-    .toBeNull();
-  expect(new URL(page.url()).searchParams.get("agent")).toBeNull();
-
-  await composer.fill("/subagents");
-  await composer.press("Enter");
-  await expect(agentDialog).toBeHidden();
-  await expect(
-    page
-      .getByRole("region", { name: "Codex conversation" })
-      .getByRole("alert"),
-  ).toContainText("Unknown command /subagents");
-
-  await composer.fill("/new");
-  await composer.press("Enter");
-  await expect
-    .poll(() => new URL(page.url()).searchParams.get("session"))
-    .toBeNull();
-  await expect(
-    page.locator('textarea[name="new-session-instruction"]'),
-  ).toBeVisible();
-
-  await page.goto(sourceUrl);
-  await emitControlledEvent(page, eventPath, "snapshot", snapshot);
-  await expect(page.getByText("Loading conversation…")).toBeHidden();
-  const resumedComposer = page.locator('textarea[name="message"]');
-  await resumedComposer.fill("/fork");
-  await resumedComposer.press("Enter");
-  await expect.poll(() => forkBody).toEqual({});
-  await expect
-    .poll(() => new URL(page.url()).searchParams.get("session"))
-    .toBe(forkedSessionId);
-  expect(browserErrors).toEqual([]);
+  expect(createBody).not.toHaveProperty("collaborationMode");
+  expect(createBody).not.toHaveProperty("sessionStartSource");
 });
 
 test("keeps an optimistic prompt ahead of Activity and folds it for the streamed answer", async ({

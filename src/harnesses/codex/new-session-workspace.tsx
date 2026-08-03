@@ -15,24 +15,11 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
-import type {
-  EnvironmentSettingsOpenOptions,
-  EnvironmentSettingsTab,
-} from "@/components/environment-settings";
 import {
   CodexComposer,
   encodeCodexComposerLocalImages,
 } from "@/harnesses/codex/composer";
 import { insertCodexFileMentions } from "@/harnesses/codex/file-mentions";
-import {
-  CodexSlashCommandMenu,
-  useCodexSlashCommandMenu,
-} from "@/harnesses/codex/slash-command-menu";
-import {
-  CODEX_INIT_COMMAND_PROMPT,
-  parseCodexSlashInvocation,
-  type CodexSlashCommand,
-} from "@/harnesses/codex/slash-commands";
 import {
   shouldSubmitComposer,
   type OperationLanguage,
@@ -59,11 +46,6 @@ import {
   type CodexModelOption,
 } from "@/harnesses/codex/models";
 import {
-  CodexNativeCommandDialog,
-  type CodexNativeDialogMode,
-} from "@/harnesses/codex/native-command-dialog";
-import { parseCodexTokenUsageView } from "@/harnesses/codex/token-usage";
-import {
   beginSessionCreation,
   failSessionCreation,
   isDefinitiveSessionCreationFailure,
@@ -87,26 +69,13 @@ interface NewSessionWorkspaceProps {
   canManageEnvironment: boolean;
   onEnvironmentChange: (environment: Environment) => void;
   onCreated: (session: CodexSession) => void;
-  initialTitle?: string;
-  sessionStartSource?: "startup" | "clear";
   onOpenAgentHarnessSettings: () => void;
-  onOpenEnvironmentSettings: (
-    tab: EnvironmentSettingsTab,
-    options?: EnvironmentSettingsOpenOptions,
-  ) => void;
   onToggleSidebar: () => void;
   inspectorOpen: boolean;
   onToggleInspector: () => void;
   terminalOpen: boolean;
   onToggleTerminal: () => void;
   onOpenWorkspacePath: (path: string) => void;
-}
-
-interface CreateCodexSessionOptions {
-  instruction?: string;
-  collaborationMode?: "plan";
-  bypassSlash?: boolean;
-  restorePrompt?: string;
 }
 
 export function CodexNewSessionWorkspace({
@@ -116,10 +85,7 @@ export function CodexNewSessionWorkspace({
   canManageEnvironment,
   onEnvironmentChange,
   onCreated,
-  initialTitle,
-  sessionStartSource,
   onOpenAgentHarnessSettings,
-  onOpenEnvironmentSettings,
   onToggleSidebar,
   inspectorOpen,
   onToggleInspector,
@@ -146,13 +112,7 @@ export function CodexNewSessionWorkspace({
     tone: "info" | "error";
     message: string;
   } | null>(null);
-  const [planMode, setPlanMode] = useState(false);
   const [fastMode, setFastMode] = useState(false);
-  const [mentionOpenRequest, setMentionOpenRequest] = useState(0);
-  const [nativeDialog, setNativeDialog] = useState<{
-    mode: CodexNativeDialogMode;
-    usageView?: "daily" | "weekly" | "cumulative";
-  }>();
   const [images, setImages] = useState<CodexComposerImage[]>([]);
   const [localImages, setLocalImages] = useState<CodexComposerLocalImage[]>([]);
   const promptRef = useRef<HTMLTextAreaElement>(null);
@@ -164,13 +124,6 @@ export function CodexNewSessionWorkspace({
     selectedModel,
     selectedModel ? reasoningEfforts[selectedModel.id] : undefined,
   );
-  const slashMenu = useCodexSlashCommandMenu({
-    value: prompt,
-    context: "new-session",
-    onComplete: setComposerPrompt,
-    onExecute: (command) => void executeSlashCommand(command, ""),
-  });
-
   useEffect(() => {
     if (!window.matchMedia("(min-width: 641px)").matches) {
       return;
@@ -200,9 +153,7 @@ export function CodexNewSessionWorkspace({
     setModelCatalogError("");
     setModelCatalogState("idle");
     setCommandNotice(null);
-    setPlanMode(false);
     setFastMode(false);
-    setMentionOpenRequest(0);
     if (
       environment.status !== "ready" ||
       environment.codingAgent.status !== "connected"
@@ -304,21 +255,6 @@ export function CodexNewSessionWorkspace({
     });
   }
 
-  function setComposerPrompt(value: string) {
-    setPrompt(value);
-    window.requestAnimationFrame(() => {
-      const textarea = promptRef.current;
-      if (!textarea) return;
-      textarea.focus();
-      textarea.setSelectionRange(value.length, value.length);
-    });
-  }
-
-  function clearComposerPrompt() {
-    setPrompt("");
-    window.requestAnimationFrame(() => promptRef.current?.focus());
-  }
-
   async function openAgentsFile() {
     if (openingAgentsFile) return;
     setOpeningAgentsFile(true);
@@ -337,142 +273,7 @@ export function CodexNewSessionWorkspace({
     }
   }
 
-  async function executeSlashCommand(
-    command: CodexSlashCommand,
-    argumentsValue: string,
-  ) {
-    clearComposerPrompt();
-    setCommandNotice(null);
-    setError("");
-    if (command.intent === "composer.mention") {
-      setMentionOpenRequest((request) => request + 1);
-      return;
-    }
-    if (command.intent === "environment.skills") {
-      onOpenEnvironmentSettings("skills");
-      return;
-    }
-    if (command.intent === "environment.mcp") {
-      if (argumentsValue && argumentsValue.toLowerCase() !== "verbose") {
-        setCommandNotice({
-          tone: "error",
-          message:
-            language === "zh-CN"
-              ? "/mcp 仅支持可选参数 verbose。"
-              : "/mcp only accepts the optional verbose argument.",
-        });
-        return;
-      }
-      onOpenEnvironmentSettings("mcp", {
-        mcpVerbose: argumentsValue.toLowerCase() === "verbose",
-      });
-      return;
-    }
-    if (command.intent === "environment.network") {
-      onOpenEnvironmentSettings("network");
-      return;
-    }
-    if (command.intent === "environment.credentials") {
-      onOpenEnvironmentSettings("credentials");
-      return;
-    }
-    if (
-      command.intent === "codex.personality" ||
-      command.intent === "codex.memories" ||
-      command.intent === "codex.hooks"
-    ) {
-      setNativeDialog({
-        mode:
-          command.intent === "codex.personality"
-            ? "personality"
-            : command.intent === "codex.memories"
-              ? "memories"
-              : "hooks",
-      });
-      return;
-    }
-    if (command.intent === "codex.usage") {
-      const view = parseCodexTokenUsageView(argumentsValue);
-      if (!view) {
-        setCommandNotice({
-          tone: "error",
-          message:
-            language === "zh-CN"
-              ? "/usage 参数必须是 daily、weekly 或 cumulative。"
-              : "/usage expects daily, weekly, or cumulative.",
-        });
-        return;
-      }
-      setNativeDialog({ mode: "usage", usageView: view });
-      return;
-    }
-    if (command.intent === "composer.plan") {
-      setPlanMode(true);
-      if (argumentsValue) {
-        await createSession({
-          instruction: argumentsValue,
-          collaborationMode: "plan",
-          bypassSlash: true,
-          restorePrompt: `/plan ${argumentsValue}`,
-        });
-      } else {
-        setCommandNotice({
-          tone: "info",
-          message:
-            language === "zh-CN"
-              ? "计划模式已开启，将应用到新 Session。"
-              : "Plan mode is active for the new Session.",
-        });
-      }
-      return;
-    }
-    if (command.intent === "codex.init") {
-      await createSession({
-        instruction: CODEX_INIT_COMMAND_PROMPT,
-        bypassSlash: true,
-        restorePrompt: "/init",
-      });
-    }
-  }
-
-  async function createSession(options: CreateCodexSessionOptions = {}) {
-    if (!options.bypassSlash) {
-      const invocation = parseCodexSlashInvocation(prompt, "new-session");
-      if (invocation.kind === "command") {
-        await executeSlashCommand(invocation.command, invocation.arguments);
-        return;
-      }
-      if (invocation.kind === "unknown") {
-        setCommandNotice({
-          tone: "error",
-          message:
-            language === "zh-CN"
-              ? `未知命令 /${invocation.name}。输入 / 查看可用命令。`
-              : `Unknown command /${invocation.name}. Type / to see available commands.`,
-        });
-        return;
-      }
-      if (invocation.kind === "unavailable") {
-        setCommandNotice({
-          tone: "error",
-          message:
-            language === "zh-CN"
-              ? `/${invocation.command.name} 需要先打开一个 Session。`
-              : `/${invocation.command.name} requires an active Session.`,
-        });
-        return;
-      }
-      if (invocation.kind === "missing-arguments") {
-        setCommandNotice({
-          tone: "error",
-          message:
-            language === "zh-CN"
-              ? `/${invocation.command.name} 缺少参数。`
-              : `/${invocation.command.name} requires an argument.`,
-        });
-        return;
-      }
-    }
+  async function createSession() {
     if (environment.status !== "ready") {
       setError(
         environment.status === "error"
@@ -493,7 +294,7 @@ export function CodexNewSessionWorkspace({
       setError(modelCatalogError || ui.waitForModels);
       return;
     }
-    const instruction = (options.instruction ?? prompt).trim();
+    const instruction = prompt.trim();
     if (!instruction && images.length === 0 && localImages.length === 0) {
       setError(ui.emptyInstruction(environment.codingAgent.label));
       promptRef.current?.focus();
@@ -502,21 +303,12 @@ export function CodexNewSessionWorkspace({
 
     const requestInput = {
       environmentId: environment.id,
-      ...(initialTitle?.trim() ? { title: initialTitle.trim() } : {}),
-      ...(sessionStartSource ? { sessionStartSource } : {}),
       prompt: instruction,
       images: images.map(encodeCodexComposerImage),
       localImages: encodeCodexComposerLocalImages(localImages),
       modelId: selectedModel.id,
       ...(selectedReasoningEffort
         ? { reasoningEffort: selectedReasoningEffort }
-        : {}),
-      ...((options.collaborationMode ?? (planMode ? "plan" : undefined))
-        ? {
-            collaborationMode:
-              options.collaborationMode ??
-              (planMode ? ("plan" as const) : undefined),
-          }
         : {}),
       ...(fastMode && selectedModel.fastServiceTier
         ? { serviceTier: selectedModel.fastServiceTier.id }
@@ -549,9 +341,6 @@ export function CodexNewSessionWorkspace({
         isDefinitiveSessionCreationFailure(cause),
       );
       setError(cause instanceof Error ? cause.message : ui.startFailed);
-      if (options.restorePrompt) {
-        setComposerPrompt(options.restorePrompt);
-      }
       setCreating(false);
     }
   }
@@ -770,10 +559,6 @@ export function CodexNewSessionWorkspace({
         </div>
       </div>
       <div className={styles.composerRegion}>
-        {/*
-          Codex slash-command completion belongs in this Codex composer. Future harnesses
-          provide their own composer instead of registering commands in a shared catalog.
-        */}
         <CodexComposer
           className={styles.composer}
           language={language}
@@ -784,7 +569,6 @@ export function CodexNewSessionWorkspace({
             placeholder: ui.placeholder(environment.codingAgent.label),
             onChange: (event) => {
               setPrompt(event.target.value);
-              slashMenu.show();
               setCommandNotice(null);
               if (error && event.target.value.trim()) {
                 setError("");
@@ -798,7 +582,6 @@ export function CodexNewSessionWorkspace({
               void addImages(pasted);
             },
             onKeyDown: (event) => {
-              if (slashMenu.handleKeyDown(event)) return;
               if (
                 shouldSubmitComposer(
                   {
@@ -815,22 +598,7 @@ export function CodexNewSessionWorkspace({
                 void createSession();
               }
             },
-            "aria-controls":
-              slashMenu.commands.length > 0 ? slashMenu.id : undefined,
-            "aria-activedescendant": slashMenu.activeCommand
-              ? `${slashMenu.id}-${slashMenu.activeCommand.name}`
-              : undefined,
           }}
-          slashCommandMenu={
-            <CodexSlashCommandMenu
-              id={slashMenu.id}
-              language={language}
-              commands={slashMenu.commands}
-              activeIndex={slashMenu.activeIndex}
-              onActiveIndexChange={slashMenu.setActiveIndex}
-              onSelect={slashMenu.select}
-            />
-          }
           images={images}
           onRemoveImage={(id) => {
             setImages((current) =>
@@ -846,23 +614,6 @@ export function CodexNewSessionWorkspace({
             setError("");
           }}
           notice={commandNotice}
-          mode={
-            planMode
-              ? {
-                  label: language === "zh-CN" ? "计划模式" : "Plan mode",
-                  description:
-                    language === "zh-CN"
-                      ? "新 Session 使用 Codex 计划协作模式"
-                      : "The new Session uses Codex Plan collaboration mode",
-                  exitLabel:
-                    language === "zh-CN" ? "退出计划模式" : "Exit Plan mode",
-                  onExit: () => {
-                    setPlanMode(false);
-                    setCommandNotice(null);
-                  },
-                }
-              : null
-          }
           toolbar={{
             environmentId: environment.id,
             agentLabel: environment.codingAgent.label,
@@ -894,7 +645,6 @@ export function CodexNewSessionWorkspace({
               setFastMode(enabled);
               setCommandNotice(null);
             },
-            mentionOpenRequest,
             status: {
               state:
                 environment.codingAgent.status !== "connected" ||
@@ -939,15 +689,6 @@ export function CodexNewSessionWorkspace({
           }}
         />
       </div>
-      {nativeDialog ? (
-        <CodexNativeCommandDialog
-          mode={nativeDialog.mode}
-          language={language}
-          environmentId={environment.id}
-          initialUsageView={nativeDialog.usageView}
-          onClose={() => setNativeDialog(undefined)}
-        />
-      ) : null}
     </section>
   );
 }

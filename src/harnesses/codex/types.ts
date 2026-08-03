@@ -248,11 +248,6 @@ export interface CodexThread {
 }
 
 /** Native root plus every persisted AgentControl descendant in one Session tree. */
-export interface CodexAgentThreads {
-  root: CodexThread;
-  descendants: CodexThread[];
-}
-
 export interface CodexTokenUsageBreakdown {
   inputTokens: number;
   cachedInputTokens: number;
