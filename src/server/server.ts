@@ -102,11 +102,9 @@ import { TerminalInputQueue } from "@/server/terminal-input-queue";
 import {
   billingCheckoutSchema,
   codexComposerUploadSchema,
-  codexHookUpdateSchema,
   codexMcpServerConfigurationSchema,
   codexMcpServerEnabledSchema,
   codexMemoriesSettingsSchema,
-  codexPersonalitySelectionSchema,
   codexRateLimitResetSchema,
   codexSkillConfigurationSchema,
   codexSkillPutSchema,
@@ -122,9 +120,7 @@ import {
   rotateEnvironmentWebhookSecretSchema,
   sessionCreateSchema,
   sessionForkSchema,
-  sessionGoalUpdateSchema,
   sessionMetadataSchema,
-  sessionReviewSchema,
   terminalInputSchema,
   turnCreateSchema,
   turnInterruptSchema,
@@ -1451,37 +1447,6 @@ export function registerApiRoutes(
     }),
   );
   app.get<{ Params: { environmentId: string } }>(
-    "/api/v1/environments/:environmentId/harnesses/codex/personality",
-    async (request) => ({
-      data: await services.codex.readEnvironmentPersonality(
-        request.principal.userId,
-        request.params.environmentId,
-      ),
-    }),
-  );
-  app.put<{ Params: { environmentId: string } }>(
-    "/api/v1/environments/:environmentId/harnesses/codex/personality",
-    async (request) => {
-      const body = codexPersonalitySelectionSchema.parse(request.body);
-      return {
-        data: await services.codex.setEnvironmentPersonality({
-          userId: request.principal.userId,
-          environmentId: request.params.environmentId,
-          personality: body.personality,
-        }),
-      };
-    },
-  );
-  app.get<{ Params: { environmentId: string } }>(
-    "/api/v1/environments/:environmentId/harnesses/codex/token-usage",
-    async (request) => ({
-      data: await services.codex.accountTokenUsageForEnvironment(
-        request.principal.userId,
-        request.params.environmentId,
-      ),
-    }),
-  );
-  app.get<{ Params: { environmentId: string } }>(
     "/api/v1/environments/:environmentId/harnesses/codex/memories",
     async (request) => ({
       data: await services.codex.readEnvironmentMemories(
@@ -1511,28 +1476,6 @@ export function registerApiRoutes(
         request.params.environmentId,
       ),
     }),
-  );
-  app.get<{ Params: { environmentId: string } }>(
-    "/api/v1/environments/:environmentId/harnesses/codex/hooks",
-    async (request) => ({
-      data: await services.codex.listEnvironmentHooks(
-        request.principal.userId,
-        request.params.environmentId,
-      ),
-    }),
-  );
-  app.put<{ Params: { environmentId: string } }>(
-    "/api/v1/environments/:environmentId/harnesses/codex/hooks",
-    async (request) => {
-      const body = codexHookUpdateSchema.parse(request.body);
-      return {
-        data: await services.codex.updateEnvironmentHook({
-          userId: request.principal.userId,
-          environmentId: request.params.environmentId,
-          ...body,
-        }),
-      };
-    },
   );
   app.post<{ Params: { environmentId: string }; Body: unknown }>(
     "/api/v1/environments/:environmentId/harnesses/codex/uploads",
@@ -1703,7 +1646,6 @@ export function registerApiRoutes(
         reasoningEffort: body.reasoningEffort,
         collaborationMode: body.collaborationMode,
         serviceTier: body.serviceTier,
-        sessionStartSource: body.sessionStartSource,
       });
       return reply.status(201).send({
         data: await services.store.getSession(
@@ -1790,142 +1732,6 @@ export function registerApiRoutes(
     },
   );
   app.post<{ Params: { sessionId: string } }>(
-    "/api/v1/sessions/:sessionId/compact",
-    async (request, reply) =>
-      reply.status(202).send({
-        data: await services.codex.compactSession({
-          userId: request.principal.userId,
-          sessionId: request.params.sessionId,
-        }),
-      }),
-  );
-  app.post<{ Params: { sessionId: string } }>(
-    "/api/v1/sessions/:sessionId/review",
-    async (request, reply) => {
-      const body = sessionReviewSchema.parse(request.body);
-      return reply.status(202).send({
-        data: await services.codex.startReview({
-          userId: request.principal.userId,
-          sessionId: request.params.sessionId,
-          instructions: body.instructions,
-        }),
-      });
-    },
-  );
-  app.get<{ Params: { sessionId: string } }>(
-    "/api/v1/sessions/:sessionId/goal",
-    async (request) => ({
-      data: await services.codex.readSessionGoal({
-        userId: request.principal.userId,
-        sessionId: request.params.sessionId,
-      }),
-    }),
-  );
-  app.put<{ Params: { sessionId: string } }>(
-    "/api/v1/sessions/:sessionId/goal",
-    async (request) => {
-      const body = sessionGoalUpdateSchema.parse(request.body);
-      return {
-        data: await services.codex.setSessionGoal({
-          userId: request.principal.userId,
-          sessionId: request.params.sessionId,
-          ...body,
-        }),
-      };
-    },
-  );
-  app.delete<{ Params: { sessionId: string } }>(
-    "/api/v1/sessions/:sessionId/goal",
-    async (request) => ({
-      data: await services.codex.clearSessionGoal({
-        userId: request.principal.userId,
-        sessionId: request.params.sessionId,
-      }),
-    }),
-  );
-  app.get<{ Params: { sessionId: string } }>(
-    "/api/v1/sessions/:sessionId/personality",
-    async (request) => ({
-      data: await services.codex.readSessionPersonality({
-        userId: request.principal.userId,
-        sessionId: request.params.sessionId,
-      }),
-    }),
-  );
-  app.put<{ Params: { sessionId: string } }>(
-    "/api/v1/sessions/:sessionId/personality",
-    async (request) => {
-      const body = codexPersonalitySelectionSchema.parse(request.body);
-      return {
-        data: await services.codex.setSessionPersonality({
-          userId: request.principal.userId,
-          sessionId: request.params.sessionId,
-          personality: body.personality,
-        }),
-      };
-    },
-  );
-  app.get<{ Params: { sessionId: string } }>(
-    "/api/v1/sessions/:sessionId/memories",
-    async (request) => ({
-      data: await services.codex.readSessionMemories({
-        userId: request.principal.userId,
-        sessionId: request.params.sessionId,
-      }),
-    }),
-  );
-  app.put<{ Params: { sessionId: string } }>(
-    "/api/v1/sessions/:sessionId/memories",
-    async (request) => {
-      const settings = codexMemoriesSettingsSchema.parse(request.body);
-      return {
-        data: await services.codex.setSessionMemories({
-          userId: request.principal.userId,
-          sessionId: request.params.sessionId,
-          settings,
-        }),
-      };
-    },
-  );
-  app.get<{ Params: { sessionId: string } }>(
-    "/api/v1/sessions/:sessionId/background-terminals",
-    async (request) => ({
-      data: await services.codex.listSessionBackgroundTerminals({
-        userId: request.principal.userId,
-        sessionId: request.params.sessionId,
-      }),
-    }),
-  );
-  app.delete<{ Params: { sessionId: string } }>(
-    "/api/v1/sessions/:sessionId/background-terminals",
-    async (request) => ({
-      data: await services.codex.cleanSessionBackgroundTerminals({
-        userId: request.principal.userId,
-        sessionId: request.params.sessionId,
-      }),
-    }),
-  );
-  app.delete<{
-    Params: { sessionId: string; processId: string };
-  }>(
-    "/api/v1/sessions/:sessionId/background-terminals/:processId",
-    async (request) => {
-      const processId = z
-        .string()
-        .trim()
-        .min(1)
-        .max(200)
-        .parse(request.params.processId);
-      return {
-        data: await services.codex.terminateSessionBackgroundTerminal({
-          userId: request.principal.userId,
-          sessionId: request.params.sessionId,
-          processId,
-        }),
-      };
-    },
-  );
-  app.post<{ Params: { sessionId: string } }>(
     "/api/v1/sessions/:sessionId/fork",
     async (request, reply) => {
       const body = sessionForkSchema.parse(request.body);
@@ -1990,35 +1796,6 @@ export function registerApiRoutes(
           },
         };
       }
-    },
-  );
-  app.get<{ Params: { sessionId: string } }>(
-    "/api/v1/sessions/:sessionId/agents",
-    async (request) => ({
-      data: await services.codex.listSessionAgentThreads({
-        userId: request.principal.userId,
-        sessionId: request.params.sessionId,
-      }),
-    }),
-  );
-  app.get<{
-    Params: { sessionId: string; nativeThreadId: string };
-  }>(
-    "/api/v1/sessions/:sessionId/agents/:nativeThreadId",
-    async (request) => {
-      const nativeThreadId = z
-        .string()
-        .trim()
-        .min(1)
-        .max(200)
-        .parse(request.params.nativeThreadId);
-      return {
-        data: await services.codex.readSessionAgentThread({
-          userId: request.principal.userId,
-          sessionId: request.params.sessionId,
-          nativeThreadId,
-        }),
-      };
     },
   );
   app.get<{ Params: { sessionId: string } }>(

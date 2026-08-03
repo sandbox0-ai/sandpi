@@ -108,10 +108,6 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
     initialTab: EnvironmentSettingsTab;
     mcpVerbose?: boolean;
   } | null>(null);
-  const [newSessionPreset, setNewSessionPreset] = useState<{
-    title?: string;
-    source?: "startup" | "clear";
-  } | null>(null);
   const [newEnvironmentOpen, setNewEnvironmentOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(false);
@@ -225,7 +221,6 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
       );
       if (environmentChanged) setTerminalOpen(false);
       if (selectionChanged) {
-        setNewSessionPreset(null);
         const environment = next.environments.find(
           (candidate) => candidate.id === next.selectedEnvironmentId,
         );
@@ -602,17 +597,13 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
         setSelectedSessionId("");
         replaceWorkspaceUrl(environmentId);
       }
-      setNewSessionPreset(null);
       setSidebarOpen(false);
     },
     [environments, hydrateSession, sessions],
   );
 
   const handleNewSession = useCallback(
-    (
-      environmentId: string,
-      options?: { title?: string; source?: "startup" | "clear" },
-    ) => {
+    (environmentId: string) => {
       if (
         !environments.some(
           (environment) => environment.id === environmentId,
@@ -622,7 +613,6 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
       }
       setSelectedEnvironmentId(environmentId);
       setSelectedSessionId("");
-      setNewSessionPreset(options ?? null);
       replaceWorkspaceUrl(environmentId);
       setSidebarOpen(false);
     },
@@ -771,7 +761,6 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
       ]);
       setSelectedEnvironmentId(session.environmentId);
       setSelectedSessionId(session.id);
-      setNewSessionPreset(null);
       replaceWorkspaceUrl(session.environmentId, session.id);
       setTerminalOpen(false);
     },
@@ -1154,9 +1143,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
           onInspectorTabChange={handleInspectorTabChange}
           onInspectorWidthRatioChange={handleInspectorWidthRatioChange}
           onToggleTerminal={() => setTerminalOpen((open) => !open)}
-          onNewSession={(options) =>
-            handleNewSession(selectedEnvironment.id, options)
-          }
+          onNewSession={() => handleNewSession(selectedEnvironment.id)}
           onOpenEnvironmentSettings={(tab, options) =>
             openEnvironmentSettings(selectedEnvironment.id, tab, options)
           }
@@ -1180,13 +1167,8 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
           canManageEnvironment={canManageEnvironment(selectedEnvironment)}
           onEnvironmentChange={handleEnvironmentChange}
           onCreated={handleSessionCreated}
-          initialTitle={newSessionPreset?.title}
-          sessionStartSource={newSessionPreset?.source}
           onOpenAgentHarnessSettings={() =>
             openEnvironmentSettings(selectedEnvironment.id, "credentials")
-          }
-          onOpenEnvironmentSettings={(tab, options) =>
-            openEnvironmentSettings(selectedEnvironment.id, tab, options)
           }
           onToggleSidebar={handleToggleNavigation}
           inspectorOpen={showInspector}

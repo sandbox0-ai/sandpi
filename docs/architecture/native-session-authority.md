@@ -495,128 +495,21 @@ Thread; the Activity tab is added only when a selected Session supplies its
 harness-owned renderer. Environment settings remain a sidebar management
 action and do not replace these Workspace operations.
 
-## Codex slash command boundary
+## Codex composer boundary
 
-Slash completion is part of the Codex harness adapter, not the shared
-conversation dispatcher. The New Session and active Session composers use one
-Codex registry and parser, support pointer plus Up/Down/Tab/Enter/Escape
-interaction, and reject unknown commands locally instead of sending them to the
-model as user text. Each registry entry also names a stable browser intent.
-Dispatch switches on that intent rather than command text. The Codex TUI is the
-behavioral reference for command meaning, while app-server remains the data and
-mutation authority; redundant aliases and terminal-only presentation commands
-are not copied into the browser.
+Sandpi does not implement a browser slash-command grammar or mirror the Codex
+TUI command catalog. Text entered in either Codex composer is submitted as
+visible user input, including text whose first character is `/`. Product
+operations such as creating, forking, renaming or archiving a Session; opening
+Workspace and Environment settings; copying responses; and selecting models,
+reasoning effort or Fast mode remain explicit browser controls.
 
-The model-visible input boundary is strict. Sandpi submits only text the user
-can see in a composer, validated native image inputs, or the verbatim Codex TUI
-`/init` prompt after the user explicitly invokes that command. It never supplies
-Sandpi-authored `baseInstructions` or `developerInstructions`, calls
-`thread/inject_items`, or replays a user mutation after runtime repair. The only
-Sandpi-authored model input is the visible, versioned, single-attempt recovery
-Turn described above. Custom review instructions remain user input and go only
-through Codex's native `review/start` contract.
-
-Commands preserve Sandpi product ownership where a browser-native surface
-already exists:
-
-- `/new [name]` and `/clear [name]` navigate to the Environment's New Session
-  composer, preserve the optional name until creation, and pass Codex the
-  matching `startup` or `clear` native Session start source. They remain
-  unavailable during an active Turn, matching Codex TUI command availability.
-- `/fork` calls native `thread/fork`, creates a child product Session and
-  selects it.
-- `/rename [name]` updates only the product Session title; native Thread
-  metadata remains harness-owned. Bare `/rename` opens the same product
-  operation in a dialog. `/archive`
-  updates product Session metadata.
-- User-managed completion is also product Session metadata. It only changes
-  attention treatment in Session navigation; it neither archives the Session
-  nor changes the harness-native runtime status. A later authoritative native
-  `turn/started` transition atomically clears completion, while input steered
-  into the already-active Turn does not.
-- `/mention`, `/diff`, `/skills`, `/mcp [verbose]` and `/permissions` open the
-  corresponding composer, Inspector or Environment settings surface. MCP
-  verbose requests full native status and renders server tools, resources and
-  resource templates.
-- `/ide` opens the Workspace Inspector. `/agent` opens the dedicated native
-  Agent Threads picker described below. `/logout` opens the Codex account
-  connection so the user retains the existing confirmation and reconnect flow.
-- `/copy` copies the latest assistant message.
-- `/compact` calls `thread/compact/start`; `/review` calls inline
-  `review/start` with either the native `uncommittedChanges` target or a custom
-  target. Their ordinary native Turn/item notifications remain authoritative.
-  Inline review can also expose Codex's private one-shot reviewer Turn beside
-  the completed review wrapper in `thread/read`. Sandpi derives that exact
-  adjacent relationship from the native review markers and matching output:
-  the wrapper remains the Session control Turn and owns the visible result,
-  while the private delegate is omitted from conversation and interruption
-  state. The raw native snapshot is not rewritten or persisted separately.
-- `/goal` reads, creates and edits native `thread/goal/*` state; `pause`,
-  `resume` and `clear` map to native status updates or goal removal.
-- `/personality` offers the same Friendly and Pragmatic choices as Codex TUI,
-  reads the live model capability, writes native config, rereads the effective
-  layered value, and applies that value with
-  `thread/settings/update` on a loaded Thread. `/usage
-  daily|weekly|cumulative` projects `account/usage/read` token activity and is
-  deliberately separate from Sandpi/Sandbox0 billing usage.
-- `/memories` writes `features.memories` and native memory policy. Its feature
-  switch enables or disables both memory use and generation together; after
-  enabling, either policy can still be adjusted independently. Sandpi rereads
-  the effective layered values, updates the selected Thread's
-  `thread/memoryMode/set` eligibility, and exposes
-  `memory/reset`. `/hooks` reads `hooks/list` and only upserts user-controlled
-  enablement or the reviewed current hash under `hooks.state`.
-- `/ps` lists `thread/backgroundTerminals/list`; `/stop` cleans every native
-  background terminal, while the process dialog can terminate one process.
-- Fast is a
-  first-class composer switch that sends the service-tier id returned by the
-  selected model's live `model/list` entry and is absent when Codex reports no
-  Fast tier for that model.
-- `/plan` sends the selected live model and effort through Codex's native Plan
-  collaboration-mode settings. `/init` submits the same visible user prompt
-  vendored from Codex TUI's `prompt_for_init_command.md`; Sandpi does not add
-  hidden instructions around it.
-
-### Native Agent Threads
-
-Session Activity is a parent-Thread execution and audit feed; it is not the
-Codex Agent picker. Sandpi initializes app-server with
-`capabilities.experimentalApi`, then `/agent` uses
-`thread/list(ancestorThreadId)` to page the persisted spawn tree at any depth.
-The Agent picker contains the main Agent thread and its spawned subagent
-threads. This preserves completed descendants across Sandpi, app-server and
-Sandbox restarts. Selecting a row calls `thread/read(includeTurns: true)` and
-projects that native child transcript with the same Codex message, tool and
-Turn renderers used by the main conversation. A child that has not materialized
-history yet falls back to metadata-only display.
-
-The server re-reads the ancestor tree before accepting a child Thread id, so a
-caller cannot use the endpoint to inspect an unrelated Thread in the same
-Environment. Child metadata and transcripts are never copied into PostgreSQL
-or converted into product Sessions. The browser records the open picker as
-`agents=1` and a selected child as `agent={threadId}` so refresh restores the
-same GUI state. Closing the picker removes both parameters.
-
-Codex app-server does not expose the TUI slash catalog as a runtime capability.
-Sandpi therefore keeps an explicit, reviewed command registry instead of
-pretending to discover it dynamically. Future command maintenance should
-compare the pinned Codex TUI source with that registry, map browser-relevant
-commands to an existing or new intent, and deliberately exclude TUI-only
-commands. Native protocol types should continue moving toward output generated
-from the Sandbox0-pinned Codex version (`@openai/codex` 0.144.1 at the time of
-this document) rather than adding parallel Sandpi protocol models. Browser API
-projections may normalize validated native values, but must not invent harness
-behavior.
-
-`/resume` is intentionally absent because Sandpi's sidebar and URL own product
-Session selection. `/model` and `/fast` are absent because the composer owns
-those controls, and `/status` is absent because the browser already presents
-the relevant state. TUI terminal styling, local-login and debug commands are
-likewise omitted rather than emulated or forwarded. Commands for Apps, plugins,
-experimental flags, feedback and permanent deletion stay absent until Sandpi
-has a faithful product surface and lifecycle contract for them. A native
-mutation that cannot safely overlap a Turn is hidden and rejected while the
-current Turn is active.
+This boundary keeps Sandpi coupled to the app-server capabilities it actually
+uses instead of the independently evolving Codex TUI command surface. Native
+review and compaction events that already exist in durable Thread history remain
+readable, but Sandpi does not expose command-only mutations for starting them.
+Environment memory configuration remains an explicit API because the Sandpi CLI
+uses it independently of the browser composer.
 
 Uploaded composer files use the Sandbox0 File API and live under
 `/workspace/.sandpi/uploads/{upload-id}/{safe-name}`. Sandpi validates a

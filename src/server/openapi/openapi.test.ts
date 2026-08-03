@@ -24,7 +24,7 @@ test("OpenAPI publishes every supported operation with a unique id", async () =>
   const operations = allOperations(document);
   const operationIds = operations.map((operation) => operation.operationId);
 
-  assert.equal(operations.length, 124);
+  assert.equal(operations.length, 105);
   assert.ok(operationIds.every(Boolean));
   assert.equal(new Set(operationIds).size, operationIds.length);
   assert.ok(Object.keys(document.paths).every((path) => !path.includes(":")));
@@ -98,7 +98,6 @@ test("OpenAPI excludes the removed Browser API and preserves streaming semantics
   );
 
   for (const [path, method] of [
-    ["/api/v1/sessions/{sessionId}/review", "post"],
     ["/api/v1/sessions/{sessionId}/fork", "post"],
     [
       "/api/v1/sessions/{sessionId}/turns/{nativeTurnId}/fork",
@@ -108,6 +107,23 @@ test("OpenAPI excludes the removed Browser API and preserves streaming semantics
     const requestBody = operation(document, path, method).requestBody;
     assert.ok(requestBody && !("$ref" in requestBody));
     assert.equal(requestBody.required, false);
+  }
+
+  for (const path of [
+    "/api/v1/environments/{environmentId}/harnesses/codex/personality",
+    "/api/v1/environments/{environmentId}/harnesses/codex/token-usage",
+    "/api/v1/environments/{environmentId}/harnesses/codex/hooks",
+    "/api/v1/sessions/{sessionId}/compact",
+    "/api/v1/sessions/{sessionId}/review",
+    "/api/v1/sessions/{sessionId}/goal",
+    "/api/v1/sessions/{sessionId}/personality",
+    "/api/v1/sessions/{sessionId}/memories",
+    "/api/v1/sessions/{sessionId}/background-terminals",
+    "/api/v1/sessions/{sessionId}/background-terminals/{processId}",
+    "/api/v1/sessions/{sessionId}/agents",
+    "/api/v1/sessions/{sessionId}/agents/{nativeThreadId}",
+  ]) {
+    assert.equal(document.paths[path], undefined);
   }
 
   const sessionEvents = operation(

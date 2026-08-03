@@ -44,14 +44,9 @@ import type {
   CodexSkillsInventory,
 } from "@/harnesses/codex/environment-tools";
 import type {
-  CodexBackgroundTerminals,
-  CodexHooksInventory,
   CodexMemoriesSettings,
-  CodexPersonalitySettings,
-  CodexTokenUsage,
 } from "@/harnesses/codex/native-capabilities";
 import type {
-  CodexAgentThreads,
   CodexComposerUpload,
   CodexThread,
 } from "@/harnesses/codex/types";
@@ -729,66 +724,12 @@ export const rateLimitResetResultSchema = component(
   }),
 );
 
-export const personalitySettingsSchema = component(
-  "CodexPersonalitySettings",
-  z.object({
-    personality: z.enum(["friendly", "pragmatic", "none"]),
-    supported: z.boolean(),
-  }),
-);
-
-export const tokenUsageSchema = component(
-  "CodexTokenUsage",
-  z.object({
-    summary: z.object({
-      lifetimeTokens: z.number().nullable(),
-      peakDailyTokens: z.number().nullable(),
-      longestRunningTurnSec: z.number().nullable(),
-      currentStreakDays: z.number().nullable(),
-      longestStreakDays: z.number().nullable(),
-    }),
-    dailyUsageBuckets: z.array(
-      z.object({ startDate: z.string(), tokens: z.number() }),
-    ),
-  }),
-);
-
 export const memoriesSettingsSchema = component(
   "CodexMemoriesSettings",
   z.object({
     featureEnabled: z.boolean(),
     useMemories: z.boolean(),
     generateMemories: z.boolean(),
-  }),
-);
-
-export const hooksInventorySchema = component(
-  "CodexHooksInventory",
-  z.object({
-    cwd: z.string(),
-    hooks: z.array(
-      z.object({
-        key: z.string(),
-        eventName: z.string(),
-        handlerType: z.string(),
-        isManaged: z.boolean(),
-        matcher: z.string().nullable(),
-        command: z.string().nullable(),
-        timeoutSec: z.number(),
-        statusMessage: z.string().nullable(),
-        sourcePath: z.string(),
-        source: z.string(),
-        pluginId: z.string().nullable(),
-        displayOrder: z.number(),
-        enabled: z.boolean(),
-        currentHash: z.string(),
-        trustStatus: z.enum(["trusted", "untrusted", "modified", "managed"]),
-      }),
-    ),
-    warnings: z.array(z.string()),
-    errors: z.array(
-      z.object({ path: z.string().optional(), message: z.string() }),
-    ),
   }),
 );
 
@@ -883,38 +824,6 @@ export const mcpOAuthLoginSchema = component(
   }),
 );
 
-export const sessionGoalSchema = component(
-  "CodexSessionGoal",
-  z.object({
-    goal: z
-      .object({
-        objective: z.string(),
-        status: z.string(),
-        tokenBudget: z.number().nullable(),
-        tokensUsed: z.number(),
-        timeUsedSeconds: z.number(),
-      })
-      .nullable(),
-  }),
-);
-
-export const backgroundTerminalsSchema = component(
-  "CodexBackgroundTerminals",
-  z.object({
-    terminals: z.array(
-      z.object({
-        itemId: z.string(),
-        processId: z.string(),
-        command: z.string(),
-        cwd: z.string(),
-        osPid: z.number().int().nullable(),
-        cpuPercent: z.number().nullable(),
-        rssKb: z.number().nullable(),
-      }),
-    ),
-  }),
-);
-
 const codexThreadStatusSchema = z.union([
   z.object({ type: z.enum(["notLoaded", "idle", "systemError"]) }),
   z.object({
@@ -966,14 +875,6 @@ export const codexThreadSchema = component(
     updatedAt: z.number().optional(),
     status: codexThreadStatusSchema,
     turns: z.array(codexTurnSchema),
-  }),
-);
-
-export const codexAgentThreadsSchema = component(
-  "CodexAgentThreads",
-  z.object({
-    root: codexThreadSchema,
-    descendants: z.array(codexThreadSchema),
   }),
 );
 
@@ -1314,19 +1215,14 @@ const publicModelTypeChecks: {
   credential: z.ZodType<EnvironmentEgressCredential>;
   deviceAuth: z.ZodType<PublicCodexDeviceAuthFlow>;
   codexAccount: z.ZodType<CodexAccountSummary>;
-  codexBackgroundTerminals: z.ZodType<CodexBackgroundTerminals>;
   codexRateLimits: z.ZodType<CodexAccountRateLimits>;
   codexRateLimitReset: z.ZodType<CodexRateLimitResetResult>;
-  codexPersonality: z.ZodType<CodexPersonalitySettings>;
-  codexTokenUsage: z.ZodType<CodexTokenUsage>;
   codexMemories: z.ZodType<CodexMemoriesSettings>;
-  codexHooks: z.ZodType<CodexHooksInventory>;
   codexUpload: z.ZodType<CodexComposerUpload>;
   codexSkills: z.ZodType<CodexSkillsInventory>;
   codexMcp: z.ZodType<CodexMcpInventory>;
   codexMcpOAuth: z.ZodType<CodexMcpOAuthLogin>;
   codexThread: z.ZodType<CodexThread>;
-  codexAgentThreads: z.ZodType<CodexAgentThreads>;
   workspaceFile: z.ZodType<WorkspaceFile>;
   workspaceSearch: z.ZodType<WorkspaceFileSearchResult>;
   workspaceListing: z.ZodType<WorkspaceDirectoryListing>;
@@ -1360,19 +1256,14 @@ const publicModelTypeChecks: {
   credential: egressCredentialSchema,
   deviceAuth: deviceAuthFlowSchema,
   codexAccount: codexAccountSchema,
-  codexBackgroundTerminals: backgroundTerminalsSchema,
   codexRateLimits: codexRateLimitsSchema,
   codexRateLimitReset: rateLimitResetResultSchema,
-  codexPersonality: personalitySettingsSchema,
-  codexTokenUsage: tokenUsageSchema,
   codexMemories: memoriesSettingsSchema,
-  codexHooks: hooksInventorySchema,
   codexUpload: composerUploadSchema,
   codexSkills: skillsInventorySchema,
   codexMcp: mcpInventorySchema,
   codexMcpOAuth: mcpOAuthLoginSchema,
   codexThread: codexThreadSchema,
-  codexAgentThreads: codexAgentThreadsSchema,
   workspaceFile: workspaceFileSchema,
   workspaceSearch: workspaceSearchResultSchema,
   workspaceListing: workspaceDirectoryListingSchema,

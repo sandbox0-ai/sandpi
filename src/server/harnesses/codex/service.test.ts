@@ -532,39 +532,6 @@ function fixture(
       const params = message.params as { expectedTurnId: string };
       return { id, result: { turnId: params.expectedTurnId } };
     }
-    if (message.method === "review/start") {
-      return {
-        id,
-        result: {
-          turn: { id: "turn-review", status: "inProgress", items: [] },
-          reviewThreadId: "thread-one",
-        },
-      };
-    }
-    if (
-      message.method === "thread/goal/get" ||
-      message.method === "thread/goal/set"
-    ) {
-      const params = message.params as {
-        objective?: string;
-        status?: string;
-      };
-      return {
-        id,
-        result: {
-          goal: {
-            threadId: "thread-one",
-            objective: params.objective ?? "Existing native goal",
-            status: params.status ?? "active",
-            tokenBudget: 10_000,
-            tokensUsed: 250,
-            timeUsedSeconds: 12,
-            createdAt: 1,
-            updatedAt: 2,
-          },
-        },
-      };
-    }
     if (message.method === "thread/read") {
       const params = message.params as {
         threadId: string;
@@ -2062,185 +2029,6 @@ test("restarts a warm app-server before publishing a replacement account credent
   }
 });
 
-test("lists persisted native Agent descendants across paginated tree pages", async () => {
-  const context = fixture({
-    onRequest(message) {
-      if (message.method !== "thread/list") return undefined;
-      const params = message.params as {
-        ancestorThreadId?: string;
-        cursor?: string;
-        limit?: number;
-      };
-      assert.equal(params.ancestorThreadId, "thread-one");
-      assert.equal(params.limit, 100);
-      return params.cursor
-        ? {
-            id: message.id,
-            result: {
-              data: [
-                {
-                  id: "agent-child",
-                  parentThreadId: "thread-one",
-                  status: { type: "idle" },
-                  turns: [],
-                },
-              ],
-              nextCursor: null,
-            },
-          }
-        : {
-            id: message.id,
-            result: {
-              data: [
-                {
-                  id: "agent-grandchild",
-                  parentThreadId: "agent-child",
-                  agentNickname: "Scout",
-                  agentRole: "explorer",
-                  status: { type: "notLoaded" },
-                  turns: [],
-                },
-              ],
-              nextCursor: "agent-page-two",
-            },
-          };
-    },
-  });
-  try {
-    const tree = await context.service.listSessionAgentThreads({
-      userId: "user",
-      sessionId: "session-one",
-    });
-
-    assert.equal(tree.root.id, "thread-one");
-    assert.deepEqual(
-      tree.descendants.map((thread) => ({
-        id: thread.id,
-        parentThreadId: thread.parentThreadId,
-      })),
-      [
-        {
-          id: "agent-grandchild",
-          parentThreadId: "agent-child",
-        },
-        {
-          id: "agent-child",
-          parentThreadId: "thread-one",
-        },
-      ],
-    );
-    assert.deepEqual(
-      context.writes
-        .filter(({ message }) => message.method === "thread/list")
-        .map(({ message }) => message.params),
-      [
-        { ancestorThreadId: "thread-one", limit: 100 },
-        {
-          ancestorThreadId: "thread-one",
-          limit: 100,
-          cursor: "agent-page-two",
-        },
-      ],
-    );
-  } finally {
-    await context.close();
-  }
-});
-
-test("reads only a native Agent Thread owned by the Session tree", async () => {
-  const context = fixture({
-    onRequest(message) {
-      if (message.method === "thread/list") {
-        return {
-          id: message.id,
-          result: {
-            data: [
-              {
-                id: "agent-child",
-                parentThreadId: "thread-one",
-                status: { type: "idle" },
-                turns: [],
-              },
-            ],
-            nextCursor: null,
-          },
-        };
-      }
-      if (
-        message.method === "thread/read" &&
-        (message.params as { threadId?: string }).threadId === "agent-child"
-      ) {
-        return {
-          id: message.id,
-          result: {
-            thread: {
-              id: "agent-child",
-              parentThreadId: "thread-one",
-              agentNickname: "Scout",
-              status: { type: "idle" },
-              turns: [completedTurn("agent-turn")],
-            },
-          },
-        };
-      }
-      return undefined;
-    },
-  });
-  try {
-    const thread = await context.service.readSessionAgentThread({
-      userId: "user",
-      sessionId: "session-one",
-      nativeThreadId: "agent-child",
-    });
-    assert.equal(thread.id, "agent-child");
-    assert.equal(thread.agentNickname, "Scout");
-    assert.deepEqual(
-      context.writes.find(
-        ({ message }) =>
-          message.method === "thread/read" &&
-          (message.params as { threadId?: string }).threadId === "agent-child",
-      )?.message.params,
-      { threadId: "agent-child", includeTurns: true },
-    );
-  } finally {
-    await context.close();
-  }
-});
-
-test("rejects a same-Environment Thread outside the native Agent tree", async () => {
-  const context = fixture({
-    onRequest(message) {
-      if (message.method !== "thread/list") return undefined;
-      return {
-        id: message.id,
-        result: { data: [], nextCursor: null },
-      };
-    },
-  });
-  try {
-    await assert.rejects(
-      context.service.readSessionAgentThread({
-        userId: "user",
-        sessionId: "session-one",
-        nativeThreadId: "thread-two",
-      }),
-      (error: unknown) =>
-        error instanceof HttpError &&
-        error.code === "codex_agent_thread_not_found",
-    );
-    assert.equal(
-      context.writes.some(
-        ({ message }) =>
-          message.method === "thread/read" &&
-          (message.params as { threadId?: string }).threadId === "thread-two",
-      ),
-      false,
-    );
-  } finally {
-    await context.close();
-  }
-});
-
 test("starts the Environment app-server before listing New Session models", async () => {
   const context = fixture();
   try {
@@ -2582,7 +2370,6 @@ test("starts the first Turn on a newly created loaded Thread without resume", as
       images: [],
       modelId: "gpt-test",
       reasoningEffort: "high",
-      sessionStartSource: "clear",
     });
 
     assert.equal(context.sessions.get(sessionId)?.title, "New native Session");
@@ -2607,7 +2394,7 @@ test("starts the first Turn on a newly created loaded Thread without resume", as
       "tools.experimental_request_user_input.enabled": false,
       model_reasoning_effort: "high",
     });
-    assert.equal(threadStart?.sessionStartSource, "clear");
+    assert.equal(Object.hasOwn(threadStart ?? {}, "sessionStartSource"), false);
     assert.equal(
       threadStart?.threadSource,
       `sandpi-session:${sessionId}`,
@@ -2846,152 +2633,7 @@ test("fails closed when a creation key resolves to multiple native Threads", asy
   }
 });
 
-test("starts native compaction on the current Codex Thread", async () => {
-  const context = fixture();
-  try {
-    assert.deepEqual(
-      await context.service.compactSession({
-        userId: "user",
-        sessionId: "session-one",
-      }),
-      { accepted: true },
-    );
-    const compact = context.writes.find(
-      ({ message }) => message.method === "thread/compact/start",
-    )?.message;
-    assert.deepEqual(compact?.params, { threadId: "thread-one" });
-  } finally {
-    await context.close();
-  }
-});
-
-test("starts native inline reviews with Codex-owned review targets", async () => {
-  const context = fixture();
-  try {
-    assert.deepEqual(
-      await context.service.startReview({
-        userId: "user",
-        sessionId: "session-one",
-      }),
-      { nativeTurnId: "turn-review" },
-    );
-    assert.deepEqual(
-      context.writes.find(
-        ({ message }) => message.method === "review/start",
-      )?.message.params,
-      {
-        threadId: "thread-one",
-        delivery: "inline",
-        target: { type: "uncommittedChanges" },
-      },
-    );
-
-    await context.service.startReview({
-      userId: "user",
-      sessionId: "session-one",
-      instructions: "Focus on persistence races",
-    });
-    assert.deepEqual(
-      context.writes
-        .filter(({ message }) => message.method === "review/start")
-        .at(-1)?.message.params,
-      {
-        threadId: "thread-one",
-        delivery: "inline",
-        target: {
-          type: "custom",
-          instructions: "Focus on persistence races",
-        },
-      },
-    );
-  } finally {
-    await context.close();
-  }
-});
-
-test("reads, sets, and clears the native Codex Session goal", async () => {
-  const context = fixture();
-  try {
-    assert.deepEqual(
-      await context.service.readSessionGoal({
-        userId: "user",
-        sessionId: "session-one",
-      }),
-      {
-        goal: {
-          objective: "Existing native goal",
-          status: "active",
-          tokenBudget: 10_000,
-          tokensUsed: 250,
-          timeUsedSeconds: 12,
-        },
-      },
-    );
-    assert.deepEqual(
-      await context.service.setSessionGoal({
-        userId: "user",
-        sessionId: "session-one",
-        objective: "Ship the native integration",
-      }),
-      {
-        goal: {
-          objective: "Ship the native integration",
-          status: "active",
-          tokenBudget: 10_000,
-          tokensUsed: 250,
-          timeUsedSeconds: 12,
-        },
-      },
-    );
-    assert.deepEqual(
-      context.writes.find(
-        ({ message }) => message.method === "thread/goal/set",
-      )?.message.params,
-      {
-        threadId: "thread-one",
-        objective: "Ship the native integration",
-      },
-    );
-    assert.equal(
-      (
-        await context.service.setSessionGoal({
-          userId: "user",
-          sessionId: "session-one",
-          status: "paused",
-        })
-      ).goal?.status,
-      "paused",
-    );
-    assert.deepEqual(
-      context.writes
-        .filter(({ message }) => message.method === "thread/goal/set")
-        .at(-1)?.message.params,
-      {
-        threadId: "thread-one",
-        status: "paused",
-      },
-    );
-    assert.deepEqual(
-      await context.service.clearSessionGoal({
-        userId: "user",
-        sessionId: "session-one",
-      }),
-      { goal: null },
-    );
-    assert.deepEqual(
-      context.writes.find(
-        ({ message }) => message.method === "thread/goal/clear",
-      )?.message.params,
-      { threadId: "thread-one" },
-    );
-
-  } finally {
-    await context.close();
-  }
-});
-
-test("projects native personality, usage, and memory settings", async () => {
-  let personality = "friendly";
+test("reads, updates, and resets Environment Codex memories", async () => {
   let featureEnabled = true;
   let useMemories = true;
   let generateMemories = false;
@@ -3002,7 +2644,6 @@ test("projects native personality, usage, and memory settings", async () => {
           id: message.id,
           result: {
             config: {
-              personality,
               features: { memories: featureEnabled },
               memories: {
                 use_memories: useMemories,
@@ -3012,23 +2653,6 @@ test("projects native personality, usage, and memory settings", async () => {
             layers: [],
           },
         };
-      }
-      if (message.method === "model/list") {
-        return {
-          id: message.id,
-          result: {
-            data: [{ id: "gpt-test", supportsPersonality: true }],
-            nextCursor: null,
-          },
-        };
-      }
-      if (message.method === "config/value/write") {
-        const params = message.params as {
-          keyPath: string;
-          value: string;
-        };
-        if (params.keyPath === "personality") personality = params.value;
-        return { id: message.id, result: { status: "ok" } };
       }
       if (message.method === "config/batchWrite") {
         const edits = (message.params as {
@@ -3045,120 +2669,68 @@ test("projects native personality, usage, and memory settings", async () => {
         }
         return { id: message.id, result: { status: "ok" } };
       }
-      if (
-        message.method === "thread/settings/update" ||
-        message.method === "thread/memoryMode/set" ||
-        message.method === "memory/reset"
-      ) {
+      if (message.method === "memory/reset") {
         return { id: message.id, result: {} };
-      }
-      if (message.method === "account/usage/read") {
-        return {
-          id: message.id,
-          result: {
-            summary: {
-              lifetimeTokens: 12_000,
-              peakDailyTokens: 2_500,
-              longestRunningTurnSec: 90,
-              currentStreakDays: 4,
-              longestStreakDays: 9,
-            },
-            dailyUsageBuckets: [
-              { startDate: "2026-07-26", tokens: 1_200 },
-              { startDate: "2026-07-27", tokens: 800 },
-            ],
-          },
-        };
       }
       return undefined;
     },
   });
   try {
     assert.deepEqual(
-      await context.service.readSessionPersonality({
-        userId: "user",
-        sessionId: "session-one",
-      }),
-      { personality: "friendly", supported: true },
-    );
-    assert.deepEqual(
-      await context.service.setSessionPersonality({
-        userId: "user",
-        sessionId: "session-one",
-        personality: "pragmatic",
-      }),
-      { personality: "pragmatic", supported: true },
-    );
-    assert.deepEqual(
-      context.writes.find(
-        ({ message }) => message.method === "thread/settings/update",
-      )?.message.params,
-      { threadId: "thread-one", personality: "pragmatic" },
-    );
-
-    assert.deepEqual(
-      await context.service.accountTokenUsageForEnvironment(
-        "user",
-        environment.id,
-      ),
-      {
-        summary: {
-          lifetimeTokens: 12_000,
-          peakDailyTokens: 2_500,
-          longestRunningTurnSec: 90,
-          currentStreakDays: 4,
-          longestStreakDays: 9,
-        },
-        dailyUsageBuckets: [
-          { startDate: "2026-07-26", tokens: 1_200 },
-          { startDate: "2026-07-27", tokens: 800 },
-        ],
-      },
-    );
-    assert.equal(
-      Object.hasOwn(
-        context.writes.find(
-          ({ message }) => message.method === "account/usage/read",
-        )?.message ?? {},
-        "params",
-      ),
-      false,
-    );
-
-    assert.deepEqual(
-      await context.service.readSessionMemories({
-        userId: "user",
-        sessionId: "session-one",
-      }),
+      await context.service.readEnvironmentMemories("user", environment.id),
       {
         featureEnabled: true,
         useMemories: true,
         generateMemories: false,
       },
     );
-    const memorySettings = {
-      featureEnabled: true,
-      useMemories: false,
-      generateMemories: true,
-    };
+
     assert.deepEqual(
-      await context.service.setSessionMemories({
+      await context.service.setEnvironmentMemories({
         userId: "user",
-        sessionId: "session-one",
-        settings: memorySettings,
+        environmentId: environment.id,
+        settings: {
+          featureEnabled: true,
+          useMemories: false,
+          generateMemories: true,
+        },
       }),
-      memorySettings,
+      {
+        featureEnabled: true,
+        useMemories: false,
+        generateMemories: true,
+      },
     );
     assert.deepEqual(
-      context.writes.find(
-        ({ message }) => message.method === "thread/memoryMode/set",
-      )?.message.params,
-      { threadId: "thread-one", mode: "enabled" },
+      context.writes
+        .filter(({ message }) => message.method === "config/batchWrite")
+        .at(-1)?.message.params,
+      {
+        edits: [
+          {
+            keyPath: "features.memories",
+            value: true,
+            mergeStrategy: "replace",
+          },
+          {
+            keyPath: "memories.use_memories",
+            value: false,
+            mergeStrategy: "replace",
+          },
+          {
+            keyPath: "memories.generate_memories",
+            value: true,
+            mergeStrategy: "replace",
+          },
+        ],
+        reloadUserConfig: true,
+      },
     );
+
     assert.deepEqual(
-      await context.service.setSessionMemories({
+      await context.service.setEnvironmentMemories({
         userId: "user",
-        sessionId: "session-one",
+        environmentId: environment.id,
         settings: {
           featureEnabled: false,
           useMemories: true,
@@ -3172,333 +2744,8 @@ test("projects native personality, usage, and memory settings", async () => {
       },
     );
     assert.deepEqual(
-      context.writes
-        .filter(({ message }) => message.method === "config/batchWrite")
-        .at(-1)?.message.params,
-      {
-        edits: [
-          {
-            keyPath: "features.memories",
-            value: false,
-            mergeStrategy: "replace",
-          },
-          {
-            keyPath: "memories.use_memories",
-            value: false,
-            mergeStrategy: "replace",
-          },
-          {
-            keyPath: "memories.generate_memories",
-            value: false,
-            mergeStrategy: "replace",
-          },
-        ],
-        reloadUserConfig: true,
-      },
-    );
-    assert.deepEqual(
-      context.writes
-        .filter(
-          ({ message }) => message.method === "thread/memoryMode/set",
-        )
-        .at(-1)?.message.params,
-      { threadId: "thread-one", mode: "disabled" },
-    );
-    assert.deepEqual(
       await context.service.resetEnvironmentMemories("user", environment.id),
       { reset: true },
-    );
-  } finally {
-    await context.close();
-  }
-});
-
-test("uses effective Codex configuration after native writes", async () => {
-  const context = fixture({
-    onRequest(message) {
-      if (message.method === "config/read") {
-        return {
-          id: message.id,
-          result: {
-            config: {
-              features: { memories: false },
-              memories: {
-                use_memories: true,
-                generate_memories: true,
-              },
-            },
-            layers: [],
-          },
-        };
-      }
-      if (message.method === "config/batchWrite") {
-        return { id: message.id, result: { status: "ok" } };
-      }
-      if (message.method === "thread/memoryMode/set") {
-        return { id: message.id, result: {} };
-      }
-      return undefined;
-    },
-  });
-  try {
-    assert.deepEqual(
-      await context.service.setSessionMemories({
-        userId: "user",
-        sessionId: "session-one",
-        settings: {
-          featureEnabled: true,
-          useMemories: true,
-          generateMemories: true,
-        },
-      }),
-      {
-        featureEnabled: false,
-        useMemories: false,
-        generateMemories: false,
-      },
-    );
-    assert.deepEqual(
-      context.writes.find(
-        ({ message }) => message.method === "thread/memoryMode/set",
-      )?.message.params,
-      { threadId: "thread-one", mode: "disabled" },
-    );
-  } finally {
-    await context.close();
-  }
-});
-
-test("rejects Codex configuration writes overridden by a higher layer", async () => {
-  const context = fixture({
-    onRequest(message) {
-      if (message.method === "model/list") {
-        return {
-          id: message.id,
-          result: {
-            data: [{ id: "gpt-test", supportsPersonality: true }],
-            nextCursor: null,
-          },
-        };
-      }
-      if (message.method === "config/value/write") {
-        return {
-          id: message.id,
-          result: {
-            status: "okOverridden",
-            overriddenMetadata: {
-              message: "overridden",
-              overridingLayer: { name: { type: "system" }, version: "1" },
-              effectiveValue: "friendly",
-            },
-          },
-        };
-      }
-      return undefined;
-    },
-  });
-  try {
-    await assert.rejects(
-      context.service.setSessionPersonality({
-        userId: "user",
-        sessionId: "session-one",
-        personality: "pragmatic",
-      }),
-      (error: unknown) =>
-        error instanceof HttpError &&
-        error.statusCode === 409 &&
-        error.code === "codex_config_overridden",
-    );
-    assert.equal(
-      context.writes.some(
-        ({ message }) => message.method === "thread/settings/update",
-      ),
-      false,
-    );
-  } finally {
-    await context.close();
-  }
-});
-
-test("lists and manages native hooks and background terminals", async () => {
-  let trusted = false;
-  const context = fixture({
-    onRequest(message) {
-      if (message.method === "hooks/list") {
-        return {
-          id: message.id,
-          result: {
-            data: [
-              {
-                cwd: "/workspace",
-                hooks: [
-                  {
-                    key: "project-hook",
-                    eventName: "preToolUse",
-                    handlerType: "command",
-                    matcher: "exec",
-                    command: "./check.sh",
-                    timeoutSec: 10,
-                    statusMessage: null,
-                    sourcePath: "/workspace/.codex/hooks.json",
-                    source: "project",
-                    pluginId: null,
-                    displayOrder: -1,
-                    enabled: trusted,
-                    isManaged: false,
-                    currentHash: "sha256:current",
-                    trustStatus: trusted ? "trusted" : "untrusted",
-                  },
-                ],
-                warnings: [],
-                errors: [],
-              },
-            ],
-          },
-        };
-      }
-      if (message.method === "config/batchWrite") {
-        trusted = true;
-        return { id: message.id, result: { status: "ok" } };
-      }
-      if (message.method === "thread/backgroundTerminals/list") {
-        return {
-          id: message.id,
-          result: {
-            data: [
-              {
-                itemId: "item-shell",
-                processId: "process-shell",
-                command: "npm run dev",
-                cwd: "/workspace",
-                osPid: 42,
-                cpuPercent: 3.5,
-                rssKb: 1_024,
-              },
-            ],
-            nextCursor: null,
-          },
-        };
-      }
-      if (message.method === "thread/backgroundTerminals/terminate") {
-        return { id: message.id, result: { terminated: true } };
-      }
-      return undefined;
-    },
-  });
-  try {
-    const hooks = await context.service.listEnvironmentHooks(
-      "user",
-      environment.id,
-    );
-    assert.equal(hooks.hooks[0]?.trustStatus, "untrusted");
-    assert.equal(hooks.hooks[0]?.displayOrder, -1);
-    const updated = await context.service.updateEnvironmentHook({
-      userId: "user",
-      environmentId: environment.id,
-      key: "project-hook",
-      trustedHash: "sha256:current",
-      enabled: true,
-    });
-    assert.equal(updated.hooks[0]?.trustStatus, "trusted");
-    assert.deepEqual(
-      context.writes.find(
-        ({ message }) => message.method === "config/batchWrite",
-      )?.message.params,
-      {
-        edits: [
-          {
-            keyPath: "hooks.state",
-            value: {
-              "project-hook": {
-                enabled: true,
-                trusted_hash: "sha256:current",
-              },
-            },
-            mergeStrategy: "upsert",
-          },
-        ],
-        reloadUserConfig: true,
-      },
-    );
-
-    assert.deepEqual(
-      await context.service.listSessionBackgroundTerminals({
-        userId: "user",
-        sessionId: "session-one",
-      }),
-      {
-        terminals: [
-          {
-            itemId: "item-shell",
-            processId: "process-shell",
-            command: "npm run dev",
-            cwd: "/workspace",
-            osPid: 42,
-            cpuPercent: 3.5,
-            rssKb: 1_024,
-          },
-        ],
-      },
-    );
-    assert.deepEqual(
-      await context.service.terminateSessionBackgroundTerminal({
-        userId: "user",
-        sessionId: "session-one",
-        processId: "process-shell",
-      }),
-      { terminated: true },
-    );
-    assert.deepEqual(
-      await context.service.cleanSessionBackgroundTerminals({
-        userId: "user",
-        sessionId: "session-one",
-      }),
-      { cleaned: true },
-    );
-  } finally {
-    await context.close();
-  }
-});
-
-test("rejects native slash mutations while the Session has an active Turn", async () => {
-  const context = fixture({
-    sessions: [
-      {
-        id: "session-one",
-        nativeSessionId: "thread-one",
-        status: "running",
-        activeNativeTurnId: "turn-active",
-      },
-    ],
-  });
-  try {
-    await assert.rejects(
-      context.service.compactSession({
-        userId: "user",
-        sessionId: "session-one",
-      }),
-      (error: unknown) =>
-        error instanceof HttpError &&
-        error.statusCode === 409 &&
-        error.code === "codex_compact_not_ready",
-    );
-    await assert.rejects(
-      context.service.startReview({
-        userId: "user",
-        sessionId: "session-one",
-      }),
-      (error: unknown) =>
-        error instanceof HttpError &&
-        error.statusCode === 409 &&
-        error.code === "codex_review_not_ready",
-    );
-    assert.equal(
-      context.writes.some(({ message }) =>
-        ["thread/compact/start", "review/start"].includes(
-          String(message.method),
-        ),
-      ),
-      false,
     );
   } finally {
     await context.close();
