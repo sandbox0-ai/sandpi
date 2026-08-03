@@ -13,6 +13,7 @@ import {
   models,
   runtime as generatedRuntime,
   type SandboxMetrics,
+  type SandboxPreviewGrant,
 } from "sandbox0";
 
 import type {
@@ -598,7 +599,7 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     },
   ): Promise<RuntimeSandboxPreviewGrant> {
     try {
-      const sandbox = this.previewSandbox(runtime);
+      const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
       return runtimePreviewGrant(
         await sandbox.createPreview({
           port: input.port,
@@ -619,8 +620,9 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     ttlSeconds?: number,
   ): Promise<RuntimeSandboxPreviewGrant> {
     try {
+      const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
       return runtimePreviewGrant(
-        await this.previewSandbox(runtime).renewPreview(previewId, {
+        await sandbox.renewPreview(previewId, {
           ttlSeconds,
         }),
       );
@@ -635,40 +637,14 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     previewId: string,
   ) {
     try {
-      await this.previewSandbox(runtime).revokePreview(previewId);
+      await this.client.sandboxes
+        .sandbox(runtime.sandboxId)
+        .revokePreview(previewId);
     } catch (error) {
       if (isMissingResource(error)) return;
       if (error instanceof HttpError) throw error;
       throw translateSandbox0Error(error);
     }
-  }
-
-  private previewSandbox(runtime: EnvironmentRuntimeRecord) {
-    const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId) as unknown as {
-      createPreview?: (input: {
-        port: number;
-        protocol: "http" | "https";
-        path: string;
-        ttlSeconds?: number;
-      }) => Promise<Sandbox0PreviewGrant>;
-      renewPreview?: (
-        previewId: string,
-        input?: { ttlSeconds?: number },
-      ) => Promise<Sandbox0PreviewGrant>;
-      revokePreview?: (previewId: string) => Promise<void>;
-    };
-    if (
-      !sandbox.createPreview ||
-      !sandbox.renewPreview ||
-      !sandbox.revokePreview
-    ) {
-      throw new HttpError(
-        503,
-        "sandbox0_preview_sdk_unavailable",
-        "The installed Sandbox0 SDK does not support private previews.",
-      );
-    }
-    return sandbox as Required<typeof sandbox>;
   }
 
   async createEnvironmentWorkspaceBackup(
@@ -2711,19 +2687,8 @@ export class Sandbox0Runtime implements RuntimeAdapter {
   }
 }
 
-interface Sandbox0PreviewGrant {
-  id: string;
-  sandboxId: string;
-  port: number;
-  protocol: "http" | "https";
-  url: string;
-  targetUrl: string;
-  expiresAt: Date | string;
-  runtimeGeneration: number;
-}
-
 function runtimePreviewGrant(
-  grant: Sandbox0PreviewGrant,
+  grant: SandboxPreviewGrant,
 ): RuntimeSandboxPreviewGrant {
   const expiresAt = new Date(grant.expiresAt);
   if (Number.isNaN(expiresAt.getTime())) {

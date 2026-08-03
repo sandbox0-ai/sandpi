@@ -203,26 +203,6 @@ test("creates, renews, and revokes private Sandbox previews through the SDK", as
   ]);
 });
 
-test("reports an unavailable Preview capability with an older Sandbox0 SDK", async () => {
-  const runtime = runtimeWithClient({
-    sandboxes: { sandbox: () => ({}) },
-  });
-  await assert.rejects(
-    runtime.createEnvironmentPreview(environmentRuntimeRecord(), {
-      port: 3000,
-      protocol: "http",
-      path: "/",
-    }),
-    (error: unknown) => {
-      assert.equal(
-        (error as { code?: string }).code,
-        "sandbox0_preview_sdk_unavailable",
-      );
-      return true;
-    },
-  );
-});
-
 test("reads Sandbox0 usage only through the official SDK resource", async () => {
   const calls: unknown[] = [];
   const expected = {
