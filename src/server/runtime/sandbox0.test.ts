@@ -141,6 +141,88 @@ test("projects the active Sandbox allocation start for live usage", async () => 
   );
 });
 
+test("creates, renews, and revokes private Sandbox previews through the SDK", async () => {
+  const calls: Array<{ operation: string; value: unknown }> = [];
+  const grant = {
+    id: "preview-1",
+    sandboxId: "sandbox-environment",
+    port: 3000,
+    protocol: "http" as const,
+    url: "https://bootstrap.example.test",
+    targetUrl: "https://target.example.test",
+    expiresAt: new Date("2026-08-03T00:15:00Z"),
+    runtimeGeneration: 3,
+  };
+  const runtime = runtimeWithClient({
+    sandboxes: {
+      sandbox(sandboxId: string) {
+        assert.equal(sandboxId, "sandbox-environment");
+        return {
+          async createPreview(value: unknown) {
+            calls.push({ operation: "create", value });
+            return grant;
+          },
+          async renewPreview(previewId: string, value: unknown) {
+            calls.push({ operation: "renew", value: { previewId, value } });
+            return { ...grant, url: grant.targetUrl };
+          },
+          async revokePreview(previewId: string) {
+            calls.push({ operation: "revoke", value: previewId });
+          },
+        };
+      },
+    },
+  });
+  const coordinates = environmentRuntimeRecord();
+
+  const created = await runtime.createEnvironmentPreview(coordinates, {
+    port: 3000,
+    protocol: "http",
+    path: "/dashboard?q=1",
+    ttlSeconds: 900,
+  });
+  assert.equal(created.expiresAt.toISOString(), "2026-08-03T00:15:00.000Z");
+  await runtime.renewEnvironmentPreview(coordinates, created.id, 600);
+  await runtime.revokeEnvironmentPreview(coordinates, created.id);
+
+  assert.deepEqual(calls, [
+    {
+      operation: "create",
+      value: {
+        port: 3000,
+        protocol: "http",
+        path: "/dashboard?q=1",
+        ttlSeconds: 900,
+      },
+    },
+    {
+      operation: "renew",
+      value: { previewId: "preview-1", value: { ttlSeconds: 600 } },
+    },
+    { operation: "revoke", value: "preview-1" },
+  ]);
+});
+
+test("reports an unavailable Preview capability with an older Sandbox0 SDK", async () => {
+  const runtime = runtimeWithClient({
+    sandboxes: { sandbox: () => ({}) },
+  });
+  await assert.rejects(
+    runtime.createEnvironmentPreview(environmentRuntimeRecord(), {
+      port: 3000,
+      protocol: "http",
+      path: "/",
+    }),
+    (error: unknown) => {
+      assert.equal(
+        (error as { code?: string }).code,
+        "sandbox0_preview_sdk_unavailable",
+      );
+      return true;
+    },
+  );
+});
+
 test("reads Sandbox0 usage only through the official SDK resource", async () => {
   const calls: unknown[] = [];
   const expected = {

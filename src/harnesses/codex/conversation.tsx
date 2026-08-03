@@ -159,6 +159,7 @@ interface ConversationProps {
   inspectorOpen: boolean;
   inspectorTab: InspectorTab;
   inspectorWidthRatio: number;
+  previewUrl?: string;
   terminalOpen: boolean;
   onToggleSidebar: () => void;
   onToggleInspector: () => void;
@@ -176,6 +177,7 @@ interface ConversationProps {
   onOpenInspector: (tab: InspectorTab) => void;
   workspaceNavigationRequest?: WorkspaceFileNavigationRequest;
   onOpenWorkspacePath: (path: string) => void;
+  onOpenSandboxPreview: (url: string) => void;
   onWorkspaceNavigationHandled: (
     request: WorkspaceFileNavigationRequest,
   ) => void;
@@ -251,6 +253,7 @@ export function CodexConversation({
   inspectorOpen,
   inspectorTab,
   inspectorWidthRatio,
+  previewUrl,
   terminalOpen,
   onToggleSidebar,
   onToggleInspector,
@@ -262,6 +265,7 @@ export function CodexConversation({
   onOpenInspector,
   workspaceNavigationRequest,
   onOpenWorkspacePath,
+  onOpenSandboxPreview,
   onWorkspaceNavigationHandled,
   onSessionChange,
   onToggleSessionCompleted,
@@ -2123,6 +2127,7 @@ export function CodexConversation({
             <MarkdownContent
               content={message.content}
               onOpenWorkspacePath={onOpenWorkspacePath}
+              onOpenSandboxPreview={onOpenSandboxPreview}
             />
           ) : message.streaming ? (
             <div
@@ -2723,6 +2728,7 @@ export function CodexConversation({
           widthRatio={inspectorWidthRatio}
           workspaceNavigationRequest={workspaceNavigationRequest}
           onWorkspaceNavigationHandled={onWorkspaceNavigationHandled}
+          previewUrl={previewUrl}
           onTabChange={onInspectorTabChange}
           onWidthRatioChange={onInspectorWidthRatioChange}
           onOpenEnvironmentSettings={() =>

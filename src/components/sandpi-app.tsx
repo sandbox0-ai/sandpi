@@ -46,6 +46,7 @@ import {
 } from "@/lib/local-ui-preferences";
 import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
 import { visibleSessionsForEnvironment } from "@/lib/session-list";
+import { sandboxLoopbackUrl } from "@/lib/sandbox-loopback-url";
 import { useLocalUiPreferences } from "@/lib/use-local-ui-preferences";
 import { useCloudStateSync } from "@/lib/use-cloud-state-sync";
 import { useNativeChromeSurfaces } from "@/lib/use-native-chrome-surfaces";
@@ -132,6 +133,10 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
   );
   const [workspaceNavigationRequest, setWorkspaceNavigationRequest] =
     useState<WorkspaceFileNavigationRequest>();
+  const [sandboxPreviewRequest, setSandboxPreviewRequest] = useState<{
+    environmentId: string;
+    url: string;
+  }>();
   const localUiPreferences = useLocalUiPreferences();
   const inspectorTab = localUiPreferences.workspace.inspectorTab;
   const sidebarCollapsed = localUiPreferences.workspace.sidebarCollapsed;
@@ -431,6 +436,27 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
           ...current.workspace,
           inspectorOpen: true,
           inspectorTab: "files",
+        },
+      }));
+      setInspectorOpen(true);
+    },
+    [selectedEnvironment],
+  );
+
+  const openSandboxPreview = useCallback(
+    (requestedUrl: string) => {
+      const url = sandboxLoopbackUrl(requestedUrl);
+      if (!url || !selectedEnvironment) return;
+      setSandboxPreviewRequest({
+        environmentId: selectedEnvironment.id,
+        url,
+      });
+      updateLocalUiPreferences((current) => ({
+        ...current,
+        workspace: {
+          ...current.workspace,
+          inspectorOpen: true,
+          inspectorTab: "preview",
         },
       }));
       setInspectorOpen(true);
@@ -1117,6 +1143,11 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
           inspectorOpen={showInspector}
           inspectorTab={inspectorTab}
           inspectorWidthRatio={inspectorWidthRatio}
+          previewUrl={
+            sandboxPreviewRequest?.environmentId === selectedEnvironment.id
+              ? sandboxPreviewRequest.url
+              : undefined
+          }
           terminalOpen={showTerminal}
           onToggleSidebar={handleToggleNavigation}
           onToggleInspector={() => handleInspectorOpenChange(!showInspector)}
@@ -1135,6 +1166,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
           }}
           workspaceNavigationRequest={workspaceNavigationRequest}
           onOpenWorkspacePath={openWorkspacePath}
+          onOpenSandboxPreview={openSandboxPreview}
           onWorkspaceNavigationHandled={handleWorkspaceNavigationHandled}
           onSessionChange={handleSessionChange}
           onToggleSessionCompleted={handleToggleSessionCompleted}
@@ -1175,6 +1207,11 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
           hidden={!showInspector}
           workspaceNavigationRequest={workspaceNavigationRequest}
           onWorkspaceNavigationHandled={handleWorkspaceNavigationHandled}
+          previewUrl={
+            sandboxPreviewRequest?.environmentId === selectedEnvironment.id
+              ? sandboxPreviewRequest.url
+              : undefined
+          }
           activeTab={inspectorTab === "activity" ? "files" : inspectorTab}
           onTabChange={handleInspectorTabChange}
           widthRatio={inspectorWidthRatio}
@@ -1194,6 +1231,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
           onHeightChange={handleTerminalHeightChange}
           onToggleMaximize={handleToggleTerminalMaximize}
           onClose={() => setTerminalOpen(false)}
+          onOpenSandboxPreview={openSandboxPreview}
         />
       ) : null}
 

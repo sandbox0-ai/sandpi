@@ -24,27 +24,40 @@ test("OpenAPI publishes every supported operation with a unique id", async () =>
   const operations = allOperations(document);
   const operationIds = operations.map((operation) => operation.operationId);
 
-  assert.equal(operations.length, 121);
+  assert.equal(operations.length, 124);
   assert.ok(operationIds.every(Boolean));
   assert.equal(new Set(operationIds).size, operationIds.length);
   assert.ok(Object.keys(document.paths).every((path) => !path.includes(":")));
   assert.ok(Object.keys(document.paths).every((path) => !path.includes("*")));
 
-  for (const [path, operationId] of [
+  for (const [path, method, operationId] of [
+    [
+      "/api/v1/environments/{environmentId}/previews",
+      "post",
+      "createEnvironmentPreview",
+    ],
+    [
+      "/api/v1/environments/{environmentId}/previews/{previewId}",
+      "put",
+      "renewEnvironmentPreview",
+    ],
     [
       "/api/v1/environments/{environmentId}/sandbox/pause",
+      "put",
       "pauseEnvironmentSandbox",
     ],
     [
       "/api/v1/environments/{environmentId}/sandbox/restart",
+      "put",
       "restartEnvironmentSandbox",
     ],
     [
       "/api/v1/environments/{environmentId}/webhooks/{webhookId}/secret",
+      "put",
       "rotateEnvironmentWebhookSecret",
     ],
   ] as const) {
-    assert.equal(operation(document, path, "put").operationId, operationId);
+    assert.equal(operation(document, path, method).operationId, operationId);
   }
   assert.deepEqual(
     operation(document, "/api/v1/webhooks/{endpointId}", "post").security,

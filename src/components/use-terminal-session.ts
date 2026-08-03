@@ -2,10 +2,18 @@
 
 import type { SearchAddon as XTermSearchAddon } from "@xterm/addon-search";
 import type { FitAddon as XTermFitAddon } from "@xterm/addon-fit";
-import type { Terminal as XTerm } from "@xterm/xterm";
+import type {
+  IBufferLine,
+  ILink,
+  Terminal as XTerm,
+} from "@xterm/xterm";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { apiWebSocketUrl } from "@/lib/api-client";
+import {
+  sandboxLoopbackMatches,
+  sandboxLoopbackUrl,
+} from "@/lib/sandbox-loopback-url";
 import {
   advanceTerminalSequence,
   emptyTerminalReplayState,
@@ -47,6 +55,21 @@ interface TerminalMessage {
 }
 
 const MAX_TERMINAL_RECONNECT_ATTEMPTS = 5;
+
+function terminalColumnForStringIndex(
+  line: IBufferLine,
+  stringIndex: number,
+) {
+  let remaining = stringIndex;
+  for (let column = 0; column < line.length; column += 1) {
+    const cell = line.getCell(column);
+    if (!cell || cell.getWidth() === 0) continue;
+    if (remaining === 0) return column;
+    remaining -= cell.getChars().length || 1;
+    if (remaining < 0) return column;
+  }
+  return remaining === 0 ? line.length : undefined;
+}
 
 function decodeBase64(data: string) {
   const raw = window.atob(data);
@@ -115,6 +138,7 @@ export function isCurrentTerminalExit(
 export function useTerminalSession(
   environmentId: string,
   onOpenSearch: () => void,
+  onOpenSandboxPreview: (url: string) => void,
 ) {
   const [connectionState, setConnectionState] =
     useState<TerminalConnectionState>("initializing");
@@ -511,6 +535,11 @@ export function useTerminalSession(
         const webLinksAddon = new webLinksModule.WebLinksAddon(
           (event, uri) => {
             event.preventDefault();
+            const previewUrl = sandboxLoopbackUrl(uri);
+            if (previewUrl) {
+              onOpenSandboxPreview(previewUrl);
+              return;
+            }
             try {
               const parsed = new URL(uri);
               if (parsed.protocol === "http:" || parsed.protocol === "https:") {
@@ -530,6 +559,42 @@ export function useTerminalSession(
         terminalRef.current = terminal;
         fitAddonRef.current = fitAddon;
         searchAddonRef.current = searchAddon;
+
+        disposables.push(
+          terminal.registerLinkProvider({
+            provideLinks(bufferLineNumber, callback) {
+              const line = terminal?.buffer.active.getLine(
+                bufferLineNumber - 1,
+              );
+              if (!line) {
+                callback(undefined);
+                return;
+              }
+              const links: ILink[] = [];
+              for (const match of sandboxLoopbackMatches(
+                line.translateToString(true),
+              )) {
+                const start = terminalColumnForStringIndex(line, match.start);
+                const end = terminalColumnForStringIndex(line, match.end);
+                if (start === undefined || end === undefined || end <= start) {
+                  continue;
+                }
+                links.push({
+                  text: match.text,
+                  range: {
+                    start: { x: start + 1, y: bufferLineNumber },
+                    end: { x: end, y: bufferLineNumber },
+                  },
+                  activate(event) {
+                    event.preventDefault();
+                    onOpenSandboxPreview(match.url);
+                  },
+                });
+              }
+              callback(links.length > 0 ? links : undefined);
+            },
+          }),
+        );
 
         disposables.push(
           terminal.onData((data) => {
@@ -625,7 +690,14 @@ export function useTerminalSession(
       fitAddonRef.current = null;
       searchAddonRef.current = null;
     };
-  }, [environmentId, fitTerminal, onOpenSearch, persistReplayState, rendererGeneration]);
+  }, [
+    environmentId,
+    fitTerminal,
+    onOpenSandboxPreview,
+    onOpenSearch,
+    persistReplayState,
+    rendererGeneration,
+  ]);
 
   useEffect(
     () => () => {

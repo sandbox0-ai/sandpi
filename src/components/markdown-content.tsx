@@ -12,7 +12,10 @@ import ReactMarkdown, {
 } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-import { sandboxLoopbackUrl } from "@/lib/sandbox-loopback-url";
+import {
+  sandboxLoopbackMatches,
+  sandboxLoopbackUrl,
+} from "@/lib/sandbox-loopback-url";
 import { resolveWorkspaceMarkdownPath } from "@/lib/workspace-file-presentation";
 
 interface MarkdownContentProps {
@@ -20,10 +23,72 @@ interface MarkdownContentProps {
   variant?: "message" | "document";
   baseWorkspacePath?: string;
   onOpenWorkspacePath?: (path: string) => void;
+  onOpenSandboxPreview?: (url: string) => void;
   renderWorkspaceImage?: (path: string, alt: string) => ReactNode;
 }
 
-const remarkPlugins = [remarkGfm];
+interface MarkdownAstNode {
+  type?: string;
+  value?: string;
+  children?: MarkdownAstNode[];
+  url?: string;
+}
+
+const SKIPPED_LOOPBACK_LINK_PARENTS = new Set([
+  "code",
+  "inlineCode",
+  "link",
+  "linkReference",
+]);
+
+function addSandboxLoopbackLinks(node: MarkdownAstNode) {
+  if (
+    SKIPPED_LOOPBACK_LINK_PARENTS.has(node.type ?? "") ||
+    !node.children
+  ) {
+    return;
+  }
+
+  const children: MarkdownAstNode[] = [];
+  for (const child of node.children) {
+    if (child.type !== "text" || typeof child.value !== "string") {
+      addSandboxLoopbackLinks(child);
+      children.push(child);
+      continue;
+    }
+    const matches = sandboxLoopbackMatches(child.value);
+    if (matches.length === 0) {
+      children.push(child);
+      continue;
+    }
+    let cursor = 0;
+    for (const match of matches) {
+      if (match.start > cursor) {
+        children.push({ type: "text", value: child.value.slice(cursor, match.start) });
+      }
+      children.push({
+        type: "link",
+        url: match.url,
+        children: [{ type: "text", value: match.text }],
+      });
+      cursor = match.end;
+    }
+    if (cursor < child.value.length) {
+      children.push({ type: "text", value: child.value.slice(cursor) });
+    }
+  }
+  node.children = children;
+}
+
+function remarkSandboxLoopbackLinks() {
+  return (tree: unknown) => {
+    if (tree && typeof tree === "object") {
+      addSandboxLoopbackLinks(tree as MarkdownAstNode);
+    }
+  };
+}
+
+const remarkPlugins = [remarkGfm, remarkSandboxLoopbackLinks];
 // Intentionally omit rehypeRaw so pasted HTML stays visible as inert text.
 
 function posixAbsolutePathFromHref(href: string | undefined) {
@@ -64,6 +129,7 @@ function MarkdownContentView({
   variant = "message",
   baseWorkspacePath,
   onOpenWorkspacePath,
+  onOpenSandboxPreview,
   renderWorkspaceImage,
 }: MarkdownContentProps) {
   const components = useMemo<Components>(
@@ -97,6 +163,19 @@ function MarkdownContentView({
         }
         const sandboxUrl = sandboxLoopbackUrl(href);
         if (sandboxUrl) {
+          if (onOpenSandboxPreview) {
+            return (
+              <button
+                type="button"
+                className="markdown-workspace-link markdown-local-url"
+                title={title ?? sandboxUrl}
+                data-sandbox-loopback-url={sandboxUrl}
+                onClick={() => onOpenSandboxPreview(sandboxUrl)}
+              >
+                {children}
+              </button>
+            );
+          }
           return (
             <code
               className="markdown-local-url"
@@ -162,6 +241,7 @@ function MarkdownContentView({
     [
       baseWorkspacePath,
       onOpenWorkspacePath,
+      onOpenSandboxPreview,
       renderWorkspaceImage,
     ],
   );

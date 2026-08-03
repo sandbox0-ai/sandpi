@@ -92,6 +92,15 @@ test("migrates the removed Browser Inspector tab to Files", () => {
   );
 });
 
+test("keeps the private Preview Inspector tab", () => {
+  assert.equal(
+    normalizeLocalUiPreferences({
+      workspace: { inspectorTab: "preview" },
+    }).workspace.inspectorTab,
+    "preview",
+  );
+});
+
 test("keeps file browser sidebar layout preferences bounded", () => {
   assert.deepEqual(
     normalizeLocalUiPreferences({

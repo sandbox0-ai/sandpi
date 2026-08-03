@@ -22,6 +22,7 @@ interface ConversationProps {
   inspectorOpen: boolean;
   inspectorTab: InspectorTab;
   inspectorWidthRatio: number;
+  previewUrl?: string;
   terminalOpen: boolean;
   onToggleSidebar: () => void;
   onToggleInspector: () => void;
@@ -39,6 +40,7 @@ interface ConversationProps {
   onOpenInspector: (tab: InspectorTab) => void;
   workspaceNavigationRequest?: WorkspaceFileNavigationRequest;
   onOpenWorkspacePath: (path: string) => void;
+  onOpenSandboxPreview: (url: string) => void;
   onWorkspaceNavigationHandled: (
     request: WorkspaceFileNavigationRequest,
   ) => void;

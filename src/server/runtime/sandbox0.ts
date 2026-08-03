@@ -70,6 +70,7 @@ import {
   type RuntimeUsageWindowPage,
   type RuntimeEnvironmentEgressCredential,
   type RuntimeMcpOAuthCallbackService,
+  type RuntimeSandboxPreviewGrant,
   type RuntimeProvisionEnvironmentInput,
   type RuntimeTerminalHandle,
   type RuntimeWorkspaceBackupSnapshot,
@@ -585,6 +586,89 @@ export class Sandbox0Runtime implements RuntimeAdapter {
       if (error instanceof HttpError) throw error;
       throw translateSandbox0Error(error);
     }
+  }
+
+  async createEnvironmentPreview(
+    runtime: EnvironmentRuntimeRecord,
+    input: {
+      port: number;
+      protocol: "http" | "https";
+      path: string;
+      ttlSeconds?: number;
+    },
+  ): Promise<RuntimeSandboxPreviewGrant> {
+    try {
+      const sandbox = this.previewSandbox(runtime);
+      return runtimePreviewGrant(
+        await sandbox.createPreview({
+          port: input.port,
+          protocol: input.protocol,
+          path: input.path,
+          ttlSeconds: input.ttlSeconds,
+        }),
+      );
+    } catch (error) {
+      if (error instanceof HttpError) throw error;
+      throw translateSandbox0Error(error);
+    }
+  }
+
+  async renewEnvironmentPreview(
+    runtime: EnvironmentRuntimeRecord,
+    previewId: string,
+    ttlSeconds?: number,
+  ): Promise<RuntimeSandboxPreviewGrant> {
+    try {
+      return runtimePreviewGrant(
+        await this.previewSandbox(runtime).renewPreview(previewId, {
+          ttlSeconds,
+        }),
+      );
+    } catch (error) {
+      if (error instanceof HttpError) throw error;
+      throw translateSandbox0Error(error);
+    }
+  }
+
+  async revokeEnvironmentPreview(
+    runtime: EnvironmentRuntimeRecord,
+    previewId: string,
+  ) {
+    try {
+      await this.previewSandbox(runtime).revokePreview(previewId);
+    } catch (error) {
+      if (isMissingResource(error)) return;
+      if (error instanceof HttpError) throw error;
+      throw translateSandbox0Error(error);
+    }
+  }
+
+  private previewSandbox(runtime: EnvironmentRuntimeRecord) {
+    const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId) as unknown as {
+      createPreview?: (input: {
+        port: number;
+        protocol: "http" | "https";
+        path: string;
+        ttlSeconds?: number;
+      }) => Promise<Sandbox0PreviewGrant>;
+      renewPreview?: (
+        previewId: string,
+        input?: { ttlSeconds?: number },
+      ) => Promise<Sandbox0PreviewGrant>;
+      revokePreview?: (previewId: string) => Promise<void>;
+    };
+    if (
+      !sandbox.createPreview ||
+      !sandbox.renewPreview ||
+      !sandbox.revokePreview
+    ) {
+      throw new HttpError(
+        503,
+        "sandbox0_preview_sdk_unavailable",
+        "The installed Sandbox0 SDK does not support private previews.",
+      );
+    }
+    return sandbox as Required<typeof sandbox>;
   }
 
   async createEnvironmentWorkspaceBackup(
@@ -2625,6 +2709,34 @@ export class Sandbox0Runtime implements RuntimeAdapter {
       close: () => connection.close(),
     };
   }
+}
+
+interface Sandbox0PreviewGrant {
+  id: string;
+  sandboxId: string;
+  port: number;
+  protocol: "http" | "https";
+  url: string;
+  targetUrl: string;
+  expiresAt: Date | string;
+  runtimeGeneration: number;
+}
+
+function runtimePreviewGrant(
+  grant: Sandbox0PreviewGrant,
+): RuntimeSandboxPreviewGrant {
+  const expiresAt = new Date(grant.expiresAt);
+  if (Number.isNaN(expiresAt.getTime())) {
+    throw new HttpError(
+      502,
+      "sandbox0_preview_response_invalid",
+      "Sandbox0 returned an invalid preview expiration.",
+    );
+  }
+  return {
+    ...grant,
+    expiresAt,
+  };
 }
 
 function sandboxAppServiceFromView(

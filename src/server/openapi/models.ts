@@ -73,6 +73,17 @@ export const unixTimestampSchema = z
   .finite()
   .describe("Unix time in seconds; fractional values preserve milliseconds.");
 
+export const environmentPreviewGrantSchema = component(
+  "EnvironmentPreviewGrant",
+  z.object({
+    id: z.string(),
+    url: z.string(),
+    targetUrl: z.string(),
+    expiresAt: unixTimestampSchema,
+    runtimeGeneration: z.number().int(),
+  }),
+);
+
 export const errorSchema = component(
   "Error",
   z.object({
