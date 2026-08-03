@@ -36,6 +36,7 @@ export interface TerminalDockProps {
   onHeightChange: (height: number) => void;
   onToggleMaximize: () => void;
   onClose: () => void;
+  onOpenSandboxPreview: (url: string) => void;
 }
 
 const MIN_TERMINAL_HEIGHT = 190;
@@ -59,6 +60,7 @@ function TerminalDockSession({
   onHeightChange,
   onToggleMaximize,
   onClose,
+  onOpenSandboxPreview,
 }: TerminalDockProps) {
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -82,7 +84,7 @@ function TerminalDockSession({
     copySelection,
     clearTerminal,
     restartTerminal,
-  } = useTerminalSession(environment.id, openSearch);
+  } = useTerminalSession(environment.id, openSearch, onOpenSandboxPreview);
 
   const closeSearch = useCallback(() => {
     searchAddonRef.current?.clearDecorations();

@@ -44,6 +44,17 @@ export interface RuntimeMcpOAuthCallbackService {
   publicUrl: string;
 }
 
+export interface RuntimeSandboxPreviewGrant {
+  id: string;
+  sandboxId: string;
+  port: number;
+  protocol: "http" | "https";
+  url: string;
+  targetUrl: string;
+  expiresAt: Date;
+  runtimeGeneration: number;
+}
+
 export interface RuntimeCodexSkillFile {
   path: string;
   content: Uint8Array;
@@ -198,6 +209,24 @@ export interface RuntimeAdapter {
     runtime: EnvironmentRuntimeRecord,
     input: { port: number },
   ): Promise<RuntimeMcpOAuthCallbackService>;
+  createEnvironmentPreview(
+    runtime: EnvironmentRuntimeRecord,
+    input: {
+      port: number;
+      protocol: "http" | "https";
+      path: string;
+      ttlSeconds?: number;
+    },
+  ): Promise<RuntimeSandboxPreviewGrant>;
+  renewEnvironmentPreview(
+    runtime: EnvironmentRuntimeRecord,
+    previewId: string,
+    ttlSeconds?: number,
+  ): Promise<RuntimeSandboxPreviewGrant>;
+  revokeEnvironmentPreview(
+    runtime: EnvironmentRuntimeRecord,
+    previewId: string,
+  ): Promise<void>;
   createEnvironmentWorkspaceBackup(
     runtime: EnvironmentRuntimeRecord,
     input: { name: string; description: string },

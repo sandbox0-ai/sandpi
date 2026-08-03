@@ -27,6 +27,19 @@ export const workspaceFileSearchQuerySchema = z
   .max(512)
   .refine((value) => !value.includes("\0"));
 
+export const environmentPreviewCreateSchema = z
+  .object({
+    url: z.string().trim().min(1).max(8_192),
+  })
+  .strict();
+
+export const environmentPreviewRenewSchema = z
+  .object({
+    ttlSeconds: z.number().int().min(30).max(3_600).optional(),
+  })
+  .strict()
+  .default({});
+
 export const codexReasoningEffortSchema = z.string().trim().min(1).max(100);
 
 const idempotencyKeySchema = z

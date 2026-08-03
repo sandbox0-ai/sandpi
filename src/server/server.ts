@@ -29,6 +29,7 @@ import {
 } from "@/lib/environment-metrics";
 import { dateFromUnixTimestamp, toUnixTimestamp } from "@/lib/time";
 import { WORKSPACE_ROOT } from "@/lib/workspace-path-policy";
+import { sandboxLoopbackTarget } from "@/lib/sandbox-loopback-url";
 import { NativeAuthService } from "@/server/auth/native";
 import { OidcIdentityService } from "@/server/auth/oidc";
 import type { Principal } from "@/server/auth/principal";
@@ -86,7 +87,10 @@ import {
   requestEtagMatches,
 } from "@/server/cloud-sync";
 import { createRuntime } from "@/server/runtime";
-import type { RuntimeAdapter } from "@/server/runtime/types";
+import type {
+  RuntimeAdapter,
+  RuntimeSandboxPreviewGrant,
+} from "@/server/runtime/types";
 import { RuntimeWebSocketHeartbeat } from "@/server/runtime-websocket-heartbeat";
 import {
   allowedOrigins,
@@ -107,6 +111,8 @@ import {
   environmentCreateSchema,
   environmentOrderSchema,
   environmentProvisioningSchema,
+  environmentPreviewCreateSchema,
+  environmentPreviewRenewSchema,
   environmentScheduleSchema,
   environmentWebhookSchema,
   environmentUpdateSchema,
@@ -136,6 +142,17 @@ const CODEX_UPLOAD_BODY_LIMIT_BYTES =
   MAX_CODEX_COMPOSER_UPLOAD_BASE64_LENGTH + 64 * 1024;
 const WORKSPACE_FILE_BODY_LIMIT_BYTES = 7 * 1024 * 1024;
 const CODEX_SKILL_BODY_LIMIT_BYTES = 14 * 1024 * 1024;
+
+function environmentPreviewResponse(grant: RuntimeSandboxPreviewGrant) {
+  return {
+    id: grant.id,
+    url: grant.url,
+    targetUrl: grant.targetUrl,
+    expiresAt: toUnixTimestamp(grant.expiresAt),
+    runtimeGeneration: grant.runtimeGeneration,
+  };
+}
+
 export interface SandpiServerOptions {
   config?: SandpiConfig;
   pool?: Pool;
@@ -820,6 +837,73 @@ export function registerApiRoutes(
   app.get("/api/v1/environments", async (request) => ({
     data: await services.environments.list(request.principal.userId),
   }));
+  app.post<{
+    Params: { environmentId: string };
+    Body: unknown;
+  }>(
+    "/api/v1/environments/:environmentId/previews",
+    async (request, reply) => {
+      const input = environmentPreviewCreateSchema.parse(request.body);
+      const target = sandboxLoopbackTarget(input.url);
+      if (!target) {
+        throw new HttpError(
+          400,
+          "sandbox_loopback_url_required",
+          "Preview URLs must use localhost, 127.0.0.1, or ::1 over HTTP or HTTPS.",
+        );
+      }
+      const grant = await services.runtimeAccess.withRuntimeAccess(
+        request.principal.userId,
+        request.params.environmentId,
+        (runtime) =>
+          services.runtime.createEnvironmentPreview(runtime, {
+            port: target.port,
+            protocol: target.protocol,
+            path: target.path,
+          }),
+      );
+      reply.header("Cache-Control", "no-store").code(201);
+      return { data: environmentPreviewResponse(grant) };
+    },
+  );
+  app.put<{
+    Params: { environmentId: string; previewId: string };
+    Body: unknown;
+  }>(
+    "/api/v1/environments/:environmentId/previews/:previewId",
+    async (request, reply) => {
+      const input = environmentPreviewRenewSchema.parse(request.body);
+      const grant = await services.runtimeAccess.withRuntimeAccess(
+        request.principal.userId,
+        request.params.environmentId,
+        (runtime) =>
+          services.runtime.renewEnvironmentPreview(
+            runtime,
+            request.params.previewId,
+            input.ttlSeconds,
+          ),
+      );
+      reply.header("Cache-Control", "no-store");
+      return { data: environmentPreviewResponse(grant) };
+    },
+  );
+  app.delete<{
+    Params: { environmentId: string; previewId: string };
+  }>(
+    "/api/v1/environments/:environmentId/previews/:previewId",
+    async (request) => {
+      await services.runtimeAccess.withRuntimeAccess(
+        request.principal.userId,
+        request.params.environmentId,
+        (runtime) =>
+          services.runtime.revokeEnvironmentPreview(
+            runtime,
+            request.params.previewId,
+          ),
+      );
+      return { data: { id: request.params.previewId } };
+    },
+  );
   app.get<{ Params: { environmentId: string } }>(
     "/api/v1/environments/:environmentId",
     async (request) => ({

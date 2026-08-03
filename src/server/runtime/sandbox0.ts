@@ -13,6 +13,7 @@ import {
   models,
   runtime as generatedRuntime,
   type SandboxMetrics,
+  type SandboxPreviewGrant,
 } from "sandbox0";
 
 import type {
@@ -70,6 +71,7 @@ import {
   type RuntimeUsageWindowPage,
   type RuntimeEnvironmentEgressCredential,
   type RuntimeMcpOAuthCallbackService,
+  type RuntimeSandboxPreviewGrant,
   type RuntimeProvisionEnvironmentInput,
   type RuntimeTerminalHandle,
   type RuntimeWorkspaceBackupSnapshot,
@@ -582,6 +584,64 @@ export class Sandbox0Runtime implements RuntimeAdapter {
         publicUrl: callback.publicUrl,
       };
     } catch (error) {
+      if (error instanceof HttpError) throw error;
+      throw translateSandbox0Error(error);
+    }
+  }
+
+  async createEnvironmentPreview(
+    runtime: EnvironmentRuntimeRecord,
+    input: {
+      port: number;
+      protocol: "http" | "https";
+      path: string;
+      ttlSeconds?: number;
+    },
+  ): Promise<RuntimeSandboxPreviewGrant> {
+    try {
+      const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
+      return runtimePreviewGrant(
+        await sandbox.createPreview({
+          port: input.port,
+          protocol: input.protocol,
+          path: input.path,
+          ttlSeconds: input.ttlSeconds,
+        }),
+      );
+    } catch (error) {
+      if (error instanceof HttpError) throw error;
+      throw translateSandbox0Error(error);
+    }
+  }
+
+  async renewEnvironmentPreview(
+    runtime: EnvironmentRuntimeRecord,
+    previewId: string,
+    ttlSeconds?: number,
+  ): Promise<RuntimeSandboxPreviewGrant> {
+    try {
+      const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
+      return runtimePreviewGrant(
+        await sandbox.renewPreview(previewId, {
+          ttlSeconds,
+        }),
+      );
+    } catch (error) {
+      if (error instanceof HttpError) throw error;
+      throw translateSandbox0Error(error);
+    }
+  }
+
+  async revokeEnvironmentPreview(
+    runtime: EnvironmentRuntimeRecord,
+    previewId: string,
+  ) {
+    try {
+      await this.client.sandboxes
+        .sandbox(runtime.sandboxId)
+        .revokePreview(previewId);
+    } catch (error) {
+      if (isMissingResource(error)) return;
       if (error instanceof HttpError) throw error;
       throw translateSandbox0Error(error);
     }
@@ -2625,6 +2685,23 @@ export class Sandbox0Runtime implements RuntimeAdapter {
       close: () => connection.close(),
     };
   }
+}
+
+function runtimePreviewGrant(
+  grant: SandboxPreviewGrant,
+): RuntimeSandboxPreviewGrant {
+  const expiresAt = new Date(grant.expiresAt);
+  if (Number.isNaN(expiresAt.getTime())) {
+    throw new HttpError(
+      502,
+      "sandbox0_preview_response_invalid",
+      "Sandbox0 returned an invalid preview expiration.",
+    );
+  }
+  return {
+    ...grant,
+    expiresAt,
+  };
 }
 
 function sandboxAppServiceFromView(

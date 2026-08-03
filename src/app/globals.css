@@ -3919,6 +3919,58 @@ code.codex-compact-activity-subject {
   scrollbar-width: thin;
 }
 
+.sandbox-preview {
+  min-height: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel-strong);
+}
+
+.sandbox-preview-toolbar {
+  min-height: 38px;
+  padding: 5px 8px 5px 11px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--panel);
+}
+
+.sandbox-preview-toolbar code {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: var(--ink-soft);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sandbox-preview iframe {
+  width: 100%;
+  min-height: 0;
+  flex: 1;
+  border: 0;
+  background: #fff;
+}
+
+.sandbox-preview-status,
+.sandbox-preview-empty {
+  padding: 12px;
+  color: var(--ink-soft);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.sandbox-preview-empty {
+  min-height: 0;
+  flex: 1;
+  display: grid;
+  place-items: center;
+  text-align: center;
+}
+
 @keyframes inspector-skeleton-pulse {
   0%,
   100% {

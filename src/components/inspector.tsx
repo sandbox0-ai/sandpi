@@ -8,6 +8,7 @@ import {
   FileCode2,
   Gauge,
   ListTree,
+  MonitorPlay,
   Network,
   Settings2,
   SquareArrowOutUpRight,
@@ -26,6 +27,7 @@ import {
   InteractiveMetricChart,
   type MetricChartSeries,
 } from "@/components/metric-chart";
+import { SandboxPreview } from "@/components/sandbox-preview";
 import {
   WorkspaceIde,
   type WorkspaceFileNavigationRequest,
@@ -53,7 +55,7 @@ import type {
   RuntimeMetricSeries,
 } from "@/lib/types";
 
-export type InspectorTab = "files" | "activity" | "metrics";
+export type InspectorTab = "files" | "activity" | "metrics" | "preview";
 export const INSPECTOR_KEEP_ALIVE_MS = 30_000;
 
 export interface InspectorSessionActivity {
@@ -73,6 +75,7 @@ interface InspectorProps {
   onWorkspaceNavigationHandled?: (
     request: WorkspaceFileNavigationRequest,
   ) => void;
+  previewUrl?: string;
   activeTab: InspectorTab;
   onTabChange: (tab: InspectorTab) => void;
   widthRatio: number;
@@ -320,6 +323,7 @@ export function Inspector({
   sessionActivity,
   workspaceNavigationRequest,
   onWorkspaceNavigationHandled,
+  previewUrl,
   activeTab,
   onTabChange,
   widthRatio,
@@ -576,6 +580,13 @@ export function Inspector({
         <nav aria-label={ui.views}>
           <button
             type="button"
+            className={activeTab === "preview" ? "is-active" : ""}
+            onClick={() => onTabChange("preview")}
+          >
+            <MonitorPlay size={14} /> {ui.preview}
+          </button>
+          <button
+            type="button"
             className={activeTab === "files" ? "is-active" : ""}
             onClick={() => onTabChange("files")}
           >
@@ -633,6 +644,20 @@ export function Inspector({
       {activeTab === "activity" && sessionActivity
         ? sessionActivity.content
         : null}
+
+      {!hidden && activeTab === "preview" ? (
+        <SandboxPreview
+          environmentId={environment.id}
+          sourceUrl={previewUrl}
+          copy={{
+            loading: ui.previewLoading,
+            reload: ui.previewReload,
+            openNewTab: ui.previewOpenNewTab,
+            empty: ui.previewEmpty,
+            iframeTitle: ui.previewFrame,
+          }}
+        />
+      ) : null}
 
       {activeTab === "files" ||
       mountedFilesEnvironmentId === environment.id ? (

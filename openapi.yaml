@@ -1506,6 +1506,29 @@ components:
         - window
         - pauseIntervals
       additionalProperties: false
+    EnvironmentPreviewGrant:
+      type: object
+      properties:
+        id:
+          type: string
+        url:
+          type: string
+        targetUrl:
+          type: string
+        expiresAt:
+          type: number
+          description: Unix time in seconds; fractional values preserve milliseconds.
+        runtimeGeneration:
+          type: integer
+          minimum: -9007199254740991
+          maximum: 9007199254740991
+      required:
+        - id
+        - url
+        - targetUrl
+        - expiresAt
+        - runtimeGeneration
+      additionalProperties: false
     EnvironmentResourceMetrics:
       type: object
       properties:
@@ -6273,6 +6296,146 @@ paths:
                 properties:
                   data:
                     $ref: "#/components/schemas/EnvironmentResourceMetrics"
+                required:
+                  - data
+                additionalProperties: false
+        default:
+          description: Sandpi error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/environments/{environmentId}/previews:
+    post:
+      operationId: createEnvironmentPreview
+      summary: Open a private preview for a Sandbox loopback URL
+      tags:
+        - Environment previews
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                url:
+                  type: string
+                  minLength: 1
+                  maxLength: 8192
+              required:
+                - url
+              additionalProperties: false
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+          in: path
+          name: environmentId
+          required: true
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/EnvironmentPreviewGrant"
+                required:
+                  - data
+                additionalProperties: false
+        default:
+          description: Sandpi error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/environments/{environmentId}/previews/{previewId}:
+    put:
+      operationId: renewEnvironmentPreview
+      summary: Renew a private Environment preview
+      tags:
+        - Environment previews
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              default: {}
+              type: object
+              properties:
+                ttlSeconds:
+                  type: integer
+                  minimum: 30
+                  maximum: 3600
+              additionalProperties: false
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+          in: path
+          name: environmentId
+          required: true
+        - schema:
+            type: string
+            minLength: 1
+          in: path
+          name: previewId
+          required: true
+      responses:
+        "200":
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/EnvironmentPreviewGrant"
+                required:
+                  - data
+                additionalProperties: false
+        default:
+          description: Sandpi error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      operationId: revokeEnvironmentPreview
+      summary: Revoke a private Environment preview
+      tags:
+        - Environment previews
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+          in: path
+          name: environmentId
+          required: true
+        - schema:
+            type: string
+            minLength: 1
+          in: path
+          name: previewId
+          required: true
+      responses:
+        "200":
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                    required:
+                      - id
+                    additionalProperties: false
                 required:
                   - data
                 additionalProperties: false

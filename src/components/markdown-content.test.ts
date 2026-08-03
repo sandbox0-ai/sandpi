@@ -122,6 +122,40 @@ test("keeps sandbox loopback links inert without a Preview route", () => {
   assert.doesNotMatch(html, /target="_blank"/);
 });
 
+test("renders sandbox loopback links as Preview actions when routed", () => {
+  const html = renderToStaticMarkup(
+    createElement(MarkdownContent, {
+      content: "[App](http://localhost:3000/dashboard)",
+      onOpenSandboxPreview: () => undefined,
+    }),
+  );
+
+  assert.match(
+    html,
+    /<button[^>]+data-sandbox-loopback-url="http:\/\/localhost:3000\/dashboard"/,
+  );
+  assert.match(html, />App<\/button>/);
+});
+
+test("turns bare sandbox loopback URLs into Preview actions", () => {
+  const html = renderToStaticMarkup(
+    createElement(MarkdownContent, {
+      content:
+        "Open localhost:3000, 127.0.0.1:8080/health and [::1]:4173. Keep `localhost:9000` inert.",
+      onOpenSandboxPreview: () => undefined,
+    }),
+  );
+
+  assert.equal(html.match(/data-sandbox-loopback-url=/g)?.length, 3);
+  assert.match(html, /data-sandbox-loopback-url="http:\/\/localhost:3000\/"/);
+  assert.match(
+    html,
+    /data-sandbox-loopback-url="http:\/\/127\.0\.0\.1:8080\/health"/,
+  );
+  assert.match(html, /data-sandbox-loopback-url="http:\/\/\[::1\]:4173\/"/);
+  assert.match(html, /<code>localhost:9000<\/code>/);
+});
+
 test("marks external image destinations for native system browsers", () => {
   const html = render("![Architecture](https://example.com/diagram.png)");
 
