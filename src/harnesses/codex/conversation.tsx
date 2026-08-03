@@ -49,15 +49,6 @@ import {
 } from "@/harnesses/codex/composer";
 import { insertCodexFileMentions } from "@/harnesses/codex/file-mentions";
 import {
-  CodexSlashCommandMenu,
-  useCodexSlashCommandMenu,
-} from "@/harnesses/codex/slash-command-menu";
-import {
-  CODEX_INIT_COMMAND_PROMPT,
-  parseCodexSlashInvocation,
-  type CodexSlashCommand,
-} from "@/harnesses/codex/slash-commands";
-import {
   codexModelOptionsFromNativeResult,
   codexReasoningEffortForModel,
   codexReasoningEffortLabel,
@@ -87,12 +78,6 @@ import {
   CodexTurnResult,
 } from "@/harnesses/codex/activity";
 import { CodexSessionActivityView } from "@/harnesses/codex/session-activity-view";
-import { CodexAgentThreadsDialog } from "@/harnesses/codex/agent-threads-dialog";
-import {
-  CodexNativeCommandDialog,
-  type CodexNativeDialogMode,
-} from "@/harnesses/codex/native-command-dialog";
-import { parseCodexTokenUsageView } from "@/harnesses/codex/token-usage";
 import {
   codexContextUsedPercent,
   normalizeCodexThreadTokenUsage,
@@ -165,10 +150,7 @@ interface ConversationProps {
   onInspectorTabChange: (tab: InspectorTab) => void;
   onInspectorWidthRatioChange: (ratio: number, persist: boolean) => void;
   onToggleTerminal: () => void;
-  onNewSession: (options?: {
-    title?: string;
-    source?: "startup" | "clear";
-  }) => void;
+  onNewSession: () => void;
   onOpenEnvironmentSettings: (
     tab: EnvironmentSettingsTab,
     options?: EnvironmentSettingsOpenOptions,
@@ -221,23 +203,6 @@ interface PendingCodexSteer {
   localImages: CodexComposerLocalImage[];
   startedAt: number;
   phase: "submitting" | "accepted";
-}
-
-interface SubmitCodexMessageOptions {
-  content?: string;
-  collaborationMode?: "plan";
-  bypassSlash?: boolean;
-  restoreDraft?: string;
-}
-
-interface CodexGoalProjection {
-  goal: {
-    objective: string;
-    status: string;
-    tokenBudget: number | null;
-    tokensUsed: number;
-    timeUsedSeconds: number;
-  } | null;
 }
 
 export function CodexConversation({
@@ -339,7 +304,6 @@ export function CodexConversation({
     id: selectedModelId || session.harnessState.modelId || "default",
     displayName: selectedModelId || session.harnessState.modelId || "Default",
     isDefault: false,
-    supportsPersonality: false,
     defaultReasoningEffort: fallbackReasoningEffort,
     supportedReasoningEfforts: fallbackReasoningEffort
       ? [
@@ -363,9 +327,7 @@ export function CodexConversation({
     tone: "info" | "error";
     message: string;
   } | null>(null);
-  const [planMode, setPlanMode] = useState(false);
   const [fastMode, setFastMode] = useState(false);
-  const [mentionOpenRequest, setMentionOpenRequest] = useState(0);
   const [sending, setSending] = useState(false);
   const [interrupting, setInterrupting] = useState(false);
   const [openingAgentsFile, setOpeningAgentsFile] = useState(false);
@@ -386,15 +348,6 @@ export function CodexConversation({
   const [activityClock, setActivityClock] = useState(() => Date.now());
   const [pendingTurn, setPendingTurn] = useState<PendingCodexTurn | null>(null);
   const [pendingSteers, setPendingSteers] = useState<PendingCodexSteer[]>([]);
-  const [agentThreadsOpen, setAgentThreadsOpen] = useState(false);
-  const [nativeDialog, setNativeDialog] = useState<{
-    mode: CodexNativeDialogMode;
-    usageView?: "daily" | "weekly" | "cumulative";
-    editGoalImmediately?: boolean;
-  }>();
-  const [selectedAgentThreadId, setSelectedAgentThreadId] = useState<
-    string | undefined
-  >();
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const scrollbarHideTimerRef = useRef<number | null>(null);
   const pendingTurnStartedAtRef = useRef<number | null>(null);
@@ -600,13 +553,6 @@ export function CodexConversation({
   const nativeHistoryLoading = !nativeSnapshot && !nativeHistoryError;
   const nativeHistorySyncing =
     nativeSnapshotFromCache && !nativeStreamReady && !nativeHistoryError;
-  const slashMenu = useCodexSlashCommandMenu({
-    value: draft,
-    context: "session",
-    turnRunning,
-    onComplete: setComposerDraft,
-    onExecute: (command) => void executeSlashCommand(command, ""),
-  });
   const {
     scrollRef: conversationScrollRef,
     contentRef: conversationContentRef,
@@ -614,44 +560,6 @@ export function CodexConversation({
     scrollToBottom,
     following: followingLatest,
   } = useConversationAutoScroll({ resetKey: session.id });
-
-  const updateAgentThreadsUrl = useCallback(
-    (open: boolean, threadId?: string) => {
-      const url = new URL(window.location.href);
-      if (open) {
-        url.searchParams.set("agents", "1");
-        if (threadId) {
-          url.searchParams.set("agent", threadId);
-        } else {
-          url.searchParams.delete("agent");
-        }
-      } else {
-        url.searchParams.delete("agents");
-        url.searchParams.delete("agent");
-      }
-      window.history.replaceState(window.history.state, "", url);
-    },
-    [],
-  );
-
-  const openAgentThreads = useCallback(() => {
-    setAgentThreadsOpen(true);
-    updateAgentThreadsUrl(true, selectedAgentThreadId);
-  }, [selectedAgentThreadId, updateAgentThreadsUrl]);
-
-  const closeAgentThreads = useCallback(() => {
-    setAgentThreadsOpen(false);
-    setSelectedAgentThreadId(undefined);
-    updateAgentThreadsUrl(false);
-  }, [updateAgentThreadsUrl]);
-
-  const selectAgentThread = useCallback(
-    (threadId?: string) => {
-      setSelectedAgentThreadId(threadId);
-      updateAgentThreadsUrl(true, threadId);
-    },
-    [updateAgentThreadsUrl],
-  );
 
   useEffect(() => {
     sessionRef.current = session;
@@ -728,21 +636,10 @@ export function CodexConversation({
     setLocalImages([]);
     setAttachmentError("");
     setCommandNotice(null);
-    setPlanMode(false);
     setFastMode(false);
-    setMentionOpenRequest(0);
     setSending(false);
     setInterrupting(false);
     setForkingMessageId(null);
-    const agentThreadUrl = new URL(window.location.href);
-    const requestedAgentThread =
-      agentThreadUrl.searchParams.get("agent")?.trim() || undefined;
-    setSelectedAgentThreadId(requestedAgentThread);
-    setAgentThreadsOpen(
-      agentThreadUrl.searchParams.get("agents") === "1" ||
-        Boolean(requestedAgentThread),
-    );
-    setNativeDialog(undefined);
     setNativeSnapshot(cachedSnapshot ?? null);
     setNativeSnapshotFromCache(Boolean(cachedSnapshot));
     setLiveNotifications([]);
@@ -1333,400 +1230,11 @@ export function CodexConversation({
     });
   }
 
-  function setComposerDraft(value: string) {
-    setDraft(value);
-    window.requestAnimationFrame(() => {
-      const textarea = composerRef.current;
-      if (!textarea) return;
-      textarea.focus();
-      textarea.setSelectionRange(value.length, value.length);
-    });
-  }
-
-  function clearComposerDraft() {
-    setDraft("");
-    window.requestAnimationFrame(() => {
-      const textarea = composerRef.current;
-      if (!textarea) return;
-      textarea.focus();
-    });
-  }
-
-  function markNativeCommandRunning() {
-    const current = sessionRef.current;
-    const next: CodexSession = {
-      ...current,
-      status: "running",
-      unread: false,
-      completed: false,
-    };
-    sessionRef.current = next;
-    onSessionChange(next);
-  }
-
-  async function executeSlashCommand(
-    command: CodexSlashCommand,
-    argumentsValue: string,
-  ) {
-    if (command.unavailableWhileTurnRunning && turnRunning) {
-      setCommandNotice({
-        tone: "error",
-        message:
-          language === "zh-CN"
-            ? `请等待当前 Turn 完成后再运行 /${command.name}。`
-            : `Wait for the current Turn to finish before running /${command.name}.`,
-      });
-      return;
-    }
-    clearComposerDraft();
-    setCommandNotice(null);
-
-    if (command.intent === "session.new") {
-      onNewSession({
-        ...(argumentsValue ? { title: argumentsValue } : {}),
-        source: command.name === "clear" ? "clear" : "startup",
-      });
-      return;
-    }
-    if (command.intent === "composer.mention") {
-      setMentionOpenRequest((request) => request + 1);
-      return;
-    }
-    if (command.intent === "workspace.open") {
-      onOpenInspector("files");
-      return;
-    }
-    if (command.intent === "agents.open") {
-      openAgentThreads();
-      return;
-    }
-    if (command.intent === "environment.skills") {
-      onOpenEnvironmentSettings("skills");
-      return;
-    }
-    if (command.intent === "environment.mcp") {
-      if (argumentsValue && argumentsValue.toLowerCase() !== "verbose") {
-        setCommandNotice({
-          tone: "error",
-          message:
-            language === "zh-CN"
-              ? "/mcp 仅支持可选参数 verbose。"
-              : "/mcp only accepts the optional verbose argument.",
-        });
-        return;
-      }
-      onOpenEnvironmentSettings("mcp", {
-        mcpVerbose: argumentsValue.toLowerCase() === "verbose",
-      });
-      return;
-    }
-    if (command.intent === "environment.network") {
-      onOpenEnvironmentSettings("network");
-      return;
-    }
-    if (command.intent === "environment.credentials") {
-      onOpenEnvironmentSettings("credentials");
-      return;
-    }
-    if (
-      command.intent === "codex.personality" ||
-      command.intent === "codex.memories" ||
-      command.intent === "codex.hooks" ||
-      command.intent === "codex.processes"
-    ) {
-      setNativeDialog({
-        mode:
-          command.intent === "codex.personality"
-            ? "personality"
-            : command.intent === "codex.memories"
-              ? "memories"
-              : command.intent === "codex.hooks"
-                ? "hooks"
-                : "processes",
-      });
-      return;
-    }
-    if (command.intent === "codex.usage") {
-      const view = parseCodexTokenUsageView(argumentsValue);
-      if (!view) {
-        setCommandNotice({
-          tone: "error",
-          message:
-            language === "zh-CN"
-              ? "/usage 参数必须是 daily、weekly 或 cumulative。"
-              : "/usage expects daily, weekly, or cumulative.",
-        });
-        return;
-      }
-      setNativeDialog({ mode: "usage", usageView: view });
-      return;
-    }
-    if (
-      command.intent === "codex.goal" &&
-      (!argumentsValue || argumentsValue.toLowerCase() === "edit")
-    ) {
-      setNativeDialog({
-        mode: "goal",
-        editGoalImmediately: argumentsValue.toLowerCase() === "edit",
-      });
-      return;
-    }
-    if (command.intent === "session.rename" && !argumentsValue) {
-      setNativeDialog({ mode: "rename" });
-      return;
-    }
-    if (command.intent === "response.copy") {
-      const latest = [...visibleTimeline.entries]
-        .reverse()
-        .find(
-          (entry): entry is CodexMessageView =>
-            entry.kind === "message" &&
-            entry.role === "assistant" &&
-            Boolean(entry.content.trim()),
-        );
-      if (!latest) {
-        setCommandNotice({
-          tone: "error",
-          message:
-            language === "zh-CN"
-              ? "当前 Session 还没有可复制的助手回复。"
-              : "This Session has no assistant response to copy yet.",
-        });
-        return;
-      }
-      await copyMessage(latest);
-      setCommandNotice({
-        tone: "info",
-        message:
-          language === "zh-CN"
-            ? "已复制最近一条助手回复。"
-            : "Copied the latest assistant response.",
-      });
-      return;
-    }
-    if (command.intent === "composer.plan") {
-      setPlanMode(true);
-      if (argumentsValue) {
-        await submitMessage({
-          content: argumentsValue,
-          collaborationMode: "plan",
-          bypassSlash: true,
-          restoreDraft: `/plan ${argumentsValue}`,
-        });
-      } else {
-        setCommandNotice({
-          tone: "info",
-          message:
-            language === "zh-CN"
-              ? "计划模式已开启，将应用到后续消息。"
-              : "Plan mode is active for subsequent messages.",
-        });
-      }
-      return;
-    }
-    if (command.intent === "codex.init") {
-      await submitMessage({
-        content: CODEX_INIT_COMMAND_PROMPT,
-        bypassSlash: true,
-        restoreDraft: "/init",
-      });
-      return;
-    }
-
-    const originalDraft =
-      draft || `/${command.name}${argumentsValue ? ` ${argumentsValue}` : ""}`;
-    clearComposerDraft();
-    setSending(true);
-    setAttachmentError("");
-    try {
-      if (command.intent === "codex.goal") {
-        const action = argumentsValue.toLowerCase();
-        const clear = action === "clear";
-        const status =
-          action === "pause"
-            ? ("paused" as const)
-            : action === "resume"
-              ? ("active" as const)
-              : undefined;
-        const response = await apiFetch<ApiEnvelope<CodexGoalProjection>>(
-          `/api/v1/sessions/${encodeURIComponent(session.id)}/goal`,
-          clear
-            ? { method: "DELETE" }
-            : {
-                method: "PUT",
-                body: JSON.stringify(
-                  status ? { status } : { objective: argumentsValue },
-                ),
-              },
-        );
-        const goal = response.data.goal;
-        setCommandNotice({
-          tone: "info",
-          message: clear
-            ? language === "zh-CN"
-              ? "已清除 Codex 原生 Session 目标。"
-              : "Cleared the native Codex Session goal."
-            : goal
-              ? [
-                  language === "zh-CN" ? "目标" : "Goal",
-                  goal.status,
-                  goal.objective,
-                  goal.tokenBudget === null
-                    ? `${goal.tokensUsed} tokens`
-                    : `${goal.tokensUsed}/${goal.tokenBudget} tokens`,
-                ].join(" · ")
-              : language === "zh-CN"
-                ? "当前没有 Codex Session 目标。"
-                : "This Codex Session has no goal.",
-        });
-        return;
-      }
-      if (command.intent === "codex.stop") {
-        await apiFetch<ApiEnvelope<{ cleaned: boolean }>>(
-          `/api/v1/sessions/${encodeURIComponent(
-            session.id,
-          )}/background-terminals`,
-          { method: "DELETE" },
-        );
-        setCommandNotice({
-          tone: "info",
-          message:
-            language === "zh-CN"
-              ? "已停止并清理所有 Codex 后台终端。"
-              : "Stopped and cleaned all Codex background terminals.",
-        });
-        return;
-      }
-      if (command.intent === "session.fork") {
-        const response = await apiFetch<ApiEnvelope<CodexSession>>(
-          `/api/v1/sessions/${encodeURIComponent(session.id)}/fork`,
-          { method: "POST", body: JSON.stringify({}) },
-        );
-        onDerivedSessionCreated(response.data);
-        return;
-      }
-      if (command.intent === "codex.compact") {
-        await apiFetch<ApiEnvelope<{ accepted: boolean }>>(
-          `/api/v1/sessions/${encodeURIComponent(session.id)}/compact`,
-          { method: "POST", body: JSON.stringify({}) },
-        );
-        markNativeCommandRunning();
-        setCommandNotice({
-          tone: "info",
-          message:
-            language === "zh-CN"
-              ? "Codex 正在压缩当前 Session 上下文。"
-              : "Codex is compacting this Session context.",
-        });
-        return;
-      }
-      if (command.intent === "codex.review") {
-        await apiFetch<ApiEnvelope<{ nativeTurnId: string }>>(
-          `/api/v1/sessions/${encodeURIComponent(session.id)}/review`,
-          {
-            method: "POST",
-            body: JSON.stringify(
-              argumentsValue ? { instructions: argumentsValue } : {},
-            ),
-          },
-        );
-        markNativeCommandRunning();
-        setCommandNotice({
-          tone: "info",
-          message:
-            language === "zh-CN"
-              ? "Codex 原生代码审查已开始。"
-              : "The native Codex review has started.",
-        });
-        return;
-      }
-      if (command.intent === "session.rename") {
-        const response = await apiFetch<ApiEnvelope<CodexSession>>(
-          `/api/v1/sessions/${encodeURIComponent(session.id)}/metadata`,
-          {
-            method: "PUT",
-            body: JSON.stringify({ title: argumentsValue }),
-          },
-        );
-        onSessionChange(response.data);
-        setCommandNotice({
-          tone: "info",
-          message:
-            language === "zh-CN"
-              ? `Session 已重命名为“${response.data.title}”。`
-              : `Renamed the Session to “${response.data.title}”.`,
-        });
-        return;
-      }
-      if (command.intent === "session.archive") {
-        const response = await apiFetch<ApiEnvelope<CodexSession>>(
-          `/api/v1/sessions/${encodeURIComponent(session.id)}/metadata`,
-          {
-            method: "PUT",
-            body: JSON.stringify({ archived: true }),
-          },
-        );
-        onSessionChange(response.data);
-        onNewSession();
-      }
-    } catch (error) {
-      setComposerDraft(originalDraft);
-      setCommandNotice({
-        tone: "error",
-        message:
-          error instanceof Error
-            ? error.message
-            : language === "zh-CN"
-              ? `无法运行 /${command.name}。`
-              : `Could not run /${command.name}.`,
-      });
-    } finally {
-      setSending(false);
-    }
-  }
-
-  async function submitMessage(options: SubmitCodexMessageOptions = {}) {
-    if (!options.bypassSlash) {
-      const invocation = parseCodexSlashInvocation(draft, "session");
-      if (invocation.kind === "command") {
-        await executeSlashCommand(invocation.command, invocation.arguments);
-        return;
-      }
-      if (invocation.kind === "unknown") {
-        setCommandNotice({
-          tone: "error",
-          message:
-            language === "zh-CN"
-              ? `未知命令 /${invocation.name}。输入 / 查看可用命令。`
-              : `Unknown command /${invocation.name}. Type / to see available commands.`,
-        });
-        return;
-      }
-      if (invocation.kind === "unavailable") {
-        setCommandNotice({
-          tone: "error",
-          message:
-            language === "zh-CN"
-              ? `/${invocation.command.name} 不适用于当前输入框。`
-              : `/${invocation.command.name} is not available in this composer.`,
-        });
-        return;
-      }
-      if (invocation.kind === "missing-arguments") {
-        setCommandNotice({
-          tone: "error",
-          message:
-            language === "zh-CN"
-              ? `/${invocation.command.name} 需要${invocation.command.argumentHint?.[language] ?? "参数"}。`
-              : `/${invocation.command.name} requires ${invocation.command.argumentHint?.[language] ?? "an argument"}.`,
-        });
-        return;
-      }
-    }
-    const submittedDraft = options.restoreDraft ?? draft;
+  async function submitMessage() {
+    const submittedDraft = draft;
     const submittedImages = pastedImages;
     const submittedLocalImages = localImages;
-    const content = (options.content ?? draft).trim();
+    const content = draft.trim();
     if (
       !content &&
       submittedImages.length === 0 &&
@@ -1794,14 +1302,6 @@ export function CodexConversation({
                     : {}),
                   ...(selectedReasoningEffort
                     ? { reasoningEffort: selectedReasoningEffort }
-                    : {}),
-                  ...((options.collaborationMode ??
-                  (planMode ? "plan" : undefined))
-                    ? {
-                        collaborationMode:
-                          options.collaborationMode ??
-                          (planMode ? ("plan" as const) : undefined),
-                      }
                     : {}),
                   ...(fastMode && selectedModel.fastServiceTier
                     ? { serviceTier: selectedModel.fastServiceTier.id }
@@ -2480,10 +1980,6 @@ export function CodexConversation({
               <span>{ui.jumpToLatest}</span>
             </button>
           ) : null}
-          {/*
-            Slash commands, approvals, steering and other composer behavior are Codex-native.
-            Do not lift them into the shared dispatcher when additional harnesses are added.
-          */}
           <CodexComposer
             language={language}
             inputRef={composerRef}
@@ -2492,7 +1988,6 @@ export function CodexConversation({
               value: draft,
               onChange: (event) => {
                 setDraft(event.target.value);
-                slashMenu.show();
                 setCommandNotice(null);
               },
               onPaste: (event) => {
@@ -2504,7 +1999,6 @@ export function CodexConversation({
                 void addPastedImages(imageFiles);
               },
               onKeyDown: (event) => {
-                if (slashMenu.handleKeyDown(event)) return;
                 if (
                   shouldSubmitComposer(
                     {
@@ -2521,26 +2015,11 @@ export function CodexConversation({
                   void submitMessage();
                 }
               },
-              "aria-controls":
-                slashMenu.commands.length > 0 ? slashMenu.id : undefined,
-              "aria-activedescendant": slashMenu.activeCommand
-                ? `${slashMenu.id}-${slashMenu.activeCommand.name}`
-                : undefined,
               "aria-label": ui.messageAgent(environment.codingAgent.label),
               placeholder: turnRunning
                 ? ui.steerPlaceholder(environment.codingAgent.label)
                 : ui.askPlaceholder(environment.codingAgent.label),
             }}
-            slashCommandMenu={
-              <CodexSlashCommandMenu
-                id={slashMenu.id}
-                language={language}
-                commands={slashMenu.commands}
-                activeIndex={slashMenu.activeIndex}
-                onActiveIndexChange={slashMenu.setActiveIndex}
-                onSelect={slashMenu.select}
-              />
-            }
             images={pastedImages}
             onRemoveImage={(id) => {
               setPastedImages((current) =>
@@ -2557,23 +2036,6 @@ export function CodexConversation({
             }}
             attachmentError={attachmentError}
             notice={commandNotice}
-            mode={
-              planMode
-                ? {
-                    label: language === "zh-CN" ? "计划模式" : "Plan mode",
-                    description:
-                      language === "zh-CN"
-                        ? "后续消息使用 Codex 计划协作模式"
-                        : "Subsequent messages use Codex Plan collaboration mode",
-                    exitLabel:
-                      language === "zh-CN" ? "退出计划模式" : "Exit Plan mode",
-                    onExit: () => {
-                      setPlanMode(false);
-                      setCommandNotice(null);
-                    },
-                  }
-                : null
-            }
             toolbar={{
               environmentId: environment.id,
               agentLabel: environment.codingAgent.label,
@@ -2597,7 +2059,6 @@ export function CodexConversation({
                 setFastMode(enabled);
                 setCommandNotice(null);
               },
-              mentionOpenRequest,
               contextUsedPercent,
               status: {
                 state: nativeHistoryError
@@ -2679,38 +2140,6 @@ export function CodexConversation({
           </p>
         </div>
       </section>
-      {nativeDialog ? (
-        <CodexNativeCommandDialog
-          mode={nativeDialog.mode}
-          language={language}
-          environmentId={environment.id}
-          session={session}
-          initialUsageView={nativeDialog.usageView}
-          editGoalImmediately={nativeDialog.editGoalImmediately}
-          onSessionChange={onSessionChange}
-          onClose={() => setNativeDialog(undefined)}
-        />
-      ) : null}
-      {agentThreadsOpen ? (
-        <CodexAgentThreadsDialog
-          language={language}
-          timeZone={timeZone}
-          sessionId={session.id}
-          sessionTitle={session.title}
-          harnessLabel={session.harnessLabel}
-          selectedThreadId={selectedAgentThreadId}
-          onSelectedThreadChange={selectAgentThread}
-          onOpenWorkspacePath={(path) => {
-            closeAgentThreads();
-            onOpenWorkspacePath(path);
-          }}
-          onOpenFiles={(path) => {
-            closeAgentThreads();
-            openChangedFile(path);
-          }}
-          onClose={closeAgentThreads}
-        />
-      ) : null}
       {inspectorOpen ||
       mountedInspectorEnvironmentId === environment.id ? (
         <Inspector

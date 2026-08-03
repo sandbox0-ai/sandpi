@@ -97,7 +97,7 @@ Environment。如果多个 Session 本来就应该共享文件、工具和执行
 - 支持在工具运行期间向同一个 Codex Turn 追加消息，并保留原生消息顺序
 - Sandbox/Codex 进程自恢复，以及有上限的可见 continuation
 - 在输入框实时显示原生上下文窗口和 Sandbox CPU/内存使用率
-- Codex tools、Skills、MCP 配置、审批和已支持的 slash-command 界面
+- Codex tools、Skills、MCP 配置、审批，以及浏览器原生的 Session 和 Workspace 操作
 - 持久化多 Environment、多 Session Web UI；Session 列表保持紧凑并支持渐进分页，
   默认显示所有运行中的 Session，同时提供独立于归档语义、并会在新 Turn 开始时
   自动恢复为未完成的完成状态

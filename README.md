@@ -105,8 +105,8 @@ coding-agent configuration into a new or existing Sandpi Environment. See
 - Same-Turn Codex steering while tools are running, with native message ordering
 - Sandbox/Codex process self-recovery with a bounded visible continuation
 - Live native context-window and Sandbox CPU/memory usage in the composer
-- Codex tools, Skills, MCP configuration, approvals and supported slash-command
-  surfaces
+- Codex tools, Skills, MCP configuration, approvals and browser-native Session
+  and Workspace controls
 - Persistent multi-Environment and multi-Session Web UI with compact,
   progressively paginated Session lists that keep every running Session
   visible, and completion state distinct from archival that automatically

@@ -70,7 +70,6 @@ interface CodexComposerToolbarProps {
   fastEnabled: boolean;
   fastDisabled: boolean;
   onFastEnabledChange: (enabled: boolean) => void;
-  mentionOpenRequest?: number;
   contextUsedPercent?: number | null;
   status: CodexComposerStatus;
   action: ReactNode;
@@ -86,7 +85,6 @@ interface CodexComposerProps {
   > & {
     value: string;
   };
-  slashCommandMenu: ReactNode;
   images: readonly CodexComposerImage[];
   onRemoveImage: (id: string) => void;
   localImages: CodexComposerLocalImage[];
@@ -95,12 +93,6 @@ interface CodexComposerProps {
   notice?: {
     tone: "info" | "error";
     message: string;
-  } | null;
-  mode?: {
-    label: string;
-    description: string;
-    exitLabel: string;
-    onExit: () => void;
   } | null;
   toolbar: Omit<CodexComposerToolbarProps, "language" | "localImages">;
 }
@@ -410,14 +402,12 @@ export function CodexComposer({
   language,
   inputRef,
   inputProps,
-  slashCommandMenu,
   images,
   onRemoveImage,
   localImages,
   onRemoveLocalImage,
   attachmentError,
   notice,
-  mode,
   toolbar,
 }: CodexComposerProps) {
   const copy = composerCopy[language];
@@ -428,7 +418,6 @@ export function CodexComposer({
 
   return (
     <div className={`composer-shell${className ? ` ${className}` : ""}`}>
-      {slashCommandMenu}
       {images.length > 0 ? (
         <div className="composer-image-previews" aria-label={copy.attachedImages}>
           {images.map((image) => (
@@ -464,22 +453,6 @@ export function CodexComposer({
           role={notice.tone === "error" ? "alert" : "status"}
         >
           <span>{notice.message}</span>
-        </div>
-      ) : null}
-      {mode ? (
-        <div className="codex-composer-mode" role="status">
-          <span>
-            <strong>{mode.label}</strong>
-            {" · "}
-            {mode.description}
-          </span>
-          <button
-            type="button"
-            aria-label={mode.exitLabel}
-            onClick={mode.onExit}
-          >
-            <X size={12} aria-hidden="true" />
-          </button>
         </div>
       ) : null}
       <CodexComposerLocalImages
@@ -523,7 +496,6 @@ function CodexComposerToolbar({
   fastEnabled,
   fastDisabled,
   onFastEnabledChange,
-  mentionOpenRequest,
   contextUsedPercent,
   status,
   action,
@@ -550,15 +522,6 @@ function CodexComposerToolbar({
     setMentionResults([]);
     setMentionState("idle");
   }, [environmentId]);
-
-  useEffect(() => {
-    if (!mentionOpenRequest) return;
-    setMentionOpen(true);
-    setMentionQuery("");
-    setMentionResults([]);
-    setMentionState("idle");
-    onAttachmentError("");
-  }, [mentionOpenRequest, onAttachmentError]);
 
   useEffect(() => {
     if (!mentionOpen) return;

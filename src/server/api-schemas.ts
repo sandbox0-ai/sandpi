@@ -232,27 +232,11 @@ export const environmentProvisioningSchema = z.object({
   desiredState: z.literal("ready"),
 });
 
-export const codexPersonalitySelectionSchema = z.object({
-  personality: z.enum(["friendly", "pragmatic"]),
-});
-
 export const codexMemoriesSettingsSchema = z.object({
   featureEnabled: z.boolean(),
   useMemories: z.boolean(),
   generateMemories: z.boolean(),
 });
-
-export const codexHookUpdateSchema = z
-  .object({
-    key: z.string().trim().min(1).max(8_192),
-    enabled: z.boolean().optional(),
-    trustedHash: z.string().trim().min(1).max(512).optional(),
-  })
-  .refine(
-    (value) => value.enabled !== undefined || value.trustedHash !== undefined,
-    { message: "A hook update is required." },
-  )
-  .describe("At least one of enabled or trustedHash is required.");
 
 export const codexSkillConfigurationSchema = z.object({
   path: z.string().trim().min(1).max(4_096),
@@ -402,7 +386,6 @@ export const sessionCreateSchema = z
     reasoningEffort: codexReasoningEffortSchema.optional(),
     collaborationMode: z.literal("plan").optional(),
     serviceTier: z.string().trim().min(1).max(100).optional(),
-    sessionStartSource: z.enum(["startup", "clear"]).optional(),
     images: codexInputImagesSchema,
     localImages: codexLocalImagesSchema,
   })
@@ -466,23 +449,6 @@ export const turnSteerSchema = z
 export const turnInterruptSchema = z.object({
   turnId: z.string().trim().min(1).max(200).optional(),
 });
-
-export const sessionReviewSchema = z
-  .object({
-    instructions: z.string().trim().min(1).max(100_000).optional(),
-  })
-  .default({});
-
-export const sessionGoalUpdateSchema = z
-  .object({
-    objective: z.string().trim().min(1).max(10_000).optional(),
-    status: z.enum(["active", "paused"]).optional(),
-  })
-  .refine(
-    (value) => value.objective !== undefined || value.status !== undefined,
-    { message: "A goal update is required." },
-  )
-  .describe("At least one of objective or status is required.");
 
 export const sessionForkSchema = z
   .object({ title: z.string().trim().min(1).max(200).optional() })

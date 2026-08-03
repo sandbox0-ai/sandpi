@@ -29,7 +29,6 @@ test("projects the native Codex model/list result without sharing a cross-harnes
             },
           ],
           additionalSpeedTiers: ["fast"],
-          supportsPersonality: true,
           serviceTiers: [
             {
               id: "native-priority",
@@ -61,7 +60,6 @@ test("projects the native Codex model/list result without sharing a cross-harnes
             description: "Deeper reasoning for complex tasks",
           },
         ],
-        supportsPersonality: true,
         fastServiceTier: {
           id: "native-priority",
           name: "Fast",
@@ -94,7 +92,6 @@ test("keeps a future model-defined effort without requiring a Sandpi enum", () =
         supportedReasoningEfforts: [
           { id: "focused", description: "Focused" },
         ],
-        supportsPersonality: false,
       },
     ],
   );
@@ -135,7 +132,6 @@ test("stably deduplicates the live Codex catalog by native model id", () => {
         supportedReasoningEfforts: [
           { id: "medium", description: "Medium" },
         ],
-        supportsPersonality: false,
       },
       {
         id: "native-next",
@@ -143,7 +139,6 @@ test("stably deduplicates the live Codex catalog by native model id", () => {
         isDefault: false,
         defaultReasoningEffort: "",
         supportedReasoningEfforts: [],
-        supportsPersonality: false,
       },
     ],
   );

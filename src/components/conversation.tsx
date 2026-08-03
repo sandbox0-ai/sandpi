@@ -28,10 +28,7 @@ interface ConversationProps {
   onInspectorTabChange: (tab: InspectorTab) => void;
   onInspectorWidthRatioChange: (ratio: number, persist: boolean) => void;
   onToggleTerminal: () => void;
-  onNewSession: (options?: {
-    title?: string;
-    source?: "startup" | "clear";
-  }) => void;
+  onNewSession: () => void;
   onOpenEnvironmentSettings: (
     tab: EnvironmentSettingsTab,
     options?: EnvironmentSettingsOpenOptions,
@@ -49,7 +46,7 @@ interface ConversationProps {
 
 /**
  * Thin harness dispatcher. It selects a complete harness-owned conversation experience and
- * intentionally exposes no shared message, tool, approval, slash-command or composer contract.
+ * intentionally exposes no shared message, tool, approval or composer contract.
  */
 export function Conversation(props: ConversationProps) {
   if (isCodexSession(props.session)) {

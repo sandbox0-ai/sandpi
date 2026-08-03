@@ -10,7 +10,6 @@ import {
 } from "@/harnesses/codex/inline-review";
 import {
   CODEX_SESSION_NOTIFICATION_METHODS,
-  type CodexAgentThreads,
   type CodexEventEnvelope,
   type CodexNativeSnapshot,
   type CodexServerNotification,
@@ -43,16 +42,7 @@ import type {
 } from "@/harnesses/codex/environment-tools";
 import {
   codexMemoriesFeatureToggleSettings,
-  type CodexBackgroundTerminal,
-  type CodexBackgroundTerminals,
-  type CodexHook,
-  type CodexHookIssue,
-  type CodexHooksInventory,
   type CodexMemoriesSettings,
-  type CodexPersonality,
-  type CodexPersonalitySelection,
-  type CodexPersonalitySettings,
-  type CodexTokenUsage,
 } from "@/harnesses/codex/native-capabilities";
 import type { Environment } from "@/lib/types";
 import { toUnixTimestamp } from "@/lib/time";
@@ -141,30 +131,9 @@ const CODEX_APPLY_PATCH_STREAMING_CONFIG =
   "features.apply_patch_streaming_events";
 const CODEX_REQUEST_USER_INPUT_CONFIG =
   "tools.experimental_request_user_input.enabled";
-const CODEX_AGENT_THREAD_PAGE_LIMIT = 100;
-const MAX_CODEX_AGENT_THREADS = 1_000;
 const CODEX_THREAD_CREATION_PAGE_LIMIT = 100;
 const MAX_CODEX_THREAD_CREATION_LOOKUP = 1_000;
 const CODEX_THREAD_CREATION_SOURCE_PREFIX = "sandpi-session:";
-const CODEX_BACKGROUND_TERMINAL_PAGE_LIMIT = 100;
-const MAX_CODEX_BACKGROUND_TERMINALS = 1_000;
-const CODEX_PERSONALITIES = new Set<CodexPersonality>([
-  "friendly",
-  "pragmatic",
-  "none",
-]);
-const CODEX_PERSONALITY_SELECTIONS = new Set<CodexPersonalitySelection>([
-  "friendly",
-  "pragmatic",
-]);
-const CODEX_GOAL_STATUSES = new Set([
-  "active",
-  "paused",
-  "blocked",
-  "usageLimited",
-  "budgetLimited",
-  "complete",
-]);
 const CODEX_ACCOUNT_PLAN_TYPES = new Set<CodexAccountPlanType>([
   "free",
   "go",
@@ -339,7 +308,6 @@ interface CreateSessionInput {
   reasoningEffort?: string;
   collaborationMode?: "plan";
   serviceTier?: string;
-  sessionStartSource?: "startup" | "clear";
   idempotencyKey?: string;
 }
 
@@ -629,7 +597,6 @@ export class CodexService {
       reasoningEffort?: string;
       collaborationMode?: "plan";
       serviceTier?: string;
-      sessionStartSource?: "startup" | "clear";
     },
     sessionId: string,
     environmentRuntime: StoredEnvironmentRuntime,
@@ -655,15 +622,12 @@ export class CodexService {
       method: "thread/start",
       id: rpcId("thread-start", sessionId),
       params: {
-        ...threadConfiguration(
-          {
-            modelId: input.modelId,
-            reasoningEffort: input.reasoningEffort,
-            collaborationMode: input.collaborationMode,
-            serviceTier: input.serviceTier,
-          },
-          input.sessionStartSource,
-        ),
+        ...threadConfiguration({
+          modelId: input.modelId,
+          reasoningEffort: input.reasoningEffort,
+          collaborationMode: input.collaborationMode,
+          serviceTier: input.serviceTier,
+        }),
         threadSource,
       },
     };
@@ -759,289 +723,6 @@ export class CodexService {
     });
   }
 
-  /**
-   * Manual compaction is a native Codex operation on the existing Thread.
-   * Progress remains authoritative in the regular Turn/item event stream.
-   */
-  async compactSession(input: { userId: string; sessionId: string }) {
-    const response = await this.requestNativeSessionRpc({
-      ...input,
-      method: "thread/compact/start",
-      requestKind: "thread-compact",
-      requireIdleOperation: "compact",
-    });
-    if (response.error) {
-      throw new HttpError(
-        502,
-        "codex_compact_failed",
-        rpcErrorMessage(response.error),
-      );
-    }
-    return { accepted: true };
-  }
-
-  /**
-   * Reviews run inline on the current native Thread, so Sandpi keeps one
-   * product Session and receives the review as an ordinary native Turn.
-   */
-  async startReview(input: {
-    userId: string;
-    sessionId: string;
-    instructions?: string;
-  }) {
-    const response = await this.requestNativeSessionRpc({
-      userId: input.userId,
-      sessionId: input.sessionId,
-      method: "review/start",
-      requestKind: "review-start",
-      requireIdleOperation: "review",
-      params: {
-        delivery: "inline",
-        target: input.instructions
-          ? { type: "custom", instructions: input.instructions }
-          : { type: "uncommittedChanges" },
-      },
-    });
-    if (response.error) {
-      throw new HttpError(
-        502,
-        "codex_review_failed",
-        rpcErrorMessage(response.error),
-      );
-    }
-    const nativeTurnId = turnIdFromRpcResponse(response);
-    if (!nativeTurnId) {
-      throw new HttpError(
-        502,
-        "codex_review_failed",
-        "Codex did not return the native review Turn.",
-      );
-    }
-    return { nativeTurnId };
-  }
-
-  async readSessionGoal(input: { userId: string; sessionId: string }) {
-    const response = await this.requestNativeSessionRpc({
-      ...input,
-      method: "thread/goal/get",
-      requestKind: "thread-goal-get",
-    });
-    if (response.error) {
-      throw new HttpError(
-        502,
-        "codex_goal_read_failed",
-        rpcErrorMessage(response.error),
-      );
-    }
-    return nativeThreadGoal(response);
-  }
-
-  async setSessionGoal(input: {
-    userId: string;
-    sessionId: string;
-    objective?: string;
-    status?: string;
-  }) {
-    if (input.objective === undefined && input.status === undefined) {
-      throw new HttpError(
-        400,
-        "codex_goal_update_required",
-        "A Codex goal objective or status update is required.",
-      );
-    }
-    if (
-      input.status !== undefined &&
-      !CODEX_GOAL_STATUSES.has(input.status)
-    ) {
-      throw new HttpError(
-        400,
-        "codex_goal_status_invalid",
-        "The requested Codex goal status is invalid.",
-      );
-    }
-    const response = await this.requestNativeSessionRpc({
-      userId: input.userId,
-      sessionId: input.sessionId,
-      method: "thread/goal/set",
-      requestKind: "thread-goal-set",
-      params: {
-        ...(input.objective !== undefined
-          ? { objective: input.objective }
-          : {}),
-        ...(input.status !== undefined ? { status: input.status } : {}),
-      },
-    });
-    if (response.error) {
-      throw new HttpError(
-        502,
-        "codex_goal_update_failed",
-        rpcErrorMessage(response.error),
-      );
-    }
-    return nativeThreadGoal(response);
-  }
-
-  async clearSessionGoal(input: { userId: string; sessionId: string }) {
-    const response = await this.requestNativeSessionRpc({
-      ...input,
-      method: "thread/goal/clear",
-      requestKind: "thread-goal-clear",
-    });
-    if (response.error) {
-      throw new HttpError(
-        502,
-        "codex_goal_clear_failed",
-        rpcErrorMessage(response.error),
-      );
-    }
-    return { goal: null };
-  }
-
-  async readSessionPersonality(input: {
-    userId: string;
-    sessionId: string;
-  }): Promise<CodexPersonalitySettings> {
-    const sessionRuntime = await this.requireNativeSessionRuntime(
-      input.userId,
-      input.sessionId,
-    );
-    const runtime = await this.environmentRuntimeForSession(
-      input.userId,
-      input.sessionId,
-    );
-    const [config, models] = await Promise.all([
-      this.readEnvironmentCodexConfig(sessionRuntime.environmentId, runtime),
-      this.listModelsFromRuntime(
-        sessionRuntime.environmentId,
-        runtime,
-        input.sessionId,
-        input.sessionId,
-      ),
-    ]);
-    return {
-      personality: codexPersonality(config.config.personality),
-      supported: modelSupportsPersonality(
-        models.data,
-        sessionRuntime.modelId,
-      ),
-    };
-  }
-
-  async readEnvironmentPersonality(
-    userId: string,
-    environmentId: string,
-  ): Promise<CodexPersonalitySettings> {
-    const runtime = await this.environmentRuntimeForEnvironment(
-      userId,
-      environmentId,
-    );
-    const config = await this.readEnvironmentCodexConfig(
-      environmentId,
-      runtime,
-    );
-    return {
-      personality: codexPersonality(config.config.personality),
-      supported: true,
-    };
-  }
-
-  async setSessionPersonality(input: {
-    userId: string;
-    sessionId: string;
-    personality: CodexPersonalitySelection;
-  }): Promise<CodexPersonalitySettings> {
-    requireCodexPersonality(input.personality);
-    const sessionRuntime = await this.requireNativeSessionRuntime(
-      input.userId,
-      input.sessionId,
-    );
-    const runtime = await this.environmentRuntimeForSession(
-      input.userId,
-      input.sessionId,
-    );
-    const models = await this.listModelsFromRuntime(
-      sessionRuntime.environmentId,
-      runtime,
-      input.sessionId,
-      input.sessionId,
-    );
-    if (!modelSupportsPersonality(models.data, sessionRuntime.modelId)) {
-      throw new HttpError(
-        409,
-        "codex_personality_unsupported",
-        "The current Codex model does not support personalities.",
-      );
-    }
-    await this.writeCodexConfigValue(sessionRuntime.environmentId, runtime, {
-      keyPath: "personality",
-      value: input.personality,
-    });
-    const effectiveConfig = await this.readEnvironmentCodexConfig(
-      sessionRuntime.environmentId,
-      runtime,
-    );
-    const personality = codexPersonality(effectiveConfig.config.personality);
-    const response = await this.requestNativeSessionRpc({
-      userId: input.userId,
-      sessionId: input.sessionId,
-      method: "thread/settings/update",
-      requestKind: "thread-personality-update",
-      params: { personality },
-    });
-    if (response.error) {
-      throw new HttpError(
-        502,
-        "codex_personality_update_failed",
-        rpcErrorMessage(response.error),
-      );
-    }
-    return { personality, supported: true };
-  }
-
-  async setEnvironmentPersonality(input: {
-    userId: string;
-    environmentId: string;
-    personality: CodexPersonalitySelection;
-  }): Promise<CodexPersonalitySettings> {
-    requireCodexPersonality(input.personality);
-    const runtime = await this.environmentRuntimeForEnvironment(
-      input.userId,
-      input.environmentId,
-    );
-    await this.writeCodexConfigValue(input.environmentId, runtime, {
-      keyPath: "personality",
-      value: input.personality,
-    });
-    const config = await this.readEnvironmentCodexConfig(
-      input.environmentId,
-      runtime,
-    );
-    return {
-      personality: codexPersonality(config.config.personality),
-      supported: true,
-    };
-  }
-
-  async accountTokenUsageForEnvironment(
-    userId: string,
-    environmentId: string,
-  ): Promise<CodexTokenUsage> {
-    const runtime = await this.environmentRuntimeForEnvironment(
-      userId,
-      environmentId,
-    );
-    const response = await this.requestCodex(environmentId, runtime, {
-      method: "account/usage/read",
-      id: rpcId("account-token-usage", environmentId),
-    });
-    const result = requireSafeRpcResult(
-      response,
-      "codex_account_usage_read_failed",
-      "Codex could not read account token activity.",
-    );
-    return codexTokenUsage(result);
-  }
-
   async readEnvironmentMemories(
     userId: string,
     environmentId: string,
@@ -1073,58 +754,6 @@ export class CodexService {
     );
   }
 
-  async readSessionMemories(input: {
-    userId: string;
-    sessionId: string;
-  }): Promise<CodexMemoriesSettings> {
-    const session = await this.requireNativeSessionRuntime(
-      input.userId,
-      input.sessionId,
-    );
-    return this.readEnvironmentMemories(input.userId, session.environmentId);
-  }
-
-  async setSessionMemories(input: {
-    userId: string;
-    sessionId: string;
-    settings: CodexMemoriesSettings;
-  }): Promise<CodexMemoriesSettings> {
-    const session = await this.requireNativeSessionRuntime(
-      input.userId,
-      input.sessionId,
-    );
-    const runtime = await this.environmentRuntimeForSession(
-      input.userId,
-      input.sessionId,
-    );
-    const settings = await this.writeEnvironmentMemorySettings(
-      session.environmentId,
-      runtime,
-      input.settings,
-    );
-    const response = await this.requestNativeSessionRpc({
-      userId: input.userId,
-      sessionId: input.sessionId,
-      method: "thread/memoryMode/set",
-      requestKind: "thread-memory-mode-set",
-      params: {
-        mode:
-          settings.featureEnabled &&
-          settings.generateMemories
-            ? "enabled"
-            : "disabled",
-      },
-    });
-    if (response.error) {
-      throw new HttpError(
-        502,
-        "codex_memory_mode_update_failed",
-        rpcErrorMessage(response.error),
-      );
-    }
-    return settings;
-  }
-
   async resetEnvironmentMemories(userId: string, environmentId: string) {
     const runtime = await this.environmentRuntimeForEnvironment(
       userId,
@@ -1140,159 +769,6 @@ export class CodexService {
       "Codex could not reset Environment memories.",
     );
     return { reset: true };
-  }
-
-  async listEnvironmentHooks(
-    userId: string,
-    environmentId: string,
-  ): Promise<CodexHooksInventory> {
-    const runtime = await this.environmentRuntimeForEnvironment(
-      userId,
-      environmentId,
-    );
-    return this.readEnvironmentHooks(environmentId, runtime);
-  }
-
-  async updateEnvironmentHook(input: {
-    userId: string;
-    environmentId: string;
-    key: string;
-    enabled?: boolean;
-    trustedHash?: string;
-  }): Promise<CodexHooksInventory> {
-    const runtime = await this.environmentRuntimeForEnvironment(
-      input.userId,
-      input.environmentId,
-    );
-    const inventory = await this.readEnvironmentHooks(
-      input.environmentId,
-      runtime,
-    );
-    const hook = inventory.hooks.find((candidate) => candidate.key === input.key);
-    if (!hook) {
-      throw new HttpError(
-        404,
-        "codex_hook_not_found",
-        "The Codex hook is no longer available in this Environment.",
-      );
-    }
-    if (hook.isManaged) {
-      throw new HttpError(
-        409,
-        "codex_hook_managed",
-        "Managed Codex hooks cannot be changed by the user.",
-      );
-    }
-    if (
-      input.trustedHash !== undefined &&
-      input.trustedHash !== hook.currentHash
-    ) {
-      throw new HttpError(
-        409,
-        "codex_hook_definition_changed",
-        "The Codex hook changed before it could be trusted. Refresh and review it again.",
-      );
-    }
-    const state: Record<string, unknown> = {};
-    if (input.enabled !== undefined) state.enabled = input.enabled;
-    if (input.trustedHash !== undefined) {
-      state.trusted_hash = input.trustedHash;
-    }
-    const response = await this.requestCodex(input.environmentId, runtime, {
-      method: "config/batchWrite",
-      id: rpcId("hooks-config-write", input.environmentId),
-      params: {
-        edits: [
-          {
-            keyPath: "hooks.state",
-            value: { [hook.key]: state },
-            mergeStrategy: "upsert",
-          },
-        ],
-        reloadUserConfig: true,
-      },
-    });
-    requireEffectiveConfigWrite(
-      response,
-      "codex_hook_update_failed",
-      "Codex could not update the hook.",
-    );
-    return this.readEnvironmentHooks(input.environmentId, runtime);
-  }
-
-  async listSessionBackgroundTerminals(input: {
-    userId: string;
-    sessionId: string;
-  }): Promise<CodexBackgroundTerminals> {
-    const terminals: CodexBackgroundTerminal[] = [];
-    let cursor: string | undefined;
-    do {
-      const response = await this.requestNativeSessionRpc({
-        userId: input.userId,
-        sessionId: input.sessionId,
-        method: "thread/backgroundTerminals/list",
-        requestKind: "background-terminals-list",
-        params: {
-          limit: CODEX_BACKGROUND_TERMINAL_PAGE_LIMIT,
-          ...(cursor ? { cursor } : {}),
-        },
-      });
-      const result = requireRpcResult(
-        response,
-        "codex_background_terminals_list_failed",
-        "Codex could not list background terminals.",
-      );
-      const page = codexBackgroundTerminalsPage(result);
-      terminals.push(...page.data);
-      if (terminals.length > MAX_CODEX_BACKGROUND_TERMINALS) {
-        throw new HttpError(
-          502,
-          "codex_background_terminals_list_failed",
-          "Codex returned too many background terminals.",
-        );
-      }
-      cursor = page.nextCursor;
-    } while (cursor);
-    return { terminals };
-  }
-
-  async cleanSessionBackgroundTerminals(input: {
-    userId: string;
-    sessionId: string;
-  }) {
-    const response = await this.requestNativeSessionRpc({
-      ...input,
-      method: "thread/backgroundTerminals/clean",
-      requestKind: "background-terminals-clean",
-    });
-    if (response.error) {
-      throw new HttpError(
-        502,
-        "codex_background_terminals_clean_failed",
-        rpcErrorMessage(response.error),
-      );
-    }
-    return { cleaned: true };
-  }
-
-  async terminateSessionBackgroundTerminal(input: {
-    userId: string;
-    sessionId: string;
-    processId: string;
-  }) {
-    const response = await this.requestNativeSessionRpc({
-      userId: input.userId,
-      sessionId: input.sessionId,
-      method: "thread/backgroundTerminals/terminate",
-      requestKind: "background-terminal-terminate",
-      params: { processId: input.processId },
-    });
-    const result = requireRpcResult(
-      response,
-      "codex_background_terminal_terminate_failed",
-      "Codex could not terminate the background terminal.",
-    );
-    return { terminated: objectBoolean(result, "terminated") === true };
   }
 
   /**
@@ -2053,23 +1529,6 @@ export class CodexService {
     return codexMemoriesSettings(config.config);
   }
 
-  private async readEnvironmentHooks(
-    environmentId: string,
-    runtime: StoredEnvironmentRuntime,
-  ): Promise<CodexHooksInventory> {
-    const response = await this.requestCodex(environmentId, runtime, {
-      method: "hooks/list",
-      id: rpcId("hooks-list", environmentId),
-      params: { cwds: [CODEX_ENVIRONMENT_CWD] },
-    });
-    const result = requireRpcResult(
-      response,
-      "codex_hooks_list_failed",
-      "Codex could not list Environment hooks.",
-    );
-    return codexHooksInventory(result);
-  }
-
   private async writeCodexConfigValue(
     environmentId: string,
     runtime: StoredEnvironmentRuntime,
@@ -2481,102 +1940,6 @@ export class CodexService {
       sessionId,
       sessionId,
     );
-  }
-
-  /**
-   * Reads the native AgentControl tree directly from Codex. The relationship
-   * query is persisted by app-server, so completed descendants remain visible
-   * after either Sandpi or the Environment runtime restarts.
-   */
-  async listSessionAgentThreads(input: {
-    userId: string;
-    sessionId: string;
-  }): Promise<CodexAgentThreads> {
-    const sessionRuntime = await this.requireNativeSessionRuntime(
-      input.userId,
-      input.sessionId,
-    );
-    const environmentRuntime = await this.environmentRuntimeForSession(
-      input.userId,
-      input.sessionId,
-    );
-    return this.readNativeAgentTree(
-      environmentRuntime,
-      sessionRuntime,
-      input.sessionId,
-    );
-  }
-
-  /**
-   * Reads one root or descendant Thread without converting it into a Sandpi
-   * Session. The ancestor check prevents arbitrary same-Environment Thread
-   * reads while keeping Codex as the only transcript authority.
-   */
-  async readSessionAgentThread(input: {
-    userId: string;
-    sessionId: string;
-    nativeThreadId: string;
-  }) {
-    const sessionRuntime = await this.requireNativeSessionRuntime(
-      input.userId,
-      input.sessionId,
-    );
-    const environmentRuntime = await this.environmentRuntimeForSession(
-      input.userId,
-      input.sessionId,
-    );
-    const tree = await this.readNativeAgentTree(
-      environmentRuntime,
-      sessionRuntime,
-      input.sessionId,
-    );
-    if (
-      input.nativeThreadId !== tree.root.id &&
-      !tree.descendants.some((thread) => thread.id === input.nativeThreadId)
-    ) {
-      throw new HttpError(
-        404,
-        "codex_agent_thread_not_found",
-        "The requested Codex Agent Thread does not belong to this Session.",
-      );
-    }
-
-    const read = (includeTurns: boolean) =>
-      this.requestCodex(
-        sessionRuntime.environmentId,
-        environmentRuntime,
-        {
-          method: "thread/read",
-          id: rpcId("agent-thread-read", input.sessionId),
-          params: {
-            threadId: input.nativeThreadId,
-            includeTurns,
-          },
-        },
-        input.sessionId,
-      );
-    let response = await read(true);
-    if (
-      response.error &&
-      canFallbackFromAgentThreadHistoryError(response.error)
-    ) {
-      response = await read(false);
-    }
-    if (response.error) {
-      throw new HttpError(
-        502,
-        "codex_agent_thread_read_failed",
-        rpcErrorMessage(response.error),
-      );
-    }
-    const thread = threadFromRpcResponse(response);
-    if (!thread || thread.id !== input.nativeThreadId) {
-      throw invalidCodexResponse(
-        "codex_agent_thread_read_failed",
-        "Codex returned an invalid Agent Thread.",
-      );
-    }
-    return thread;
   }
 
   async listEnvironmentModels(userId: string, environmentId: string) {
@@ -4988,84 +4351,6 @@ export class CodexService {
     return thread;
   }
 
-  private async readNativeAgentTree(
-    environmentRuntime: StoredEnvironmentRuntime,
-    sessionRuntime: StoredSessionRuntime & { nativeSessionId: string },
-    ownerSessionId: string,
-  ): Promise<CodexAgentThreads> {
-    const rootResponse = await this.requestCodex(
-      sessionRuntime.environmentId,
-      environmentRuntime,
-      {
-        method: "thread/read",
-        id: rpcId("agent-root-read", ownerSessionId),
-        params: {
-          threadId: sessionRuntime.nativeSessionId,
-          includeTurns: false,
-        },
-      },
-      ownerSessionId,
-    );
-    if (rootResponse.error) {
-      throw nativeSessionUnavailable(rootResponse.error);
-    }
-    const root = threadFromRpcResponse(rootResponse);
-    if (!root || root.id !== sessionRuntime.nativeSessionId) {
-      throw invalidCodexResponse(
-        "codex_agent_threads_list_failed",
-        "Codex returned an invalid root Agent Thread.",
-      );
-    }
-
-    const descendants: CodexThread[] = [];
-    const cursors = new Set<string>();
-    let cursor: string | undefined;
-    do {
-      const response = await this.requestCodex(
-        sessionRuntime.environmentId,
-        environmentRuntime,
-        {
-          method: "thread/list",
-          id: rpcId("agent-thread-list", ownerSessionId),
-          params: {
-            ancestorThreadId: sessionRuntime.nativeSessionId,
-            limit: CODEX_AGENT_THREAD_PAGE_LIMIT,
-            ...(cursor ? { cursor } : {}),
-          },
-        },
-        ownerSessionId,
-      );
-      if (response.error) {
-        throw new HttpError(
-          502,
-          "codex_agent_threads_list_failed",
-          rpcErrorMessage(response.error),
-        );
-      }
-      const page = threadListPage(response.result);
-      descendants.push(...page.data);
-      if (descendants.length > MAX_CODEX_AGENT_THREADS) {
-        throw invalidCodexResponse(
-          "codex_agent_threads_list_failed",
-          "Codex returned too many Agent Threads.",
-        );
-      }
-      cursor = page.nextCursor;
-      if (cursor && cursors.has(cursor)) {
-        throw invalidCodexResponse(
-          "codex_agent_threads_list_failed",
-          "Codex returned a repeated Agent Thread cursor.",
-        );
-      }
-      if (cursor) cursors.add(cursor);
-    } while (cursor);
-
-    return {
-      root,
-      descendants: validateAgentThreadTree(root.id, descendants),
-    };
-  }
-
   /**
    * A native Thread is durable before app-server answers thread/start or
    * thread/fork. The Sandpi Session id is carried in ThreadSource so a lost
@@ -5847,7 +5132,7 @@ function threadConfiguration(input: {
   reasoningEffort?: string;
   collaborationMode?: "plan";
   serviceTier?: string;
-}, sessionStartSource?: "startup" | "clear") {
+}) {
   return {
     ...(input.modelId ? { model: input.modelId } : {}),
     config: {
@@ -5866,7 +5151,6 @@ function threadConfiguration(input: {
     cwd: CODEX_ENVIRONMENT_CWD,
     approvalPolicy: "never",
     sandbox: "danger-full-access",
-    ...(sessionStartSource ? { sessionStartSource } : {}),
   };
 }
 
@@ -5921,60 +5205,6 @@ function threadListPage(
   };
 }
 
-function validateAgentThreadTree(
-  rootThreadId: string,
-  descendants: CodexThread[],
-) {
-  const byId = new Map<string, CodexThread>();
-  for (const thread of descendants) {
-    if (thread.id === rootThreadId || byId.has(thread.id)) {
-      throw invalidCodexResponse(
-        "codex_agent_threads_list_failed",
-        "Codex returned a duplicate Agent Thread.",
-      );
-    }
-    if (!thread.parentThreadId) {
-      throw invalidCodexResponse(
-        "codex_agent_threads_list_failed",
-        "Codex returned an Agent Thread without its parent relation.",
-      );
-    }
-    byId.set(thread.id, thread);
-  }
-
-  const accepted = new Set([rootThreadId]);
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const thread of descendants) {
-      if (
-        !accepted.has(thread.id) &&
-        thread.parentThreadId &&
-        accepted.has(thread.parentThreadId)
-      ) {
-        accepted.add(thread.id);
-        changed = true;
-      }
-    }
-  }
-  if (accepted.size !== descendants.length + 1) {
-    throw invalidCodexResponse(
-      "codex_agent_threads_list_failed",
-      "Codex returned an Agent Thread outside the requested Session tree.",
-    );
-  }
-  return descendants;
-}
-
-function canFallbackFromAgentThreadHistoryError(error: unknown) {
-  const message = rpcErrorMessage(error).toLowerCase();
-  return (
-    message.includes("does not support thread/read(includeturns=true)") ||
-    message.includes("includeTurns is unavailable".toLowerCase()) ||
-    message.includes("ephemeral threads do not support includeturns")
-  );
-}
-
 function isUnmaterializedNativeThreadError(error: unknown) {
   const message = rpcErrorMessage(error).toLowerCase();
   return (
@@ -5989,31 +5219,6 @@ function turnIdFromRpcResponse(response: Record<string, unknown>) {
 
 function steeredTurnIdFromRpcResponse(response: Record<string, unknown>) {
   return objectString(objectRecord(response.result), "turnId");
-}
-
-function nativeThreadGoal(response: Record<string, unknown>) {
-  const result = objectRecord(response.result);
-  const goalValue = result?.goal;
-  if (goalValue === null || goalValue === undefined) return { goal: null };
-  const goal = objectRecord(goalValue);
-  const objective = objectString(goal, "objective");
-  const status = objectString(goal, "status");
-  if (!goal || !objective || !status) {
-    throw new HttpError(
-      502,
-      "codex_goal_invalid_response",
-      "Codex returned an invalid native Session goal.",
-    );
-  }
-  return {
-    goal: {
-      objective,
-      status,
-      tokenBudget: objectNumber(goal, "tokenBudget") ?? null,
-      tokensUsed: objectNumber(goal, "tokensUsed") ?? 0,
-      timeUsedSeconds: objectNumber(goal, "timeUsedSeconds") ?? 0,
-    },
-  };
 }
 
 function requireRpcResult(
@@ -6626,97 +5831,6 @@ function codexMcpAuthStatus(value: string | undefined): CodexMcpAuthStatus {
     : "unknown";
 }
 
-function requireCodexPersonality(
-  value: string,
-): asserts value is CodexPersonalitySelection {
-  if (!CODEX_PERSONALITY_SELECTIONS.has(value as CodexPersonalitySelection)) {
-    throw new HttpError(
-      400,
-      "codex_personality_invalid",
-      "Codex personality must be friendly or pragmatic.",
-    );
-  }
-}
-
-function codexPersonality(value: unknown): CodexPersonality {
-  // Codex TUI presents its absent config value as Friendly and offers only the
-  // Friendly and Pragmatic choices. Preserve that native command behavior.
-  if (value === undefined || value === null) return "friendly";
-  if (
-    typeof value === "string" &&
-    CODEX_PERSONALITIES.has(value as CodexPersonality)
-  ) {
-    return value as CodexPersonality;
-  }
-  throw invalidCodexResponse(
-    "codex_config_read_failed",
-    "Codex returned an unknown effective personality.",
-  );
-}
-
-function modelSupportsPersonality(
-  models: readonly unknown[],
-  modelId: string | undefined,
-) {
-  if (!modelId) return false;
-  const model = models
-    .map(objectRecord)
-    .find(
-      (candidate) =>
-        objectString(candidate, "id") === modelId ||
-        objectString(candidate, "model") === modelId,
-    );
-  return objectBoolean(model, "supportsPersonality") === true;
-}
-
-function codexTokenUsage(result: Record<string, unknown>): CodexTokenUsage {
-  const summary = objectRecord(result.summary);
-  if (!summary) {
-    throw invalidCodexResponse(
-      "codex_account_usage_read_failed",
-      "Codex returned an invalid account token-activity summary.",
-    );
-  }
-  const bucketsValue = result.dailyUsageBuckets;
-  if (
-    bucketsValue !== undefined &&
-    bucketsValue !== null &&
-    !Array.isArray(bucketsValue)
-  ) {
-    throw invalidCodexResponse(
-      "codex_account_usage_read_failed",
-      "Codex returned invalid account token-activity buckets.",
-    );
-  }
-  const dailyUsageBuckets = (Array.isArray(bucketsValue)
-    ? bucketsValue
-    : []
-  ).map((value) => {
-    const bucket = objectRecord(value);
-    const startDate = objectString(bucket, "startDate");
-    const tokens = boundedNonnegativeInteger(bucket?.tokens);
-    if (!startDate || tokens === undefined) {
-      throw invalidCodexResponse(
-        "codex_account_usage_read_failed",
-        "Codex returned an invalid account token-activity bucket.",
-      );
-    }
-    return { startDate, tokens };
-  });
-  return {
-    summary: {
-      lifetimeTokens: nullableNonnegativeInteger(summary.lifetimeTokens),
-      peakDailyTokens: nullableNonnegativeInteger(summary.peakDailyTokens),
-      longestRunningTurnSec: nullableNonnegativeInteger(
-        summary.longestRunningTurnSec,
-      ),
-      currentStreakDays: nullableNonnegativeInteger(summary.currentStreakDays),
-      longestStreakDays: nullableNonnegativeInteger(summary.longestStreakDays),
-    },
-    dailyUsageBuckets,
-  };
-}
-
 function codexMemoriesSettings(
   config: Record<string, unknown>,
 ): CodexMemoriesSettings {
@@ -6732,201 +5846,6 @@ function codexMemoriesSettings(
     generateMemories:
       objectBoolean(memories, "generate_memories") === true,
   };
-}
-
-function codexHooksInventory(
-  result: Record<string, unknown>,
-): CodexHooksInventory {
-  if (!Array.isArray(result.data)) {
-    throw invalidCodexResponse(
-      "codex_hooks_list_failed",
-      "Codex returned an invalid hooks inventory.",
-    );
-  }
-  const entry = result.data
-    .map(objectRecord)
-    .find((candidate) => objectString(candidate, "cwd") === CODEX_ENVIRONMENT_CWD);
-  if (!entry) {
-    return {
-      cwd: CODEX_ENVIRONMENT_CWD,
-      hooks: [],
-      warnings: [],
-      errors: [],
-    };
-  }
-  if (
-    !Array.isArray(entry.hooks) ||
-    !Array.isArray(entry.warnings) ||
-    !Array.isArray(entry.errors)
-  ) {
-    throw invalidCodexResponse(
-      "codex_hooks_list_failed",
-      "Codex returned an invalid hooks inventory entry.",
-    );
-  }
-  const hooks = entry.hooks.map(codexHook);
-  const warnings = entry.warnings.filter(
-    (value): value is string => typeof value === "string",
-  );
-  const errors = entry.errors.flatMap((value): CodexHookIssue[] => {
-    const issue = objectRecord(value);
-    const message = objectString(issue, "message");
-    if (!message) return [];
-    const issuePath = objectString(issue, "path");
-    return [{ ...(issuePath ? { path: issuePath } : {}), message }];
-  });
-  return {
-    cwd: CODEX_ENVIRONMENT_CWD,
-    hooks: hooks.sort(
-      (left, right) =>
-        left.displayOrder - right.displayOrder ||
-        left.eventName.localeCompare(right.eventName),
-    ),
-    warnings,
-    errors,
-  };
-}
-
-function codexHook(value: unknown): CodexHook {
-  const hook = objectRecord(value);
-  if (!hook) {
-    throw invalidCodexResponse(
-      "codex_hooks_list_failed",
-      "Codex returned an invalid hook.",
-    );
-  }
-  const key = objectString(hook, "key");
-  const eventName = objectString(hook, "eventName");
-  const handlerType = objectString(hook, "handlerType");
-  const source = objectString(hook, "source");
-  const currentHash = objectString(hook, "currentHash");
-  const trustStatus = objectString(hook, "trustStatus");
-  const displayOrder = boundedInteger(hook?.displayOrder);
-  const timeoutSec = boundedNonnegativeInteger(hook.timeoutSec);
-  const enabled = objectBoolean(hook, "enabled");
-  const isManaged = objectBoolean(hook, "isManaged");
-  const sourcePath = objectString(hook, "sourcePath");
-  if (
-    !key ||
-    !eventName ||
-    !handlerType ||
-    !source ||
-    !currentHash ||
-    !["managed", "untrusted", "trusted", "modified"].includes(
-      trustStatus ?? "",
-    ) ||
-    displayOrder === undefined ||
-    timeoutSec === undefined ||
-    enabled === undefined ||
-    isManaged === undefined ||
-    !sourcePath
-  ) {
-    throw invalidCodexResponse(
-      "codex_hooks_list_failed",
-      "Codex returned an invalid hook.",
-    );
-  }
-  return {
-    key,
-    eventName,
-    handlerType,
-    isManaged,
-    source,
-    displayOrder,
-    enabled,
-    currentHash,
-    trustStatus: trustStatus as CodexHook["trustStatus"],
-    matcher: objectString(hook, "matcher") ?? null,
-    command: objectString(hook, "command") ?? null,
-    timeoutSec,
-    statusMessage: objectString(hook, "statusMessage") ?? null,
-    sourcePath,
-    pluginId: objectString(hook, "pluginId") ?? null,
-  };
-}
-
-function codexBackgroundTerminalsPage(result: Record<string, unknown>) {
-  if (!Array.isArray(result.data)) {
-    throw invalidCodexResponse(
-      "codex_background_terminals_list_failed",
-      "Codex returned an invalid background-terminal list.",
-    );
-  }
-  const data = result.data.map((value): CodexBackgroundTerminal => {
-    const terminal = objectRecord(value);
-    const itemId = objectString(terminal, "itemId");
-    const processId = objectString(terminal, "processId");
-    const command = objectString(terminal, "command");
-    const cwd = objectString(terminal, "cwd");
-    if (!itemId || !processId || command === undefined || !cwd) {
-      throw invalidCodexResponse(
-        "codex_background_terminals_list_failed",
-        "Codex returned an invalid background terminal.",
-      );
-    }
-    return {
-      itemId,
-      processId,
-      command,
-      cwd,
-      osPid: nullableNonnegativeInteger(terminal?.osPid),
-      cpuPercent: nullableFiniteNumber(terminal?.cpuPercent),
-      rssKb: nullableNonnegativeInteger(terminal?.rssKb),
-    };
-  });
-  const nextCursor = result.nextCursor;
-  if (
-    nextCursor !== undefined &&
-    nextCursor !== null &&
-    typeof nextCursor !== "string"
-  ) {
-    throw invalidCodexResponse(
-      "codex_background_terminals_list_failed",
-      "Codex returned an invalid background-terminal cursor.",
-    );
-  }
-  return {
-    data,
-    nextCursor:
-      typeof nextCursor === "string" && nextCursor ? nextCursor : undefined,
-  };
-}
-
-function boundedNonnegativeInteger(value: unknown) {
-  return typeof value === "number" &&
-    Number.isSafeInteger(value) &&
-    value >= 0
-    ? value
-    : undefined;
-}
-
-function boundedInteger(value: unknown) {
-  return typeof value === "number" && Number.isSafeInteger(value)
-    ? value
-    : undefined;
-}
-
-function nullableNonnegativeInteger(value: unknown): number | null {
-  if (value === undefined || value === null) return null;
-  const parsed = boundedNonnegativeInteger(value);
-  if (parsed === undefined) {
-    throw invalidCodexResponse(
-      "codex_native_number_invalid",
-      "Codex returned an invalid numeric value.",
-    );
-  }
-  return parsed;
-}
-
-function nullableFiniteNumber(value: unknown): number | null {
-  if (value === undefined || value === null) return null;
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    throw invalidCodexResponse(
-      "codex_native_number_invalid",
-      "Codex returned an invalid numeric value.",
-    );
-  }
-  return value;
 }
 
 function modelListPage(result: unknown) {
@@ -7134,7 +6053,6 @@ function sessionCreationRequestFingerprint(input: CreateSessionInput) {
         input.reasoningEffort ?? null,
         input.collaborationMode ?? null,
         input.serviceTier ?? null,
-        input.sessionStartSource ?? null,
       ]),
     )
     .digest("hex");
