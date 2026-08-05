@@ -3,7 +3,11 @@ import test from "node:test";
 
 import type { Pool } from "pg";
 
-import { SandpiStore, type CodexControlTransition } from "./store";
+import {
+  NATIVE_SESSION_UNRECOVERABLE_ERROR,
+  SandpiStore,
+  type CodexControlTransition,
+} from "./store";
 
 interface QueryCall {
   sql: string;
@@ -659,7 +663,12 @@ test("native snapshot reconciliation uses a runtime-version compare-and-swap", a
     call.sql.includes("status IS DISTINCT FROM"),
   );
   assert.ok(statusUpdate);
-  assert.deepEqual(statusUpdate.values, ["session-one", "waiting", false]);
+  assert.deepEqual(statusUpdate.values, [
+    "session-one",
+    "waiting",
+    false,
+    false,
+  ]);
 });
 
 test("stale native snapshot reconciliation leaves Session state untouched", async () => {
@@ -754,7 +763,12 @@ test("background native reconciliation clears an idle stale Turn admission", asy
   const statusUpdate = fixture.calls.find((call) =>
     call.sql.includes("status IS DISTINCT FROM"),
   );
-  assert.deepEqual(statusUpdate?.values, ["session-one", "waiting", false]);
+  assert.deepEqual(statusUpdate?.values, [
+    "session-one",
+    "waiting",
+    false,
+    false,
+  ]);
 });
 
 test("background native reconciliation preserves pending state for an active Turn", async () => {
@@ -819,7 +833,12 @@ test("background native reconciliation preserves pending state for an active Tur
     call.sql.includes("status IS DISTINCT FROM"),
   );
   assert.match(statusUpdate?.sql ?? "", /completed = CASE/);
-  assert.deepEqual(statusUpdate?.values, ["session-one", "running", true]);
+  assert.deepEqual(statusUpdate?.values, [
+    "session-one",
+    "running",
+    true,
+    false,
+  ]);
 });
 
 test("terminal recovery reconciliation clears only recovery-owned error state", async () => {
@@ -875,6 +894,70 @@ test("terminal recovery reconciliation clears only recovery-owned error state", 
   assert.match(runtimeUpdate.sql, /recovery_attempt_count = 0/);
 });
 
+test("unrecoverable native reconciliation atomically releases control state", async () => {
+  const fixture = transactionalStore((sql) => {
+    if (sql.includes("SELECT environment_id")) {
+      return { rows: [{ environment_id: "environment-one" }], rowCount: 1 };
+    }
+    if (sql.includes("SELECT runtime.active_native_turn_id")) {
+      return {
+        rows: [
+          {
+            active_native_turn_id: "turn-stale",
+            pending_turn_request_id: "request-stale",
+            pending_turn_phase: "accepted",
+            pending_turn_started_at: new Date("2026-07-15T00:00:00.000Z"),
+          },
+        ],
+        rowCount: 1,
+      };
+    }
+    return { rows: [], rowCount: 1 };
+  });
+
+  assert.equal(
+    await fixture.store.reconcileNativeSessionState({
+      sessionId: "session-one",
+      nativeSessionId: "thread-one",
+      historyRevision: 7,
+      runtimeVersion: 11,
+      environmentId: "environment-one",
+      environmentSupervisorSessionId: "supervisor-one",
+      environmentAttemptId: "attempt-one",
+      environmentRuntimeGeneration: 3,
+      terminalErrorCode: NATIVE_SESSION_UNRECOVERABLE_ERROR,
+      requireUnarchived: true,
+    }),
+    true,
+  );
+
+  const runtimeUpdate = fixture.calls.find(
+    (call) =>
+      call.sql.includes("UPDATE session_runtime") &&
+      call.sql.includes("pending_turn_request_id = NULL"),
+  );
+  assert.ok(runtimeUpdate);
+  assert.deepEqual(runtimeUpdate.values, [
+    "session-one",
+    NATIVE_SESSION_UNRECOVERABLE_ERROR,
+    true,
+  ]);
+  assert.match(runtimeUpdate.sql, /active_native_turn_id = NULL/);
+  assert.match(runtimeUpdate.sql, /pending_turn_phase = NULL/);
+  assert.match(runtimeUpdate.sql, /runtime_error_code = CASE/);
+
+  const statusUpdate = fixture.calls.find((call) =>
+    call.sql.includes("status IS DISTINCT FROM"),
+  );
+  assert.deepEqual(statusUpdate?.values, [
+    "session-one",
+    "failed",
+    false,
+    true,
+  ]);
+  assert.match(statusUpdate?.sql ?? "", /unread = CASE/);
+});
+
 test("background native reconciliation cannot clear a fresh pending Turn", async () => {
   const fixture = transactionalStore((sql) => {
     if (sql.includes("SELECT environment_id")) {
@@ -924,7 +1007,12 @@ test("background native reconciliation cannot clear a fresh pending Turn", async
   const statusUpdate = fixture.calls.find((call) =>
     call.sql.includes("status IS DISTINCT FROM"),
   );
-  assert.deepEqual(statusUpdate?.values, ["session-one", "running", false]);
+  assert.deepEqual(statusUpdate?.values, [
+    "session-one",
+    "running",
+    false,
+    false,
+  ]);
 });
 
 test("background native reconciliation loses its CAS when the Session is archived", async () => {

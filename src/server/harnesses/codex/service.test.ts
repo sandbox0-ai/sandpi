@@ -12,6 +12,7 @@ import type { CodingSession, Environment } from "@/lib/types";
 import type { RuntimeAdapter } from "@/server/runtime/types";
 import { HttpError } from "@/server/http-error";
 import {
+  NATIVE_SESSION_UNRECOVERABLE_ERROR,
   WORKSPACE_RESTORE_UNAVAILABLE_SESSION_ERROR,
   type CodexControlTransition,
   type IdempotentResourceState,
@@ -311,6 +312,7 @@ function fixture(
     exceptionalSessionRetryBaseMs?: number;
     exceptionalSessionActiveRecheckMs?: number;
     exceptionalSessionRequestTimeoutMs?: number;
+    exceptionalSessionUnrecoverableMaxAttempts?: number;
     modelCatalogCacheTtlMs?: number;
     exceptionalCandidateErrors?: Error[];
     environmentRecoveryDelay?: Promise<void>;
@@ -980,6 +982,7 @@ function fixture(
       clearPendingStartedBefore?: Date;
       clearRecoveryState?: boolean;
       recoveryErrorCode?: string;
+      terminalErrorCode?: string;
       requireUnarchived?: boolean;
     }) {
       reconciledEnvironmentEpochs.push({
@@ -1017,7 +1020,8 @@ function fixture(
         pendingRecoveryEligible;
       const clearRecovery =
         options.clearRecoveryState === true && !options.activeNativeTurnId;
-      const clearControl = clearPending || clearRecovery;
+      const terminalFailure = options.terminalErrorCode !== undefined;
+      const clearControl = clearPending || clearRecovery || terminalFailure;
       const activeChanged =
         current.activeNativeTurnId !== options.activeNativeTurnId;
       sessionRuntimes.set(options.sessionId, {
@@ -1061,21 +1065,23 @@ function fixture(
           ? undefined
           : current.recoveryPromptVersion,
         recoveryAttemptCount: clearRecovery ? 0 : current.recoveryAttemptCount,
-        runtimeErrorCode: clearRecovery
-          ? options.recoveryErrorCode
+        runtimeErrorCode: clearRecovery || terminalFailure
+          ? options.terminalErrorCode ?? options.recoveryErrorCode
           : current.runtimeErrorCode,
-        sessionStatus:
-          options.activeNativeTurnId ||
-          (!clearControl && current.pendingTurnPhase)
+        sessionStatus: terminalFailure
+          ? "failed"
+          : options.activeNativeTurnId ||
+              (!clearControl && current.pendingTurnPhase)
             ? "running"
             : "waiting",
         version: current.version + (activeChanged || clearControl ? 1 : 0),
       });
       sessions.set(options.sessionId, {
         ...sessions.get(options.sessionId)!,
-        status:
-          options.activeNativeTurnId ||
-          (!clearControl && current.pendingTurnPhase)
+        status: terminalFailure
+          ? "failed"
+          : options.activeNativeTurnId ||
+              (!clearControl && current.pendingTurnPhase)
             ? "running"
             : "waiting",
       });
@@ -1613,6 +1619,8 @@ function fixture(
         input.exceptionalSessionActiveRecheckMs,
       exceptionalSessionRequestTimeoutMs:
         input.exceptionalSessionRequestTimeoutMs,
+      exceptionalSessionUnrecoverableMaxAttempts:
+        input.exceptionalSessionUnrecoverableMaxAttempts,
       modelCatalogCacheTtlMs: input.modelCatalogCacheTtlMs,
     },
   );
@@ -3664,6 +3672,82 @@ test("settles exceptional Session state on a native Thread system error", async 
         ),
       true,
     );
+  } finally {
+    await context.close();
+  }
+});
+
+test("terminalizes a repeatedly unreadable native Session", async () => {
+  let reads = 0;
+  const context = fixture({
+    sessions: [
+      {
+        id: "session-unrecoverable",
+        nativeSessionId: "thread-unrecoverable",
+        status: "running",
+        activeNativeTurnId: "turn-unrecoverable",
+        activeTurnAttemptId: "attempt-environment-test",
+        activeTurnRuntimeGeneration: 1,
+        pendingTurnPhase: "accepted",
+        pendingTurnNativeTurnId: "turn-unrecoverable",
+        pendingTurnAttemptId: "attempt-environment-test",
+        pendingTurnRuntimeGeneration: 1,
+      },
+    ],
+    exceptionalSessionRecoveryDelayMs: 0,
+    exceptionalSessionRetryBaseMs: 1,
+    exceptionalSessionUnrecoverableMaxAttempts: 3,
+    onRequest(message) {
+      if (message.method !== "thread/read") return undefined;
+      reads += 1;
+      return {
+        id: message.id,
+        error: {
+          code: -32603,
+          message: "failed to load native Thread history",
+        },
+      };
+    },
+  });
+  try {
+    await context.service.resumeWorkers();
+    await eventually(
+      () => context.sessions.get("session-unrecoverable")?.status === "failed",
+      "unrecoverable native Session did not become terminal",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    const runtime = context.sessionRuntimes.get("session-unrecoverable");
+    assert.equal(reads, 3);
+    assert.equal(runtime?.activeNativeTurnId, undefined);
+    assert.equal(runtime?.pendingTurnPhase, undefined);
+    assert.equal(
+      runtime?.runtimeErrorCode,
+      NATIVE_SESSION_UNRECOVERABLE_ERROR,
+    );
+    assert.equal(
+      context.service
+        .listLiveNotifications("session-unrecoverable")
+        .some(
+          (update) =>
+            update.kind === "invalidation" &&
+            update.reason === "native-session-unrecoverable" &&
+            update.unrecoverable === true,
+        ),
+      true,
+    );
+    await assert.rejects(
+      context.service.startTurn({
+        userId: "user",
+        sessionId: "session-unrecoverable",
+        text: "retry",
+        images: [],
+      }),
+      (error: unknown) =>
+        error instanceof HttpError &&
+        error.code === "codex_native_session_unrecoverable",
+    );
+    assert.equal(reads, 3);
   } finally {
     await context.close();
   }

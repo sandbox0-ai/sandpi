@@ -58,6 +58,7 @@ import {
   SANDPI_MANAGED_SKILL_ROOT,
 } from "@/server/runtime/types";
 import {
+  NATIVE_SESSION_UNRECOVERABLE_ERROR,
   SandpiStore,
   WORKSPACE_RESTORE_UNAVAILABLE_SESSION_ERROR,
   type CodexControlTransition,
@@ -100,6 +101,7 @@ const EXCEPTIONAL_SESSION_RETRY_BASE_MS = 1_000;
 const EXCEPTIONAL_SESSION_RETRY_MAX_MS = 30_000;
 const EXCEPTIONAL_SESSION_ACTIVE_RECHECK_MS = 30_000;
 const EXCEPTIONAL_SESSION_REQUEST_TIMEOUT_MS = 5_000;
+const EXCEPTIONAL_SESSION_UNRECOVERABLE_MAX_ATTEMPTS = 3;
 const AUTOMATIC_TURN_RECOVERY_MAX_ATTEMPTS = 1;
 const MAX_RPC_RESPONSES_PER_ENVIRONMENT = 512;
 const MAX_LIVE_NOTIFICATIONS_PER_SESSION = 1_000;
@@ -237,6 +239,7 @@ interface ExceptionalSessionReconciliation {
   retryAttempt: number;
   nextRetryAttempt: number;
   pendingTurnRequests: Map<string, string>;
+  unrecoverableAttempts: Map<string, number>;
   controller: AbortController;
 }
 
@@ -380,6 +383,7 @@ export class CodexService {
       exceptionalSessionRetryBaseMs?: number;
       exceptionalSessionActiveRecheckMs?: number;
       exceptionalSessionRequestTimeoutMs?: number;
+      exceptionalSessionUnrecoverableMaxAttempts?: number;
       modelCatalogCacheTtlMs?: number;
       runtimeQuotaGate?: RuntimeQuotaGate;
     } = {},
@@ -3060,6 +3064,7 @@ export class CodexService {
       delayMs?: number;
       pendingTurnRequests?: ReadonlyMap<string, string>;
       retryAttempt?: number;
+      unrecoverableAttempts?: ReadonlyMap<string, number>;
     } = {},
   ) {
     if (this.advisoryLockScope.getStore()) {
@@ -3097,6 +3102,9 @@ export class CodexService {
     for (const [sessionId, requestId] of options.pendingTurnRequests ?? []) {
       pendingTurnRequests.set(sessionId, requestId);
     }
+    const unrecoverableAttempts = new Map(
+      current?.unrecoverableAttempts ?? options.unrecoverableAttempts,
+    );
     current?.controller.abort();
     const reconciliation: ExceptionalSessionReconciliation = {
       epoch,
@@ -3105,6 +3113,7 @@ export class CodexService {
       retryAttempt: options.retryAttempt ?? 0,
       nextRetryAttempt: options.retryAttempt ?? 0,
       pendingTurnRequests,
+      unrecoverableAttempts,
       controller: new AbortController(),
     };
     reconciliation.task = this.reconcileExceptionalSessions(
@@ -3132,6 +3141,7 @@ export class CodexService {
               delayMs: reconciliation.rerunDelayMs,
               pendingTurnRequests: reconciliation.pendingTurnRequests,
               retryAttempt: reconciliation.nextRetryAttempt,
+              unrecoverableAttempts: reconciliation.unrecoverableAttempts,
             });
           }
         }
@@ -3167,6 +3177,11 @@ export class CodexService {
       );
       if (!candidate || candidate.pendingTurnRequestId !== requestId) {
         reconciliation.pendingTurnRequests.delete(sessionId);
+      }
+    }
+    for (const sessionId of reconciliation.unrecoverableAttempts.keys()) {
+      if (!sessions.some((session) => session.sessionId === sessionId)) {
+        reconciliation.unrecoverableAttempts.delete(sessionId);
       }
     }
     for (const session of sessions) {
@@ -3223,6 +3238,57 @@ export class CodexService {
         ) {
           return;
         }
+        if (isNativeSessionUnrecoverable(error)) {
+          const attempts =
+            (reconciliation.unrecoverableAttempts.get(session.sessionId) ??
+              0) + 1;
+          reconciliation.unrecoverableAttempts.set(
+            session.sessionId,
+            attempts,
+          );
+          const maxAttempts =
+            this.options.exceptionalSessionUnrecoverableMaxAttempts ??
+            EXCEPTIONAL_SESSION_UNRECOVERABLE_MAX_ATTEMPTS;
+          if (attempts >= maxAttempts) {
+            const terminal = await this.store.reconcileNativeSessionState({
+              sessionId: session.sessionId,
+              nativeSessionId,
+              historyRevision: session.historyRevision,
+              runtimeVersion: session.version,
+              environmentId: runtime.id,
+              environmentSupervisorSessionId: runtime.supervisorSessionId,
+              environmentAttemptId: runtime.attemptId,
+              environmentRuntimeGeneration: runtime.runtimeGeneration,
+              terminalErrorCode: NATIVE_SESSION_UNRECOVERABLE_ERROR,
+              requireUnarchived: true,
+            });
+            if (terminal) {
+              reconciliation.unrecoverableAttempts.delete(session.sessionId);
+              reconciliation.pendingTurnRequests.delete(session.sessionId);
+              this.publishInvalidation(
+                session.sessionId,
+                "native-session-unrecoverable",
+                {
+                  message:
+                    "The native Codex Session could not be read and was stopped.",
+                  unrecoverable: true,
+                },
+              );
+              this.logger.error(
+                {
+                  environmentId: runtime.id,
+                  sessionId: session.sessionId,
+                  attempts,
+                  error: errorMessage(error),
+                },
+                "Unrecoverable Codex Session stopped",
+              );
+              continue;
+            }
+          }
+        } else {
+          reconciliation.unrecoverableAttempts.delete(session.sessionId);
+        }
         this.requestExceptionalSessionRetry(reconciliation);
         this.logger.warn(
           {
@@ -3252,6 +3318,7 @@ export class CodexService {
     if (!submitted) return;
     const { response, runtime: latestRuntime } = submitted;
     if (response.error) throw nativeSessionUnavailable(response.error);
+    reconciliation.unrecoverableAttempts.delete(session.sessionId);
     const thread = threadFromRpcResponse(response);
     if (!thread || thread.id !== nativeSessionId) {
       throw new HttpError(
@@ -4153,6 +4220,13 @@ export class CodexService {
         409,
         "codex_session_unavailable_after_workspace_restore",
         "This Session was created after the restored Workspace backup, so its native harness state is unavailable.",
+      );
+    }
+    if (runtime.runtimeErrorCode === NATIVE_SESSION_UNRECOVERABLE_ERROR) {
+      throw new HttpError(
+        409,
+        "codex_native_session_unrecoverable",
+        "This Session's native Codex history is unavailable.",
       );
     }
     if (!runtime.nativeSessionId) {
@@ -5881,6 +5955,13 @@ function nativeSessionUnavailable(error: unknown) {
     409,
     "codex_native_session_unrecoverable",
     `The native Codex Session is unavailable: ${rpcErrorMessage(error)}`,
+  );
+}
+
+function isNativeSessionUnrecoverable(error: unknown): error is HttpError {
+  return (
+    error instanceof HttpError &&
+    error.code === "codex_native_session_unrecoverable"
   );
 }
 
