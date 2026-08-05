@@ -95,6 +95,8 @@ export interface PreparedEnvironmentWorkspaceRestore {
 
 export const WORKSPACE_RESTORE_UNAVAILABLE_SESSION_ERROR =
   "workspace_restored_session_unavailable";
+export const NATIVE_SESSION_UNRECOVERABLE_ERROR =
+  "native_session_unrecoverable";
 
 export interface StoredSessionRuntime {
   sessionId: string;
@@ -2708,9 +2710,9 @@ export class SandpiStore {
   }
 
   /**
-   * Reconciles the scalar active-Turn projection from one authoritative native
-   * Thread response. The runtime version compare-and-swap prevents a snapshot
-   * from overwriting a concurrent Turn admission or native event.
+   * Reconciles scalar native control state from one authoritative Thread read.
+   * A terminal native read failure uses the same runtime-version CAS so it can
+   * release stale control state without racing Turn admission or native events.
    */
   async reconcileNativeSessionState(input: {
     sessionId: string;
@@ -2727,6 +2729,7 @@ export class SandpiStore {
     clearPendingStartedBefore?: Date;
     clearRecoveryState?: boolean;
     recoveryErrorCode?: string;
+    terminalErrorCode?: string;
     requireUnarchived?: boolean;
   }) {
     const client = await this.pool.connect();
@@ -2814,7 +2817,8 @@ export class SandpiStore {
         pendingRecoveryEligible;
       const clearRecovery =
         input.clearRecoveryState === true && activeNativeTurnId === null;
-      const clearControlState = clearPending || clearRecovery;
+      const terminalFailure = input.terminalErrorCode !== undefined;
+      const clearControlState = clearPending || clearRecovery || terminalFailure;
       if (clearControlState) {
         await client.query(
           `UPDATE session_runtime
@@ -2839,7 +2843,11 @@ export class SandpiStore {
                END,
                version = version + 1
            WHERE session_id = $1`,
-          [input.sessionId, input.recoveryErrorCode ?? null, clearRecovery],
+          [
+            input.sessionId,
+            input.terminalErrorCode ?? input.recoveryErrorCode ?? null,
+            clearRecovery || terminalFailure,
+          ],
         );
       } else if (projection.active_native_turn_id !== activeNativeTurnId) {
         await client.query(
@@ -2861,21 +2869,29 @@ export class SandpiStore {
           ],
         );
       }
-      const status =
-        activeNativeTurnId ||
-        (!clearPending && projection.pending_turn_phase)
+      const status = terminalFailure
+        ? "failed"
+        : activeNativeTurnId ||
+            (!clearPending && projection.pending_turn_phase)
           ? "running"
           : "waiting";
       await client.query(
         `UPDATE sessions
          SET status = $2,
-             completed = CASE WHEN $3::BOOLEAN THEN FALSE ELSE completed END
-         WHERE id = $1 AND status <> 'failed'
+             completed = CASE WHEN $3::BOOLEAN THEN FALSE ELSE completed END,
+             unread = CASE WHEN $4::BOOLEAN THEN TRUE ELSE unread END
+         WHERE id = $1 AND ($4::BOOLEAN OR status <> 'failed')
            AND (
              status IS DISTINCT FROM $2
              OR ($3::BOOLEAN AND completed)
+             OR ($4::BOOLEAN AND unread = FALSE)
            )`,
-        [input.sessionId, status, activeNativeTurnId !== null],
+        [
+          input.sessionId,
+          status,
+          activeNativeTurnId !== null,
+          terminalFailure,
+        ],
       );
       await client.query("COMMIT");
       return true;

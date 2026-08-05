@@ -376,8 +376,14 @@ Sandbox0 write. That response path is lifecycle-neutral, so a pause that wins
 after submission is never reversed by Session repair. Transient discovery,
 transport and native errors retry with capped backoff; an active exceptional
 Thread receives a slow full-state recheck so a lost completion event cannot pin
-the Environment indefinitely. A new exact timeout target or explicit unarchive
-repair wakes any longer pending grace timer.
+the Environment indefinitely. Three consecutive native responses classified as
+`codex_native_session_unrecoverable` in the same Environment runtime epoch
+instead atomically mark the product Session failed, clear its pending and active
+control projection, and publish an unrecoverable invalidation. This terminal
+path prevents unreadable native history from retrying forever or blocking idle
+pause, while runtime-version and Environment-epoch compare-and-swap checks keep
+it from overwriting concurrent Turn admission or recovery. A new exact timeout
+target or explicit unarchive repair wakes any longer pending grace timer.
 
 Archiving is allowed only after the Session's native control projection is idle.
 The archive transaction uses the same Environment-runtime, Session-runtime,
