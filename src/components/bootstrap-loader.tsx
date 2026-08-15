@@ -19,7 +19,7 @@ import styles from "./bootstrap-loader.module.css";
 type LoaderState =
   | { status: "loading" }
   | { status: "redirecting" }
-  | { status: "unauthenticated"; loginUrl: string }
+  | { status: "unauthenticated"; loginUrl: string; registrationOpen: boolean }
   | { status: "error"; message: string }
   | { status: "ready"; bootstrap: SandpiBootstrap };
 
@@ -69,7 +69,11 @@ function useBootstrap(allowUnauthenticated: boolean) {
         if (error instanceof ApiError && error.status === 401) {
           const target = authLoginUrl(window.location.href, error.loginUrl);
           if (allowUnauthenticated) {
-            setState({ status: "unauthenticated", loginUrl: target });
+            setState({
+              status: "unauthenticated",
+              loginUrl: target,
+              registrationOpen: error.registrationOpen ?? true,
+            });
             return;
           }
           setState({ status: "redirecting" });
@@ -98,7 +102,10 @@ function BootstrapBoundary({
   renderUnauthenticated,
 }: {
   children: (bootstrap: SandpiBootstrap) => ReactNode;
-  renderUnauthenticated?: (loginUrl: string) => ReactNode;
+  renderUnauthenticated?: (
+    loginUrl: string,
+    registrationOpen: boolean,
+  ) => ReactNode;
 }) {
   const { state, retry } = useBootstrap(Boolean(renderUnauthenticated));
 
@@ -106,7 +113,7 @@ function BootstrapBoundary({
     return children(state.bootstrap);
   }
   if (state.status === "unauthenticated" && renderUnauthenticated) {
-    return renderUnauthenticated(state.loginUrl);
+    return renderUnauthenticated(state.loginUrl, state.registrationOpen);
   }
 
   return (
@@ -147,8 +154,11 @@ function BootstrapBoundary({
 export function SandpiAppLoader() {
   return (
     <BootstrapBoundary
-      renderUnauthenticated={(loginUrl) => (
-        <GuestSandpiApp loginUrl={loginUrl} />
+      renderUnauthenticated={(loginUrl, registrationOpen) => (
+        <GuestSandpiApp
+          loginUrl={loginUrl}
+          registrationOpen={registrationOpen}
+        />
       )}
     >
       {(bootstrap) => <SandpiApp initialData={bootstrap} />}

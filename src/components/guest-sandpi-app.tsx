@@ -36,13 +36,22 @@ import { useNativeChromeSurfaces } from "@/lib/use-native-chrome-surfaces";
 import workspaceStyles from "@/components/new-session-workspace.module.css";
 import styles from "./guest-sandpi-app.module.css";
 
-export function GuestSandpiApp({ loginUrl }: { loginUrl: string }) {
+export function GuestSandpiApp({
+  loginUrl,
+  registrationOpen,
+}: {
+  loginUrl: string;
+  registrationOpen: boolean;
+}) {
   const preferences = loadClientPreferences(DEFAULT_CLIENT_PREFERENCES);
   const ui = getOperationUiCopy(preferences.general.language);
   const [prompt, setPrompt] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [helpFeedbackOpen, setHelpFeedbackOpen] = useState(false);
+  const signInLabel = registrationOpen
+    ? ui.guest.signInOrSignUp
+    : ui.guest.signIn;
   const promptRef = useRef<HTMLTextAreaElement>(null);
   useNativeChromeSurfaces(
     sidebarOpen ? "sidebar" : "canvas",
@@ -112,14 +121,14 @@ export function GuestSandpiApp({ loginUrl }: { loginUrl: string }) {
           <button
             type="button"
             className={`account-menu-trigger ${styles.signInButton}`}
-            aria-label={ui.guest.signInOrSignUp}
+            aria-label={signInLabel}
             onClick={() => continueToLogin()}
           >
             <span className={`account-avatar ${styles.signInAvatar}`}>
               <LogIn size={14} aria-hidden="true" />
             </span>
             <span className="account-copy">
-              <strong>{ui.guest.signInOrSignUp}</strong>
+              <strong>{signInLabel}</strong>
               <small>{ui.guest.signInContext}</small>
             </span>
           </button>
@@ -229,6 +238,15 @@ export function GuestSandpiApp({ loginUrl }: { loginUrl: string }) {
             </span>
             <h1>{ui.guest.question}</h1>
             <p>{ui.guest.introduction}</p>
+            {!registrationOpen ? (
+              <div className={styles.betaNotice} role="status">
+                <LockKeyhole size={15} aria-hidden="true" />
+                <div>
+                  <strong>{ui.guest.privateBeta}</strong>
+                  <span>{ui.guest.registrationClosed}</span>
+                </div>
+              </div>
+            ) : null}
             <div className={workspaceStyles.facts}>
               <span>
                 <Cloud size={13} aria-hidden="true" />{" "}

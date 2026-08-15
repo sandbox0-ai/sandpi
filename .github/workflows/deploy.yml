@@ -65,6 +65,7 @@ jobs:
       SANDBOX0_API_HOST: ${{ vars.SANDBOX0_API_HOST }}
       SANDBOX0_API_KEY: ${{ secrets.SANDBOX0_API_KEY }}
       SANDPI_AUTH_MODE: ${{ vars.SANDPI_AUTH_MODE }}
+      SANDPI_ALLOW_NEW_USERS: ${{ vars.SANDPI_ALLOW_NEW_USERS }}
       SANDPI_BILLING_MODE: ${{ vars.SANDPI_BILLING_MODE }}
       SANDPI_COOKIE_SECRET: ${{ secrets.SANDPI_COOKIE_SECRET }}
       SANDPI_GITHUB_APP_SLUG: ${{ vars.SANDPI_GITHUB_APP_SLUG }}
@@ -98,6 +99,7 @@ jobs:
           const required = [
             "SANDBOX0_API_HOST",
             "SANDBOX0_API_KEY",
+            "SANDPI_ALLOW_NEW_USERS",
             "SANDPI_BILLING_MODE",
             "SANDPI_COOKIE_SECRET",
             "SANDPI_INGRESS_IP",
@@ -133,6 +135,9 @@ jobs:
           }
           if (process.env.SANDPI_AUTH_MODE !== "oidc") {
             throw new Error("The production deployment requires SANDPI_AUTH_MODE=oidc.");
+          }
+          if (!/^(?:true|false)$/.test(process.env.SANDPI_ALLOW_NEW_USERS)) {
+            throw new Error("SANDPI_ALLOW_NEW_USERS must be true or false.");
           }
           if (process.env.SANDPI_BILLING_MODE !== "stripe") {
             throw new Error("The production deployment requires SANDPI_BILLING_MODE=stripe.");
@@ -259,6 +264,7 @@ jobs:
             NODE_ENV \
             SANDBOX0_API_HOST \
             SANDBOX0_API_KEY \
+            SANDPI_ALLOW_NEW_USERS \
             SANDPI_AUTH_MODE \
             SANDPI_BILLING_MODE \
             SANDPI_COOKIE_SECRET \

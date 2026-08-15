@@ -381,7 +381,11 @@ export async function createSandpiServer(
         requestId: request.id,
         details: normalized.details,
         ...(normalized.statusCode === 401
-          ? { loginUrl: "/api/v1/auth/login" }
+          ? {
+              loginUrl: "/api/v1/auth/login",
+              registrationOpen:
+                config.auth.mode !== "oidc" || config.auth.allowNewUsers,
+            }
           : {}),
       },
     });
@@ -520,9 +524,17 @@ export function registerAuthRoutes(
         "OIDC is not configured.",
       );
     }
-    const result = await oidcIdentity.completeLogin(
-      new URL(request.url, config.publicUrl),
-    );
+    let result;
+    try {
+      result = await oidcIdentity.completeLogin(
+        new URL(request.url, config.publicUrl),
+      );
+    } catch (error) {
+      if (error instanceof HttpError && error.code === "registration_closed") {
+        return reply.redirect("/");
+      }
+      throw error;
+    }
     // A first-time OIDC user receives a default Environment in the identity
     // transaction. Provision it before the first Web bootstrap so every client
     // observes the same ready/error state without a server restart.

@@ -18,17 +18,20 @@ interface ApiErrorBody {
     code?: string;
     message?: string;
     loginUrl?: string;
+    registrationOpen?: boolean;
     details?: unknown;
   };
   code?: string;
   message?: string;
   loginUrl?: string;
+  registrationOpen?: boolean;
 }
 
 export class ApiError extends Error {
   readonly status: number;
   readonly code?: string;
   readonly loginUrl?: string;
+  readonly registrationOpen?: boolean;
   readonly details?: unknown;
   readonly body?: unknown;
 
@@ -38,6 +41,7 @@ export class ApiError extends Error {
       status: number;
       code?: string;
       loginUrl?: string;
+      registrationOpen?: boolean;
       details?: unknown;
       body?: unknown;
     },
@@ -47,6 +51,7 @@ export class ApiError extends Error {
     this.status = options.status;
     this.code = options.code;
     this.loginUrl = options.loginUrl;
+    this.registrationOpen = options.registrationOpen;
     this.details = options.details;
     this.body = options.body;
   }
@@ -98,6 +103,8 @@ function apiError(response: Response, body: unknown) {
       errorBody?.loginUrl ??
       response.headers.get("location") ??
       undefined,
+    registrationOpen:
+      nestedError?.registrationOpen ?? errorBody?.registrationOpen,
     details: nestedError?.details,
     body,
   });

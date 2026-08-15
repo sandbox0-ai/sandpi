@@ -39,6 +39,7 @@ Required repository variables:
 
 - `SANDBOX0_API_HOST`
 - `SANDPI_AUTH_MODE`
+- `SANDPI_ALLOW_NEW_USERS`
 - `SANDPI_BILLING_MODE`
 - `SANDPI_INGRESS_IP`
 - `SANDPI_OIDC_CLIENT_ID`
@@ -50,6 +51,11 @@ Required repository variables:
 - `SANDPI_STRIPE_PLUS_PRICE_ID`
 - `SANDPI_STRIPE_PRO_PRICE_ID`
 - `SANDPI_STRIPE_ULTRA_PRICE_ID`
+
+Set `SANDPI_ALLOW_NEW_USERS=false` to keep existing OIDC users able to sign in
+while rejecting first-time Sandpi identities before they create a user or
+default Environment. Unauthenticated clients receive this admission state so
+the guest UI can explain that registration is closed during private beta.
 
 Required repository secrets:
 

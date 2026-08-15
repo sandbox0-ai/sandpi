@@ -39,6 +39,7 @@ const environmentSchema = z.object({
   SANDPI_PUBLIC_URL: optionalUrl,
   SANDPI_WEB_DIR: z.string().min(1).optional(),
   SANDPI_AUTH_MODE: z.enum(["admin", "oidc"]).default("admin"),
+  SANDPI_ALLOW_NEW_USERS: z.enum(["true", "false"]).default("true"),
   SANDPI_COOKIE_SECRET: z.string().min(32).optional(),
   SANDPI_SECRET_KEY: optionalDeploymentSecret,
   SANDPI_OIDC_ISSUER: optionalUrl,
@@ -91,6 +92,7 @@ export interface SandpiConfig {
         clientId: string;
         clientSecret?: string;
         deviceClientId?: string;
+        allowNewUsers: boolean;
         tokenEndpointAuthMethod: z.infer<
           typeof oidcTokenEndpointAuthMethod
         >;
@@ -174,6 +176,7 @@ export function loadConfig(
       clientId: value.SANDPI_OIDC_CLIENT_ID,
       clientSecret: value.SANDPI_OIDC_CLIENT_SECRET,
       deviceClientId: value.SANDPI_OIDC_DEVICE_CLIENT_ID,
+      allowNewUsers: value.SANDPI_ALLOW_NEW_USERS === "true",
       tokenEndpointAuthMethod,
       scopes: scopes.join(" "),
     };

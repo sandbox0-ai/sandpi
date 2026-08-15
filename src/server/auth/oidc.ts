@@ -148,10 +148,14 @@ export class OidcIdentityService {
       });
       const claims = tokens.claims();
       const identity = identityFromClaims(claims ?? {});
-      const principal = await upsertOidcUser(client, {
-        issuer: this.config.issuer.toString(),
-        ...identity,
-      });
+      const principal = await upsertOidcUser(
+        client,
+        {
+          issuer: this.config.issuer.toString(),
+          ...identity,
+        },
+        this.config.allowNewUsers,
+      );
       const session = await createWebSession(client, principal);
       await client.query("COMMIT");
       return { ...session, returnTo: stored.return_to };
@@ -217,10 +221,14 @@ export class OidcIdentityService {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
-      const principal = await upsertOidcUser(client, {
-        issuer: this.config.issuer.toString(),
-        ...identity,
-      });
+      const principal = await upsertOidcUser(
+        client,
+        {
+          issuer: this.config.issuer.toString(),
+          ...identity,
+        },
+        this.config.allowNewUsers,
+      );
       const session = await createWebSession(client, principal);
       await client.query("COMMIT");
       return session;
@@ -344,9 +352,11 @@ export function oidcClientAuthentication(
   }
 }
 
-async function upsertOidcUser(
+/** Resolve an OIDC identity without admitting new users when registration is closed. */
+export async function upsertOidcUser(
   client: PoolClient,
   identity: { issuer: string; subject: string; email: string; name: string },
+  allowNewUsers: boolean,
 ): Promise<Principal> {
   const existing = await client.query(
     `SELECT * FROM users WHERE identity_provider = $1 AND identity_subject = $2`,
@@ -359,6 +369,13 @@ async function upsertOidcUser(
       [userId, identity.email, identity.name],
     );
   } else {
+    if (!allowNewUsers) {
+      throw new HttpError(
+        403,
+        "registration_closed",
+        "Sandpi is currently in private beta. New user registration is temporarily closed.",
+      );
+    }
     userId = `user_${randomUUID()}`;
     const initials = identity.name
       .split(/\s+/)

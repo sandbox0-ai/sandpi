@@ -81,7 +81,11 @@ const copy = {
     },
     guest: {
       signInOrSignUp: "Log in or sign up",
+      signIn: "Log in",
       signInContext: "Continue to your workspace",
+      privateBeta: "Private beta",
+      registrationClosed:
+        "New user registration is temporarily closed. Existing users can still log in.",
       emptySidebar: "Log in to see your Environments and Sessions.",
       expandSidebar: "Expand sidebar",
       openNavigation: "Open navigation",
@@ -231,7 +235,10 @@ const copy = {
     },
     guest: {
       signInOrSignUp: "登录或注册",
+      signIn: "登录",
       signInContext: "继续进入你的工作区",
+      privateBeta: "当前内测中",
+      registrationClosed: "新用户注册暂时关闭，已有用户仍可正常登录。",
       emptySidebar: "登录后查看你的环境和会话。",
       expandSidebar: "展开侧边栏",
       openNavigation: "打开导航",
