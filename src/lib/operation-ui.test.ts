@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { shouldSubmitComposer } from "./operation-ui";
+import { getOperationUiCopy, shouldSubmitComposer } from "./operation-ui";
 
 const key = {
   key: "Enter",
@@ -37,4 +37,14 @@ test("composer shortcut preserves newlines and IME composition", () => {
     ),
     false,
   );
+});
+
+test("private beta registration copy is available in every UI language", () => {
+  assert.match(getOperationUiCopy("en").guest.privateBeta, /private beta/i);
+  assert.match(
+    getOperationUiCopy("en").guest.registrationClosed,
+    /registration is temporarily closed/i,
+  );
+  assert.match(getOperationUiCopy("zh-CN").guest.privateBeta, /内测/);
+  assert.match(getOperationUiCopy("zh-CN").guest.registrationClosed, /注册暂时关闭/);
 });

@@ -88,6 +88,7 @@ export const errorSchema = component(
       requestId: z.string(),
       details: z.unknown().optional(),
       loginUrl: z.string().optional(),
+      registrationOpen: z.boolean().optional(),
     }),
   }),
 );

@@ -50,6 +50,30 @@ test("defaults OIDC clients without a secret to public client authentication", (
   assert.equal(config.auth.clientSecret, undefined);
 });
 
+test("configures OIDC new-user admission explicitly", () => {
+  const openConfig = loadConfig(oidcEnvironment);
+  const closedConfig = loadConfig({
+    ...oidcEnvironment,
+    SANDPI_ALLOW_NEW_USERS: "false",
+  });
+
+  assert.equal(openConfig.auth.mode, "oidc");
+  assert.equal(closedConfig.auth.mode, "oidc");
+  if (openConfig.auth.mode !== "oidc" || closedConfig.auth.mode !== "oidc") {
+    return;
+  }
+  assert.equal(openConfig.auth.allowNewUsers, true);
+  assert.equal(closedConfig.auth.allowNewUsers, false);
+  assert.throws(
+    () =>
+      loadConfig({
+        ...oidcEnvironment,
+        SANDPI_ALLOW_NEW_USERS: "yes",
+      }),
+    /SANDPI_ALLOW_NEW_USERS/,
+  );
+});
+
 test("rejects inconsistent OIDC client authentication settings", () => {
   assert.throws(
     () =>

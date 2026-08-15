@@ -129,6 +129,7 @@ test(
         clientId: "sandpi-web",
         clientSecret: "web-secret",
         deviceClientId: "sandpi-cli",
+        allowNewUsers: true,
         tokenEndpointAuthMethod: "client_secret_post",
         scopes: "openid profile email",
       },
