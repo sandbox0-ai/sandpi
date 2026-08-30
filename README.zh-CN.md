@@ -22,7 +22,7 @@ Sandpi 客户端继续同一个 coding session。
 
 Web 应用与 iOS、iPadOS、Android、OpenHarmony、Windows 和 macOS 第一方原生客户端
 共用同一套 Sandpi 产品 UI 和 API。所有客户端都保持轻量：coding-agent harness、
-终端运行在云端，文件则保存在持久化 Workspace Volume 中。
+终端运行在云端，文件则保存在 Sandbox 的持久化可写 rootfs 中。
 你可以关闭电脑、切换设备或断开客户端，而不会结束 coding session。
 
 目前第一个支持的 coding agent 是 Codex。
@@ -46,15 +46,15 @@ Web 应用与 iOS、iPadOS、Android、OpenHarmony、Windows 和 macOS 第一方
 | 更专注的隔离 | 可以按项目、任务或关注点创建独立 Environment。每个 Environment 都有自己的 Sandbox、Workspace、coding-agent 账号、网络策略和凭证。 |
 | 多个 coding plan | 不同 Environment 可以连接不同的 Codex/ChatGPT 订阅账号；即使使用同一个账号，也可以把不同工作彼此隔离。 |
 | 可控的出站访问 | 按目标限制 Sandbox 出站流量，并只向匹配的请求注入受支持的凭证，避免把服务密钥放进仓库或浏览器。 |
-| Workspace 防丢失 | 通过 Sandbox0 Volume snapshot 手动或定时备份 Workspace，设置保留数量并按需恢复。 |
-| 持久化数据加密 | Sandbox0 在写入对象存储前，对 Environment rootfs checkpoint 对象和默认 S0FS Workspace Volume 对象做应用层加密。 |
+| Workspace 防丢失 | 通过 Sandbox0 rootfs snapshot 手动或定时备份 Workspace 和原生 harness 状态，设置保留数量并按需恢复。 |
+| 持久化数据加密 | Sandbox0 在写入对象存储前，对 Environment rootfs checkpoint 对象做应用层加密。 |
 | 持久化自动化 | 定时执行 Codex prompt，或由经过 Bearer 认证的自定义 Webhook 触发。Sandpi 在 Sandbox 外持久化运行意图，并在 server 或 runtime 恢复后对账原生 Turn。 |
 
 Environment 刻意设计得比一个聊天会话更完整：
 
 ```text
 Environment
-├── Sandbox 和持久化 Workspace Volume
+├── Sandbox 和持久化可写 rootfs
 ├── 一个原生 coding-agent harness 和 provider 账号
 ├── 网络策略和出站凭证
 ├── runtime 资源、终端和指标
@@ -127,7 +127,7 @@ Sandpi 仍处于 pre-1.0 阶段，目前只实现了 Codex harness。Web 应用�
 - Node.js 24 和 npm 11
 - PostgreSQL 15 或更高版本
 - 一个 Sandbox0 deployment
-- 具备 Sandbox、Volume 访问权限以及 `credentialsource:read`、
+- 具备 Sandbox 访问权限以及 `credentialsource:read`、
   `credentialsource:write`、`credentialsource:delete` 权限的 Sandbox0
   deployment API key
 - 一个包含官方 Playwright CLI 的当前 Sandbox0 `coding-agent` template
@@ -234,11 +234,11 @@ Sandpi server ───────── PostgreSQL
     ▼
 Sandbox0
     ├── Sandbox + 原生 Codex app-server
-    ├── 持久化 Workspace Volume
+    ├── 持久化可写 rootfs 和原生 snapshot
     ├── 官方 Playwright CLI 和版本匹配的 Agent Skill
     ├── 终端和 runtime 指标
     ├── 网络策略和凭证注入
-    └── Workspace snapshot
+    └── Environment rootfs snapshot
 ```
 
 - Sandpi 客户端只与 Sandpi 通信，不会收到 Sandbox0 deployment API key，也不会直接
@@ -248,10 +248,10 @@ Sandbox0
   surface 实现前保持不可点击。
 - Sandpi 只通过官方 JavaScript SDK 使用 Sandbox0，不读取 Sandbox0 数据库、内部
   metering endpoint 或 ClickHouse 凭证。
-- Sandbox0 负责 Sandbox 生命周期、Volume、网络执行、凭证注入和 usage truth。
+- Sandbox0 负责 Sandbox 生命周期、可写 rootfs 持久化、网络执行、凭证注入和 usage truth。
   Sandpi 负责用户、Environment 归属、原生 Session 引用和可选产品 entitlement。
-- 使用 Sandbox0 默认存储 runtime 时，Environment rootfs checkpoint 对象和默认 S0FS
-  Workspace Volume 对象会在写入对象存储前进行应用层加密。Sandbox0 manager 和 active
+- 使用 Sandbox0 默认存储 runtime 时，Environment rootfs checkpoint 对象会在写入
+  对象存储前进行应用层加密。Sandbox0 manager 和 active
   ctld 持有 installation key，因此这是服务端加密而不是端到端加密；self-hosted
   operator 可通过 `spec.storage.runtime.objectEncryptionEnabled` 控制该能力。
 - 原生 Codex Session 历史保存在 Environment Workspace 中。PostgreSQL 只保存不透明

@@ -59,7 +59,6 @@ const environment: Environment = {
   revision: 1,
   templateId: "coding-agent",
   rootfsSnapshotId: "",
-  workspaceVolumeId: "volume-environment-test",
   sandboxId: "sandbox-environment-test",
   sandboxState: "running",
   supervisorSessionId: "supervisor-environment-test",
@@ -402,7 +401,6 @@ function fixture(
   let environmentRuntime: StoredEnvironmentRuntime = {
     id: environment.id,
     sandboxId: environment.sandboxId,
-    workspaceVolumeId: environment.workspaceVolumeId,
     supervisorSessionId: environment.supervisorSessionId,
     terminalSessionId: undefined,
     attemptId: "attempt-environment-test",
@@ -3071,7 +3069,7 @@ test("shares an in-flight native snapshot read across SSE subscribers", async ()
 
 test("keeps the conversation snapshot when persisted rollout Activity cannot be read", async () => {
   const context = fixture({
-    rollouts: { "thread-one": new Error("volume read failed") },
+    rollouts: { "thread-one": new Error("rootfs read failed") },
   });
 
   try {
@@ -3088,7 +3086,7 @@ test("keeps the conversation snapshot when persisted rollout Activity cannot be 
     assert.equal(snapshot.activity.availability, "unavailable");
     assert.deepEqual(snapshot.activity.records, []);
     assert.equal(snapshot.activity.error?.code, "codex_rollout_read_failed");
-    assert.equal(snapshot.activity.error?.message, "volume read failed");
+    assert.equal(snapshot.activity.error?.message, "rootfs read failed");
     assert.equal(context.rolloutReads.length, 1);
   } finally {
     await context.close();

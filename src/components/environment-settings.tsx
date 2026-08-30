@@ -162,17 +162,6 @@ function formatArchivedSessionTime(
   });
 }
 
-function formatWorkspaceBackupSize(sizeBytes: number) {
-  if (sizeBytes < 1024) return `${sizeBytes} B`;
-  if (sizeBytes < 1024 * 1024) {
-    return `${Math.round(sizeBytes / 1024)} KiB`;
-  }
-  if (sizeBytes < 1024 * 1024 * 1024) {
-    return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MiB`;
-  }
-  return `${(sizeBytes / (1024 * 1024 * 1024)).toFixed(2)} GiB`;
-}
-
 function formatSandboxState(state: Environment["sandboxState"]) {
   switch (state) {
     case "pending":
@@ -1150,7 +1139,7 @@ export function EnvironmentSettings({
                       <strong>Delete Environment</strong>
                       <p>
                         Permanently delete every Session, the shared Sandbox,
-                        Workspace Volume and stored coding-agent credential.
+                        Sandbox rootfs and stored coding-agent credential.
                       </p>
                     </div>
                   </div>
@@ -1482,8 +1471,9 @@ export function EnvironmentSettings({
                     <div>
                       <strong>Workspace backups</strong>
                       <p>
-                        Create native snapshots of the shared Workspace Volume.
-                        Retention removes only snapshots created by Sandpi.
+                        Create native snapshots of the Environment rootfs,
+                        including Workspace and harness state. Retention removes
+                        only snapshots created by Sandpi.
                       </p>
                     </div>
                     <button
@@ -1493,7 +1483,7 @@ export function EnvironmentSettings({
                         workspaceBackupBusy ||
                         workspaceRestoreBusy ||
                         draft.status !== "ready" ||
-                        !draft.workspaceVolumeId
+                        !draft.sandboxId
                       }
                       onClick={() => void createWorkspaceBackup()}
                     >
@@ -1646,9 +1636,6 @@ export function EnvironmentSettings({
                             </time>
                           </span>
                           <div className="workspace-backup-row-actions">
-                            <code>
-                              {formatWorkspaceBackupSize(backup.sizeBytes)}
-                            </code>
                             <button
                               type="button"
                               className="workspace-backup-restore-button"
@@ -1760,11 +1747,6 @@ export function EnvironmentSettings({
                   <DefinitionRow
                     label="Rootfs snapshot"
                     value={draft.rootfsSnapshotId}
-                    code
-                  />
-                  <DefinitionRow
-                    label="Workspace Volume"
-                    value={draft.workspaceVolumeId}
                     code
                   />
                   <DefinitionRow label="Sandbox" value={draft.sandboxId} code />

@@ -31,7 +31,6 @@ const environment: Environment = {
   revision: 1,
   templateId: "coding-agent",
   rootfsSnapshotId: "rootfs-baseline",
-  workspaceVolumeId: "volume-environment",
   sandboxId: "sandbox-environment",
   sandboxState: "running",
   supervisorSessionId: "",
@@ -57,7 +56,6 @@ function environmentRuntimeRecord(): EnvironmentRuntimeRecord {
   return {
     id: environment.id,
     sandboxId: environment.sandboxId,
-    workspaceVolumeId: environment.workspaceVolumeId,
     runtimeGeneration: 1,
     decoder: {
       supervisorCursor: 0,
@@ -258,17 +256,10 @@ test("does not fall back to raw Sandbox0 HTTP when the SDK lacks usage", async (
   );
 });
 
-test("claims exactly one Environment Sandbox around its shared Workspace Volume", async () => {
+test("claims exactly one Environment Sandbox with a durable writable rootfs", async () => {
   const allocations: Array<Record<string, string>> = [];
-  let volumeCreates = 0;
   let claimInput: Record<string, unknown> | undefined;
   const runtime = runtimeWithClient({
-    volumes: {
-      async create() {
-        volumeCreates += 1;
-        return { id: "unexpected-volume" };
-      },
-    },
     sandboxes: {
       async claim(templateId: string, input: Record<string, unknown>) {
         assert.equal(templateId, "coding-agent");
@@ -291,13 +282,9 @@ test("claims exactly one Environment Sandbox around its shared Workspace Volume"
 
   assert.deepEqual(provisioned, {
     sandboxId: "sandbox-environment",
-    workspaceVolumeId: "volume-environment",
   });
-  assert.equal(volumeCreates, 0);
-  assert.deepEqual((claimInput?.mounts as Array<Record<string, unknown>>)[0], {
-    sandboxvolumeId: "volume-environment",
-    mountPoint: "/workspace",
-  });
+  assert.equal(claimInput?.snapshotId, "rootfs-baseline");
+  assert.equal("mounts" in (claimInput ?? {}), false);
   assert.equal(
     ((claimInput?.config ?? {}) as Record<string, unknown>).hardTtl,
     0,
@@ -334,90 +321,8 @@ test("claims exactly one Environment Sandbox around its shared Workspace Volume"
   assert.deepEqual(allocations, [
     {
       sandboxId: "sandbox-environment",
-      workspaceVolumeId: "volume-environment",
     },
   ]);
-});
-
-test("creates one Workspace Volume when provisioning a new Environment", async () => {
-  const allocations: Array<Record<string, string>> = [];
-  const runtime = runtimeWithClient({
-    volumes: {
-      async create() {
-        return { id: "volume-new" };
-      },
-    },
-    sandboxes: {
-      async claim(
-        _templateId: string,
-        input: { mounts: Array<{ sandboxvolumeId: string }> },
-      ) {
-        assert.equal(input.mounts[0]?.sandboxvolumeId, "volume-new");
-        return { id: "sandbox-new" };
-      },
-      async waitForLifecycle() {
-        return { status: "running" };
-      },
-    },
-  });
-
-  const provisioned = await runtime.provisionEnvironment({
-    environment: { ...environment, workspaceVolumeId: "" },
-    async onResourcesAllocated(resources) {
-      allocations.push(resources as Record<string, string>);
-    },
-  });
-
-  assert.deepEqual(provisioned, {
-    sandboxId: "sandbox-new",
-    workspaceVolumeId: "volume-new",
-  });
-  assert.deepEqual(allocations, [
-    { workspaceVolumeId: "volume-new" },
-    { sandboxId: "sandbox-new", workspaceVolumeId: "volume-new" },
-  ]);
-});
-
-test("deletes only retired Sandboxes that mount the Environment Workspace", async () => {
-  const inspected: string[] = [];
-  const deleted: string[] = [];
-  const runtime = runtimeWithClient({
-    sandboxes: {
-      async list() {
-        return {
-          sandboxes: [
-            { id: "sandbox-environment" },
-            { id: "sandbox-retired" },
-            { id: "sandbox-other" },
-          ],
-          hasMore: false,
-        };
-      },
-      async get(sandboxId: string) {
-        inspected.push(sandboxId);
-        return {
-          id: sandboxId,
-          mounts: [
-            {
-              sandboxvolumeId:
-                sandboxId === "sandbox-retired"
-                  ? "volume-environment"
-                  : "volume-other",
-              mountPoint: "/workspace",
-            },
-          ],
-        };
-      },
-      async delete(sandboxId: string) {
-        deleted.push(sandboxId);
-      },
-    },
-  });
-
-  await runtime.deleteRetiredEnvironmentSandboxes(environmentRuntimeRecord());
-
-  assert.deepEqual(inspected, ["sandbox-retired", "sandbox-other"]);
-  assert.deepEqual(deleted, ["sandbox-retired"]);
 });
 
 test("maps every supported Environment credential source without returning material", async () => {
@@ -751,7 +656,6 @@ test("disables Environment TTLs and executes Sandpi-owned pause and resume", asy
   const coordinates: EnvironmentRuntimeRecord = {
     id: environment.id,
     sandboxId: environment.sandboxId,
-    workspaceVolumeId: environment.workspaceVolumeId,
     runtimeGeneration: 1,
     decoder: {
       supervisorCursor: 0,
@@ -936,7 +840,6 @@ test("queries only the latest Sandbox CPU and memory gauges for compact UI", asy
   const coordinates: EnvironmentRuntimeRecord = {
     id: environment.id,
     sandboxId: environment.sandboxId,
-    workspaceVolumeId: environment.workspaceVolumeId,
     runtimeGeneration: 1,
     decoder: {
       supervisorCursor: 0,
@@ -1026,7 +929,6 @@ test("preserves the effective Sandbox metric step for chart rendering", async ()
   const coordinates: EnvironmentRuntimeRecord = {
     id: environment.id,
     sandboxId: environment.sandboxId,
-    workspaceVolumeId: environment.workspaceVolumeId,
     runtimeGeneration: 1,
     decoder: {
       supervisorCursor: 0,
@@ -1114,7 +1016,6 @@ test("preserves unrelated services and installs a constrained MCP OAuth callback
   const coordinates: EnvironmentRuntimeRecord = {
     id: environment.id,
     sandboxId: environment.sandboxId,
-    workspaceVolumeId: environment.workspaceVolumeId,
     runtimeGeneration: 1,
     decoder: {
       supervisorCursor: 0,
@@ -1182,26 +1083,25 @@ test("preserves unrelated services and installs a constrained MCP OAuth callback
   assert.equal(JSON.stringify(replacement).includes("publishable"), false);
 });
 
-test("creates, restores and deletes native snapshots for the Environment Workspace Volume", async () => {
-  const calls: Array<{ operation: string; volumeId: string; value: unknown }> = [];
+test("creates, restores and deletes native Environment rootfs snapshots", async () => {
+  const calls: Array<{ operation: string; sandboxId?: string; value: unknown }> = [];
   const runtime = runtimeWithClient({
-    volumes: {
-      async createSnapshot(volumeId: string, request: unknown) {
-        calls.push({ operation: "create", volumeId, value: request });
+    sandboxes: {
+      async createRootFSSnapshot(sandboxId: string, request: unknown) {
+        calls.push({ operation: "create", sandboxId, value: request });
         return {
           id: "snapshot-workspace-one",
-          volumeId,
+          sandboxId,
           name: "sandpi-workspace-backup",
-          sizeBytes: 1_048_576,
-          createdAt: "2026-07-21T12:00:00.000Z",
+          createdAt: new Date("2026-07-21T12:00:00.000Z"),
         };
       },
-      async deleteSnapshot(volumeId: string, snapshotId: string) {
-        calls.push({ operation: "delete", volumeId, value: snapshotId });
+      async deleteRootFSSnapshot(snapshotId: string) {
+        calls.push({ operation: "delete", value: snapshotId });
         return { message: "deleted" };
       },
-      async restoreSnapshot(volumeId: string, snapshotId: string) {
-        calls.push({ operation: "restore", volumeId, value: snapshotId });
+      async restoreRootFS(sandboxId: string, request: unknown) {
+        calls.push({ operation: "restore", sandboxId, value: request });
         return { status: "restored" };
       },
     },
@@ -1209,7 +1109,6 @@ test("creates, restores and deletes native snapshots for the Environment Workspa
   const coordinates: EnvironmentRuntimeRecord = {
     id: environment.id,
     sandboxId: environment.sandboxId,
-    workspaceVolumeId: environment.workspaceVolumeId,
     runtimeGeneration: 1,
     decoder: {
       supervisorCursor: 0,
@@ -1231,13 +1130,12 @@ test("creates, restores and deletes native snapshots for the Environment Workspa
   assert.deepEqual(snapshot, {
     id: "snapshot-workspace-one",
     name: "sandpi-workspace-backup",
-    sizeBytes: 1_048_576,
     createdAt: new Date("2026-07-21T12:00:00.000Z"),
   });
   assert.deepEqual(calls, [
     {
       operation: "create",
-      volumeId: "volume-environment",
+      sandboxId: "sandbox-environment",
       value: {
         name: "sandpi-workspace-backup",
         description: "Environment backup",
@@ -1245,62 +1143,21 @@ test("creates, restores and deletes native snapshots for the Environment Workspa
     },
     {
       operation: "restore",
-      volumeId: "volume-environment",
-      value: "snapshot-workspace-one",
+      sandboxId: "sandbox-environment",
+      value: { snapshotId: "snapshot-workspace-one" },
     },
     {
       operation: "delete",
-      volumeId: "volume-environment",
       value: "snapshot-workspace-one",
     },
   ]);
 });
 
-test("waits for the paused Sandbox ctld portal to unmount before restoring a Workspace snapshot", async () => {
+test("does not retry rootfs snapshot restore conflicts", async () => {
   let attempts = 0;
   const runtime = runtimeWithClient({
-    volumes: {
-      async restoreSnapshot(volumeId: string, snapshotId: string) {
-        assert.equal(volumeId, "volume-environment");
-        assert.equal(snapshotId, "snapshot-workspace-one");
-        attempts += 1;
-        if (attempts === 1) {
-          throw new APIError({
-            statusCode: 409,
-            code: "conflict",
-            message:
-              "ctld-mounted volumes must be unmounted before snapshot or restore",
-          });
-        }
-        return { status: "restored" };
-      },
-    },
-  });
-  const coordinates: EnvironmentRuntimeRecord = {
-    id: environment.id,
-    sandboxId: environment.sandboxId,
-    workspaceVolumeId: environment.workspaceVolumeId,
-    runtimeGeneration: 1,
-    decoder: {
-      supervisorCursor: 0,
-      tailBase64: "",
-      runtimeGeneration: 1,
-    },
-  };
-
-  await runtime.restoreEnvironmentWorkspaceBackup(
-    coordinates,
-    "snapshot-workspace-one",
-  );
-
-  assert.equal(attempts, 2);
-});
-
-test("does not retry unrelated Workspace snapshot restore conflicts", async () => {
-  let attempts = 0;
-  const runtime = runtimeWithClient({
-    volumes: {
-      async restoreSnapshot() {
+    sandboxes: {
+      async restoreRootFS() {
         attempts += 1;
         throw new APIError({
           statusCode: 409,
@@ -1313,7 +1170,6 @@ test("does not retry unrelated Workspace snapshot restore conflicts", async () =
   const coordinates: EnvironmentRuntimeRecord = {
     id: environment.id,
     sandboxId: environment.sandboxId,
-    workspaceVolumeId: environment.workspaceVolumeId,
     runtimeGeneration: 1,
     decoder: {
       supervisorCursor: 0,
@@ -1423,7 +1279,6 @@ test("uses Sandbox0 runtime access to auto-resume a paused Environment", async (
   const coordinates: EnvironmentRuntimeRecord = {
     id: environment.id,
     sandboxId: environment.sandboxId,
-    workspaceVolumeId: environment.workspaceVolumeId,
     supervisorSessionId: "supervisor-environment",
     attemptId: "attempt-before-pause",
     runtimeGeneration: 1,
@@ -1616,7 +1471,6 @@ test("rehydrates the Codex credential after missing Supervisor repair restarts t
   const coordinates: EnvironmentRuntimeRecord = {
     id: environment.id,
     sandboxId: environment.sandboxId,
-    workspaceVolumeId: environment.workspaceVolumeId,
     supervisorSessionId: "supervisor-environment",
     attemptId: "attempt-before-repair",
     runtimeGeneration: 1,
@@ -1721,7 +1575,6 @@ test("rehydrates the Codex credential after Workspace transport repair", async (
   const coordinates: EnvironmentRuntimeRecord = {
     id: environment.id,
     sandboxId: environment.sandboxId,
-    workspaceVolumeId: environment.workspaceVolumeId,
     supervisorSessionId: "supervisor-environment",
     attemptId: "attempt-before-repair",
     runtimeGeneration: 1,
@@ -1783,7 +1636,6 @@ test("rejects a credential write whose post-write Sandbox generation changed", a
   const coordinates: EnvironmentRuntimeRecord = {
     id: environment.id,
     sandboxId: environment.sandboxId,
-    workspaceVolumeId: environment.workspaceVolumeId,
     supervisorSessionId: "supervisor-environment",
     attemptId: "attempt-before-restart",
     runtimeGeneration: 1,
@@ -1860,7 +1712,6 @@ test("does not swallow an unrelated Supervisor attempt conflict", async () => {
   const coordinates: EnvironmentRuntimeRecord = {
     id: environment.id,
     sandboxId: environment.sandboxId,
-    workspaceVolumeId: environment.workspaceVolumeId,
     supervisorSessionId: "supervisor-environment",
     attemptId: "attempt-stopped",
     runtimeGeneration: 1,
@@ -1939,7 +1790,6 @@ test("accepts a Supervisor attempt conflict only after Sandbox0 proves the live 
   const coordinates: EnvironmentRuntimeRecord = {
     id: environment.id,
     sandboxId: environment.sandboxId,
-    workspaceVolumeId: environment.workspaceVolumeId,
     supervisorSessionId: "supervisor-environment",
     attemptId: "attempt-stopped",
     runtimeGeneration: 1,
@@ -2026,7 +1876,6 @@ test("restores harness-neutral access without starting Codex", async () => {
   const coordinates: EnvironmentRuntimeRecord = {
     id: environment.id,
     sandboxId: environment.sandboxId,
-    workspaceVolumeId: environment.workspaceVolumeId,
     runtimeGeneration: 1,
     decoder: {
       supervisorCursor: 0,
@@ -2078,7 +1927,6 @@ test("repairs a disconnected Workspace portal for harness-neutral access", async
   const coordinates: EnvironmentRuntimeRecord = {
     id: environment.id,
     sandboxId: environment.sandboxId,
-    workspaceVolumeId: environment.workspaceVolumeId,
     runtimeGeneration: 1,
     decoder: {
       supervisorCursor: 0,
@@ -2158,7 +2006,6 @@ test("starts one Environment-scoped Codex app-server without unsupported plugin 
   const coordinates: EnvironmentRuntimeRecord = {
     id: environment.id,
     sandboxId: environment.sandboxId,
-    workspaceVolumeId: environment.workspaceVolumeId,
     runtimeGeneration: 0,
     decoder: {
       supervisorCursor: 0,
@@ -2329,7 +2176,6 @@ test("reasserts a failed Supervisor desired state after restart exhaustion", asy
   const coordinates: EnvironmentRuntimeRecord = {
     id: environment.id,
     sandboxId: environment.sandboxId,
-    workspaceVolumeId: environment.workspaceVolumeId,
     supervisorSessionId: failed.id,
     attemptId: failed.attempt.id,
     runtimeGeneration: 1,
@@ -2422,7 +2268,6 @@ test("replaces a live Codex app-server attempt after its credential binding chan
   const coordinates: EnvironmentRuntimeRecord = {
     id: environment.id,
     sandboxId: environment.sandboxId,
-    workspaceVolumeId: environment.workspaceVolumeId,
     supervisorSessionId: previous.id,
     attemptId: previous.attempt.id,
     runtimeGeneration: 3,
@@ -2530,7 +2375,6 @@ test("retries transient Supervisor writes without duplicating input", async () =
   const coordinates: EnvironmentRuntimeRecord = {
     id: environment.id,
     sandboxId: environment.sandboxId,
-    workspaceVolumeId: environment.workspaceVolumeId,
     supervisorSessionId: "supervisor-environment",
     attemptId: "attempt-retry",
     runtimeGeneration: 1,
@@ -2556,7 +2400,6 @@ test("rejects stale Supervisor coordinates before writing input", async () => {
   const coordinates: EnvironmentRuntimeRecord = {
     id: environment.id,
     sandboxId: environment.sandboxId,
-    workspaceVolumeId: environment.workspaceVolumeId,
     supervisorSessionId: "supervisor-environment",
     attemptId: "attempt-current",
     runtimeGeneration: 7,
@@ -2641,7 +2484,6 @@ test("maps an expected-attempt input conflict to safe epoch recovery", async () 
   const coordinates: EnvironmentRuntimeRecord = {
     id: environment.id,
     sandboxId: environment.sandboxId,
-    workspaceVolumeId: environment.workspaceVolumeId,
     supervisorSessionId: "supervisor-environment",
     attemptId: "attempt-current",
     runtimeGeneration: 7,
@@ -2738,7 +2580,6 @@ test("uses abortable generated APIs for cancellable Supervisor writes", async ()
   const coordinates: EnvironmentRuntimeRecord = {
     id: environment.id,
     sandboxId: environment.sandboxId,
-    workspaceVolumeId: environment.workspaceVolumeId,
     supervisorSessionId: "supervisor-environment",
     attemptId: "attempt-abortable",
     runtimeGeneration: 1,
@@ -2789,7 +2630,6 @@ test("reports exhausted Sandbox0 transport failures as retryable unavailability"
   const coordinates: EnvironmentRuntimeRecord = {
     id: environment.id,
     sandboxId: environment.sandboxId,
-    workspaceVolumeId: environment.workspaceVolumeId,
     supervisorSessionId: "supervisor-environment",
     attemptId: "attempt-unavailable",
     runtimeGeneration: 1,
@@ -2821,7 +2661,6 @@ test("reports Sandbox0 deployment credential failures with operator guidance", a
   const coordinates: EnvironmentRuntimeRecord = {
     id: environment.id,
     sandboxId: environment.sandboxId,
-    workspaceVolumeId: environment.workspaceVolumeId,
     supervisorSessionId: "supervisor-environment",
     runtimeGeneration: 1,
     decoder: {
@@ -2895,7 +2734,6 @@ test("all Environment file access resolves through the shared Sandbox", async ()
   const coordinates: EnvironmentRuntimeRecord = {
     id: environment.id,
     sandboxId: environment.sandboxId,
-    workspaceVolumeId: environment.workspaceVolumeId,
     runtimeGeneration: 1,
     decoder: { supervisorCursor: 0, tailBase64: "", runtimeGeneration: 1 },
   };
@@ -2935,7 +2773,6 @@ test("reads a native Codex rollout only from its bound managed path", async () =
   const coordinates: EnvironmentRuntimeRecord = {
     id: environment.id,
     sandboxId: environment.sandboxId,
-    workspaceVolumeId: environment.workspaceVolumeId,
     runtimeGeneration: 1,
     decoder: { supervisorCursor: 0, tailBase64: "", runtimeGeneration: 1 },
   };
@@ -2993,7 +2830,6 @@ test("rejects a Codex rollout reached through a symbolic link", async () => {
   const coordinates: EnvironmentRuntimeRecord = {
     id: environment.id,
     sandboxId: environment.sandboxId,
-    workspaceVolumeId: environment.workspaceVolumeId,
     runtimeGeneration: 1,
     decoder: { supervisorCursor: 0, tailBase64: "", runtimeGeneration: 1 },
   };
@@ -3047,7 +2883,6 @@ test("falls back to Codex's compressed rollout sibling", async () => {
   const coordinates: EnvironmentRuntimeRecord = {
     id: environment.id,
     sandboxId: environment.sandboxId,
-    workspaceVolumeId: environment.workspaceVolumeId,
     runtimeGeneration: 1,
     decoder: { supervisorCursor: 0, tailBase64: "", runtimeGeneration: 1 },
   };
@@ -3095,7 +2930,6 @@ test("bounds decompressed Codex rollout output", async () => {
   const coordinates: EnvironmentRuntimeRecord = {
     id: environment.id,
     sandboxId: environment.sandboxId,
-    workspaceVolumeId: environment.workspaceVolumeId,
     runtimeGeneration: 1,
     decoder: { supervisorCursor: 0, tailBase64: "", runtimeGeneration: 1 },
   };
@@ -3153,7 +2987,6 @@ test("streams retained and live Codex events from the Supervisor cursor", async 
   const coordinates: EnvironmentRuntimeRecord = {
     id: environment.id,
     sandboxId: environment.sandboxId,
-    workspaceVolumeId: environment.workspaceVolumeId,
     supervisorSessionId: "supervisor-environment-test",
     attemptId: "attempt-stream",
     runtimeGeneration: 2,
@@ -3241,7 +3074,6 @@ test("lists one Workspace directory without recursively expanding folders", asyn
   const coordinates: EnvironmentRuntimeRecord = {
     id: environment.id,
     sandboxId: environment.sandboxId,
-    workspaceVolumeId: environment.workspaceVolumeId,
     runtimeGeneration: 1,
     decoder: { supervisorCursor: 0, tailBase64: "", runtimeGeneration: 1 },
   };
@@ -3265,75 +3097,6 @@ test("lists one Workspace directory without recursively expanding folders", asyn
       { name: "README.md", kind: "file", children: undefined },
     ],
   );
-});
-
-test("reads persistent Workspace files without resuming the Sandbox", async () => {
-  const operations: string[] = [];
-  const content = Buffer.from("export const answer = 42;\n");
-  const runtime = runtimeWithClient({
-    volumes: {
-      async listFiles(volumeId: string, directoryPath: string) {
-        operations.push(`list:${volumeId}:${directoryPath}`);
-        return [
-          { name: "src", path: "/src", type: "dir", size: 0 },
-          {
-            name: "README.md",
-            path: "/README.md",
-            type: "file",
-            size: 12,
-          },
-        ];
-      },
-      async statFile(volumeId: string, filePath: string) {
-        operations.push(`stat:${volumeId}:${filePath}`);
-        if (filePath === "/src") {
-          return { type: "dir", size: 0, isLink: false };
-        }
-        assert.equal(filePath, "/src/index.ts");
-        return {
-          type: "file",
-          size: content.byteLength,
-          modTime: new Date("2026-07-26T01:00:00.000Z"),
-          isLink: false,
-        };
-      },
-      async readFile(volumeId: string, filePath: string) {
-        operations.push(`read:${volumeId}:${filePath}`);
-        return content;
-      },
-    },
-  });
-  const coordinates = environmentRuntimeRecord();
-
-  const listing = await runtime.listPersistentWorkspaceFiles(
-    coordinates,
-    "/workspace",
-  );
-  const file = await runtime.readPersistentWorkspaceIdeFile(
-    coordinates,
-    "/workspace/src/index.ts",
-  );
-
-  assert.deepEqual(
-    listing.entries.map((entry) => ({ name: entry.name, kind: entry.kind })),
-    [
-      { name: "src", kind: "folder" },
-      { name: "README.md", kind: "file" },
-    ],
-  );
-  assert.equal(file.path, "/workspace/src/index.ts");
-  assert.equal(file.editable, false);
-  assert.equal(file.readOnlyReason, "runtime-blocked");
-  assert.equal(
-    Buffer.from(file.content, "base64").toString("utf8"),
-    content.toString("utf8"),
-  );
-  assert.deepEqual(operations, [
-    "list:volume-environment:/",
-    "stat:volume-environment:/src",
-    "stat:volume-environment:/src/index.ts",
-    "read:volume-environment:/src/index.ts",
-  ]);
 });
 
 test("coalesces Git scans and invalidates them from shallow Workspace watches", async () => {
@@ -3461,7 +3224,6 @@ test("creates empty Workspace files and folders without replacing existing entri
   const coordinates: EnvironmentRuntimeRecord = {
     id: environment.id,
     sandboxId: environment.sandboxId,
-    workspaceVolumeId: environment.workspaceVolumeId,
     runtimeGeneration: 1,
     decoder: { supervisorCursor: 0, tailBase64: "", runtimeGeneration: 1 },
   };
@@ -3923,7 +3685,6 @@ test("renames and recursively deletes mutable Workspace entries", async () => {
   const coordinates: EnvironmentRuntimeRecord = {
     id: environment.id,
     sandboxId: environment.sandboxId,
-    workspaceVolumeId: environment.workspaceVolumeId,
     runtimeGeneration: 1,
     decoder: { supervisorCursor: 0, tailBase64: "", runtimeGeneration: 1 },
   };
@@ -4103,7 +3864,6 @@ test("searches Workspace files through the harness-neutral Sandbox0 runtime", as
   const coordinates: EnvironmentRuntimeRecord = {
     id: environment.id,
     sandboxId: environment.sandboxId,
-    workspaceVolumeId: environment.workspaceVolumeId,
     runtimeGeneration: 1,
     decoder: { supervisorCursor: 0, tailBase64: "", runtimeGeneration: 1 },
   };
@@ -4183,7 +3943,6 @@ test("opens Sandpi-managed Workspace files as read-only", async () => {
   const coordinates: EnvironmentRuntimeRecord = {
     id: environment.id,
     sandboxId: environment.sandboxId,
-    workspaceVolumeId: environment.workspaceVolumeId,
     runtimeGeneration: 1,
     decoder: { supervisorCursor: 0, tailBase64: "", runtimeGeneration: 1 },
   };
@@ -4288,7 +4047,6 @@ test("returns verified media metadata instead of treating ASCII containers as te
   const coordinates: EnvironmentRuntimeRecord = {
     id: environment.id,
     sandboxId: environment.sandboxId,
-    workspaceVolumeId: environment.workspaceVolumeId,
     runtimeGeneration: 1,
     decoder: { supervisorCursor: 0, tailBase64: "", runtimeGeneration: 1 },
   };
@@ -4340,7 +4098,6 @@ test("writes composer uploads only below the protected Workspace upload root", a
   const coordinates: EnvironmentRuntimeRecord = {
     id: environment.id,
     sandboxId: environment.sandboxId,
-    workspaceVolumeId: environment.workspaceVolumeId,
     runtimeGeneration: 1,
     decoder: { supervisorCursor: 0, tailBase64: "", runtimeGeneration: 1 },
   };

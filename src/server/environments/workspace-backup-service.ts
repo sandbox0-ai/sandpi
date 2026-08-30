@@ -19,7 +19,7 @@ interface WorkspaceBackupLogger {
 }
 
 /**
- * Creates native Workspace Volume snapshots and reconciles their retention.
+ * Creates native Sandbox rootfs snapshots and reconciles their retention.
  * PostgreSQL owns scheduling and the Sandpi-created snapshot journal, while
  * Sandbox0 remains authoritative for snapshot bytes and storage metering.
  */
@@ -347,7 +347,6 @@ export class EnvironmentWorkspaceBackupService {
         id: snapshot.id,
         environmentId,
         name: snapshot.name,
-        sizeBytes: snapshot.sizeBytes,
         kind,
         createdAt: toUnixTimestamp(snapshot.createdAt),
       };
@@ -425,7 +424,7 @@ function workspaceBackupIdentity(
   const suffix = randomUUID().slice(0, 8);
   return {
     name: `sandpi-workspace-${timestamp}-${suffix}`,
-    description: `Sandpi ${kind} Workspace backup for Environment ${environmentId}.`,
+    description: `Sandpi ${kind} Environment rootfs backup for Environment ${environmentId}.`,
   };
 }
 

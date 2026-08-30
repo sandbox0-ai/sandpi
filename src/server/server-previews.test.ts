@@ -96,7 +96,6 @@ test(
     });
     await server.store.markEnvironmentReady("env-default", {
       sandboxId: "sandbox-preview",
-      workspaceVolumeId: "volume-preview",
     });
 
     const invalid = await server.app.inject({

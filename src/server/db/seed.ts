@@ -95,11 +95,11 @@ export async function seedCommunityDefaults(
       `
         INSERT INTO environments (
           id, created_by_user_id, name, description, color, status,
-          revision, template_id, rootfs_snapshot_id, workspace_volume_id,
+          revision, template_id, rootfs_snapshot_id,
           credential_revision, harness, harness_metadata, network_policy,
           metadata, display_order
         ) VALUES (
-          $1, $2, $3, $4, $5, 'updating', 1, 'coding-agent', NULL, NULL, 0, $6,
+          $1, $2, $3, $4, $5, 'updating', 1, 'coding-agent', NULL, 0, $6,
           $7::JSONB, $8::JSONB, $9::JSONB, 0
         )
         ON CONFLICT (id) DO NOTHING

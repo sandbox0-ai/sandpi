@@ -18,7 +18,6 @@ export class UnconfiguredRuntime implements RuntimeAdapter {
   listUsageWindows = unavailable;
   provisionEnvironment = unavailable;
   deleteEnvironmentResources = async () => undefined;
-  deleteRetiredEnvironmentSandboxes = async () => undefined;
   updateEnvironmentNetworkPolicy = unavailable;
   getEnvironmentCredentialSource = unavailable;
   createEnvironmentCredentialSource = unavailable;
@@ -48,16 +47,13 @@ export class UnconfiguredRuntime implements RuntimeAdapter {
   watchCodexEvents = unavailable;
   readCodexRollout = unavailable;
   listFiles = unavailable;
-  listPersistentWorkspaceFiles = unavailable;
   searchFiles = unavailable;
   writeCodexComposerUpload = unavailable;
   replaceCodexEnvironmentSkill = unavailable;
   deleteCodexEnvironmentSkill = unavailable;
   readFile = unavailable;
-  readPersistentWorkspaceFile = unavailable;
   getWorkspaceGitState = unavailable;
   readWorkspaceIdeFile = unavailable;
-  readPersistentWorkspaceIdeFile = unavailable;
   writeWorkspaceIdeFile = unavailable;
   createWorkspaceIdeEntry = unavailable;
   renameWorkspaceIdeEntry = unavailable;

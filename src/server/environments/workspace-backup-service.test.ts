@@ -18,7 +18,6 @@ const logger = {
 const runtimeState: StoredEnvironmentRuntime = {
   id: "environment-one",
   sandboxId: "sandbox-one",
-  workspaceVolumeId: "volume-one",
   runtimeGeneration: 1,
   decoder: {
     supervisorCursor: 0,
@@ -46,7 +45,6 @@ const environment: Environment = {
   revision: 1,
   templateId: "coding-agent",
   rootfsSnapshotId: "",
-  workspaceVolumeId: runtimeState.workspaceVolumeId,
   sandboxId: runtimeState.sandboxId,
   sandboxState: "running",
   supervisorSessionId: "",
@@ -66,7 +64,6 @@ const oldBackup: EnvironmentWorkspaceBackup = {
   id: "snapshot-old",
   environmentId: environment.id,
   name: "old-backup",
-  sizeBytes: 512,
   kind: "automatic",
   createdAt: 1,
 };
@@ -137,7 +134,6 @@ test("one elected worker snapshots the Workspace and prunes only journaled backu
       return {
         id: "snapshot-new",
         name: input.name,
-        sizeBytes: 1_024,
         createdAt: new Date("2026-07-21T12:00:00.000Z"),
       };
     },
@@ -262,7 +258,6 @@ test("manual backup authorizes management and returns the refreshed policy state
       return {
         id: "snapshot-manual",
         name: input.name,
-        sizeBytes: 2_048,
         createdAt: new Date("2026-07-21T12:00:00.000Z"),
       };
     },
@@ -476,7 +471,7 @@ test("a failed native restore returns a running Environment to its previous life
     },
     async restoreEnvironmentWorkspaceBackup() {
       calls.push("restore");
-      throw new Error("volume owner is busy");
+      throw new Error("rootfs restore is busy");
     },
     async ensureEnvironmentRuntimeAccess() {
       calls.push("auto-resume");
@@ -500,7 +495,7 @@ test("a failed native restore returns a running Environment to its previous life
       oldBackup.id,
       environment.name,
     ),
-    /volume owner is busy/,
+    /rootfs restore is busy/,
   );
   await service.close();
 

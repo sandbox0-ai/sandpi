@@ -172,7 +172,6 @@ export const environmentSchema = component(
     revision: z.number().int().nonnegative(),
     templateId: z.string(),
     rootfsSnapshotId: z.string(),
-    workspaceVolumeId: z.string(),
     sandboxId: z.string(),
     sandboxState: z.enum([
       "pending",
@@ -202,7 +201,6 @@ export const workspaceBackupSchema = component(
     id: z.string(),
     environmentId: z.string(),
     name: z.string(),
-    sizeBytes: z.number().int().nonnegative(),
     kind: z.enum(["automatic", "manual"]),
     createdAt: unixTimestampSchema,
   }),
@@ -916,20 +914,7 @@ export const workspaceDirectoryListingSchema = component(
 
 export const workspaceRuntimeAccessMetaSchema = component(
   "WorkspaceRuntimeAccessMeta",
-  z.discriminatedUnion("runtimeAccess", [
-    z.object({ runtimeAccess: z.literal("sandbox") }),
-    z.object({
-      runtimeAccess: z.literal("persistent-storage"),
-      runtimeBlock: z.object({
-        code: z.enum([
-          "sandbox_runtime_quota_exhausted",
-          "environment_plan_limit",
-        ]),
-        message: z.string(),
-        details: z.record(z.string(), z.unknown()).optional(),
-      }),
-    }),
-  ]),
+  z.object({ runtimeAccess: z.literal("sandbox") }),
 );
 
 const gitFileChangeSchema = z.object({
@@ -994,9 +979,7 @@ export const workspaceIdeFileSchema = component(
       .optional(),
     bom: z.literal("utf8").optional(),
     editable: z.boolean(),
-    readOnlyReason: z
-      .enum(["binary", "deleted", "sandpi-managed", "runtime-blocked"])
-      .optional(),
+    readOnlyReason: z.enum(["binary", "deleted", "sandpi-managed"]).optional(),
     size: z.string().optional(),
     modifiedAt: unixTimestampSchema.optional(),
     git: gitFileChangeSchema.optional(),

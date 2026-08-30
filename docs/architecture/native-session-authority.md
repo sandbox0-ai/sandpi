@@ -11,7 +11,7 @@ normalizes or reconstructs a parallel chat transcript in PostgreSQL.
 
 ```text
 Environment
-  Sandbox + /workspace Volume + credential binding
+  Sandbox + persistent writable rootfs + credential binding
   + one native harness process + Supervisor journal + Terminal
        |
        +-- Sandpi Session A -> native Thread A
@@ -19,11 +19,11 @@ Environment
        +-- Sandpi Session C -> native Thread C
 ```
 
-- An Environment owns the Sandbox0 resource allocation. Its Sandbox, Workspace
-  Volume, Supervisor decoder cursor, Terminal and metrics are shared by every
+- An Environment owns the Sandbox0 resource allocation. Its Sandbox, writable
+  rootfs, Supervisor decoder cursor, Terminal and metrics are shared by every
   product Session in that Environment.
 - A Sandpi Session stores product metadata and one opaque harness-native Session
-  id. It owns no Sandbox, Volume, Terminal or transcript.
+  id. It owns no Sandbox, rootfs, Terminal or transcript.
 - PostgreSQL stores scalar control and repair state: native Session id, selected
   model, history revision, active native Turn id, delivery runtime epoch and
   explicit interrupt marker. A claimed runtime recovery also stores only its
@@ -43,7 +43,7 @@ Environment
   a process-local live cursor at the matching JSON-RPC response record, and the
   client applies only the bounded notification suffix after that point. The
   conversation snapshot carries an Activity-loading marker and is sent
-  immediately; the bounded Volume read completes in a separate SSE `activity`
+  immediately; the bounded rollout read completes in a separate SSE `activity`
   event keyed by native Thread id and product history revision. The client
   ignores an Activity result for a superseded snapshot.
 - A missing native Thread is an invariant failure. Sandpi reports it and never
@@ -90,7 +90,7 @@ requiring a coding-agent image or Environment replacement.
 ## Persistent native state and credentials
 
 Codex uses `/workspace/.sandpi/harnesses/codex` as its persistent `CODEX_HOME`.
-This keeps all native Threads on the Environment Workspace Volume, so a Sandbox
+This keeps all native Threads in the Environment writable rootfs, so a Sandbox
 runtime or harness process restart can reopen their persisted history without a
 Sandpi chat store. An in-flight Turn itself does not survive an app-server
 restart: Codex reports it as interrupted. When Sandpi proves that its delivery
@@ -163,7 +163,7 @@ support is therefore the remaining format-specific playback boundary.
 
 The Environment credential source is encrypted in PostgreSQL and materialized
 at `/dev/shm/sandpi-codex-auth.json`. Persistent `CODEX_HOME/auth.json` is only a
-symlink to that ephemeral file; the Workspace Volume contains no provider
+symlink to that ephemeral file; the persisted rootfs contains no provider
 credential body. The Environment owner and its coding agents have execution in
 the same Sandbox and must still be treated as able to inspect their own native
 credential, just as with a local harness.
@@ -600,8 +600,8 @@ Every Environment Sandbox is claimed with `auto_resume=true`, soft `ttl=0` and
 `hard_ttl=0`. Sandpi disables both Sandbox0 TTLs so deployment or template
 defaults cannot terminate a durable Environment. Its native Turn projection
 owns the configurable idle-pause decision, while permanent deletion remains an
-explicit Environment operation. The Workspace Volume and native harness home
-have their independent durable lifecycle.
+explicit Environment operation. The writable rootfs and native harness home
+share the Sandbox's durable lifecycle.
 
 Each native `turn/completed` transition stores `last_turn_completed_at` and the
 configured `idle_pause_due_at` in PostgreSQL in the same transaction as the
@@ -653,7 +653,7 @@ stops retained harness and device-login workers, and deletes Sandbox0 resources.
 Only after that succeeds does one PostgreSQL transaction remove active and
 archived Session references, credentials and Environment metadata. If Sandbox0
 cleanup fails, Sandpi keeps the coordinates and records the error for a safe
-retry instead of hiding a leaked Sandbox or Workspace Volume.
+retry instead of hiding a leaked Sandbox.
 
 ## Branch and mutation semantics
 
@@ -690,8 +690,8 @@ source-level isolation; Sandpi does not choose that policy for them.
 ## Legacy isolated Sessions
 
 Sessions created by the retired per-Session Sandbox architecture cannot be
-silently rebound: their native rollout lived on a different private Workspace
-Volume. Migration preserves their opaque native ids for diagnosis, marks them
+silently rebound: their native rollout lived in a different private Sandbox
+filesystem. Migration preserves their opaque native ids for diagnosis, marks them
 `legacy_isolated_runtime`, and fails them explicitly. New Sessions immediately
 use the Environment runtime. Sandpi does not copy a legacy transcript into the
 database to make it appear resumable.

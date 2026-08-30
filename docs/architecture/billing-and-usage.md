@@ -108,11 +108,10 @@ under the Environment lifecycle lock and records `quota` as a separate pause
 reason. A later period reset does not eagerly resume anything; the next
 authorized user operation uses Sandbox0's native auto-resume path.
 
-Quota and plan blocks apply to compute, Agent, Terminal and Workspace writes,
-but they do not make durable data look lost. File listing, preview and download
-fall back to the Environment's persistent Sandbox0 Volume without resuming its
-Sandbox. The Web IDE shows the block reason, usage and reset time, disables
-edits, and links to plan management plus Environment data and backup controls.
+Quota and plan blocks apply to compute, Agent, Terminal and Workspace access.
+Durable rootfs data and snapshots remain intact while blocked, but Workspace
+operations cannot bypass the runtime gate. Access resumes after the quota reset
+or an entitlement change authorizes the Sandbox again.
 
 ## Stripe projection
 

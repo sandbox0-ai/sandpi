@@ -87,7 +87,6 @@ export interface EnvironmentWorkspaceBackup {
   id: string;
   environmentId: string;
   name: string;
-  sizeBytes: number;
   kind: "automatic" | "manual";
   createdAt: UnixTimestamp;
 }
@@ -278,7 +277,7 @@ export interface Environment {
   idlePauseTimeoutSeconds: number;
   /** Desired memory limit for the one shared Environment Sandbox, in MiB. */
   sandboxMemoryMiB: number;
-  /** Native SandboxVolume snapshot policy and its durable scheduler state. */
+  /** Native sandbox rootfs snapshot policy and its durable scheduler state. */
   workspaceBackup: EnvironmentWorkspaceBackupPolicy;
   name: string;
   description: string;
@@ -292,7 +291,6 @@ export interface Environment {
   revision: number;
   templateId: string;
   rootfsSnapshotId: string;
-  workspaceVolumeId: string;
   /** Shared execution coordinates. Sessions never own separate Sandboxes. */
   sandboxId: string;
   /**
@@ -435,8 +433,7 @@ export interface WorkspaceIdeFile {
   readOnlyReason?:
     | "binary"
     | "deleted"
-    | "sandpi-managed"
-    | "runtime-blocked";
+    | "sandpi-managed";
   size?: string;
   modifiedAt?: UnixTimestamp;
   git?: WorkspaceGitFileChange;

@@ -23,7 +23,7 @@ It lets you continue the same coding session from any Sandpi client.
 The Web app and first-party native clients for iOS, iPadOS, Android,
 OpenHarmony, Windows and macOS use the same Sandpi product UI and API. Every
 client stays lightweight: the coding-agent harness and terminal run in the
-cloud, with files stored on a persistent Workspace Volume.
+cloud, with files stored in the Sandbox's persistent writable rootfs.
 You can close your laptop, switch devices or disconnect a client without
 ending your coding session.
 
@@ -48,15 +48,15 @@ Codex is the first supported coding agent.
 | Focused isolation | Create one Environment per project, task or concern. Each gets its own Sandbox, Workspace, coding-agent account, network policy and credentials. |
 | Multiple coding plans | Connect different Environments to different Codex/ChatGPT accounts, or keep work separated while using the same account. |
 | Controlled outbound access | Restrict sandbox egress by destination and inject supported credentials only into matching traffic, instead of placing service secrets in the repository or browser. |
-| Workspace protection | Create manual or scheduled Workspace backups with retention and restore them through Sandbox0 Volume snapshots. |
-| Encrypted persisted state | Sandbox0 encrypts persisted Environment rootfs checkpoint objects and default S0FS Workspace Volume objects at the application layer before object storage. |
+| Workspace protection | Create manual or scheduled Workspace backups with retention and restore them through Sandbox0 rootfs snapshots. |
+| Encrypted persisted state | Sandbox0 encrypts persisted Environment rootfs checkpoint objects at the application layer before object storage. |
 | Durable Automation | Schedule a Codex prompt or trigger it from a connected GitHub App or authenticated custom Webhook. Sandpi persists run intent outside the Sandbox and reconciles native Turn completion after server or runtime recovery. |
 
 An Environment is deliberately larger than a chat:
 
 ```text
 Environment
-├── Sandbox and persistent Workspace Volume
+├── Sandbox with a persistent writable rootfs
 ├── one native coding-agent harness and provider account
 ├── network policy and egress credentials
 ├── runtime resources, terminal and metrics
@@ -142,7 +142,7 @@ harnesses and clients can be added as independent integrations.
 - Node.js 24 and npm 11
 - PostgreSQL 15 or newer
 - A Sandbox0 deployment
-- A Sandbox0 deployment API key with Sandbox and Volume access plus
+- A Sandbox0 deployment API key with Sandbox access plus
   `credentialsource:read`, `credentialsource:write` and
   `credentialsource:delete`
 - A current Sandbox0 `coding-agent` template with the official Playwright CLI
@@ -257,11 +257,11 @@ Sandpi server ───────── PostgreSQL
     ▼
 Sandbox0
     ├── Sandbox + native Codex app-server
-    ├── persistent Workspace Volume
+    ├── persistent writable rootfs and native snapshots
     ├── official Playwright CLI and version-matched Agent Skill
     ├── terminal and runtime metrics
     ├── network policy and credential injection
-    └── Workspace snapshots
+    └── Environment rootfs snapshots
 ```
 
 - Sandpi clients talk only to Sandpi. They receive neither the Sandbox0
@@ -272,15 +272,15 @@ Sandbox0
   chat remain inert until a dedicated Preview surface exists.
 - Sandpi uses Sandbox0 through the official JavaScript SDK; it does not read a
   Sandbox0 database, internal metering endpoint or ClickHouse credential.
-- Sandbox0 owns Sandbox lifecycle, Volumes, network enforcement, credential
+- Sandbox0 owns Sandbox lifecycle, writable rootfs persistence, network enforcement, credential
   injection and usage truth. Sandpi owns its users, Environment attribution,
   native Session references and optional product entitlements. Public
   Environment reads resolve lifecycle state through the Sandbox0 SDK; Sandpi
   PostgreSQL stores lifecycle intent and runtime fencing coordinates, not a
   second observed Sandbox state.
 - With Sandbox0's default storage runtime, persisted Environment rootfs
-  checkpoint objects and default S0FS Workspace Volume objects are encrypted at
-  the application layer before object storage. Sandbox0 manager and the active
+  checkpoint objects are encrypted at the application layer before object
+  storage. Sandbox0 manager and the active
   ctld hold the installation key, so this is service-side rather than
   end-to-end encryption. Self-hosted operators control it with
   `spec.storage.runtime.objectEncryptionEnabled`.

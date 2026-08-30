@@ -93,6 +93,7 @@ test("migration history contains every durable Sandpi boundary", async () => {
       "0062_github_webhook_sources",
       "0063_simplify_environment_webhooks",
       "0064_default_environment_memory_4_gib",
+      "0065_rootfs_environment_runtime",
     ],
   );
 
@@ -818,6 +819,25 @@ test("migration history contains every durable Sandpi boundary", async () => {
   assert.match(workspaceBackupsSql, /workspace_backup_retry_at TIMESTAMPTZ/);
   assert.doesNotMatch(workspaceBackupsSql, /snapshot_(?:content|bytes) BYTEA/i);
 
+  const rootfsEnvironmentRuntimeSql = migrations[64]?.sql ?? "";
+  assert.match(
+    rootfsEnvironmentRuntimeSql,
+    /Cannot retire Environment Workspace Volumes before every Environment has completed the rootfs cutover/,
+  );
+  assert.match(
+    rootfsEnvironmentRuntimeSql,
+    /DROP TABLE environment_workspace_backups/,
+  );
+  assert.match(
+    rootfsEnvironmentRuntimeSql,
+    /ALTER TABLE environments DROP COLUMN workspace_volume_id/,
+  );
+  assert.match(
+    rootfsEnvironmentRuntimeSql,
+    /CREATE TABLE environment_workspace_backups[\s\S]+sandbox_id TEXT NOT NULL/,
+  );
+  assert.doesNotMatch(rootfsEnvironmentRuntimeSql, /size_bytes/);
+
   const codexNativeMcpSql = migrations[44]?.sql ?? "";
   assert.match(
     codexNativeMcpSql,
@@ -1103,5 +1123,133 @@ test(
     assert.equal(tableNames.has("environment_webhook_trigger_states"), false);
     assert.equal(tableNames.has("environment_webhook_cooldown_buckets"), false);
     assert.equal(tableNames.has("environment_webhook_batch_buckets"), true);
+  },
+);
+
+test(
+  "migrating Environment persistence keeps runtime authority and retires legacy Volume backups",
+  { skip: !process.env.DATABASE_URL },
+  async (context) => {
+    const schema = `sandpi_rootfs_migration_${randomUUID().replaceAll("-", "")}`;
+    const administration = new Pool({
+      connectionString: process.env.DATABASE_URL,
+      application_name: "sandpi-rootfs-migration-administration",
+      max: 1,
+    });
+    await administration.query(`CREATE SCHEMA "${schema}"`);
+    const database = new Pool({
+      connectionString: process.env.DATABASE_URL,
+      application_name: "sandpi-rootfs-migration-test",
+      options: `-c search_path=${schema}`,
+      max: 2,
+    });
+    context.after(async () => {
+      await database.end();
+      await administration.query(`DROP SCHEMA "${schema}" CASCADE`);
+      await administration.end();
+    });
+
+    const migrations = await loadMigrations();
+    await migrateDatabase(database, migrations.slice(0, 64));
+    const seed = await seedCommunityDefaults(database, {
+      admin: {
+        id: "user-rootfs-migration",
+        email: "rootfs-migration@sandpi.local",
+        identitySubject: "rootfs-migration",
+      },
+      environment: {
+        id: "environment-rootfs-migration",
+        name: "RootFS migration",
+      },
+    });
+    await database.query(
+      `UPDATE environments SET workspace_volume_id = 'legacy-volume'
+       WHERE id = $1`,
+      [seed.environment.id],
+    );
+    await database.query(
+      `INSERT INTO environment_runtime (environment_id, sandbox_id)
+       VALUES ($1, 'sandbox-rootfs-migration')`,
+      [seed.environment.id],
+    );
+    await database.query(
+      `INSERT INTO environment_workspace_backups (
+         snapshot_id, environment_id, workspace_volume_id, name, size_bytes,
+         backup_kind, created_at
+       ) VALUES (
+         'legacy-volume-snapshot', $1, 'legacy-volume', 'Legacy backup', 42,
+         'automatic', NOW()
+       )`,
+      [seed.environment.id],
+    );
+
+    const migration = migrations[64];
+    assert.equal(migration?.version, "0065_rootfs_environment_runtime");
+    await assert.rejects(
+      migrateDatabase(database, [migration!]),
+      /Cannot retire Environment Workspace Volumes before every Environment has completed the rootfs cutover/,
+    );
+    await database.query(
+      `UPDATE environments SET workspace_volume_id = NULL WHERE id = $1`,
+      [seed.environment.id],
+    );
+    await migrateDatabase(database, [migration!]);
+
+    const environment = await database.query<{
+      id: string;
+      sandbox_id: string;
+    }>(
+      `SELECT environment.id, runtime.sandbox_id
+       FROM environments environment
+       JOIN environment_runtime runtime
+         ON runtime.environment_id = environment.id
+       WHERE environment.id = $1`,
+      [seed.environment.id],
+    );
+    assert.deepEqual(environment.rows, [
+      {
+        id: seed.environment.id,
+        sandbox_id: "sandbox-rootfs-migration",
+      },
+    ]);
+
+    const environmentColumns = await database.query<{ column_name: string }>(
+      `SELECT column_name FROM information_schema.columns
+       WHERE table_schema = $1 AND table_name = 'environments'`,
+      [schema],
+    );
+    assert.equal(
+      environmentColumns.rows.some(
+        (column) => column.column_name === "workspace_volume_id",
+      ),
+      false,
+    );
+
+    const backupColumns = await database.query<{ column_name: string }>(
+      `SELECT column_name FROM information_schema.columns
+       WHERE table_schema = $1
+         AND table_name = 'environment_workspace_backups'`,
+      [schema],
+    );
+    const backupColumnNames = new Set(
+      backupColumns.rows.map((column) => column.column_name),
+    );
+    assert.equal(backupColumnNames.has("sandbox_id"), true);
+    assert.equal(backupColumnNames.has("workspace_volume_id"), false);
+    assert.equal(backupColumnNames.has("size_bytes"), false);
+
+    const retiredBackups = await database.query<{ count: string }>(
+      `SELECT COUNT(*)::TEXT AS count FROM environment_workspace_backups`,
+    );
+    assert.equal(retiredBackups.rows[0]?.count, "0");
+    await database.query(
+      `INSERT INTO environment_workspace_backups (
+         snapshot_id, environment_id, sandbox_id, name, backup_kind, created_at
+       ) VALUES (
+         'rootfs-snapshot', $1, 'sandbox-rootfs-migration', 'RootFS backup',
+         'manual', NOW()
+       )`,
+      [seed.environment.id],
+    );
   },
 );

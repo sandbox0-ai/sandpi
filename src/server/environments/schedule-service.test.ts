@@ -24,7 +24,6 @@ const environment: Environment = {
   revision: 1,
   templateId: "coding-agent",
   rootfsSnapshotId: "rootfs-one",
-  workspaceVolumeId: "volume-one",
   sandboxId: "sandbox-one",
   sandboxState: "running",
   supervisorSessionId: "supervisor-one",

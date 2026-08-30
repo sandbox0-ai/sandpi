@@ -42,26 +42,16 @@ import {
   useState,
 } from "react";
 
-import { PreferencesLink } from "@/components/preferences-link";
 import {
   ApiError,
   apiFetch,
   apiWebSocketUrl,
   type ApiEnvelope,
 } from "@/lib/api-client";
-import {
-  formatRuntimeQuantity,
-  formatUsageResetTime,
-} from "@/lib/billing";
 import { updateLocalUiPreferences } from "@/lib/local-ui-preferences";
 import type { OperationLanguage } from "@/lib/operation-ui";
 import {
-  runtimePlanBlockFromMeta,
-  type RuntimePlanBlock,
-} from "@/lib/runtime-plan-block";
-import {
   formatUnixTimestamp,
-  unixTimestampToIso,
 } from "@/lib/time";
 import { useLocalUiPreferences } from "@/lib/use-local-ui-preferences";
 import {
@@ -166,11 +156,7 @@ const workspaceClientCache = new Map<string, WorkspaceClientCacheEntry>();
 const sharedWorkspaceRequests = new Map<string, SharedWorkspaceRequest>();
 
 function workspaceClientCacheKey(environment: Environment) {
-  return [
-    environment.id,
-    environment.sandboxId,
-    environment.workspaceVolumeId,
-  ].join(":");
+  return [environment.id, environment.sandboxId].join(":");
 }
 
 function readWorkspaceClientCache(key: string) {
@@ -300,16 +286,6 @@ const copy = {
     reconnecting: "Reconnecting",
     polling: "Polling",
     offline: "Disconnected",
-    runtimeQuotaTitle: "Sandbox runtime allowance exhausted",
-    environmentPlanTitle: "Environment runtime blocked by plan",
-    runtimePlanBody:
-      "Compute, Agent and Terminal access is blocked. Persistent Workspace files remain available below for read-only preview and download.",
-    runtimeUsage: (used: string, limit: string) =>
-      `${used} / ${limit} GiB-hours used`,
-    runtimeResets: (reset: string) => `Allowance resets ${reset}.`,
-    runtimeState: (state: string) => `Environment state: ${state}`,
-    managePlan: "Manage plan",
-    dataAndBackups: "Data & backups",
     refresh: "Refresh Workspace",
     refreshing: "Refreshing Workspace",
     refreshed: "Workspace refreshed",
@@ -330,8 +306,6 @@ const copy = {
     downloadFailed: "File could not be downloaded.",
     deletedFile: "Deleted files are read-only. Restore them from Git before editing.",
     managedFile: "Sandpi-managed files are read-only in the Web IDE.",
-    runtimeBlockedFile:
-      "Runtime access is blocked by the current plan. This persistent file remains available for preview and download, but editing is disabled.",
     save: "Save file (⌘/Ctrl+S)",
     saved: "Saved",
     saving: "Saving…",
@@ -390,16 +364,6 @@ const copy = {
     reconnecting: "正在重连",
     polling: "轮询更新",
     offline: "已断开",
-    runtimeQuotaTitle: "Sandbox 运行额度已用尽",
-    environmentPlanTitle: "当前套餐已限制 Environment 运行",
-    runtimePlanBody:
-      "计算、Agent 和 Terminal 访问已受限；下方持久化 Workspace 文件仍可只读预览和下载。",
-    runtimeUsage: (used: string, limit: string) =>
-      `已使用 ${used} / ${limit} GiB-hours`,
-    runtimeResets: (reset: string) => `额度将在 ${reset} 重置。`,
-    runtimeState: (state: string) => `Environment 状态：${state}`,
-    managePlan: "管理套餐",
-    dataAndBackups: "数据与备份",
     refresh: "刷新 Workspace",
     refreshing: "正在刷新 Workspace",
     refreshed: "Workspace 已刷新",
@@ -420,8 +384,6 @@ const copy = {
     downloadFailed: "文件无法下载。",
     deletedFile: "已删除文件为只读；请先通过 Git 恢复后再编辑。",
     managedFile: "Sandpi 管理的文件在 Web IDE 中为只读。",
-    runtimeBlockedFile:
-      "当前套餐已限制运行访问。此持久化文件仍可预览和下载，但暂时不能编辑。",
     save: "保存文件（⌘/Ctrl+S）",
     saved: "已保存",
     saving: "正在保存…",
@@ -767,14 +729,6 @@ function environmentHref(environmentId: string, sessionId?: string) {
     environment: environmentId,
   });
   if (sessionId) search.set("session", sessionId);
-  return `/?${search.toString()}`;
-}
-
-function environmentDataHref(environmentId: string) {
-  const search = new URLSearchParams({
-    environment: environmentId,
-    settings: "sandbox",
-  });
   return `/?${search.toString()}`;
 }
 
@@ -1440,8 +1394,6 @@ export function WorkspaceIde({
   );
   const [loading, setLoading] = useState(!initialCacheState.snapshot);
   const [error, setError] = useState("");
-  const [runtimePlanBlock, setRuntimePlanBlock] =
-    useState<RuntimePlanBlock>();
   const [workspaceRefreshStatus, setWorkspaceRefreshStatus] = useState<
     "idle" | "refreshing" | "complete"
   >("idle");
@@ -1490,9 +1442,6 @@ export function WorkspaceIde({
   const workspaceSocketRef = useRef<WebSocket | undefined>(undefined);
   const workspaceSocketReadyRef = useRef(false);
   const foregroundSyncKeyRef = useRef("");
-  const runtimePlanBlockCodeRef = useRef<
-    RuntimePlanBlock["code"] | undefined
-  >(undefined);
   const environmentGenerationRef = useRef(0);
   const environmentIdentityRef = useRef(cacheKey);
   const selectedPathEnvironmentRef = useRef(environment.id);
@@ -1680,11 +1629,6 @@ export function WorkspaceIde({
           ) {
             return;
           }
-          const runtimeBlock = runtimePlanBlockFromMeta(response.meta);
-          setRuntimePlanBlock(runtimeBlock);
-          if (runtimeBlock && directoryPath === WORKSPACE_ROOT) {
-            gitStateRef.current = { repositories: [] };
-          }
           const responsePath = userVisibleWorkspacePath(response.data.path);
           if (!responsePath || responsePath !== directoryPath) {
             throw new Error(
@@ -1796,7 +1740,6 @@ export function WorkspaceIde({
         ) {
           return;
         }
-        setRuntimePlanBlock(runtimePlanBlockFromMeta(response.meta));
         const responsePath = userVisibleWorkspacePath(response.data.path);
         if (!responsePath || responsePath !== visiblePath) {
           throw new Error(
@@ -1856,21 +1799,6 @@ export function WorkspaceIde({
     },
     [cacheKey, environment.id],
   );
-
-  useEffect(() => {
-    const previousCode = runtimePlanBlockCodeRef.current;
-    const currentCode = runtimePlanBlock?.code;
-    runtimePlanBlockCodeRef.current = currentCode;
-    if (!previousCode || currentCode) return;
-    for (const [filePath, document] of Object.entries(documentsRef.current)) {
-      if (
-        !document.dirty &&
-        document.data?.readOnlyReason === "runtime-blocked"
-      ) {
-        void loadDocument(filePath, "reload");
-      }
-    }
-  }, [loadDocument, runtimePlanBlock?.code]);
 
   const loadGitState = useCallback(async () => {
     const environmentId = environment.id;
@@ -1965,8 +1893,6 @@ export function WorkspaceIde({
     initialNavigationGenerationRef.current = -1;
     setRevealRequest(undefined);
     setError("");
-    runtimePlanBlockCodeRef.current = undefined;
-    setRuntimePlanBlock(undefined);
     setLoading(!nextSnapshot);
     setWorkspaceRefreshStatus("idle");
   }, [
@@ -2106,10 +2032,7 @@ export function WorkspaceIde({
       selectedPathRef.current = visiblePath;
       setSelectedPath(visiblePath);
       const document = documentsRef.current[visiblePath];
-      if (
-        !document?.data ||
-        document.data.readOnlyReason === "runtime-blocked"
-      ) {
+      if (!document?.data) {
         return loadDocument(visiblePath);
       }
       return Promise.resolve();
@@ -2523,7 +2446,6 @@ export function WorkspaceIde({
         const response = await apiFetch<ApiEnvelope<WorkspaceIdeFile>>(
           `/api/v1/environments/${encodeURIComponent(environment.id)}/ide/file?${query.toString()}`,
         );
-        setRuntimePlanBlock(runtimePlanBlockFromMeta(response.meta));
         const responsePath = userVisibleWorkspacePath(response.data.path);
         if (!responsePath || responsePath !== filePath) {
           throw new Error(
@@ -2673,7 +2595,7 @@ export function WorkspaceIde({
   }, [environment.id, selectedPath]);
 
   useEffect(() => {
-    if (!workspaceForeground || runtimePlanBlock?.code) {
+    if (!workspaceForeground) {
       setConnection("offline");
       return;
     }
@@ -2875,7 +2797,6 @@ export function WorkspaceIde({
     prioritizeExplicitFileContent,
     refreshSnapshot,
     workspaceForeground,
-    runtimePlanBlock?.code,
   ]);
 
   useEffect(() => {
@@ -2907,7 +2828,6 @@ export function WorkspaceIde({
   }, []);
 
   function updateDraft(filePath: string, draft: string) {
-    if (runtimePlanBlock) return;
     setDocuments((current) => {
       const document = current[filePath];
       if (!document?.data) return current;
@@ -2928,7 +2848,6 @@ export function WorkspaceIde({
   }
 
   async function saveDocument(filePath: string, revisionOverride?: string) {
-    if (runtimePlanBlock) return;
     const visiblePath = userVisibleWorkspacePath(filePath);
     if (!visiblePath) return;
     const document = documentsRef.current[visiblePath];
@@ -3154,18 +3073,14 @@ export function WorkspaceIde({
 
   const document = selectedPath ? documents[selectedPath] : undefined;
   const selectedFile = document?.data;
-  const selectedFileEditable = Boolean(
-    selectedFile?.editable && !runtimePlanBlock,
-  );
+  const selectedFileEditable = Boolean(selectedFile?.editable);
   const selectedFileReadOnlyMessage = !selectedFile
     ? undefined
-    : runtimePlanBlock || selectedFile.readOnlyReason === "runtime-blocked"
-      ? ui.runtimeBlockedFile
-      : selectedFile.readOnlyReason === "deleted"
-        ? ui.deletedFile
-        : selectedFile.readOnlyReason === "sandpi-managed"
-          ? ui.managedFile
-          : undefined;
+    : selectedFile.readOnlyReason === "deleted"
+      ? ui.deletedFile
+      : selectedFile.readOnlyReason === "sandpi-managed"
+        ? ui.managedFile
+        : undefined;
   const documentMode = document?.mode ?? "preview";
   const text =
     document?.draft ??
@@ -3201,17 +3116,6 @@ export function WorkspaceIde({
       : workspaceRefreshStatus === "complete"
         ? ui.refreshed
         : ui.refresh;
-  const runtimeUsageLabel =
-    runtimePlanBlock?.usedGiBHours !== undefined &&
-    runtimePlanBlock.limitGiBHours !== undefined
-      ? ui.runtimeUsage(
-          formatRuntimeQuantity(runtimePlanBlock.usedGiBHours),
-          formatRuntimeQuantity(runtimePlanBlock.limitGiBHours),
-        )
-      : undefined;
-  const runtimeResetLabel = runtimePlanBlock?.resetAt
-    ? formatUsageResetTime(runtimePlanBlock.resetAt, language, timeZone)
-    : undefined;
   const displayedFileBrowserSidebarWidth =
     fileBrowserWorkbenchWidth > 0
       ? clampFileBrowserSidebarWidthForAvailableWidth(
@@ -3355,7 +3259,7 @@ export function WorkspaceIde({
     <section
       className={`${styles.ide} ${
         variant === "standalone" ? styles.standalone : styles.embedded
-      } ${runtimePlanBlock ? styles.runtimeBlocked : ""}`}
+      }`}
       aria-label="Sandpi Web IDE"
     >
       {variant === "standalone" ? (
@@ -3373,37 +3277,6 @@ export function WorkspaceIde({
             <Radio size={12} /> {connectionLabel}
           </span>
         </header>
-      ) : null}
-
-      {runtimePlanBlock ? (
-        <div className={styles.runtimePlanBlock} role="status">
-          <CircleAlert size={18} aria-hidden="true" />
-          <div className={styles.runtimePlanBlockCopy}>
-            <strong>
-              {runtimePlanBlock.code === "sandbox_runtime_quota_exhausted"
-                ? ui.runtimeQuotaTitle
-                : ui.environmentPlanTitle}
-            </strong>
-            <p>{ui.runtimePlanBody}</p>
-            <span className={styles.runtimePlanBlockMeta}>
-              {runtimeUsageLabel ? <b>{runtimeUsageLabel}</b> : null}
-              {runtimePlanBlock.resetAt && runtimeResetLabel ? (
-                <time dateTime={unixTimestampToIso(runtimePlanBlock.resetAt)}>
-                  {ui.runtimeResets(runtimeResetLabel)}
-                </time>
-              ) : null}
-              <span>{ui.runtimeState(environment.sandboxState)}</span>
-            </span>
-          </div>
-          <span className={styles.runtimePlanBlockActions}>
-            <PreferencesLink parameters={{ billing: "plan" }}>
-              {ui.managePlan}
-            </PreferencesLink>
-            <a href={environmentDataHref(environment.id)}>
-              {ui.dataAndBackups}
-            </a>
-          </span>
-        </div>
       ) : null}
 
       <div
@@ -3462,7 +3335,7 @@ export function WorkspaceIde({
                   onDownloadFile={(filePath) =>
                     void downloadWorkspaceFile(filePath)
                   }
-                  readOnly={Boolean(runtimePlanBlock)}
+                  readOnly={false}
                   onCreateEntry={createWorkspaceEntry}
                   onRenameEntry={renameWorkspaceEntry}
                   onDeleteEntry={deleteWorkspaceEntry}
@@ -3697,7 +3570,6 @@ export function WorkspaceIde({
                     <button
                       type="button"
                       className={styles.overwriteButton}
-                      disabled={Boolean(runtimePlanBlock)}
                       onClick={() =>
                         void saveDocument(selectedPath, document.conflict?.revision)
                       }

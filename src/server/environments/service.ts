@@ -161,9 +161,9 @@ export class EnvironmentService {
         policy?.fixedSandboxMemoryMiB ??
         ENVIRONMENT_SANDBOX_MEMORY_DEFAULT_MIB,
     });
-    // The logical Environment exists before its Workspace Volume is ready.
+    // The logical Environment exists before its Sandbox rootfs is ready.
     // Return immediately so native harness login can run in an Auth Runner
-    // while the Sandbox0 Volume is provisioned independently.
+    // while Sandbox provisioning completes independently.
     void this.reconcilePending();
     return this.authoritativeEnvironment(environment);
   }
@@ -398,7 +398,7 @@ export class EnvironmentService {
       let environment = await store.getEnvironmentById(environmentId);
       if (
         !["updating", "error"].includes(environment.status) ||
-        (environment.workspaceVolumeId && environment.sandboxId)
+        environment.sandboxId
       ) {
         return environment;
       }

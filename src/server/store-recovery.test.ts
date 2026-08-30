@@ -241,7 +241,6 @@ test("maps Sandbox and Supervisor coordinates from Environment runtime", async (
       rows: [
         {
           environment_id: "environment-one",
-          workspace_volume_id: "volume-one",
           sandbox_id: "sandbox-one",
           supervisor_session_id: "supervisor-one",
           terminal_session_id: "terminal-one",
@@ -271,7 +270,6 @@ test("maps Sandbox and Supervisor coordinates from Environment runtime", async (
   assert.deepEqual(runtime, {
     id: "environment-one",
     sandboxId: "sandbox-one",
-    workspaceVolumeId: "volume-one",
     supervisorSessionId: "supervisor-one",
     terminalSessionId: "terminal-one",
     attemptId: "attempt-one",
@@ -299,7 +297,6 @@ test("schedules a newly ready Sandbox from its Environment idle timeout", async 
 
   await fixture.store.markEnvironmentReady("environment-one", {
     sandboxId: "sandbox-one",
-    workspaceVolumeId: "volume-one",
   });
 
   const runtimeInsert = fixture.calls.find((call) =>
@@ -325,7 +322,6 @@ test("records successful runtime access without promoting the Codex epoch", asyn
       rows: [
         {
           environment_id: "environment-one",
-          workspace_volume_id: "volume-one",
           sandbox_id: "sandbox-one",
           supervisor_session_id: "supervisor-one",
           terminal_session_id: null,
@@ -471,7 +467,6 @@ test("grants a fresh idle window after Sandbox0 auto-resumes an Environment", as
       rows: [
         {
           environment_id: "environment-one",
-          workspace_volume_id: "volume-one",
           sandbox_id: "sandbox-one",
           supervisor_session_id: "supervisor-one",
           terminal_session_id: null,
@@ -1590,7 +1585,6 @@ test("Environment deletion marks the runtime terminated and retains cleanup coor
       id: "environment-one",
       status: "ready",
       sandboxId: "sandbox-one",
-      workspaceVolumeId: "volume-one",
       rootfsSnapshotId: "snapshot-one",
     }),
   });
@@ -1602,7 +1596,6 @@ test("Environment deletion marks the runtime terminated and retains cleanup coor
     ),
     {
       sandboxId: "sandbox-one",
-      workspaceVolumeId: "volume-one",
       rootfsSnapshotId: "snapshot-one",
     },
   );
