@@ -46,7 +46,7 @@ Web 应用与 iOS、iPadOS、Android、OpenHarmony、Windows 和 macOS 第一方
 | 更专注的隔离 | 可以按项目、任务或关注点创建独立 Environment。每个 Environment 都有自己的 Sandbox、Workspace、coding-agent 账号、网络策略和凭证。 |
 | 多个 coding plan | 不同 Environment 可以连接不同的 Codex/ChatGPT 订阅账号；即使使用同一个账号，也可以把不同工作彼此隔离。 |
 | 可控的出站访问 | 按目标限制 Sandbox 出站流量，并只向匹配的请求注入受支持的凭证，避免把服务密钥放进仓库或浏览器。 |
-| Workspace 防丢失 | 通过 Sandbox0 rootfs snapshot 手动或定时备份 Workspace 和原生 harness 状态，设置保留数量并按需恢复。 |
+| Workspace 防丢失 | 通过 Sandbox0 rootfs snapshot 手动或定时备份 Workspace 和原生 harness 状态，设置保留数量并按需恢复；运行中的空闲 Environment 会短暂暂停以固定稳定的 rootfs generation，随后恢复到原运行状态。 |
 | 持久化数据加密 | Sandbox0 在写入对象存储前，对 Environment rootfs checkpoint 对象做应用层加密。 |
 | 持久化自动化 | 定时执行 Codex prompt，或由经过 Bearer 认证的自定义 Webhook 触发。Sandpi 在 Sandbox 外持久化运行意图，并在 server 或 runtime 恢复后对账原生 Turn。 |
 

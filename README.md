@@ -127,7 +127,9 @@ coding-agent configuration into a new or existing Sandpi Environment. See
   bearer-authenticated custom URL, declarative trigger filters, durable delivery
   history, cooldown batching and bounded run admission
 - Per-Environment network policy and Sandbox0-backed egress credential injection
-- Manual and scheduled Workspace backups, retention and restore
+- Manual and scheduled Workspace backups, retention and restore; a quiescent
+  running Environment is paused only long enough to pin a stable rootfs
+  generation and is then resumed to its desired lifecycle state
 - Built-in single-user identity or OIDC
 - Optional Stripe subscriptions and product quota enforcement
 
