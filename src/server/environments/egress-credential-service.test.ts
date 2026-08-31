@@ -22,7 +22,6 @@ const environment = {
 const runtimeRecord = {
   id: environment.id,
   sandboxId: "sandbox-one",
-  workspaceVolumeId: "volume-one",
   runtimeGeneration: 1,
   decoder: {
     supervisorCursor: 0,
@@ -555,9 +554,6 @@ test("unbinds a credential before deleting its Sandbox0 source", async () => {
       assert.equal(sourceRef, stored.sourceRef);
       steps.push("source");
     },
-    async deleteRetiredEnvironmentSandboxes() {
-      steps.push("retired-sandboxes");
-    },
   } as unknown as RuntimeAdapter;
   const service = new EnvironmentEgressCredentialService(
     store,
@@ -570,7 +566,6 @@ test("unbinds a credential before deleting its Sandbox0 source", async () => {
   assert.deepEqual(steps, [
     "status:deleting",
     "unbind",
-    "retired-sandboxes",
     "source",
     "metadata",
   ]);
@@ -694,9 +689,6 @@ test("removes Environment sources only after the caller deletes the Sandbox", as
   } as unknown as SandpiStore;
   const runtime = {
     mode: "sandbox0",
-    async deleteRetiredEnvironmentSandboxes() {
-      steps.push("retired-sandboxes");
-    },
     async deleteEnvironmentCredentialSource() {
       steps.push("source");
     },
@@ -712,7 +704,6 @@ test("removes Environment sources only after the caller deletes the Sandbox", as
 
   assert.deepEqual(steps, [
     "sandbox",
-    "retired-sandboxes",
     "deleting",
     "source",
   ]);
@@ -757,9 +748,6 @@ test("finishes source cleanup without reapplying policy for a terminated Environ
   } as unknown as SandpiStore;
   const runtime = {
     mode: "sandbox0",
-    async deleteRetiredEnvironmentSandboxes() {
-      steps.push("retired-sandboxes");
-    },
     async deleteEnvironmentCredentialSource() {
       steps.push("source");
     },
@@ -775,5 +763,5 @@ test("finishes source cleanup without reapplying policy for a terminated Environ
 
   await service.reconcilePending();
 
-  assert.deepEqual(steps, ["retired-sandboxes", "source", "metadata"]);
+  assert.deepEqual(steps, ["source", "metadata"]);
 });

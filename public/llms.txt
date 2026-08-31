@@ -23,7 +23,7 @@ This file describes the current Sandpi product contract. It is documentation, no
 - Sandpi does not idle-pause an Environment while a product Session is starting or running, or a native Turn is active or pending. Terminal input keeps an already-running Environment active; a passive open connection does not.
 - A supported Workspace, Terminal, or coding-agent access can trigger Sandbox0 auto-resume. A wake-up may take time; wait for the native transition instead of creating replacement resources or calling an independent resume path.
 - A user can explicitly pause or restart the shared Sandbox from Environment Settings for manual fault recovery. Restart performs one committed pause and resume under Sandpi's lifecycle lock. Agents should not invoke this recovery control as a substitute for native auto-resume unless the user requests it.
-- The Workspace Volume and native Session history are durable. Process memory, sockets, terminal process state, and an in-flight model Turn are not durable runtime checkpoints. Re-read persisted state before continuing after recovery and avoid repeating external side effects.
+- The Sandbox writable rootfs, Workspace, and native Session history are durable. Process memory, sockets, terminal process state, and an in-flight model Turn are not durable runtime checkpoints. Re-read persisted state before continuing after recovery and avoid repeating external side effects.
 - A Sandbox-caused interruption may receive one visible, bounded Sandpi recovery Turn. Sandpi never silently replays the original user request.
 - Quota policy can pause or reject runtime access. External deletion of the Sandbox resource is reported as missing instead of silently provisioning a replacement with potentially different security settings.
 
@@ -42,8 +42,9 @@ This file describes the current Sandpi product contract. It is documentation, no
 - Authenticated custom Environment Webhooks with trigger filters, cooldown
   policies, delivery history, and bounded run queues.
 - Sandpi owns users, Environment attribution, native Session references, and
-  optional product entitlements. Sandbox0 owns Sandbox lifecycle, Volumes,
-  network enforcement, credential injection, and usage truth.
+  optional product entitlements. Sandbox0 owns Sandbox lifecycle, writable
+  rootfs persistence and snapshots, network enforcement, credential injection,
+  and usage truth.
 
 Codex and the Web client are the currently implemented harness and client. Sandpi is pre-1.0, so discover exact native capabilities from the running harness instead of assuming every newer feature exists in an older deployment.
 

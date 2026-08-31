@@ -12,7 +12,6 @@ function storedRuntime(
   return {
     id: "environment-one",
     sandboxId: "sandbox-one",
-    workspaceVolumeId: "volume-one",
     supervisorSessionId: "supervisor-one",
     attemptId: "attempt-one",
     runtimeGeneration: 1,

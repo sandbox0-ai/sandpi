@@ -18,7 +18,6 @@ const logger = {
 const runtimeState: StoredEnvironmentRuntime = {
   id: "environment-one",
   sandboxId: "sandbox-one",
-  workspaceVolumeId: "volume-one",
   runtimeGeneration: 1,
   decoder: {
     supervisorCursor: 0,
@@ -46,7 +45,6 @@ const environment: Environment = {
   revision: 1,
   templateId: "coding-agent",
   rootfsSnapshotId: "",
-  workspaceVolumeId: runtimeState.workspaceVolumeId,
   sandboxId: runtimeState.sandboxId,
   sandboxState: "running",
   supervisorSessionId: "",
@@ -66,7 +64,6 @@ const oldBackup: EnvironmentWorkspaceBackup = {
   id: "snapshot-old",
   environmentId: environment.id,
   name: "old-backup",
-  sizeBytes: 512,
   kind: "automatic",
   createdAt: 1,
 };
@@ -126,6 +123,10 @@ test("one elected worker snapshots the Workspace and prunes only journaled backu
   } as unknown as SandpiStore;
   const runtime = {
     mode: "sandbox0",
+    async pauseEnvironment(received: StoredEnvironmentRuntime) {
+      assert.strictEqual(received, runtimeState);
+      calls.push("pause");
+    },
     async createEnvironmentWorkspaceBackup(
       received: StoredEnvironmentRuntime,
       input: { name: string; description: string },
@@ -137,9 +138,12 @@ test("one elected worker snapshots the Workspace and prunes only journaled backu
       return {
         id: "snapshot-new",
         name: input.name,
-        sizeBytes: 1_024,
         createdAt: new Date("2026-07-21T12:00:00.000Z"),
       };
+    },
+    async resumeEnvironment(received: StoredEnvironmentRuntime) {
+      assert.strictEqual(received, runtimeState);
+      calls.push("resume");
     },
     async deleteEnvironmentWorkspaceBackup(
       received: StoredEnvironmentRuntime,
@@ -162,7 +166,9 @@ test("one elected worker snapshots the Workspace and prunes only journaled backu
   assert.deepEqual(calls, [
     "lock",
     "prepare",
+    "pause",
     "create",
+    "resume",
     "record",
     "list-expired",
     "delete-native",
@@ -173,6 +179,7 @@ test("one elected worker snapshots the Workspace and prunes only journaled backu
 
 test("a failed native snapshot remains a durable retry", async () => {
   let recordedError = "";
+  const calls: string[] = [];
   const store = {
     async environmentWorkspaceBackupCandidateIds() {
       return [environment.id];
@@ -196,8 +203,15 @@ test("a failed native snapshot remains a durable retry", async () => {
   } as unknown as SandpiStore;
   const runtime = {
     mode: "sandbox0",
+    async pauseEnvironment() {
+      calls.push("pause");
+    },
     async createEnvironmentWorkspaceBackup() {
+      calls.push("create");
       throw new Error("snapshot quota exceeded");
+    },
+    async resumeEnvironment() {
+      calls.push("resume");
     },
   } as unknown as RuntimeAdapter;
   const service = new EnvironmentWorkspaceBackupService(store, runtime, logger);
@@ -206,6 +220,68 @@ test("a failed native snapshot remains a durable retry", async () => {
   await service.close();
 
   assert.equal(recordedError, "snapshot quota exceeded");
+  assert.deepEqual(calls, ["pause", "create", "resume"]);
+});
+
+test("a failed post-snapshot resume deletes the unrecorded rootfs snapshot", async () => {
+  const calls: string[] = [];
+  let recordedError = "";
+  const store = {
+    async environmentWorkspaceBackupCandidateIds() {
+      return [environment.id];
+    },
+    async withEnvironmentLifecycleLock(
+      _environmentId: string,
+      operation: (scopedStore: SandpiStore) => Promise<unknown>,
+    ) {
+      return { acquired: true as const, value: await operation(this as SandpiStore) };
+    },
+    async prepareEnvironmentWorkspaceBackup() {
+      return prepared;
+    },
+    async recordEnvironmentWorkspaceBackup() {
+      assert.fail("an unresumed backup must not be recorded");
+    },
+    async recordEnvironmentWorkspaceBackupFailure(
+      _environmentId: string,
+      _sandboxId: string,
+      error: string,
+    ) {
+      recordedError = error;
+    },
+  } as unknown as SandpiStore;
+  const runtime = {
+    mode: "sandbox0",
+    async pauseEnvironment() {
+      calls.push("pause");
+    },
+    async createEnvironmentWorkspaceBackup() {
+      calls.push("create");
+      return {
+        id: "snapshot-unrecorded",
+        name: "unrecorded",
+        createdAt: new Date("2026-07-21T12:00:00.000Z"),
+      };
+    },
+    async resumeEnvironment() {
+      calls.push("resume");
+      throw new Error("resume unavailable");
+    },
+    async deleteEnvironmentWorkspaceBackup(
+      _runtime: StoredEnvironmentRuntime,
+      snapshotId: string,
+    ) {
+      assert.equal(snapshotId, "snapshot-unrecorded");
+      calls.push("delete");
+    },
+  } as unknown as RuntimeAdapter;
+  const service = new EnvironmentWorkspaceBackupService(store, runtime, logger);
+
+  await service.reconcileOnce();
+  await service.close();
+
+  assert.equal(recordedError, "resume unavailable");
+  assert.deepEqual(calls, ["pause", "create", "resume", "delete"]);
 });
 
 test("manual backup authorizes management and returns the refreshed policy state", async () => {
@@ -255,6 +331,7 @@ test("manual backup authorizes management and returns the refreshed policy state
   } as unknown as SandpiStore;
   const runtime = {
     mode: "sandbox0",
+    async pauseEnvironment() {},
     async createEnvironmentWorkspaceBackup(
       _runtime: StoredEnvironmentRuntime,
       input: { name: string },
@@ -262,10 +339,10 @@ test("manual backup authorizes management and returns the refreshed policy state
       return {
         id: "snapshot-manual",
         name: input.name,
-        sizeBytes: 2_048,
         createdAt: new Date("2026-07-21T12:00:00.000Z"),
       };
     },
+    async resumeEnvironment() {},
   } as unknown as RuntimeAdapter;
   const service = new EnvironmentWorkspaceBackupService(
     rootStore,
@@ -476,7 +553,7 @@ test("a failed native restore returns a running Environment to its previous life
     },
     async restoreEnvironmentWorkspaceBackup() {
       calls.push("restore");
-      throw new Error("volume owner is busy");
+      throw new Error("rootfs restore is busy");
     },
     async ensureEnvironmentRuntimeAccess() {
       calls.push("auto-resume");
@@ -500,7 +577,7 @@ test("a failed native restore returns a running Environment to its previous life
       oldBackup.id,
       environment.name,
     ),
-    /volume owner is busy/,
+    /rootfs restore is busy/,
   );
   await service.close();
 

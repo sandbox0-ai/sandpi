@@ -31,7 +31,7 @@ test("Workspace quiescence includes every current native delivery state", async 
   assert.doesNotMatch(query, /exclusive_operation_id/);
 });
 
-test("recording a native Workspace restore invalidates only Sessions newer than the backup", async () => {
+test("recording a portable native Workspace restore invalidates only Sessions newer than the backup", async () => {
   const queries: Array<{ sql: string; values?: readonly unknown[] }> = [];
   const backupCreatedAt = new Date("2026-07-21T12:00:00.000Z");
   const client = {
@@ -43,15 +43,8 @@ test("recording a native Workspace restore invalidates only Sessions newer than 
           rows: [
             {
               created_at: backupCreatedAt,
-              workspace_volume_id: "volume-one",
             },
           ],
-        };
-      }
-      if (sql.startsWith("SELECT workspace_volume_id")) {
-        return {
-          rowCount: 1,
-          rows: [{ workspace_volume_id: "volume-one" }],
         };
       }
       if (sql.includes("RETURNING id")) {
@@ -77,6 +70,14 @@ test("recording a native Workspace restore invalidates only Sessions newer than 
   );
 
   assert.equal(result.unavailableSessionCount, 2);
+  const ownership = queries.find(({ sql }) =>
+    sql.includes("SELECT backup.created_at"),
+  );
+  assert.match(ownership?.sql ?? "", /runtime\.sandbox_id = \$3/);
+  assert.doesNotMatch(
+    ownership?.sql ?? "",
+    /backup\.sandbox_id = runtime\.sandbox_id/,
+  );
   const recoverOlder = queries.find(({ sql }) =>
     sql.includes("metadata = metadata - 'workspaceRestore'"),
   );

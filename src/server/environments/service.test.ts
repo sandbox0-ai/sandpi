@@ -187,7 +187,6 @@ test("pending Environment reconciliation is coalesced within one server", async 
     ...environment,
     status: "updating" as const,
     sandboxId: "",
-    workspaceVolumeId: "",
   };
   const store = {
     async environmentsNeedingProvisioning() {
@@ -223,7 +222,6 @@ test("pending Environment reconciliation is coalesced within one server", async 
       await provisioningGate;
       return {
         sandboxId: `sandbox-${provisionCalls}`,
-        workspaceVolumeId: "volume-test",
         desiredState: "running",
       };
     },
@@ -256,7 +254,6 @@ test("rechecks a stale provisioning candidate after taking the lifecycle lock", 
         ...environment,
         status: "ready",
         sandboxId: "sandbox-winner",
-        workspaceVolumeId: "volume-winner",
       };
     },
     async withEnvironmentLifecycleLock(
@@ -308,7 +305,6 @@ test("applies a changed network policy to the shared Environment Sandbox", async
       return {
         id: environment.id,
         sandboxId: "sandbox-test",
-        workspaceVolumeId: "volume-test",
         runtimeGeneration: 1,
         decoder: {
           supervisorCursor: 0,
@@ -468,7 +464,6 @@ test("applies a memory change to the shared Sandbox under the lifecycle lock", a
   const runtimeRecord = {
     id: environment.id,
     sandboxId: "sandbox-test",
-    workspaceVolumeId: "volume-test",
     desiredState: "running",
     runtimeGeneration: 1,
     decoder: {
@@ -674,7 +669,6 @@ test("deletes Environment-owned resources before removing metadata", async () =>
       steps.push("prepare");
       return {
         sandboxId: "sandbox-test",
-        workspaceVolumeId: "volume-test",
         rootfsSnapshotId: "snapshot-test",
       };
     },
@@ -688,12 +682,10 @@ test("deletes Environment-owned resources before removing metadata", async () =>
   const runtime = {
     async deleteEnvironmentResources(resources: {
       sandboxId?: string;
-      workspaceVolumeId?: string;
       rootfsSnapshotId?: string;
     }) {
       assert.deepEqual(resources, {
         sandboxId: "sandbox-test",
-        workspaceVolumeId: "volume-test",
         rootfsSnapshotId: "snapshot-test",
       });
       steps.push("resources");
@@ -822,7 +814,7 @@ test("keeps Environment metadata retryable when resource deletion fails", async 
       return { acquired: true as const, value: undefined };
     },
     async prepareEnvironmentDeletion() {
-      return { sandboxId: "sandbox-test", workspaceVolumeId: "volume-test" };
+      return { sandboxId: "sandbox-test" };
     },
     async deleteEnvironmentMetadata() {
       steps.push("metadata");
@@ -833,7 +825,7 @@ test("keeps Environment metadata retryable when resource deletion fails", async 
   } as unknown as SandpiStore;
   const runtime = {
     async deleteEnvironmentResources() {
-      throw new Error("volume cleanup failed");
+      throw new Error("rootfs cleanup failed");
     },
   } as unknown as RuntimeAdapter;
   const service = new EnvironmentService(store, runtime, {
@@ -843,9 +835,9 @@ test("keeps Environment metadata retryable when resource deletion fails", async 
 
   await assert.rejects(
     service.delete("user-test", environment.id),
-    /volume cleanup failed/,
+    /rootfs cleanup failed/,
   );
-  assert.deepEqual(steps, ["failure:volume cleanup failed"]);
+  assert.deepEqual(steps, ["failure:rootfs cleanup failed"]);
 });
 
 test("checks runtime quota before provisioning Sandbox0 resources", async () => {
@@ -854,7 +846,6 @@ test("checks runtime quota before provisioning Sandbox0 resources", async () => 
     ...environment,
     status: "updating" as const,
     sandboxId: "",
-    workspaceVolumeId: "",
   };
   const store = {
     async environmentsNeedingProvisioning() {

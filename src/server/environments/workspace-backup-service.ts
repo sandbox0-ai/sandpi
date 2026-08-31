@@ -11,7 +11,7 @@ import type {
   RuntimeAdapter,
   RuntimeWorkspaceBackupSnapshot,
 } from "@/server/runtime/types";
-import type { SandpiStore } from "@/server/store";
+import type { SandpiStore, StoredEnvironmentRuntime } from "@/server/store";
 
 interface WorkspaceBackupLogger {
   info(fields: object, message: string): void;
@@ -19,7 +19,7 @@ interface WorkspaceBackupLogger {
 }
 
 /**
- * Creates native Workspace Volume snapshots and reconciles their retention.
+ * Creates native Sandbox rootfs snapshots and reconciles their retention.
  * PostgreSQL owns scheduling and the Sandpi-created snapshot journal, while
  * Sandbox0 remains authoritative for snapshot bytes and storage metering.
  */
@@ -298,7 +298,7 @@ export class EnvironmentWorkspaceBackupService {
     if (prepared.createBackup) {
       let snapshot: RuntimeWorkspaceBackupSnapshot;
       try {
-        snapshot = await this.runtime.createEnvironmentWorkspaceBackup(
+        snapshot = await this.captureRootFSBackup(
           prepared.runtime,
           workspaceBackupIdentity(environmentId, kind),
         );
@@ -347,7 +347,6 @@ export class EnvironmentWorkspaceBackupService {
         id: snapshot.id,
         environmentId,
         name: snapshot.name,
-        sizeBytes: snapshot.sizeBytes,
         kind,
         createdAt: toUnixTimestamp(snapshot.createdAt),
       };
@@ -396,6 +395,55 @@ export class EnvironmentWorkspaceBackupService {
     return backup;
   }
 
+  /**
+   * Pins a stable paused rootfs generation without changing the Environment's
+   * desired lifecycle. Snapshot failures still return a running Environment to
+   * service, and an unrecordable snapshot is deleted before the retry is
+   * published.
+   */
+  private async captureRootFSBackup(
+    runtime: StoredEnvironmentRuntime,
+    input: { name: string; description: string },
+  ): Promise<RuntimeWorkspaceBackupSnapshot> {
+    const restoreRunningState = runtime.desiredState === "running";
+    let snapshot: RuntimeWorkspaceBackupSnapshot | undefined;
+    const errors: unknown[] = [];
+    try {
+      await this.runtime.pauseEnvironment(runtime);
+      snapshot = await this.runtime.createEnvironmentWorkspaceBackup(
+        runtime,
+        input,
+      );
+    } catch (error) {
+      errors.push(error);
+    }
+
+    if (restoreRunningState) {
+      try {
+        await this.runtime.resumeEnvironment(runtime);
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    if (errors.length === 0 && snapshot) return snapshot;
+
+    if (snapshot) {
+      try {
+        await this.runtime.deleteEnvironmentWorkspaceBackup(
+          runtime,
+          snapshot.id,
+        );
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    if (errors.length === 1) throw errors[0];
+    throw new AggregateError(
+      errors,
+      errors.map(errorMessage).join("; ") || "Environment rootfs backup failed",
+    );
+  }
+
   private async waitForLifecycleLock<T>(
     environmentId: string,
     operation: (store: SandpiStore) => Promise<T>,
@@ -425,7 +473,7 @@ function workspaceBackupIdentity(
   const suffix = randomUUID().slice(0, 8);
   return {
     name: `sandpi-workspace-${timestamp}-${suffix}`,
-    description: `Sandpi ${kind} Workspace backup for Environment ${environmentId}.`,
+    description: `Sandpi ${kind} Environment rootfs backup for Environment ${environmentId}.`,
   };
 }
 

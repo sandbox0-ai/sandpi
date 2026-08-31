@@ -63,7 +63,6 @@ export interface RuntimeCodexSkillFile {
 
 export interface ProvisionedEnvironment {
   sandboxId: string;
-  workspaceVolumeId: string;
   rootfsSnapshotId?: string;
 }
 
@@ -71,7 +70,6 @@ export interface EnvironmentRuntimeRecord {
   /** Environment id; all product Sessions in it share these coordinates. */
   id: string;
   sandboxId: string;
-  workspaceVolumeId: string;
   supervisorSessionId?: string;
   terminalSessionId?: string;
   attemptId?: string;
@@ -82,14 +80,13 @@ export interface EnvironmentRuntimeRecord {
 export interface RuntimeWorkspaceBackupSnapshot {
   id: string;
   name: string;
-  sizeBytes: number;
   createdAt: Date;
 }
 
 export interface RuntimeProvisionEnvironmentInput {
   environment: Environment;
   credentials?: RuntimeEnvironmentEgressCredential[];
-  /** Existing Volume is reused when reconciliation resumes after a crash. */
+  /** Published coordinates are reused when reconciliation resumes after a crash. */
   onResourcesAllocated?: (
     resources: Partial<ProvisionedEnvironment>,
   ) => Promise<void>;
@@ -178,9 +175,6 @@ export interface RuntimeAdapter {
   ): Promise<ProvisionedEnvironment>;
   deleteEnvironmentResources(
     resources: Partial<ProvisionedEnvironment>,
-  ): Promise<void>;
-  deleteRetiredEnvironmentSandboxes(
-    runtime: EnvironmentRuntimeRecord,
   ): Promise<void>;
   updateEnvironmentNetworkPolicy(
     runtime: EnvironmentRuntimeRecord,
@@ -314,11 +308,6 @@ export interface RuntimeAdapter {
     runtime: EnvironmentRuntimeRecord,
     path: string,
   ): Promise<WorkspaceDirectoryListing>;
-  /** Reads the persistent Workspace Volume without starting Sandbox compute. */
-  listPersistentWorkspaceFiles(
-    runtime: EnvironmentRuntimeRecord,
-    path: string,
-  ): Promise<WorkspaceDirectoryListing>;
   /** Searches the shared Workspace independently of any coding-agent harness. */
   searchFiles(
     runtime: EnvironmentRuntimeRecord,
@@ -344,20 +333,10 @@ export interface RuntimeAdapter {
     runtime: EnvironmentRuntimeRecord,
     path: string,
   ): Promise<Uint8Array>;
-  /** Reads one persistent Workspace Volume file without starting Sandbox compute. */
-  readPersistentWorkspaceFile(
-    runtime: EnvironmentRuntimeRecord,
-    path: string,
-  ): Promise<Uint8Array>;
   getWorkspaceGitState(
     runtime: EnvironmentRuntimeRecord,
   ): Promise<WorkspaceGitState>;
   readWorkspaceIdeFile(
-    runtime: EnvironmentRuntimeRecord,
-    path: string,
-  ): Promise<WorkspaceIdeFile>;
-  /** Returns a read-only Web IDE file from persistent storage only. */
-  readPersistentWorkspaceIdeFile(
     runtime: EnvironmentRuntimeRecord,
     path: string,
   ): Promise<WorkspaceIdeFile>;

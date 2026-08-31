@@ -105,7 +105,6 @@ const EVENT_RETENTION_SECONDS = 30 * 24 * 60 * 60;
 const CREDENTIAL_SOURCE_DELETE_RETRY_DELAYS_MS = [
   25, 50, 100, 250, 500, 1_000, 2_000,
 ] as const;
-const SANDBOX_LIST_PAGE_SIZE = 100;
 // Supervisor journals retain decoded event structures in procd memory as well
 // as JSON on disk. A terminal only needs enough tail to rebuild xterm's visible
 // history, so it must not inherit the much larger coding-agent event budget.
@@ -144,12 +143,6 @@ const SANDBOX_AUTO_RESUME_TIMEOUT_MS = 120_000;
 const SANDBOX_AUTO_RESUME_RETRY_DELAY_MS = 250;
 const SANDBOX_RESUME_FAILURE_MAX_RETRIES = 1;
 const SANDBOX0_TRANSPORT_RETRY_DELAYS_MS = [100, 250] as const;
-// Sandbox0 commits the paused lifecycle before the deleted runtime Pod's
-// finalizer finishes unbinding its ctld volume portal. Retry only that narrow,
-// pre-mutation restore conflict while the asynchronous unbind catches up.
-const WORKSPACE_RESTORE_UNMOUNT_RETRY_DELAYS_MS = [
-  100, 250, 500, 1_000, 2_000, 4_000, 5_000, 5_000, 5_000, 5_000,
-] as const;
 // Sandbox0's File API lists one directory at a time. Keep cross-harness search
 // as one bounded Sandbox command so large trees do not become recursive HTTP
 // fan-out, and keep the capability below every coding-agent adapter.
@@ -288,26 +281,12 @@ export class Sandbox0Runtime implements RuntimeAdapter {
   async provisionEnvironment(
     input: RuntimeProvisionEnvironmentInput,
   ): Promise<ProvisionedEnvironment> {
-    let workspaceVolumeId = input.environment.workspaceVolumeId || undefined;
     let sandboxId: string | undefined;
     try {
-      if (!workspaceVolumeId) {
-        const volume = await this.client.volumes.create({
-          accessMode: models.VolumeAccessMode.Rwo,
-        });
-        workspaceVolumeId = volume.id;
-        await input.onResourcesAllocated?.({ workspaceVolumeId });
-      }
       const sandbox = await this.client.sandboxes.claim(
         input.environment.templateId,
         {
           snapshotId: input.environment.rootfsSnapshotId || undefined,
-          mounts: [
-            {
-              sandboxvolumeId: workspaceVolumeId,
-              mountPoint: "/workspace",
-            },
-          ],
           // Sandpi owns idle-pause policy while Sandbox0 owns runtime wake-up.
           // Explicitly disable both Sandbox0 TTLs so deployment or template
           // defaults cannot terminate the durable Environment runtime.
@@ -326,16 +305,13 @@ export class Sandbox0Runtime implements RuntimeAdapter {
         },
       );
       sandboxId = sandbox.id;
-      await input.onResourcesAllocated?.({ sandboxId, workspaceVolumeId });
+      await input.onResourcesAllocated?.({ sandboxId });
       await this.client.sandboxes.waitForLifecycle(
         sandbox.id,
         (state) => state.status === "running",
         { timeoutMs: 120_000 },
       );
-      return {
-        sandboxId,
-        workspaceVolumeId,
-      };
+      return { sandboxId };
     } catch (error) {
       // The allocation journal owns retry/cleanup once a resource id has been
       // published. Only an unpublished Sandbox is safe to delete here.
@@ -348,21 +324,9 @@ export class Sandbox0Runtime implements RuntimeAdapter {
 
   async deleteEnvironmentResources(resources: Partial<ProvisionedEnvironment>) {
     const cleanupErrors: unknown[] = [];
-    let sandboxGone = !resources.sandboxId;
     if (resources.sandboxId) {
       try {
         await this.client.sandboxes.delete(resources.sandboxId);
-        sandboxGone = true;
-      } catch (error) {
-        if (isMissingResource(error)) sandboxGone = true;
-        else cleanupErrors.push(error);
-      }
-    }
-    if (resources.workspaceVolumeId && sandboxGone) {
-      try {
-        await this.client.volumes.delete(resources.workspaceVolumeId, {
-          force: true,
-        });
       } catch (error) {
         if (!isMissingResource(error)) cleanupErrors.push(error);
       }
@@ -380,50 +344,6 @@ export class Sandbox0Runtime implements RuntimeAdapter {
       throw new AggregateError(
         cleanupErrors,
         "Sandbox0 Environment cleanup failed",
-      );
-    }
-  }
-
-  /**
-   * Deletes obsolete Sandboxes that still mount this Environment's unique
-   * Workspace Volume. A previous Sandpi server may have lost a provisioning
-   * race after Sandbox0 accepted its claim, leaving credential bindings behind.
-   */
-  async deleteRetiredEnvironmentSandboxes(runtime: EnvironmentRuntimeRecord) {
-    const candidates: Array<{ id: string }> = [];
-    const cleanupErrors: unknown[] = [];
-    for (let offset = 0; ; offset += SANDBOX_LIST_PAGE_SIZE) {
-      let page: Awaited<ReturnType<Client["sandboxes"]["list"]>>;
-      try {
-        page = await this.client.sandboxes.list({
-          limit: SANDBOX_LIST_PAGE_SIZE,
-          offset,
-        });
-      } catch (error) {
-        throw translateSandbox0Error(error);
-      }
-      candidates.push(...page.sandboxes);
-      if (!page.hasMore) break;
-    }
-    for (const candidate of candidates) {
-      if (candidate.id === runtime.sandboxId) continue;
-      try {
-        const sandbox = await this.client.sandboxes.get(candidate.id);
-        const ownsWorkspace = (sandbox.mounts ?? []).some(
-          (mount) =>
-            mount.sandboxvolumeId === runtime.workspaceVolumeId &&
-            mount.mountPoint === WORKSPACE_ROOT,
-        );
-        if (!ownsWorkspace) continue;
-        await this.client.sandboxes.delete(candidate.id);
-      } catch (error) {
-        if (!isMissingResource(error)) cleanupErrors.push(error);
-      }
-    }
-    if (cleanupErrors.length > 0) {
-      throw new AggregateError(
-        cleanupErrors.map(translateSandbox0Error),
-        "Retired Environment Sandbox cleanup failed",
       );
     }
   }
@@ -652,15 +572,14 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     input: { name: string; description: string },
   ): Promise<RuntimeWorkspaceBackupSnapshot> {
     try {
-      const snapshot = await this.client.volumes.createSnapshot(
-        runtime.workspaceVolumeId,
+      const snapshot = await this.client.sandboxes.createRootFSSnapshot(
+        runtime.sandboxId,
         input,
       );
-      const nativeCreatedAt = new Date(snapshot.createdAt);
+      const nativeCreatedAt = snapshot.createdAt;
       return {
         id: snapshot.id,
-        name: snapshot.name,
-        sizeBytes: snapshot.sizeBytes,
+        name: snapshot.name ?? input.name,
         // Keep the newly created snapshot manageable even if an older
         // Sandbox0 deployment returns a malformed optional timestamp.
         createdAt: Number.isNaN(nativeCreatedAt.getTime())
@@ -673,14 +592,11 @@ export class Sandbox0Runtime implements RuntimeAdapter {
   }
 
   async deleteEnvironmentWorkspaceBackup(
-    runtime: EnvironmentRuntimeRecord,
+    _runtime: EnvironmentRuntimeRecord,
     snapshotId: string,
   ) {
     try {
-      await this.client.volumes.deleteSnapshot(
-        runtime.workspaceVolumeId,
-        snapshotId,
-      );
+      await this.client.sandboxes.deleteRootFSSnapshot(snapshotId);
     } catch (error) {
       if (isMissingResource(error)) return;
       throw translateSandbox0Error(error);
@@ -691,20 +607,12 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     runtime: EnvironmentRuntimeRecord,
     snapshotId: string,
   ) {
-    for (let attempt = 0; ; attempt += 1) {
-      try {
-        await this.client.volumes.restoreSnapshot(
-          runtime.workspaceVolumeId,
-          snapshotId,
-        );
-        return;
-      } catch (error) {
-        const delayMs = WORKSPACE_RESTORE_UNMOUNT_RETRY_DELAYS_MS[attempt];
-        if (!isWorkspaceRestoreWaitingForUnmount(error) || delayMs === undefined) {
-          throw translateSandbox0Error(error);
-        }
-        await delay(delayMs);
-      }
+    try {
+      await this.client.sandboxes.restoreRootFS(runtime.sandboxId, {
+        snapshotId,
+      });
+    } catch (error) {
+      throw translateSandbox0Error(error);
     }
   }
 
@@ -810,8 +718,8 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     let sandboxId: string | undefined;
     try {
       // Every Environment uses Sandbox0's coding-agent template. This Auth
-      // Runner claims that same template but mounts neither the Environment
-      // Workspace Volume nor a rootfs snapshot. It is not a user Session.
+      // Runner claims that same template without an Environment rootfs
+      // snapshot. It is a short-lived auth flow, not a user Session.
       const sandbox = await this.client.sandboxes.claim(
         environment.templateId,
         {
@@ -972,7 +880,7 @@ export class Sandbox0Runtime implements RuntimeAdapter {
   /**
    * Reconciles one Environment with its shared native Sandbox0 runtime.
    * A lost Supervisor can be recreated because every native Codex Thread is
-   * persisted under the Environment Workspace Volume.
+   * persisted under the Environment rootfs.
    */
   async ensureCodexEnvironmentRuntime(
     runtime: EnvironmentRuntimeRecord,
@@ -982,7 +890,7 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     let sandboxRestarted = false;
     try {
       const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
-      // /dev/shm is intentionally outside both rootfs and Volume snapshots.
+      // /dev/shm is intentionally outside rootfs snapshots.
       // Make credential installation the wake-up boundary so the restarted
       // Supervisor can leave its credential wait as soon as Sandbox0 restores
       // the process, before Workspace/FUSE health checks complete.
@@ -1455,20 +1363,6 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     );
   }
 
-  async listPersistentWorkspaceFiles(
-    runtime: EnvironmentRuntimeRecord,
-    requestedPath: string,
-  ): Promise<WorkspaceDirectoryListing> {
-    try {
-      return await listWorkspaceFiles(
-        persistentWorkspaceFileReader(this.client, runtime.workspaceVolumeId),
-        requestedPath,
-      );
-    } catch (error) {
-      throw translateWorkspaceFileError(error);
-    }
-  }
-
   async searchFiles(
     runtime: EnvironmentRuntimeRecord,
     query: string,
@@ -1697,25 +1591,6 @@ export class Sandbox0Runtime implements RuntimeAdapter {
       return (
         await readWorkspaceFileData(
           this.client.sandboxes.sandbox(runtime.sandboxId),
-          requestedPath,
-        )
-      ).content;
-    } catch (error) {
-      throw translateWorkspaceFileError(error);
-    }
-  }
-
-  async readPersistentWorkspaceFile(
-    runtime: EnvironmentRuntimeRecord,
-    requestedPath: string,
-  ) {
-    try {
-      return (
-        await readWorkspaceFileData(
-          persistentWorkspaceFileReader(
-            this.client,
-            runtime.workspaceVolumeId,
-          ),
           requestedPath,
         )
       ).content;
@@ -2044,46 +1919,6 @@ export class Sandbox0Runtime implements RuntimeAdapter {
       git: change,
       lineChanges,
     };
-  }
-
-  async readPersistentWorkspaceIdeFile(
-    runtime: EnvironmentRuntimeRecord,
-    requestedPath: string,
-  ): Promise<WorkspaceIdeFile> {
-    try {
-      const { filePath, file, content } = await readWorkspaceFileData(
-        persistentWorkspaceFileReader(
-          this.client,
-          runtime.workspaceVolumeId,
-        ),
-        requestedPath,
-      );
-      const name = path.posix.basename(filePath);
-      const preview = detectWorkspaceFilePreview(name, content);
-      const text =
-        preview === undefined && isUtf8(content)
-          ? Buffer.from(content).toString("utf8")
-          : undefined;
-      return {
-        path: filePath,
-        name,
-        revision: workspaceFileRevision(content),
-        encoding: "base64",
-        content: Buffer.from(content).toString("base64"),
-        kind: text === undefined ? "binary" : "text",
-        preview,
-        bom: hasUtf8Bom(content) ? "utf8" : undefined,
-        editable: false,
-        readOnlyReason: "runtime-blocked",
-        size: file.size === undefined ? undefined : formatFileSize(file.size),
-        modifiedAt: file.modTime
-          ? toUnixTimestamp(file.modTime)
-          : undefined,
-        lineChanges: [],
-      };
-    } catch (error) {
-      throw translateWorkspaceFileError(error);
-    }
   }
 
   async writeWorkspaceIdeFile(
@@ -3423,34 +3258,6 @@ interface WorkspaceFileReader {
   readFile(filePath: string): Promise<Uint8Array>;
 }
 
-function workspaceVolumePath(filePath: string) {
-  const relative = path.posix.relative(WORKSPACE_ROOT, filePath);
-  return relative ? `/${relative}` : "/";
-}
-
-function persistentWorkspaceFileReader(
-  client: Client,
-  workspaceVolumeId: string,
-): WorkspaceFileReader {
-  return {
-    statFile: (filePath) =>
-      client.volumes.statFile(
-        workspaceVolumeId,
-        workspaceVolumePath(filePath),
-      ),
-    listFiles: (filePath) =>
-      client.volumes.listFiles(
-        workspaceVolumeId,
-        workspaceVolumePath(filePath),
-      ),
-    readFile: (filePath) =>
-      client.volumes.readFile(
-        workspaceVolumeId,
-        workspaceVolumePath(filePath),
-      ),
-  };
-}
-
 async function listWorkspaceFiles(
   reader: WorkspaceFileReader,
   requestedPath: string,
@@ -4052,20 +3859,6 @@ function sandboxAutoResumeRetryDelay(error: APIError, remainingMs: number) {
           SANDBOX_AUTO_RESUME_RETRY_DELAY_MS,
           error.retryAfter * 1_000,
         ),
-  );
-}
-
-function isWorkspaceRestoreWaitingForUnmount(
-  error: unknown,
-): error is APIError {
-  return (
-    error instanceof APIError &&
-    error.statusCode === 409 &&
-    error.message
-      .toLowerCase()
-      .includes(
-        "ctld-mounted volumes must be unmounted before snapshot or restore",
-      )
   );
 }
 

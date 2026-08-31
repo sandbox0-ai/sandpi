@@ -27,9 +27,9 @@ export const sandbox0SdkCapabilities = [
     status: "available",
   },
   {
-    id: "workspace-volumes",
-    label: "Environment Volume and file browser",
-    sdk: "client.volumes.create / listFiles / readFile / watchFiles",
+    id: "rootfs-workspace",
+    label: "Environment rootfs and file browser",
+    sdk: "sandbox.listFiles / readFile / watchFiles; client.sandboxes.createRootFSSnapshot",
     status: "available",
   },
   {

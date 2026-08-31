@@ -312,11 +312,6 @@ export class EnvironmentEgressCredentialService {
           userId,
           environmentId,
         );
-        const runtime = await scopedStore.getEnvironmentRuntime(
-          userId,
-          environmentId,
-        );
-        await this.runtime.deleteRetiredEnvironmentSandboxes(runtime);
         await this.runtime.deleteEnvironmentCredentialSource(current.sourceRef);
         await scopedStore.deleteEnvironmentEgressCredentialRecord(
           environmentId,
@@ -348,12 +343,6 @@ export class EnvironmentEgressCredentialService {
     environmentId: string,
     store: SandpiStore = this.store,
   ) {
-    const environment = await store.getEnvironmentById(environmentId);
-    const runtime = await store.getEnvironmentRuntime(
-      environment.ownerId,
-      environmentId,
-    );
-    await this.runtime.deleteRetiredEnvironmentSandboxes(runtime);
     const credentials =
       await store.listEnvironmentEgressCredentialsByEnvironmentId(environmentId);
     for (const credential of credentials) {
@@ -407,9 +396,6 @@ export class EnvironmentEgressCredentialService {
               environmentId,
             );
           if (environmentRuntime.desiredState === "terminated") {
-            await this.runtime.deleteRetiredEnvironmentSandboxes(
-              environmentRuntime,
-            );
             for (const credential of credentials) {
               await this.runtime.deleteEnvironmentCredentialSource(
                 credential.sourceRef,
@@ -455,11 +441,6 @@ export class EnvironmentEgressCredentialService {
             environment.ownerId,
             environmentId,
           );
-          if (deleting.length > 0) {
-            await this.runtime.deleteRetiredEnvironmentSandboxes(
-              environmentRuntime,
-            );
-          }
           const refreshed =
             await scopedStore.listEnvironmentEgressCredentialsByEnvironmentId(
               environmentId,

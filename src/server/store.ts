@@ -162,7 +162,6 @@ interface EnvironmentRow extends QueryResultRow {
   revision: number;
   template_id: string | null;
   rootfs_snapshot_id: string | null;
-  workspace_volume_id: string | null;
   credential_revision: number;
   harness: Environment["codingAgent"]["harness"];
   harness_metadata: Record<string, unknown>;
@@ -230,7 +229,6 @@ interface IdempotencyKeyRow extends QueryResultRow {
 
 interface EnvironmentRuntimeRow extends QueryResultRow {
   environment_id: string;
-  workspace_volume_id: string | null;
   sandbox_id: string | null;
   supervisor_session_id: string | null;
   terminal_session_id: string | null;
@@ -262,9 +260,8 @@ interface EnvironmentPauseIntervalRow extends QueryResultRow {
 interface EnvironmentWorkspaceBackupRow extends QueryResultRow {
   snapshot_id: string;
   environment_id: string;
-  workspace_volume_id: string;
+  sandbox_id: string;
   name: string;
-  size_bytes: string | number;
   backup_kind: EnvironmentWorkspaceBackup["kind"];
   created_at: Date;
 }
@@ -786,15 +783,6 @@ export class SandpiStore {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
-      if (resources.workspaceVolumeId) {
-        await client.query(
-          `UPDATE environments
-           SET workspace_volume_id = COALESCE(workspace_volume_id, $2)
-           WHERE id = $1
-             AND (workspace_volume_id IS NULL OR workspace_volume_id = $2)`,
-          [environmentId, resources.workspaceVolumeId],
-        );
-      }
       if (resources.sandboxId) {
         await client.query(
           `UPDATE environment_runtime
@@ -844,13 +832,11 @@ export class SandpiStore {
       await client.query(
         `UPDATE environments
          SET status = 'ready', template_id = COALESCE(template_id, 'coding-agent'),
-             workspace_volume_id = $2,
-             rootfs_snapshot_id = COALESCE($3, rootfs_snapshot_id),
+             rootfs_snapshot_id = COALESCE($2, rootfs_snapshot_id),
              provisioning_error = NULL
          WHERE id = $1`,
         [
           environmentId,
-          resources.workspaceVolumeId,
           resources.rootfsSnapshotId ?? null,
         ],
       );
@@ -946,10 +932,7 @@ export class SandpiStore {
          ON runtime.environment_id = environment.id
        WHERE environment.status IN ('updating', 'error')
          AND environment.status <> 'archived'
-         AND (
-           environment.workspace_volume_id IS NULL
-           OR runtime.sandbox_id IS NULL
-         )
+         AND runtime.sandbox_id IS NULL
        ORDER BY environment.created_at`,
     );
     return result.rows;
@@ -1088,7 +1071,6 @@ export class SandpiStore {
     );
     return {
       sandboxId: environment.sandboxId || undefined,
-      workspaceVolumeId: environment.workspaceVolumeId || undefined,
       rootfsSnapshotId: environment.rootfsSnapshotId || undefined,
     } satisfies Partial<ProvisionedEnvironment>;
   }
@@ -1182,7 +1164,7 @@ export class SandpiStore {
       [environmentId],
     );
     const row = result.rows[0];
-    if (!row?.sandbox_id || !row.workspace_volume_id) {
+    if (!row?.sandbox_id) {
       throw notFound(
         "environment_runtime_not_ready",
         "Environment runtime is not ready.",
@@ -1383,7 +1365,6 @@ export class SandpiStore {
        FROM environment_runtime runtime
        JOIN environments environment ON environment.id = runtime.environment_id
        WHERE environment.status = 'ready'
-         AND environment.workspace_volume_id IS NOT NULL
          AND runtime.sandbox_id IS NOT NULL
          AND runtime.desired_state <> 'terminated'
          AND NOT EXISTS (
@@ -1445,7 +1426,6 @@ export class SandpiStore {
        WHERE runtime.environment_id = $1
          AND environment.id = runtime.environment_id
          AND environment.status = 'ready'
-         AND environment.workspace_volume_id IS NOT NULL
          AND runtime.sandbox_id IS NOT NULL
          AND runtime.desired_state <> 'terminated'
          AND NOT EXISTS (
@@ -1517,20 +1497,20 @@ export class SandpiStore {
       await client.query("BEGIN");
       await client.query(
         `INSERT INTO environment_workspace_backups (
-           snapshot_id, environment_id, workspace_volume_id, name,
-           size_bytes, backup_kind, created_at
+           snapshot_id, environment_id, sandbox_id, name,
+           backup_kind, created_at
          )
-         SELECT $2, $1, environment.workspace_volume_id, $3, $4, $5, $6
-         FROM environments environment
-         WHERE environment.id = $1
-           AND environment.workspace_volume_id IS NOT NULL`,
+         SELECT $2, $1, runtime.sandbox_id, $3, $4, $5
+         FROM environment_runtime runtime
+         WHERE runtime.environment_id = $1
+           AND runtime.sandbox_id = $6`,
         [
           environmentId,
           snapshot.id,
           snapshot.name,
-          snapshot.sizeBytes,
           kind,
           snapshot.createdAt,
+          sandboxId,
         ],
       );
       const updated = await client.query(
@@ -1603,8 +1583,8 @@ export class SandpiStore {
   ): Promise<EnvironmentWorkspaceBackup[]> {
     await this.getEnvironment(userId, environmentId);
     const result = await this.pool.query<EnvironmentWorkspaceBackupRow>(
-      `SELECT snapshot_id, environment_id, workspace_volume_id, name,
-              size_bytes, backup_kind, created_at
+      `SELECT snapshot_id, environment_id, sandbox_id, name,
+              backup_kind, created_at
        FROM environment_workspace_backups
        WHERE environment_id = $1
        ORDER BY created_at DESC, snapshot_id DESC
@@ -1642,8 +1622,8 @@ export class SandpiStore {
     snapshotId: string,
   ): Promise<PreparedEnvironmentWorkspaceRestore> {
     const backupResult = await this.pool.query<EnvironmentWorkspaceBackupRow>(
-      `SELECT snapshot_id, environment_id, workspace_volume_id, name,
-              size_bytes, backup_kind, created_at
+      `SELECT snapshot_id, environment_id, sandbox_id, name,
+              backup_kind, created_at
        FROM environment_workspace_backups
        WHERE environment_id = $1 AND snapshot_id = $2`,
       [environmentId, snapshotId],
@@ -1662,12 +1642,6 @@ export class SandpiStore {
         "The Environment is being deleted.",
       );
     }
-    if (backupRow.workspace_volume_id !== runtime.workspaceVolumeId) {
-      throw conflict(
-        "environment_workspace_backup_stale",
-        "This backup belongs to an older Workspace Volume and cannot be restored into the current Environment.",
-      );
-    }
     await this.assertEnvironmentWorkspaceQuiescent(environmentId);
     return {
       runtime,
@@ -1677,7 +1651,7 @@ export class SandpiStore {
   }
 
   /**
-   * Reconciles product Session metadata after the native Volume has committed
+   * Reconciles product Session metadata after the native rootfs has committed
    * a restore. Sessions created after the snapshot have no native harness
    * state in that snapshot, so they remain visible but fail explicitly.
    */
@@ -1691,9 +1665,8 @@ export class SandpiStore {
       await client.query("BEGIN");
       const backupResult = await client.query<{
         created_at: Date;
-        workspace_volume_id: string;
       }>(
-        `SELECT backup.created_at, backup.workspace_volume_id
+        `SELECT backup.created_at
          FROM environment_workspace_backups backup
          JOIN environment_runtime runtime
            ON runtime.environment_id = backup.environment_id
@@ -1710,21 +1683,6 @@ export class SandpiStore {
           "The Environment runtime changed while its Workspace was being restored.",
         );
       }
-      const volumeResult = await client.query<{
-        workspace_volume_id: string | null;
-      }>(
-        "SELECT workspace_volume_id FROM environments WHERE id = $1 FOR UPDATE",
-        [environmentId],
-      );
-      if (
-        volumeResult.rows[0]?.workspace_volume_id !== backup.workspace_volume_id
-      ) {
-        throw conflict(
-          "environment_workspace_backup_stale",
-          "The Workspace Volume changed while its backup was being restored.",
-        );
-      }
-
       const restoredAt = new Date();
       await client.query(
         `UPDATE sessions session
@@ -1791,8 +1749,8 @@ export class SandpiStore {
     retentionCount: number,
   ): Promise<EnvironmentWorkspaceBackup[]> {
     const result = await this.pool.query<EnvironmentWorkspaceBackupRow>(
-      `SELECT snapshot_id, environment_id, workspace_volume_id, name,
-              size_bytes, backup_kind, created_at
+      `SELECT snapshot_id, environment_id, sandbox_id, name,
+              backup_kind, created_at
        FROM environment_workspace_backups
        WHERE environment_id = $1
        ORDER BY created_at DESC, snapshot_id DESC
@@ -1891,8 +1849,7 @@ export class SandpiStore {
     );
     if (
       environment.status !== "ready" ||
-      !environment.sandboxId ||
-      !environment.workspaceVolumeId
+      !environment.sandboxId
     ) {
       throw conflict(
         "environment_runtime_not_ready",
@@ -2074,7 +2031,7 @@ export class SandpiStore {
        FROM environments environment
        WHERE runtime.environment_id = $1
          AND environment.id = runtime.environment_id
-       RETURNING runtime.*, environment.workspace_volume_id`,
+       RETURNING runtime.*`,
       [
         environmentId,
         recovered.supervisorSessionId,
@@ -3715,8 +3672,7 @@ const ENVIRONMENT_SELECT = `
 `;
 
 const ENVIRONMENT_RUNTIME_SELECT = `
-  SELECT runtime.*, environment.workspace_volume_id,
-         environment.credential_revision,
+  SELECT runtime.*, environment.credential_revision,
          credential_binding.source_revision AS bound_credential_revision,
          credential_binding.status AS credential_binding_status
   FROM environment_runtime runtime
@@ -3804,7 +3760,6 @@ function environmentFromRow(row: EnvironmentRow): EnvironmentRecord {
     revision: row.revision,
     templateId: row.template_id ?? "coding-agent",
     rootfsSnapshotId: row.rootfs_snapshot_id ?? "",
-    workspaceVolumeId: row.workspace_volume_id ?? "",
     sandboxId: row.sandbox_id ?? "",
     sandboxState:
       row.status === "error"
@@ -3858,7 +3813,6 @@ function environmentWorkspaceBackupFromRow(
     id: row.snapshot_id,
     environmentId: row.environment_id,
     name: row.name,
-    sizeBytes: Number(row.size_bytes),
     kind: row.backup_kind,
     createdAt: toUnixTimestamp(row.created_at),
   };
@@ -3872,7 +3826,6 @@ function environmentRuntimeFromRow(
   return {
     id: row.environment_id,
     sandboxId: row.sandbox_id!,
-    workspaceVolumeId: row.workspace_volume_id!,
     supervisorSessionId: row.supervisor_session_id ?? undefined,
     terminalSessionId: row.terminal_session_id ?? undefined,
     attemptId: row.attempt_id ?? undefined,

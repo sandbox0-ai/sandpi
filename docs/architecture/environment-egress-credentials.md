@@ -58,9 +58,7 @@ Environment. Its shared Sandbox may be running or paused.
    not need a policy replay. A missing known source is recreated under the same
    generated name and the policy is then reapplied to restore its binding.
 4. Delete marks the credential as deleting, reapplies the policy without its
-   rule and binding, deletes any retired Sandbox still mounting the
-   Environment's unique Workspace Volume, deletes the source, then removes the
-   Sandpi record.
+   rule and binding, deletes the source, then removes the Sandpi record.
 5. Environment deletion removes the Sandbox before deleting known sources, so
    no live binding can retain them.
 
@@ -71,9 +69,7 @@ from another source; the UI asks the owner to replace it.
 
 Environment provisioning takes the same cross-server lifecycle lock and
 rechecks the pending record after acquiring it. This prevents overlapping
-Sandpi rollouts from claiming two Sandboxes for one Workspace Volume. Deletion
-still discovers historical duplicates by that Volume identity so deployments
-can repair resources created before the lock was enforced.
+Sandpi rollouts from claiming two Sandboxes for one Environment.
 
 ## Complete policy composition
 

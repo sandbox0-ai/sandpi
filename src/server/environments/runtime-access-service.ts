@@ -90,39 +90,6 @@ export class EnvironmentRuntimeAccessService {
     }
   }
 
-  /**
-   * Reads the persistent Workspace Volume while compute admission is blocked.
-   * This path never wakes the Sandbox, records runtime activity, or permits
-   * mutation; callers must use RuntimeAdapter's persistent read methods.
-   */
-  async withPersistentWorkspaceAccess<T>(
-    userId: string,
-    environmentId: string,
-    operation: (runtime: StoredEnvironmentRuntime) => Promise<T>,
-  ): Promise<T> {
-    await this.store.getEnvironment(userId, environmentId);
-    const deadline =
-      Date.now() +
-      (this.options.lockTimeoutMs ?? RUNTIME_ACCESS_LOCK_TIMEOUT_MS);
-
-    while (true) {
-      const locked = await this.store.withEnvironmentRuntimeAccessLock(
-        environmentId,
-        async (lockedStore) => {
-          const scopedStore = lockedStore ?? this.store;
-          const current = await scopedStore.getEnvironmentRuntime(
-            userId,
-            environmentId,
-          );
-          requireAccessibleEnvironment(current);
-          return operation(current);
-        },
-      );
-      if (locked.acquired) return locked.value;
-      await this.waitForLifecycleLock(deadline);
-    }
-  }
-
   private async repairEnvironmentRuntime(
     userId: string,
     environmentId: string,

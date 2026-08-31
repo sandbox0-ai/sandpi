@@ -9,7 +9,6 @@ import { EnvironmentRuntimeAccessService } from "./runtime-access-service";
 const environmentRuntime: StoredEnvironmentRuntime = {
   id: "environment-test",
   sandboxId: "sandbox-test",
-  workspaceVolumeId: "volume-test",
   runtimeGeneration: 1,
   decoder: {
     supervisorCursor: 0,
@@ -501,45 +500,6 @@ test("quota admission rejects a runtime operation while holding the shared lock"
 
   assert.equal(quotaChecks, 1);
   assert.equal(operationCalls, 0);
-});
-
-test("persistent Workspace access remains read-only available without quota admission", async () => {
-  const calls: string[] = [];
-  const store = runtimeAccessStore({
-    async recordEnvironmentRuntimeAccess() {
-      calls.push("record");
-      return environmentRuntime;
-    },
-  });
-  const service = new EnvironmentRuntimeAccessService(
-    store,
-    {} as RuntimeAdapter,
-    {
-      quotaGate: {
-        async assertEnvironmentRuntimeAllowed() {
-          calls.push("quota");
-          throw new HttpError(
-            429,
-            "sandbox_runtime_quota_exhausted",
-            "Runtime quota exhausted.",
-          );
-        },
-      },
-    },
-  );
-
-  const value = await service.withPersistentWorkspaceAccess(
-    "user-test",
-    environmentRuntime.id,
-    async (runtime) => {
-      calls.push("read");
-      assert.strictEqual(runtime, environmentRuntime);
-      return "workspace-data";
-    },
-  );
-
-  assert.equal(value, "workspace-data");
-  assert.deepEqual(calls, ["read"]);
 });
 
 function runtimeAccessStore(
