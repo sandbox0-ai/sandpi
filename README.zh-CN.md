@@ -1,11 +1,11 @@
 <p align="center">
-  <img src="./src/app/icon.svg" alt="Sandpi Logo" width="88" height="88">
+  <img src="./src/app/icon.svg" alt="Sandpi logo" width="88" height="88">
 </p>
 
 <h1 align="center">Sandpi</h1>
 
 <p align="center">
-  <strong>让你的 coding agent 运行在持久化云端 Sandbox 中——通过 Web、桌面端或移动端继续同一个 Session。</strong>
+  <strong>把原生 coding-agent TUI 运行在持久化云端 Sandbox 中，通过 Web、桌面或移动设备无缝继续。</strong>
 </p>
 
 <p align="center">
@@ -16,142 +16,123 @@
   <a href="https://sandpi.ai">打开 Sandpi</a> · <a href="https://sandbox0.ai">Sandbox0</a>
 </p>
 
-Sandpi 是 [Sandbox0](https://github.com/sandbox0-ai/sandbox0) 的开源 side
-project，用于让原生 coding agent 运行在持久化云端 Sandbox 中，并让你通过任意
-Sandpi 客户端继续同一个 coding session。
+Sandpi v2 是基于 [Sandbox0](https://github.com/sandbox0-ai/sandbox0) 的开源
+coding-agent 客户端。浏览器直接渲染真实 PTY，不把 Agent 转换成自定义聊天协议。
+刷新页面或切换设备时，客户端会重新连接同一个 Environment 级进程和终端 journal。
 
-Web 应用与 iOS、iPadOS、Android、OpenHarmony、Windows 和 macOS 第一方原生客户端
-共用同一套 Sandpi 产品 UI 和 API。所有客户端都保持轻量：coding-agent harness、
-终端运行在云端，文件则保存在 Sandbox 的持久化可写 rootfs 中。
-你可以关闭电脑、切换设备或断开客户端，而不会结束 coding session。
+v2 原生支持 Codex、Claude Code 和 Pi。`coding-agent` template 还包含 OpenCode、
+Playwright CLI，以及用于诊断和兼容的固定版本 `ttyd`。正式的 Sandpi 终端 authority
+仍是 Sandbox0 procd 加 Sandpi 自己的 xterm 客户端；ttyd 不构成第二套会话状态。
 
-目前第一个支持的 coding agent 是 Codex。
-
-![Sandpi 中的 Codex Session 和 Workspace 文件浏览器](./docs/images/sandpi-session-files.png)
-
-<p align="center"><sub>Codex Session 与持久化 Workspace 文件并排显示。</sub></p>
-
-![Sandpi Environment Settings](./docs/images/sandpi-environment-settings.png)
-
-<p align="center"><sub>Environment 级 runtime、Workspace、agent 和安全设置。</sub></p>
-
-<p align="center"><sub>画面由当前 Web 应用和公开测试数据生成。</sub></p>
-
-## 为什么要在云端 Sandbox 中运行 coding agent？
-
-| 需求 | Sandpi 带来的能力 |
-| --- | --- |
-| 随时随地继续工作 | 从另一个客户端或设备打开同一个云端 Session。Agent 工作时不需要让 PC 一直开机。 |
-| 持久化 Session | 原生 Session 状态和 Workspace 不在浏览器里。页面刷新、客户端断线和 runtime 恢复都不会让 Session 消失。 |
-| 更专注的隔离 | 可以按项目、任务或关注点创建独立 Environment。每个 Environment 都有自己的 Sandbox、Workspace、coding-agent 账号、网络策略和凭证。 |
-| 多个 coding plan | 不同 Environment 可以连接不同的 Codex/ChatGPT 订阅账号；即使使用同一个账号，也可以把不同工作彼此隔离。 |
-| 可控的出站访问 | 按目标限制 Sandbox 出站流量，并只向匹配的请求注入受支持的凭证，避免把服务密钥放进仓库或浏览器。 |
-| Workspace 防丢失 | 通过 Sandbox0 rootfs snapshot 手动或定时备份 Workspace 和原生 harness 状态，设置保留数量并按需恢复；运行中的空闲 Environment 会短暂暂停以固定稳定的 rootfs generation，随后恢复到原运行状态。 |
-| 持久化数据加密 | Sandbox0 在写入对象存储前，对 Environment rootfs checkpoint 对象做应用层加密。 |
-| 持久化自动化 | 定时执行 Codex prompt，或由经过 Bearer 认证的自定义 Webhook 触发。Sandpi 在 Sandbox 外持久化运行意图，并在 server 或 runtime 恢复后对账原生 Turn。 |
-
-Environment 刻意设计得比一个聊天会话更完整：
+## 产品模型
 
 ```text
-Environment
-├── Sandbox 和持久化可写 rootfs
-├── 一个原生 coding-agent harness 和 provider 账号
-├── 网络策略和出站凭证
-├── runtime 资源、终端和指标
-├── 持久化 Automation Schedules 和 Webhooks
-└── 多个原生 coding-agent Session
+User
+└── Environment
+    ├── 一个 Sandbox0 Sandbox
+    ├── 一个持久化可写 RootFS
+    ├── 一个原生 coding-agent TUI
+    ├── 一个受监督的 PTY session 和 replay journal
+    ├── network policy 与加密的 Agent credential
+    └── named snapshot、restore 与 fork
 ```
 
-需要隔离、希望每件事更专注，或需要切换 provider 账号时，请创建不同
-Environment。如果多个 Session 本来就应该共享文件、工具和执行上下文，则把它们放在
-同一个 Environment 中。
+Environment 是用户打开、暂停、snapshot、fork 和跨设备切换的单位。v2 没有浏览器
+自建的对话副本，也没有产品层多 Session 层级；Agent 自己的历史和项目状态保存在
+Environment RootFS 中。
 
-## CLI 与本地环境迁移
+同一时间只有一个浏览器 tab 持有可写 controller lease。其他设备可以实时观看，
+并显式接管输入权。Lease 在 PostgreSQL 中进行 fence、heartbeat 和 revoke，避免两个
+设备在用户不知情时同时向一个 TUI 输入。
 
-仓库内的 Go `sandpi` CLI 可以操作 Sandpi，并支持把选定的本地 coding-agent
-配置迁移到全新或已经使用过的 Sandpi Environment。完整流程请参阅
-[将本地 coding-agent 环境迁移到 Sandpi](./docs/local-environment-migration.md)。
+## v2 当前能力
 
-## 设计原则
+- 不 patch 上游 Agent，直接运行 Codex、Claude Code 和 Pi 的原生终端体验。
+- 全页 terminal UI；桌面端支持键盘，移动端提供 Escape、Tab、Ctrl-C、Ctrl-D、方向键、
+  粘贴、清屏、文件、snapshot、fork、pause 和 settings 等触控操作。
+- 多设备终端 replay，以及单一、可显式接管的输入 controller。
+- 每个 Environment 一个持久化 Sandbox0 Sandbox，由 Sandpi 管理 idle pause、手动
+  pause/restart、内存配置和 runtime 恢复。
+- Named RootFS snapshot、restore、从当前状态 fork，以及从指定 snapshot fork。
+  Fork 在 Sandpi 和 Sandbox0 两端都支持幂等和崩溃恢复。
+- 每个 Environment 独立的原生 Agent credential：在 PostgreSQL 中加密，仅在 Agent
+  运行期间暴露为内存文件；snapshot 和 fork 不继承 credential。
+- Environment 级 network policy 与 Sandbox0 egress credential injection。
+- Workspace 文件访问、Git-aware 编辑、runtime metrics，以及 template 中与版本匹配的
+  Playwright Agent Skill。
+- 内置单用户认证或 OIDC，以及可选的 Stripe 产品 quota。
 
-1. **不侵入 coding-agent harness。** Sandpi 的设计目标是不 fork、不 patch、
-   不替换官方 harness 实现，而是通过 harness 原生的外部接口完成集成。Codex
-   adapter 使用原生 app-server 协议。
-2. **保留原生 agent 体验。** Session、model 列表、reasoning 选项、历史记录、
-   tools、Skills 和 MCP 配置仍由 harness 负责。Sandpi 不会把所有 coding agent
-   压平成能力最小公分母式的聊天协议。
-3. **以 Environment 作为隔离边界。** Workspace、provider 身份、网络和凭证作为
-   一个整体存在。因此 Environment 既能隔离账号，也能让一件具体工作保持专注。
-4. **客户端保持轻量且可以自由切换。** Web 应用与 iOS、iPadOS、Android、
-   OpenHarmony、Windows 和 macOS 原生客户端共用同一个 Sandpi server 和产品实现。
-   客户端断线不等于要求 coding agent 停止工作。
-5. **恢复原生状态，不猜测或重放写操作。** Sandpi 会重新连接持久化的原生 Session
-   和 Workspace，而不是维护第二份聊天记录，或在中断后静默重复提交请求。对于
-   Sandbox 导致的中断，Sandpi 最多发起一次可见、保守的恢复 Turn，先检查持久化
-   状态再决定是否继续；原始请求永远不会被重放。
+v1 的结构化 Codex app-server 执行接口、Schedules 和 Webhook execution 已在 v2
+退役。迁移期仍保留只读和 cleanup API，任何会产生执行的 mutation 都返回 HTTP 410。
+未来的自动化必须使用独立 headless adapter，而不能把需要人操作的 TUI 伪装成持久化
+job protocol。
 
-## 当前已经支持
+## 为什么以 Terminal 作为产品表面
 
-- 原生 Codex device login 和 Environment 级账号连接
-- 原生 model/reasoning 能力发现、Session/Turn 历史和分支
-- 支持在工具运行期间向同一个 Codex Turn 追加消息，并保留原生消息顺序
-- Sandbox/Codex 进程自恢复，以及有上限的可见 continuation
-- 在输入框实时显示原生上下文窗口和 Sandbox CPU/内存使用率
-- Codex tools、Skills、MCP 配置、审批，以及浏览器原生的 Session 和 Workspace 操作
-- 持久化多 Environment、多 Session Web UI；Session 列表保持紧凑并支持渐进分页，
-  默认显示所有运行中的 Session，同时提供独立于归档语义、并会在新 Turn 开始时
-  自动恢复为未完成的完成状态
-- 以预览为主的实时 Workspace 文件浏览器，支持可调整宽度、可折叠的文件树和明确的
-  刷新反馈，提供快速源码、GitHub 风格 Markdown、CSV 视图，图片、音频、视频、
-  PDF、PPTX 预览，按需加载的 Monaco 编辑器，以及 Git 变更
-- 当 Environment image 提供官方 `playwright-cli` 时，按其版本 materialize
-  Playwright Agent Skill；Sandpi 不额外定义一套自动化协议
-- Environment 终端、runtime 指标、可配置 idle pause，以及用于故障恢复的
-  Sandbox 手动 pause/restart 控制
-- Environment Schedules，支持一次性或易读的周期设置、高级 Cron、IANA
-  时区、后续运行预览、持久化运行历史和重叠跳过
-- 通用 Environment Webhooks，包含 Bearer 认证、声明式触发条件、持久化
-  delivery 历史、冷却合并和运行队列限制
-- 每个 Environment 独立的网络策略和 Sandbox0 出站凭证注入
-- Workspace 手动/定时备份、保留和恢复
-- 内置单用户身份模式或 OIDC
-- 可选 Stripe 订阅和产品 quota enforcement
+Coding agent 的新能力往往首先出现在其原生 TUI。直接渲染 PTY 可以保留 slash
+commands、审批、tool output、鼠标、颜色、布局和 Agent 专属交互，不需要等待一套最低
+公共能力协议。
 
-Sandpi 仍处于 pre-1.0 阶段，目前只实现了 Codex harness。Web 应用与第一方原生封装
-共用一套产品实现；其他 harness 和客户端也可以作为独立集成逐步加入。
+Sandpi 页面采用 terminal 风格，但不要求必须有物理键盘。移动端使用足够大的触控
+target，专用键和 Environment action bar 可横向滚动；文件、snapshot、fork、生命周期、
+credential 和网络设置仍通过围绕终端的可访问对话框完成。
+
+## Authority 边界
+
+```text
+Browser / native shell
+    │ HTTPS + WebSocket
+    ▼
+Sandpi server ───────── PostgreSQL
+    │                   ownership、controller lease、fork saga、
+    │                   encrypted credential 与 product policy
+    │ Sandbox0 SDK
+    ▼
+Sandbox0 regional API
+    ├── Sandbox lifecycle 与 resource lease
+    ├── 持久化加密 block-COW RootFS
+    ├── snapshot、restore、fork 与 network policy
+    └── procd supervised PTY session + replay journal
+            └── 官方 coding-agent TUI
+```
+
+- 浏览器永远拿不到 Sandbox0 deployment API key，也不直接访问 procd。
+- PostgreSQL 保存产品 metadata 和终端 controller lease，但不复制终端输出或 Agent
+  conversation history。
+- Sandbox0 负责 Sandbox lifecycle truth、可写 RootFS、snapshot/fork、网络 enforcement、
+  process supervision 和 usage truth。
+- Pause 或 runtime replacement 保存已提交的 RootFS，不保存 process memory、socket 或
+  正在运行的 PTY process。procd 会为同一个 logical supervised session 创建新 attempt，
+  Sandpi 再连接它。
+- `ttyd` 可用于直接诊断，并已验证可渲染三种 Agent TUI；但 ttyd 本身不负责跨 runtime
+  replay、controller fencing 或 Sandbox lifecycle，因此不是正式 authority。
+
+参见 [v2 architecture](./docs/architecture/native-agent-terminal-authority.md) 和
+[详细设计记录](./sandpi-v2.md)。
 
 ## 快速开始
 
 ### 环境要求
 
 - Node.js 24 和 npm 11
-- PostgreSQL 15 或更高版本
+- PostgreSQL 15 或更新版本
 - 一个 Sandbox0 deployment
-- 具备 Sandbox 访问权限以及 `credentialsource:read`、
-  `credentialsource:write`、`credentialsource:delete` 权限的 Sandbox0
-  deployment API key
-- 一个包含官方 Playwright CLI 的当前 Sandbox0 `coding-agent` template
-- 使用容器流程时需要 Docker Engine 和 Compose v2
+- 具有 Sandbox 访问权限，以及 `credentialsource:read`、
+  `credentialsource:write`、`credentialsource:delete` 的 Sandbox0 API key
+- 包含原生 Agent 的最新 Sandbox0 `coding-agent` template
+- 容器方式还需要 Docker Engine 和 Compose v2
 
-可选的订阅 quota 模式还需要 `usage:read`。
+可选 subscription quota 模式还需要 `usage:read`。
 
 ### 本地开发
-
-先创建本地配置：
 
 ```bash
 cp .env.example .env
 chmod 600 .env
-```
-
-在 `.env` 中设置 `SANDBOX0_API_HOST` 和 `SANDBOX0_API_KEY`，然后生成一份独立
-密钥，用于加密 coding-agent 凭证：
-
-```bash
 printf '\nSANDPI_SECRET_KEY=%s\n' "$(openssl rand -base64 32)" >> .env
 ```
 
-启动 PostgreSQL，安装依赖，然后运行 Web 和 API 开发服务器：
+在 `.env` 中配置 `SANDBOX0_API_HOST` 和 `SANDBOX0_API_KEY`，然后启动：
 
 ```bash
 docker compose up -d postgres
@@ -164,53 +145,31 @@ npm ci
 npm run dev
 ```
 
-当前工作区中的开发服务器会按约定监听
-<http://172.16.100.2:3000>，以便鸿蒙融合网络中的设备访问。在其他主机上请调整开发
-脚本，或使用下面的容器流程。
-
-Sandpi 启动时会自动应用尚未执行的 PostgreSQL migration。默认的
-`SANDPI_AUTH_MODE=admin` 会创建一个受信任的本地管理员和初始 Environment。
+当前 workspace 的开发 server 监听 <http://172.16.100.2:3000>，供鸿蒙融合网络访问。
+Sandpi 启动时会自动执行 PostgreSQL migration；内置管理员模式会创建一个默认
+Environment。
 
 ### 容器部署
-
-仓库内的 Compose 文件会运行 PostgreSQL 和同一套 Sandpi server：
 
 ```bash
 cp .env.example .env
 chmod 600 .env
-# Edit .env before continuing.
+# 继续之前编辑 .env。
 docker compose up -d --build
 docker compose ps
 ```
 
-容器监听 `3000` 端口；PostgreSQL 只发布到宿主机 loopback 的 `55432`
-端口。启用 OIDC 前，请把 `SANDPI_PUBLIC_URL` 设置成外部可以访问的 HTTPS origin。
+应用监听 `3000`；PostgreSQL 只发布到宿主 loopback 的 `55432`。生产 Kubernetes
+control-plane 部署参见 [`deploy/kubernetes`](./deploy/kubernetes/README.md)。
 
-Kubernetes 部署请参阅
-[`deploy/kubernetes`](./deploy/kubernetes/README.md)。
+## 原生 Credential
 
-## OpenAPI 契约
+每个 Environment 都可以在 Agent 的原生 TUI 中完成正常登录。Sandpi 捕获凭证时会
+确认托管路径不是 symlink，把它加密保存到 PostgreSQL，然后把持久化路径替换为指向
+Environment 专属 `/dev/shm` 文件的链接。每次启动受监督的 Agent 前，Sandpi 都会把
+解密后的凭证写入该内存路径；退出或凭证刷新时再安全地捕获新值。
 
-生成的 [OpenAPI 3.0.3 契约](./openapi.yaml) 覆盖 Sandpi 的 HTTP、SSE 和
-WebSocket 接口。使用以下命令生成并校验：
-
-```bash
-npm run openapi:generate
-npm run openapi:check
-```
-
-不要直接修改 `openapi.yaml`。生成流程复用 server 的真实路由注册，无需启动
-PostgreSQL 或 Sandbox0，并会在路由与契约发生漂移时失败。契约的单一来源和特殊
-transport 规则请参阅
-[`docs/architecture/openapi-contract.md`](./docs/architecture/openapi-contract.md)。
-
-## 连接 Codex
-
-创建或打开一个 Environment，然后在 New Session 页面选择 **Connect Codex**，或者
-打开 **Environment Settings → Agent harness**。Sandpi 会启动 Codex 原生
-device-login 流程，并对得到的 Environment 级凭证进行加密存储。
-
-本地开发时，也可以直接导入已有登录，而无需让凭证文件经过浏览器：
+本地 Codex 凭证也可以不经过浏览器直接导入：
 
 ```bash
 npm run codex:import-auth -- \
@@ -218,72 +177,37 @@ npm run codex:import-auth -- \
   --file ~/.codex/auth.json
 ```
 
-持久化 Workspace 不保存 Codex 明文凭证。Sandpi 启动原生 harness 时，只会把凭证
-materialize 到当前 Environment runtime 的内存文件系统中。
+## OpenAPI Contract
 
-## 架构与信任边界
+[OpenAPI 3.0.3 contract](./openapi.yaml) 由真实 HTTP/WebSocket route 生成：
 
-```text
-Sandpi clients
-（Web 与第一方原生封装）
-    │ HTTPS / SSE / WebSocket
-    ▼
-Sandpi server ───────── PostgreSQL
-    │                   用户、ownership 和控制状态
-    │ official JavaScript SDK
-    ▼
-Sandbox0
-    ├── Sandbox + 原生 Codex app-server
-    ├── 持久化可写 rootfs 和原生 snapshot
-    ├── 官方 Playwright CLI 和版本匹配的 Agent Skill
-    ├── 终端和 runtime 指标
-    ├── 网络策略和凭证注入
-    └── Environment rootfs snapshot
+```bash
+npm run openapi:generate
+npm run openapi:check
 ```
 
-- Sandpi 客户端只与 Sandpi 通信，不会收到 Sandbox0 deployment API key，也不会直接
-  访问 Sandbox0 endpoint。当 `playwright-cli` 可用时，Sandpi 会 materialize 官方
-  Playwright Agent Skill，但不会启动 browser、管理 profile、代理 Dashboard/VNC，
-  也不会定义第二套 browser-control 协议。Environment-local URL 在专用 Preview
-  surface 实现前保持不可点击。
-- Sandpi 只通过官方 JavaScript SDK 使用 Sandbox0，不读取 Sandbox0 数据库、内部
-  metering endpoint 或 ClickHouse 凭证。
-- Sandbox0 负责 Sandbox 生命周期、可写 rootfs 持久化、网络执行、凭证注入和 usage truth。
-  Sandpi 负责用户、Environment 归属、原生 Session 引用和可选产品 entitlement。
-- 使用 Sandbox0 默认存储 runtime 时，Environment rootfs checkpoint 对象会在写入
-  对象存储前进行应用层加密。Sandbox0 manager 和 active
-  ctld 持有 installation key，因此这是服务端加密而不是端到端加密；self-hosted
-  operator 可通过 `spec.storage.runtime.objectEncryptionEnabled` 控制该能力。
-- 原生 Codex Session 历史保存在 Environment Workspace 中。PostgreSQL 只保存不透明
-  的原生引用和产品控制状态，不维护第二份 conversation transcript。
-- 出站凭证注入能够减少 secret 暴露，但 coding agent 仍然可以使用明确授予该
-  Environment 的目标和凭证。允许的 tools 与 destinations 本身就是安全边界的一部分。
+不要直接编辑 `openapi.yaml`。更多说明见
+[OpenAPI contract](./docs/architecture/openapi-contract.md)。
 
 ## 当前限制
 
-- Sandbox runtime 或 Codex 进程重启不会删除持久化 Session 和 Workspace。对于旧
-  runtime 中断的 Turn，Sandpi 会恢复 harness，并且最多运行一次可见、先检查状态的
-  恢复 Turn；用户明确中断或恢复 Turn 再次失败时立即停止。原始用户请求不会被重放。
-- 外部直接删除整个 Sandbox resource 不等同于 runtime 重启。Sandpi 会报告资源缺失，
-  不会在可能改变网络策略或凭证边界的情况下静默新建替代 Sandbox。
-- 同一个 Environment 中的 Session 共享可变 Workspace 和 harness 账号，它们不是互相
-  隔离的 checkout。工作之间不能互相影响时，请创建不同 Environment。
-- Sandpi 当前既不提供 Environment Browser，也不提供应用 Preview tab。只有在
-  Environment 另外提供兼容 browser executable 时，coding agent 才能使用 Playwright。
-- 内置管理员模式只适用于受信任的单用户部署。公开或多用户部署应使用 OIDC，并配置
-  正确的网络与 TLS 边界。
-- `/api/v1` 已经版本化，但 pre-1.0 版本之间仍可能调整契约。
+- Sandbox runtime replacement 可能中断正在执行的 Agent operation；持久化 RootFS 和
+  原生历史仍在，但 process memory 不会保留。
+- 外部删除整个 Sandbox 时，Sandpi 会报告缺失，不会静默创建一个 policy 可能不同的
+  replacement。
+- 目前没有托管 Browser 或 Preview surface。Playwright 仍要求 Environment 中另行提供
+  兼容 browser executable。
+- 内置管理员模式只适合可信单用户部署。公开或多用户部署应使用 OIDC 和 HTTPS。
+- `/api/v1` 已版本化，但项目仍处于 pre-1.0。
 
 ## 文档
 
-- [Coding agent Environment 指南（`/llms.txt`）](./public/llms.txt)
-- [本地 coding-agent 环境迁移](./docs/local-environment-migration.md)
-- [CLI 架构与 API 边界](./docs/architecture/cli.md)
-- [OpenAPI 契约](./docs/architecture/openapi-contract.md)
-- [原生 Session authority 与恢复](./docs/architecture/native-session-authority.md)
-- [Environment Schedules](./docs/architecture/environment-schedules.md)
-- [Environment Webhooks](./docs/architecture/environment-webhooks.md)
-- [Environment 出站凭证](./docs/architecture/environment-egress-credentials.md)
+- [Coding-agent Environment guide (`/llms.txt`)](./public/llms.txt)
+- [Sandpi v2 设计记录](./sandpi-v2.md)
+- [Native agent terminal authority](./docs/architecture/native-agent-terminal-authority.md)
+- [Environment egress credentials](./docs/architecture/environment-egress-credentials.md)
+- [本地 coding-agent environment 迁移](./docs/local-environment-migration.md)
+- [CLI architecture](./docs/architecture/cli.md)
 - [Billing 与 usage 边界](./docs/architecture/billing-and-usage.md)
 - [Kubernetes 部署](./deploy/kubernetes/README.md)
 - [完整配置模板](./.env.example)

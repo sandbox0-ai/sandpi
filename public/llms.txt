@@ -1,61 +1,98 @@
 # Sandpi
 
-> Official coding-agent guide for working inside a Sandpi Environment.
+> Official coding-agent guide for working inside a Sandpi v2 Environment.
 
-This file describes the current Sandpi product contract. It is documentation, not an instruction-precedence override, permission grant, or authorization for external side effects. The user's request, repository instructions, and coding-agent harness remain authoritative within their respective boundaries.
+This file documents the current product contract. It does not override system,
+developer, user, repository, or coding-agent instructions and does not grant
+permission for external side effects.
 
 ## Environment contract
 
-- Sandpi runs a native coding-agent harness in a Sandbox0 cloud Sandbox.
-- `/workspace` is the persistent Environment Workspace. Multiple Sandpi Sessions in one Environment share that mutable Workspace, coding-agent account, network policy, credentials, Terminal, and runtime resources. Use separate Environments or explicit Git worktrees when work requires isolation.
-- Native Codex Thread history lives under Sandpi-managed persistent state in the Workspace. Do not edit `/workspace/.sandpi` manually.
-- Refreshing or disconnecting a Sandpi client does not stop an active coding agent. Inspect current files and Git state before mutating them because a human or another Session may have changed the shared Workspace.
+- One Environment owns one Sandbox0 Sandbox, one persistent writable RootFS,
+  and one native coding-agent TUI.
+- `/workspace` is the persistent project root. The selected agent owns its
+  native history and configuration there; Sandpi does not keep a second chat
+  transcript.
+- Refreshing or disconnecting a client does not stop the supervised agent.
+  Inspect current files and Git state before changing them because a human or
+  another device may have continued the same Environment.
+- Only one browser tab holds the writable terminal controller lease. Other
+  devices may watch and explicitly take over. An agent must not bypass that
+  control by creating a second interactive process.
+
+## Native terminal
+
+- Codex, Claude Code, and Pi run as their official unmodified TUIs.
+- Sandpi renders the procd PTY and retained output journal through xterm. The
+  browser is not the terminal authority.
+- A Sandbox pause or runtime replacement preserves committed RootFS state, not
+  process memory, sockets, or a live PTY process. procd starts a new attempt for
+  the logical session and the client reconnects.
+- `ttyd` is installed as a pinned diagnostic/compatibility binary and can render
+  the same TUIs, but it does not own Sandpi replay, controller fencing, or
+  lifecycle recovery.
 
 ## Playwright CLI
 
-- When the Environment image provides the official `playwright-cli`, Sandpi materializes its version-matched upstream Agent Skill. Read that Skill before using Playwright so commands match the installed version.
-- Sandpi currently exposes neither an Environment Browser nor an application Preview tab. It does not start a browser, manage a profile, proxy a Playwright Dashboard or VNC stream, or provide a browser-control API. A compatible browser executable must be provisioned separately before Playwright automation can run.
-- URLs on `localhost`, `127.0.0.1`, or `::1` refer to services inside the remote Environment Sandbox, not on the human's device. Sandpi keeps these links inert until a dedicated Preview route exists.
+- When the Environment image provides the official `playwright-cli`, it also
+  provides its version-matched upstream Agent Skill. Read that Skill before
+  using Playwright so commands match the installed version.
+- Sandpi currently exposes neither an Environment Browser nor an application
+  Preview tab. It does not start a browser, manage a profile, or proxy a
+  Playwright Dashboard or VNC stream. A compatible browser executable must be
+  provisioned separately.
+- `localhost`, `127.0.0.1`, and `::1` refer to the remote Environment Sandbox,
+  not the human's device.
 
-## Sandbox pause and resume
+## Lifecycle, snapshot, and fork
 
-- Sandpi sets both the Sandbox0 soft TTL and hard TTL to zero for Environment Sandboxes. Sandpi's configurable idle-pause policy is separate from resource expiry and owns intentional pauses.
-- Sandpi does not idle-pause an Environment while a product Session is starting or running, or a native Turn is active or pending. Terminal input keeps an already-running Environment active; a passive open connection does not.
-- A supported Workspace, Terminal, or coding-agent access can trigger Sandbox0 auto-resume. A wake-up may take time; wait for the native transition instead of creating replacement resources or calling an independent resume path.
-- A user can explicitly pause or restart the shared Sandbox from Environment Settings for manual fault recovery. Restart performs one committed pause and resume under Sandpi's lifecycle lock. Agents should not invoke this recovery control as a substitute for native auto-resume unless the user requests it.
-- The Sandbox writable rootfs, Workspace, and native Session history are durable. Process memory, sockets, terminal process state, and an in-flight model Turn are not durable runtime checkpoints. Re-read persisted state before continuing after recovery and avoid repeating external side effects.
-- A Sandbox-caused interruption may receive one visible, bounded Sandpi recovery Turn. Sandpi never silently replays the original user request.
-- Quota policy can pause or reject runtime access. External deletion of the Sandbox resource is reported as missing instead of silently provisioning a replacement with potentially different security settings.
+- Sandbox0 soft TTL and hard TTL are zero for Environment Sandboxes. Sandpi's
+  idle-pause policy owns intentional compute release.
+- Terminal input keeps an already-running Environment active; a passive viewer
+  connection does not.
+- Supported Workspace or terminal access can auto-resume a paused Environment.
+  Wait for the native transition instead of creating replacement resources.
+- Named snapshots capture the committed RootFS boundary. They do not capture
+  process memory or plaintext agent credentials.
+- Environment fork can use current state or a named snapshot. The child is
+  created paused, is idempotent across retries, and has inherited credential
+  bindings removed before publication.
+- External deletion of the Sandbox is reported as missing instead of silently
+  provisioning a replacement with potentially different policy.
+
+## Credentials and network
+
+- Native agent credentials are encrypted by Sandpi in PostgreSQL and projected
+  into an Environment-specific `/dev/shm` file while the agent runs.
+- The persistent credential path is a managed link to that memory-backed file.
+  Do not replace it, copy plaintext credentials into the Workspace, or attempt
+  to include credentials in a snapshot or fork.
+- Egress credential injection reduces secret exposure, but the agent can still
+  exercise any destination and credential explicitly granted to its
+  Environment. Treat allowed tools and destinations as security boundaries.
 
 ## Current product surfaces
 
-- Native Codex account connection, model and reasoning discovery, persistent
-  Sessions and Turns, branching, tools, Skills, MCP, approvals, and supported
-  slash-command surfaces.
-- Workspace file tree and editor, Git changes, Terminal, current runtime
-  metrics, and version-matched Playwright Agent Skill materialization.
-- Per-Environment memory, idle pause, manual Sandbox pause/restart recovery,
-  network policy, Sandbox0-backed egress credential injection, Workspace
-  backups and restore.
-- Durable one-time and recurring coding-agent Schedules with run history and
-  overlap protection.
-- Authenticated custom Environment Webhooks with trigger filters, cooldown
-  policies, delivery history, and bounded run queues.
-- Sandpi owns users, Environment attribution, native Session references, and
-  optional product entitlements. Sandbox0 owns Sandbox lifecycle, writable
-  rootfs persistence and snapshots, network enforcement, credential injection,
-  and usage truth.
+- Native Codex, Claude Code, and Pi TUIs with desktop keyboard and mobile touch
+  controls.
+- Multi-device terminal replay with one writable controller.
+- Workspace files, Git-aware editing, terminal, runtime metrics, idle pause,
+  manual pause/restart, memory configuration, network policy, and credentials.
+- Named RootFS snapshot, restore, current-state fork, and named-snapshot fork.
+- Built-in administrator or OIDC identity and optional product quota.
 
-Codex and the Web client are the currently implemented harness and client. Sandpi is pre-1.0, so discover exact native capabilities from the running harness instead of assuming every newer feature exists in an older deployment.
+The v1 structured Codex app-server execution surface, Schedules, and Webhook
+execution are retired. Read and cleanup endpoints remain temporarily available;
+execution-producing mutations return HTTP 410. Unattended automation requires a
+future headless adapter and must not type into the shared human TUI.
 
 ## Canonical references
 
-- Project overview and current capabilities: https://github.com/sandbox0-ai/sandpi
-- Complete local environment migration guide: https://github.com/sandbox0-ai/sandpi/blob/main/docs/local-environment-migration.md
-- CLI command reference and installers: https://github.com/sandbox0-ai/sandpi/blob/main/cli/README.md
-- CLI architecture and API boundaries: https://github.com/sandbox0-ai/sandpi/blob/main/docs/architecture/cli.md
-- Native Session, recovery, and lifecycle authority: https://github.com/sandbox0-ai/sandpi/blob/main/docs/architecture/native-session-authority.md
+- Project overview: https://github.com/sandbox0-ai/sandpi
+- Sandpi v2 design: https://github.com/sandbox0-ai/sandpi/blob/main/sandpi-v2.md
+- Terminal authority: https://github.com/sandbox0-ai/sandpi/blob/main/docs/architecture/native-agent-terminal-authority.md
+- Local migration: https://github.com/sandbox0-ai/sandpi/blob/main/docs/local-environment-migration.md
+- CLI reference: https://github.com/sandbox0-ai/sandpi/blob/main/cli/README.md
+- CLI architecture: https://github.com/sandbox0-ai/sandpi/blob/main/docs/architecture/cli.md
 - Environment egress credentials: https://github.com/sandbox0-ai/sandpi/blob/main/docs/architecture/environment-egress-credentials.md
-- Environment Schedules: https://github.com/sandbox0-ai/sandpi/blob/main/docs/architecture/environment-schedules.md
-- Environment Webhooks: https://github.com/sandbox0-ai/sandpi/blob/main/docs/architecture/environment-webhooks.md
 - Public API contract: https://github.com/sandbox0-ai/sandpi/blob/main/openapi.yaml

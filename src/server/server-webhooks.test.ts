@@ -5,11 +5,12 @@ import test from "node:test";
 import { Pool } from "pg";
 
 import { loadConfig } from "@/server/config";
+import { NATIVE_TUI_V2_UNAVAILABLE_CODE } from "@/server/native-tui-v2";
 import { UnconfiguredRuntime } from "@/server/runtime/unconfigured";
 import { createSandpiServer } from "@/server/server";
 
 test(
-  "accepts authenticated generic payloads through public Webhook ingress",
+  "keeps v1 Webhook inventory readable while retiring ingress and mutations",
   { skip: !process.env.DATABASE_URL },
   async (context) => {
     const schema = `sandpi_webhook_api_${randomUUID().replaceAll("-", "")}`;
@@ -49,184 +50,34 @@ test(
       await administration.end();
     });
 
-    const legacyProvider = await server.app.inject({
-      method: "POST",
-      url: "/api/v1/environments/env-default/webhooks",
-      payload: webhookDefinition({ provider: "github" }),
-    });
-    assert.equal(legacyProvider.statusCode, 400, legacyProvider.body);
-
-    const githubInventory = await server.app.inject({
+    const list = await server.app.inject({
       method: "GET",
-      url: "/api/v1/environments/env-default/webhook-sources/github",
+      url: "/api/v1/environments/env-default/webhooks",
     });
-    assert.equal(githubInventory.statusCode, 200, githubInventory.body);
-    assert.deepEqual(githubInventory.json().data, {
-      configured: false,
-      connections: [],
-    });
-    const githubInstall = await server.app.inject({
-      method: "POST",
-      url: "/api/v1/environments/env-default/webhook-sources/github/install",
-    });
-    assert.equal(githubInstall.statusCode, 409, githubInstall.body);
-    assert.equal(
-      githubInstall.json().error.code,
-      "github_webhook_not_configured",
-    );
+    assert.equal(list.statusCode, 200, list.body);
+    assert.deepEqual(list.json().data, []);
 
-    const secret = "custom-bearer-secret-for-api-test";
     const create = await server.app.inject({
       method: "POST",
       url: "/api/v1/environments/env-default/webhooks",
-      payload: webhookDefinition({ secret }),
-    });
-    assert.equal(create.statusCode, 201, create.body);
-    assert.equal(create.headers["cache-control"], "no-store");
-    const setup = create.json().data as {
-      webhook: {
-        id: string;
-        endpointUrl: string;
-        source: { kind: string };
-        secretConfigured: boolean;
-      };
-    };
-    assert.equal("provider" in setup.webhook, false);
-    assert.deepEqual(setup.webhook.source, { kind: "custom" });
-    assert.equal(setup.webhook.secretConfigured, true);
-    assert.match(setup.webhook.endpointUrl, /\/api\/v1\/webhooks\/hook_/);
-
-    const path = new URL(setup.webhook.endpointUrl).pathname;
-    const badToken = await server.app.inject({
-      method: "POST",
-      url: path,
-      headers: {
-        authorization: "Bearer wrong",
-        "content-type": "application/json",
-      },
-      payload: { type: "deploy.finished" },
-    });
-    assert.equal(badToken.statusCode, 401, badToken.body);
-    assert.equal(
-      badToken.json().error.code,
-      "environment_webhook_unauthorized",
-    );
-
-    const accepted = await server.app.inject({
-      method: "POST",
-      url: path,
-      headers: {
-        authorization: `Bearer ${secret}`,
-        "content-type": "application/json",
-        "idempotency-key": "delivery-valid",
-      },
       payload: {
-        type: "deploy.finished",
-        deployment: { environment: "production" },
-      },
-    });
-    assert.equal(accepted.statusCode, 202, accepted.body);
-    assert.equal(accepted.json().status, "batched");
-
-    const duplicate = await server.app.inject({
-      method: "POST",
-      url: path,
-      headers: {
-        authorization: `Bearer ${secret}`,
-        "content-type": "application/json",
-        "idempotency-key": "delivery-valid",
-      },
-      payload: {
-        type: "deploy.finished",
-        deployment: { environment: "production" },
-      },
-    });
-    assert.equal(duplicate.statusCode, 200, duplicate.body);
-    assert.equal(duplicate.json().status, "duplicate");
-
-    const formAccepted = await server.app.inject({
-      method: "POST",
-      url: path,
-      headers: {
-        authorization: `Bearer ${secret}`,
-        "content-type": "application/x-www-form-urlencoded",
-        "x-sandpi-delivery": "form-delivery",
-        "x-sandpi-event": "build.failed",
-      },
-      payload: "build_id=42&status=failed",
-    });
-    assert.equal(formAccepted.statusCode, 202, formAccepted.body);
-    assert.equal(formAccepted.json().status, "batched");
-
-    const deliveries = await server.app.inject({
-      method: "GET",
-      url: `/api/v1/environments/env-default/webhooks/${encodeURIComponent(
-        setup.webhook.id,
-      )}/deliveries`,
-    });
-    assert.equal(deliveries.statusCode, 200, deliveries.body);
-    assert.deepEqual(
-      deliveries
-        .json()
-        .data.map((delivery: { eventType: string }) => delivery.eventType)
-        .sort(),
-      ["build.failed", "deploy.finished"],
-    );
-
-    const promptSecret = "custom-request-prompt-secret-for-api-test";
-    const promptCreate = await server.app.inject({
-      method: "POST",
-      url: "/api/v1/environments/env-default/webhooks",
-      payload: webhookDefinition({
-        name: "Prompted deployment events",
-        secret: promptSecret,
+        source: { kind: "custom" },
+        name: "Retired ingress",
+        prompt: "This must not enter a native TUI.",
         batchWindowSeconds: 0,
-      }),
+        target: { kind: "newSession" },
+        enabled: true,
+      },
     });
-    assert.equal(promptCreate.statusCode, 201, promptCreate.body);
-    const promptPath = new URL(
-      promptCreate.json().data.webhook.endpointUrl,
-    ).pathname;
-    const prompted = await server.app.inject({
+    assert.equal(create.statusCode, 410, create.body);
+    assert.equal(create.json().error.code, NATIVE_TUI_V2_UNAVAILABLE_CODE);
+
+    const ingress = await server.app.inject({
       method: "POST",
-      url: promptPath,
-      headers: {
-        authorization: `Bearer ${promptSecret}`,
-        "content-type": "application/json",
-        "idempotency-key": "prompted-delivery",
-      },
-      payload: {
-        prompt: "Investigate this production deployment failure.",
-        type: "deploy.failed",
-        deployment: { environment: "production" },
-      },
+      url: "/api/v1/webhooks/legacy-hook",
+      payload: { event: "build.finished" },
     });
-    assert.equal(prompted.statusCode, 202, prompted.body);
-    assert.equal(prompted.json().status, "queued");
-    const queued = await database.query<{ prompt: string }>(
-      "SELECT prompt FROM environment_webhook_runs WHERE id = $1",
-      [prompted.json().runId],
-    );
-    assert.match(
-      queued.rows[0]?.prompt ?? "",
-      /^Review this event and run the relevant checks\./,
-    );
-    assert.equal(
-      queued.rows[0]?.prompt.match(
-        /Investigate this production deployment failure\./g,
-      )?.length,
-      1,
-    );
+    assert.equal(ingress.statusCode, 410, ingress.body);
+    assert.equal(ingress.json().error.code, NATIVE_TUI_V2_UNAVAILABLE_CODE);
   },
 );
-
-function webhookDefinition(overrides: Record<string, unknown> = {}) {
-  return {
-    name: "Deployment events",
-    prompt: "Review this event and run the relevant checks.",
-    batchWindowSeconds: 30,
-    target: { kind: "newSession" },
-    enabled: true,
-    ...overrides,
-  };
-}

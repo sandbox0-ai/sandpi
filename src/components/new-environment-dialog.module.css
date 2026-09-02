@@ -216,6 +216,11 @@
   line-height: 1.4;
 }
 
+.agentGrid {
+  display: grid;
+  gap: 8px;
+}
+
 .agentOption {
   display: grid;
   grid-template-columns: auto auto minmax(0, 1fr) auto;
@@ -225,6 +230,16 @@
   border: 1px solid var(--line, #deddd7);
   border-radius: 9px;
   background: var(--panel, #fbfaf7);
+  cursor: pointer;
+}
+
+.agentOption:hover {
+  border-color: var(--ink-faint, #8a8982);
+}
+
+.agentOptionSelected {
+  border-color: var(--ink, #171716);
+  background: color-mix(in srgb, var(--panel, #fbfaf7) 88%, var(--ink, #171716));
 }
 
 .agentRadio {
@@ -235,8 +250,7 @@
   opacity: 1;
 }
 
-.codexMark {
-  position: relative;
+.agentMark {
   display: inline-flex;
   width: 29px;
   height: 29px;
@@ -246,23 +260,11 @@
   border: 1px solid var(--ink, #171716);
   border-radius: 7px;
   background: var(--ink, #171716);
-}
-
-.codexMark > span {
-  position: absolute;
-  width: 9px;
-  height: 9px;
-  border: 2px solid var(--canvas, #f7f6f2);
-  border-radius: 3px;
-  transform: rotate(45deg);
-}
-
-.codexMark > span:first-child {
-  margin: -5px 0 0 -5px;
-}
-
-.codexMark > span:last-child {
-  margin: 5px 0 0 5px;
+  color: var(--canvas, #f7f6f2);
+  font-family: var(--font-mono, monospace);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: -0.04em;
 }
 
 .agentCopy {
@@ -270,15 +272,6 @@
   min-width: 0;
   flex-direction: column;
   gap: 1px;
-}
-
-.agentEyebrow {
-  margin-bottom: 1px;
-  color: var(--ink-faint, #8a8982);
-  font-size: 9px;
-  font-weight: 680;
-  letter-spacing: 0.045em;
-  text-transform: uppercase;
 }
 
 .agentCopy strong {
@@ -296,23 +289,11 @@
   white-space: nowrap;
 }
 
-.lockedBadge {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 5px 7px;
-  border: 1px solid color-mix(in srgb, var(--green, #258658) 42%, transparent);
-  border-radius: 999px;
-  background: var(--green-soft, #e8f3ec);
-  color: var(--green, #258658);
-  font-size: 9px;
-  font-weight: 680;
-  white-space: nowrap;
-}
-
-.lockedBadge svg:last-child {
-  margin-left: 2px;
+.agentSelected {
   color: var(--ink-faint, #8a8982);
+  font-family: var(--font-mono, monospace);
+  font-size: 9px;
+  font-weight: 700;
 }
 
 .agentHelp {
@@ -323,12 +304,6 @@
   color: var(--ink-soft, #62615c);
   font-size: 10.5px;
   line-height: 1.45;
-}
-
-.agentHelp > svg {
-  flex: 0 0 auto;
-  margin-top: 1px;
-  color: var(--ink-faint, #8a8982);
 }
 
 .submitError {

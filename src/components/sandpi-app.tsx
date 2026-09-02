@@ -10,13 +10,15 @@ import {
   useState,
 } from "react";
 
-import { Conversation } from "@/components/conversation";
+import { AgentTerminalWorkspace } from "@/components/agent-terminal-workspace";
 import { AppFrame } from "@/components/app-frame";
+import { EnvironmentForkDialog } from "@/components/environment-fork-dialog";
 import {
   EnvironmentSettings,
   type EnvironmentSettingsOpenOptions,
   type EnvironmentSettingsTab,
 } from "@/components/environment-settings";
+import { EnvironmentSidebar } from "@/components/environment-sidebar";
 import {
   Inspector,
   INSPECTOR_KEEP_ALIVE_MS,
@@ -24,10 +26,8 @@ import {
 } from "@/components/inspector";
 import { NativePullToRefresh } from "@/components/native-pull-to-refresh";
 import { NewEnvironmentDialog } from "@/components/new-environment-dialog";
-import { NewSessionWorkspace } from "@/components/new-session-workspace";
-import { Sidebar } from "@/components/sidebar";
-import { TerminalDock } from "@/components/terminal-dock";
 import type { WorkspaceFileNavigationRequest } from "@/components/workspace-ide";
+import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
 import {
   applyClientPreferences,
   CLIENT_PREFERENCES_CHANGED_EVENT,
@@ -35,40 +35,28 @@ import {
   loadClientPreferences,
   saveClientPreferences,
 } from "@/lib/client-preferences";
-import {
-  mergeCloudEnvironments,
-  mergeCloudSessions,
-  reconcileCloudWorkspaceState,
-} from "@/lib/cloud-state-sync";
+import { mergeCloudEnvironments } from "@/lib/cloud-state-sync";
 import {
   loadLocalUiPreferences,
   updateLocalUiPreferences,
 } from "@/lib/local-ui-preferences";
-import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
-import { visibleSessionsForEnvironment } from "@/lib/session-list";
 import { sandboxLoopbackUrl } from "@/lib/sandbox-loopback-url";
-import { useLocalUiPreferences } from "@/lib/use-local-ui-preferences";
-import { useCloudStateSync } from "@/lib/use-cloud-state-sync";
-import { useNativeChromeSurfaces } from "@/lib/use-native-chrome-surfaces";
-import { userVisibleWorkspacePath } from "@/lib/workspace-path-policy";
-import { normalizeInspectorWidthRatio } from "@/lib/workspace-layout";
 import type {
-  CodingSession,
   Environment,
   SandpiBootstrap,
   SandpiCloudSnapshot,
 } from "@/lib/types";
+import { useCloudStateSync } from "@/lib/use-cloud-state-sync";
+import { useLocalUiPreferences } from "@/lib/use-local-ui-preferences";
+import { useNativeChromeSurfaces } from "@/lib/use-native-chrome-surfaces";
+import { userVisibleWorkspacePath } from "@/lib/workspace-path-policy";
+import { normalizeInspectorWidthRatio } from "@/lib/workspace-layout";
 
 interface SandpiAppProps {
   initialData: SandpiBootstrap;
 }
 
-const SESSION_HYDRATION_FRESHNESS_MS = 30_000;
-
-function replaceWorkspaceUrl(
-  environmentId: string,
-  sessionId?: string,
-) {
+function replaceWorkspaceUrl(environmentId: string) {
   const url = new URL(window.location.href);
   const previousEnvironmentId = url.searchParams.get("environment");
   const previousPath = url.searchParams.get("path");
@@ -76,13 +64,6 @@ function replaceWorkspaceUrl(
   url.searchParams.set("environment", environmentId);
   if (previousEnvironmentId === environmentId && previousPath) {
     url.searchParams.set("path", previousPath);
-  }
-  if (sessionId) {
-    url.searchParams.set("session", sessionId);
-    url.searchParams.delete("new");
-  } else {
-    url.searchParams.delete("session");
-    url.searchParams.set("new", "1");
   }
   window.history.replaceState(window.history.state, "", url);
 }
@@ -95,193 +76,99 @@ function replaceEmptyWorkspaceUrl() {
 
 export function SandpiApp({ initialData }: SandpiAppProps) {
   const [environments, setEnvironments] = useState(initialData.environments);
-  const [sessions, setSessions] = useState(initialData.sessions);
   const [preferences, setPreferences] = useState(initialData.preferences);
-  const [selectedEnvironmentId, setSelectedEnvironmentId] = useState(
-    initialData.selectedEnvironmentId,
-  );
-  const [selectedSessionId, setSelectedSessionId] = useState(
-    initialData.selectedSessionId,
-  );
+  const [selectedEnvironmentId, setSelectedEnvironmentId] = useState(() => {
+    const requested = initialData.selectedEnvironmentId;
+    return initialData.environments.some(({ id }) => id === requested)
+      ? requested
+      : (initialData.environments[0]?.id ?? "");
+  });
   const [settingsTarget, setSettingsTarget] = useState<{
     environmentId: string;
     initialTab: EnvironmentSettingsTab;
     mcpVerbose?: boolean;
   } | null>(null);
   const [newEnvironmentOpen, setNewEnvironmentOpen] = useState(false);
+  const [forkSourceEnvironmentId, setForkSourceEnvironmentId] =
+    useState<string>();
   const [inspectorOpen, setInspectorOpen] = useState(false);
-  const [terminalOpen, setTerminalOpen] = useState(false);
-  const [terminalHeight, setTerminalHeight] = useState(320);
-  const [terminalMaximized, setTerminalMaximized] = useState(false);
-  const [terminalRestoreHeight, setTerminalRestoreHeight] = useState(320);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [inspectorCoversViewport, setInspectorCoversViewport] = useState(false);
   const fullWidthInspectorOpen = inspectorOpen && inspectorCoversViewport;
   useNativeChromeSurfaces(
     sidebarOpen ? "sidebar" : fullWidthInspectorOpen ? "panel" : "canvas",
-    sidebarOpen
-      ? "sidebar"
-      : fullWidthInspectorOpen
-        ? "panel"
-        : terminalOpen
-          ? "terminal"
-          : "canvas",
+    sidebarOpen ? "sidebar" : fullWidthInspectorOpen ? "panel" : "terminal",
   );
+
   const [workspaceNavigationRequest, setWorkspaceNavigationRequest] =
     useState<WorkspaceFileNavigationRequest>();
   const [sandboxPreviewRequest, setSandboxPreviewRequest] = useState<{
     environmentId: string;
     url: string;
   }>();
+  const [mountedInspectorEnvironmentId, setMountedInspectorEnvironmentId] =
+    useState("");
   const localUiPreferences = useLocalUiPreferences();
   const inspectorTab = localUiPreferences.workspace.inspectorTab;
   const sidebarCollapsed = localUiPreferences.workspace.sidebarCollapsed;
   const storedInspectorOpen = localUiPreferences.workspace.inspectorOpen;
   const storedInspectorWidthRatio =
     localUiPreferences.workspace.inspectorWidthRatio;
-  const storedTerminalHeight = localUiPreferences.workspace.terminalHeight;
   const [inspectorWidthRatio, setInspectorWidthRatio] = useState(
     storedInspectorWidthRatio,
   );
+
   const workspaceNavigationRequestIdRef = useRef(0);
   const environmentOrderRequestIdRef = useRef(0);
   const restoredWorkspaceNavigationRef = useRef(false);
   const restoredEnvironmentSettingsRef = useRef(false);
-  const sessionHydratedAtRef = useRef(
-    new Map(
-      initialData.sessions.map((session) => [session.id, Date.now()] as const),
-    ),
-  );
-  const sessionHydrationsRef = useRef(new Map<string, Promise<void>>());
   const environmentsRef = useRef(environments);
-  const sessionsRef = useRef(sessions);
   const selectedEnvironmentIdRef = useRef(selectedEnvironmentId);
-  const selectedSessionIdRef = useRef(selectedSessionId);
   const cloudStateVersionRef = useRef(0);
-  const [cloudRefreshEpoch, setCloudRefreshEpoch] = useState(0);
   environmentsRef.current = environments;
-  sessionsRef.current = sessions;
   selectedEnvironmentIdRef.current = selectedEnvironmentId;
-  selectedSessionIdRef.current = selectedSessionId;
 
   useEffect(() => {
     cloudStateVersionRef.current += 1;
-  }, [environments, preferences, sessions]);
+  }, [environments, preferences]);
 
-  const applyCloudSnapshot = useCallback(
-    (snapshot: SandpiCloudSnapshot) => {
-      const nextEnvironments = mergeCloudEnvironments(
-        environmentsRef.current,
-        snapshot.environments,
-      );
-      const nextSessions = mergeCloudSessions(
-        sessionsRef.current,
-        snapshot.sessions,
-      );
-      const next = reconcileCloudWorkspaceState(
-        {
-          environments: environmentsRef.current,
-          sessions: sessionsRef.current,
-          selectedEnvironmentId: selectedEnvironmentIdRef.current,
-          selectedSessionId: selectedSessionIdRef.current,
-        },
-        {
-          environments: nextEnvironments,
-          sessions: nextSessions,
-        },
-      );
-      const environmentChanged =
-        next.selectedEnvironmentId !== selectedEnvironmentIdRef.current;
-      const selectionChanged =
-        environmentChanged ||
-        next.selectedSessionId !== selectedSessionIdRef.current;
+  const applyCloudSnapshot = useCallback((snapshot: SandpiCloudSnapshot) => {
+    const nextEnvironments = mergeCloudEnvironments(
+      environmentsRef.current,
+      snapshot.environments,
+    );
+    const currentSelection = selectedEnvironmentIdRef.current;
+    const nextSelection = nextEnvironments.some(
+      ({ id }) => id === currentSelection,
+    )
+      ? currentSelection
+      : (nextEnvironments[0]?.id ?? "");
 
-      environmentsRef.current = next.environments;
-      sessionsRef.current = next.sessions;
-      selectedEnvironmentIdRef.current = next.selectedEnvironmentId;
-      selectedSessionIdRef.current = next.selectedSessionId;
-      setEnvironments(next.environments);
-      setSessions(next.sessions);
-      setSelectedEnvironmentId(next.selectedEnvironmentId);
-      setSelectedSessionId(next.selectedSessionId);
-      setPreferences(snapshot.preferences);
-      saveClientPreferences(snapshot.preferences);
-      const hydratedAt = Date.now();
-      sessionHydratedAtRef.current = new Map(
-        next.sessions.map((session) => [session.id, hydratedAt] as const),
-      );
+    environmentsRef.current = nextEnvironments;
+    selectedEnvironmentIdRef.current = nextSelection;
+    setEnvironments(nextEnvironments);
+    setSelectedEnvironmentId(nextSelection);
+    setPreferences(snapshot.preferences);
+    saveClientPreferences(snapshot.preferences);
+    setSettingsTarget((current) =>
+      current &&
+      nextEnvironments.some(({ id }) => id === current.environmentId)
+        ? current
+        : null,
+    );
 
-      setSettingsTarget((current) =>
-        current &&
-        next.environments.some(
-          (environment) => environment.id === current.environmentId,
-        )
-          ? current
-          : null,
-      );
-      if (environmentChanged) setTerminalOpen(false);
-      if (selectionChanged) {
-        const environment = next.environments.find(
-          (candidate) => candidate.id === next.selectedEnvironmentId,
-        );
-        if (environment) {
-          replaceWorkspaceUrl(
-            environment.id,
-            next.selectedSessionId || undefined,
-          );
-        } else {
-          replaceEmptyWorkspaceUrl();
-        }
-      }
-    },
-    [],
-  );
+    if (nextSelection) replaceWorkspaceUrl(nextSelection);
+    else replaceEmptyWorkspaceUrl();
+  }, []);
+
   const getCloudStateVersion = useCallback(
     () => cloudStateVersionRef.current,
     [],
   );
-  const handleCloudSynchronized = useCallback(() => {
-    setCloudRefreshEpoch((current) => current + 1);
-  }, []);
   const cloudSync = useCloudStateSync({
     applySnapshot: applyCloudSnapshot,
     getLocalStateVersion: getCloudStateVersion,
-    onSynchronized: handleCloudSynchronized,
   });
-
-  const hydrateSession = useCallback((sessionId: string) => {
-    const now = Date.now();
-    const lastHydratedAt = sessionHydratedAtRef.current.get(sessionId);
-    if (
-      lastHydratedAt !== undefined &&
-      now - lastHydratedAt < SESSION_HYDRATION_FRESHNESS_MS
-    ) {
-      return Promise.resolve();
-    }
-    const active = sessionHydrationsRef.current.get(sessionId);
-    if (active) return active;
-    const hydration = apiFetch<ApiEnvelope<CodingSession>>(
-      `/api/v1/sessions/${encodeURIComponent(sessionId)}`,
-    )
-      .then((response) => {
-        sessionHydratedAtRef.current.set(sessionId, Date.now());
-        setSessions((current) =>
-          current.map((session) =>
-            session.id === response.data.id ? response.data : session,
-          ),
-        );
-      })
-      .catch((error) => {
-        console.error("Unable to refresh Session metadata", error);
-      })
-      .finally(() => {
-        if (sessionHydrationsRef.current.get(sessionId) === hydration) {
-          sessionHydrationsRef.current.delete(sessionId);
-        }
-      });
-    sessionHydrationsRef.current.set(sessionId, hydration);
-    return hydration;
-  }, []);
 
   useEffect(() => {
     const synchronizePreferences = () => {
@@ -311,52 +198,35 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
     };
   }, [initialData.preferences]);
 
-  useEffect(() => {
-    setInspectorOpen(storedInspectorOpen);
-  }, [storedInspectorOpen]);
-
-  useEffect(() => {
-    setInspectorWidthRatio(storedInspectorWidthRatio);
-  }, [storedInspectorWidthRatio]);
-
-  useEffect(() => {
-    if (terminalMaximized) return;
-    setTerminalHeight(storedTerminalHeight);
-    setTerminalRestoreHeight(storedTerminalHeight);
-  }, [storedTerminalHeight, terminalMaximized]);
+  useEffect(() => setInspectorOpen(storedInspectorOpen), [storedInspectorOpen]);
+  useEffect(
+    () => setInspectorWidthRatio(storedInspectorWidthRatio),
+    [storedInspectorWidthRatio],
+  );
 
   useEffect(() => {
     const narrowViewport = window.matchMedia("(max-width: 960px)");
     const fullWidthInspector = window.matchMedia("(max-width: 680px)");
-    const closeInspectorOnNarrowViewport = (
+    const synchronizeInspector = (
       event: MediaQueryListEvent | MediaQueryList,
     ) => {
-      if (event.matches) {
-        setInspectorOpen(false);
-      } else {
-        setInspectorOpen(loadLocalUiPreferences().workspace.inspectorOpen);
-      }
+      setInspectorOpen(
+        event.matches
+          ? false
+          : loadLocalUiPreferences().workspace.inspectorOpen,
+      );
     };
-    const synchronizeInspectorCoverage = (
+    const synchronizeCoverage = (
       event: MediaQueryListEvent | MediaQueryList,
     ) => setInspectorCoversViewport(event.matches);
 
-    closeInspectorOnNarrowViewport(narrowViewport);
-    synchronizeInspectorCoverage(fullWidthInspector);
-    narrowViewport.addEventListener("change", closeInspectorOnNarrowViewport);
-    fullWidthInspector.addEventListener(
-      "change",
-      synchronizeInspectorCoverage,
-    );
+    synchronizeInspector(narrowViewport);
+    synchronizeCoverage(fullWidthInspector);
+    narrowViewport.addEventListener("change", synchronizeInspector);
+    fullWidthInspector.addEventListener("change", synchronizeCoverage);
     return () => {
-      narrowViewport.removeEventListener(
-        "change",
-        closeInspectorOnNarrowViewport,
-      );
-      fullWidthInspector.removeEventListener(
-        "change",
-        synchronizeInspectorCoverage,
-      );
+      narrowViewport.removeEventListener("change", synchronizeInspector);
+      fullWidthInspector.removeEventListener("change", synchronizeCoverage);
     };
   }, []);
 
@@ -364,53 +234,36 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
     (environment: Environment) => environment.ownerId === initialData.viewer.id,
     [initialData.viewer.id],
   );
-
   const selectedEnvironment = useMemo(
     () =>
-      environments.find(
-        (environment) => environment.id === selectedEnvironmentId,
-      ) ?? environments[0],
+      environments.find(({ id }) => id === selectedEnvironmentId) ??
+      environments[0],
     [environments, selectedEnvironmentId],
   );
-
-  const selectedSession = useMemo(
+  const settingsEnvironment = useMemo(
     () =>
-      sessions.find(
-        (session) =>
-          session.id === selectedSessionId &&
-          session.environmentId === selectedEnvironmentId,
-      ),
-    [selectedEnvironmentId, selectedSessionId, sessions],
+      environments.find(({ id }) => id === settingsTarget?.environmentId) ??
+      null,
+    [environments, settingsTarget?.environmentId],
   );
-  const [
-    mountedNewSessionInspectorEnvironmentId,
-    setMountedNewSessionInspectorEnvironmentId,
-  ] = useState("");
 
   useEffect(() => {
     if (!selectedEnvironment) {
-      setMountedNewSessionInspectorEnvironmentId("");
-      return;
-    }
-    if (selectedSession) {
-      setMountedNewSessionInspectorEnvironmentId("");
+      setMountedInspectorEnvironmentId("");
       return;
     }
     if (inspectorOpen) {
-      setMountedNewSessionInspectorEnvironmentId(selectedEnvironment.id);
+      setMountedInspectorEnvironmentId(selectedEnvironment.id);
       return;
     }
-    setMountedNewSessionInspectorEnvironmentId((current) =>
-      current === selectedEnvironment.id ? current : "",
-    );
     const environmentId = selectedEnvironment.id;
     const timeout = window.setTimeout(() => {
-      setMountedNewSessionInspectorEnvironmentId((current) =>
+      setMountedInspectorEnvironmentId((current) =>
         current === environmentId ? "" : current,
       );
     }, INSPECTOR_KEEP_ALIVE_MS);
     return () => window.clearTimeout(timeout);
-  }, [inspectorOpen, selectedEnvironment, selectedSession]);
+  }, [inspectorOpen, selectedEnvironment]);
 
   const openWorkspacePath = useCallback(
     (requestedPath: string) => {
@@ -442,10 +295,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
     (requestedUrl: string) => {
       const url = sandboxLoopbackUrl(requestedUrl);
       if (!url || !selectedEnvironment) return;
-      setSandboxPreviewRequest({
-        environmentId: selectedEnvironment.id,
-        url,
-      });
+      setSandboxPreviewRequest({ environmentId: selectedEnvironment.id, url });
       updateLocalUiPreferences((current) => ({
         ...current,
         workspace: {
@@ -478,30 +328,20 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
   }, [selectedEnvironment?.id]);
 
   useEffect(() => {
-    if (
-      restoredWorkspaceNavigationRef.current ||
-      !selectedEnvironment ||
-      !selectedSession
-    ) {
-      return;
-    }
+    if (restoredWorkspaceNavigationRef.current || !selectedEnvironment) return;
     restoredWorkspaceNavigationRef.current = true;
-    const requestedPath = new URLSearchParams(window.location.search).get(
-      "path",
-    );
-    if (requestedPath) openWorkspacePath(requestedPath);
-  }, [openWorkspacePath, selectedEnvironment, selectedSession]);
+    const path = new URLSearchParams(window.location.search).get("path");
+    if (path) openWorkspacePath(path);
+  }, [openWorkspacePath, selectedEnvironment]);
 
   useEffect(() => {
-    if (!environments.some((environment) => environment.status === "updating")) {
-      return;
-    }
+    if (!environments.some(({ status }) => status === "updating")) return;
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
       void apiFetch<ApiEnvelope<Environment[]>>("/api/v1/environments", {
         signal: controller.signal,
       })
-        .then((response) => setEnvironments(response.data))
+        .then(({ data }) => setEnvironments(data))
         .catch((error) => {
           if (!controller.signal.aborted) {
             console.error("Unable to refresh Environment provisioning", error);
@@ -514,36 +354,13 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
     };
   }, [environments]);
 
-  useEffect(() => {
-    if (!selectedSession?.unread) return;
-    setSessions((current) =>
-      current.map((session) =>
-        session.id === selectedSession.id ? { ...session, unread: false } : session,
-      ),
-    );
-    void apiFetch(`/api/v1/sessions/${encodeURIComponent(selectedSession.id)}/metadata`, {
-      method: "PUT",
-      body: JSON.stringify({ unread: false }),
-    }).catch((error) => console.error("Unable to mark Session as read", error));
-  }, [selectedSession?.id, selectedSession?.unread]);
-
-  const settingsEnvironment = useMemo(
-    () =>
-      environments.find(
-        (environment) => environment.id === settingsTarget?.environmentId,
-      ) ?? null,
-    [environments, settingsTarget?.environmentId],
-  );
-
   const openEnvironmentSettings = useCallback(
     (
       environmentId: string,
       initialTab: EnvironmentSettingsTab = "general",
       options: EnvironmentSettingsOpenOptions = {},
     ) => {
-      const environment = environments.find(
-        (candidate) => candidate.id === environmentId,
-      );
+      const environment = environments.find(({ id }) => id === environmentId);
       if (environment && canManageEnvironment(environment)) {
         setSettingsTarget({
           environmentId,
@@ -561,9 +378,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
     if (search.get("settings") !== "sandbox") return;
     const environmentId = search.get("environment");
     if (!environmentId) return;
-    const environment = environments.find(
-      (candidate) => candidate.id === environmentId,
-    );
+    const environment = environments.find(({ id }) => id === environmentId);
     if (!environment) return;
     restoredEnvironmentSettingsRef.current = true;
     openEnvironmentSettings(environmentId, "sandbox");
@@ -571,48 +386,8 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
 
   const handleSelectEnvironment = useCallback(
     (environmentId: string) => {
-      const environment = environments.find(
-        (item) => item.id === environmentId,
-      );
-      if (!environment) {
-        return;
-      }
+      if (!environments.some(({ id }) => id === environmentId)) return;
       setSelectedEnvironmentId(environmentId);
-      const firstSession = visibleSessionsForEnvironment(
-        sessions,
-        environmentId,
-      )[0];
-      if (firstSession) {
-        setSelectedSessionId(firstSession.id);
-        replaceWorkspaceUrl(environmentId, firstSession.id);
-        void hydrateSession(firstSession.id);
-        setSessions((current) =>
-          current.map((session) =>
-            session.id === firstSession.id && session.unread
-              ? { ...session, unread: false }
-              : session,
-          ),
-        );
-      } else {
-        setSelectedSessionId("");
-        replaceWorkspaceUrl(environmentId);
-      }
-      setSidebarOpen(false);
-    },
-    [environments, hydrateSession, sessions],
-  );
-
-  const handleNewSession = useCallback(
-    (environmentId: string) => {
-      if (
-        !environments.some(
-          (environment) => environment.id === environmentId,
-        )
-      ) {
-        return;
-      }
-      setSelectedEnvironmentId(environmentId);
-      setSelectedSessionId("");
       replaceWorkspaceUrl(environmentId);
       setSidebarOpen(false);
     },
@@ -630,299 +405,59 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
     }));
   }, []);
 
-  const handleSelectSession = useCallback(
-    (sessionId: string) => {
-      const session = sessions.find(
-        (item) => item.id === sessionId && !item.archived,
-      );
-      const environment = session
-        ? environments.find((item) => item.id === session.environmentId)
-        : undefined;
-      if (session && environment) {
-        setSelectedSessionId(sessionId);
-        setSelectedEnvironmentId(session.environmentId);
-        replaceWorkspaceUrl(session.environmentId, sessionId);
-        void hydrateSession(sessionId);
-        setSessions((current) =>
-          current.map((item) =>
-            item.id === sessionId && item.unread
-              ? { ...item, unread: false }
-              : item,
-          ),
-        );
-      }
-      setSidebarOpen(false);
-    },
-    [environments, hydrateSession, sessions],
-  );
+  const handleEnvironmentChange = useCallback((next: Environment) => {
+    setEnvironments((current) =>
+      current.map((environment) =>
+        environment.id === next.id ? next : environment,
+      ),
+    );
+  }, []);
 
-  const handleEnvironmentChange = useCallback(
-    (nextEnvironment: Environment) => {
-      setEnvironments((current) =>
-        current.map((environment) =>
-          environment.id === nextEnvironment.id ? nextEnvironment : environment,
-        ),
-      );
-    },
-    [],
-  );
-
-  const handleReorderEnvironments = useCallback(
-    (reordered: Environment[]) => {
-      const previous = environmentsRef.current;
-      const requestId = ++environmentOrderRequestIdRef.current;
-      environmentsRef.current = reordered;
-      setEnvironments(reordered);
-      void apiFetch<ApiEnvelope<Environment[]>>("/api/v1/environments/order", {
-        method: "PUT",
-        body: JSON.stringify({
-          environmentIds: reordered.map(({ id }) => id),
-        }),
+  const handleReorderEnvironments = useCallback((reordered: Environment[]) => {
+    const previous = environmentsRef.current;
+    const requestId = ++environmentOrderRequestIdRef.current;
+    environmentsRef.current = reordered;
+    setEnvironments(reordered);
+    void apiFetch<ApiEnvelope<Environment[]>>("/api/v1/environments/order", {
+      method: "PUT",
+      body: JSON.stringify({
+        environmentIds: reordered.map(({ id }) => id),
+      }),
+    })
+      .then(({ data }) => {
+        if (requestId !== environmentOrderRequestIdRef.current) return;
+        environmentsRef.current = data;
+        setEnvironments(data);
       })
-        .then(({ data }) => {
-          if (requestId !== environmentOrderRequestIdRef.current) return;
-          environmentsRef.current = data;
-          setEnvironments(data);
-        })
-        .catch((error) => {
-          if (requestId !== environmentOrderRequestIdRef.current) return;
-          environmentsRef.current = previous;
-          setEnvironments(previous);
-          console.error("Unable to reorder Environments", error);
-        });
-    },
-    [],
-  );
-
-  const handleEnvironmentWorkspaceRestore = useCallback(
-    (nextEnvironment: Environment) => {
-      handleEnvironmentChange(nextEnvironment);
-      void apiFetch<ApiEnvelope<CodingSession[]>>("/api/v1/sessions")
-        .then((response) => setSessions(response.data))
-        .catch((error) =>
-          console.error(
-            "Unable to refresh Sessions after Workspace restore",
-            error,
-          ),
-        );
-    },
-    [handleEnvironmentChange],
-  );
+      .catch((error) => {
+        if (requestId !== environmentOrderRequestIdRef.current) return;
+        environmentsRef.current = previous;
+        setEnvironments(previous);
+        console.error("Unable to reorder Environments", error);
+      });
+  }, []);
 
   const handleEnvironmentDeleted = useCallback(
     (environmentId: string) => {
-      const remainingEnvironments = environments.filter(
-        (environment) => environment.id !== environmentId,
-      );
-      const remainingSessions = sessions.filter(
-        (session) => session.environmentId !== environmentId,
-      );
-      const nextEnvironment = remainingEnvironments[0];
-      const nextSession = nextEnvironment
-        ? visibleSessionsForEnvironment(
-            remainingSessions,
-            nextEnvironment.id,
-          )[0]
-        : undefined;
-
-      setEnvironments((current) =>
-        current.filter((environment) => environment.id !== environmentId),
-      );
-      setSessions((current) =>
-        current.filter((session) => session.environmentId !== environmentId),
-      );
+      const remaining = environments.filter(({ id }) => id !== environmentId);
+      const nextEnvironment = remaining[0];
+      setEnvironments(remaining);
       setSettingsTarget(null);
-      setTerminalOpen(false);
-
       if (selectedEnvironmentId === environmentId) {
         setSelectedEnvironmentId(nextEnvironment?.id ?? "");
-        setSelectedSessionId(nextSession?.id ?? "");
-        if (nextEnvironment) {
-          replaceWorkspaceUrl(nextEnvironment.id, nextSession?.id);
-          if (nextSession) void hydrateSession(nextSession.id);
-        } else {
-          replaceEmptyWorkspaceUrl();
-        }
+        if (nextEnvironment) replaceWorkspaceUrl(nextEnvironment.id);
+        else replaceEmptyWorkspaceUrl();
       }
     },
-    [
-      environments,
-      hydrateSession,
-      selectedEnvironmentId,
-      sessions,
-    ],
-  );
-
-  const handleSessionCreated = useCallback(
-    (session: CodingSession) => {
-      setSessions((current) => [
-        session,
-        ...current.filter((candidate) => candidate.id !== session.id),
-      ]);
-      setSelectedEnvironmentId(session.environmentId);
-      setSelectedSessionId(session.id);
-      replaceWorkspaceUrl(session.environmentId, session.id);
-      setTerminalOpen(false);
-    },
-    [],
-  );
-
-  const persistSessionMetadata = useCallback(
-    async (
-      sessionId: string,
-      metadata: {
-        title?: string;
-        pinned?: boolean;
-        archived?: boolean;
-        completed?: boolean;
-        unread?: boolean;
-      },
-    ) => {
-      const response = await apiFetch<ApiEnvelope<CodingSession>>(
-        `/api/v1/sessions/${encodeURIComponent(sessionId)}/metadata`,
-        {
-          method: "PUT",
-          body: JSON.stringify(metadata),
-        },
-      );
-      setSessions((current) =>
-        current.map((session) =>
-          session.id === response.data.id ? response.data : session,
-        ),
-      );
-      return response.data;
-    },
-    [],
-  );
-
-  const handleRenameSession = useCallback(
-    (sessionId: string, title: string) => {
-      void persistSessionMetadata(sessionId, { title }).catch((error) => {
-        console.error("Unable to rename Session", error);
-      });
-    },
-    [persistSessionMetadata],
-  );
-
-  const handleTogglePinSession = useCallback(
-    (sessionId: string) => {
-      const session = sessions.find((candidate) => candidate.id === sessionId);
-      if (!session) {
-        return;
-      }
-      void persistSessionMetadata(sessionId, {
-        pinned: !session.pinned,
-      }).catch((error) => {
-        console.error("Unable to update pinned Session", error);
-      });
-    },
-    [persistSessionMetadata, sessions],
-  );
-
-  const handleToggleSessionCompleted = useCallback(
-    async (sessionId: string) => {
-      const session = sessions.find((candidate) => candidate.id === sessionId);
-      if (!session) return;
-      const completed = !session.completed;
-      setSessions((current) =>
-        current.map((candidate) =>
-          candidate.id === sessionId ? { ...candidate, completed } : candidate,
-        ),
-      );
-      try {
-        await persistSessionMetadata(sessionId, { completed });
-      } catch (error) {
-        setSessions((current) =>
-          current.map((candidate) =>
-            candidate.id === sessionId && candidate.completed === completed
-              ? { ...candidate, completed: session.completed }
-              : candidate,
-          ),
-        );
-        console.error("Unable to update Session completion", error);
-        throw error;
-      }
-    },
-    [persistSessionMetadata, sessions],
-  );
-
-  const handleForkSession = useCallback((sessionId: string) => {
-    void apiFetch<ApiEnvelope<CodingSession>>(
-      `/api/v1/sessions/${encodeURIComponent(sessionId)}/fork`,
-      { method: "POST", body: JSON.stringify({}) },
-    )
-      .then((response) => {
-        handleSessionCreated(response.data);
-      })
-      .catch((error) => console.error("Unable to fork Session", error));
-  }, [handleSessionCreated]);
-
-  const handleArchiveSession = useCallback(
-    (sessionId: string) => {
-      const archivedSession = sessions.find(
-        (session) => session.id === sessionId,
-      );
-      if (!archivedSession) {
-        return;
-      }
-
-      void persistSessionMetadata(sessionId, { archived: true })
-        .then(() => {
-          if (selectedSessionId === sessionId) {
-            const nextSession = visibleSessionsForEnvironment(
-              sessions,
-              archivedSession.environmentId,
-              sessionId,
-            )[0];
-            setSelectedSessionId(nextSession?.id ?? "");
-            replaceWorkspaceUrl(
-              archivedSession.environmentId,
-              nextSession?.id,
-            );
-          }
-        })
-        .catch((error) => {
-          console.error("Unable to archive Session", error);
-        });
-    },
-    [persistSessionMetadata, selectedSessionId, sessions],
-  );
-
-  const handleRestoreSession = useCallback(
-    (sessionId: string) => {
-      void persistSessionMetadata(sessionId, { archived: false }).catch(
-        (error) => {
-          console.error("Unable to restore Session", error);
-        },
-      );
-    },
-    [persistSessionMetadata],
+    [environments, selectedEnvironmentId],
   );
 
   const handleEnvironmentCreated = useCallback((environment: Environment) => {
     setEnvironments((current) => [...current, environment]);
     setSelectedEnvironmentId(environment.id);
-    setSelectedSessionId("");
     replaceWorkspaceUrl(environment.id);
-    setTerminalOpen(false);
     setNewEnvironmentOpen(false);
-  }, []);
-
-  const handleSessionChange = useCallback((nextSession: CodingSession) => {
-    setSessions((current) =>
-      current.map((session) =>
-        session.id === nextSession.id ? nextSession : session,
-      ),
-    );
-  }, []);
-
-  const handleTerminalHeightChange = useCallback((height: number) => {
-    setTerminalHeight(height);
-    setTerminalMaximized(false);
-    updateLocalUiPreferences((current) => ({
-      ...current,
-      workspace: { ...current.workspace, terminalHeight: height },
-    }));
+    setForkSourceEnvironmentId(undefined);
   }, []);
 
   const handleInspectorTabChange = useCallback((tab: InspectorTab) => {
@@ -947,14 +482,14 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
 
   const handleInspectorWidthRatioChange = useCallback(
     (ratio: number, persist: boolean) => {
-      const normalizedRatio = normalizeInspectorWidthRatio(ratio);
-      setInspectorWidthRatio(normalizedRatio);
+      const normalized = normalizeInspectorWidthRatio(ratio);
+      setInspectorWidthRatio(normalized);
       if (!persist) return;
       updateLocalUiPreferences((current) => ({
         ...current,
         workspace: {
           ...current.workspace,
-          inspectorWidthRatio: normalizedRatio,
+          inspectorWidthRatio: normalized,
         },
       }));
     },
@@ -968,49 +503,25 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
     }));
   }, []);
 
-  const handleToggleTerminalMaximize = useCallback(() => {
-    if (terminalMaximized) {
-      setTerminalHeight(terminalRestoreHeight);
-      setTerminalMaximized(false);
-      return;
-    }
-    setTerminalRestoreHeight(terminalHeight);
-    setTerminalHeight(Math.max(360, Math.floor(window.innerHeight * 0.72)));
-    setTerminalMaximized(true);
-  }, [terminalHeight, terminalMaximized, terminalRestoreHeight]);
-
   const showInspector = inspectorOpen;
-  const showTerminal = terminalOpen;
   const workspaceStyle = {
     "--conversation-pane-size": `${1 - inspectorWidthRatio}fr`,
     "--inspector-pane-size": `${inspectorWidthRatio}fr`,
-    ...(showTerminal
-      ? { "--terminal-height": `${terminalHeight}px` }
-      : {}),
   } as CSSProperties;
   const sidebar = (
-    <Sidebar
+    <EnvironmentSidebar
       language={preferences.general.language}
       timeZone={preferences.general.timeZone}
       viewer={initialData.viewer}
       environments={environments}
-      sessions={sessions}
       selectedEnvironmentId={selectedEnvironment?.id ?? ""}
-      selectedSessionId={selectedSession?.id ?? ""}
       onSelectEnvironment={handleSelectEnvironment}
-      onSelectSession={handleSelectSession}
       onNewEnvironment={() => setNewEnvironmentOpen(true)}
-      onNewSession={handleNewSession}
       onEnvironmentSettings={(environmentId) => {
         handleSelectEnvironment(environmentId);
         openEnvironmentSettings(environmentId);
       }}
       onReorderEnvironments={handleReorderEnvironments}
-      onRenameSession={handleRenameSession}
-      onForkSession={handleForkSession}
-      onArchiveSession={handleArchiveSession}
-      onTogglePinSession={handleTogglePinSession}
-      onToggleSessionCompleted={handleToggleSessionCompleted}
       onCollapse={() => {
         handleSidebarCollapsedChange(true);
         setSidebarOpen(false);
@@ -1023,7 +534,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
     return (
       <AppFrame
         as="main"
-        className={`app-shell environment-empty-shell ${
+        className={`app-shell terminal-v2-shell environment-empty-shell ${
           sidebarOpen ? "sidebar-is-open" : ""
         } ${sidebarCollapsed ? "sidebar-is-collapsed" : ""}`}
       >
@@ -1066,10 +577,10 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
             <span aria-hidden="true">
               <Box size={25} />
             </span>
-            <h1>Create an Environment</h1>
+            <h1>CREATE AN ENVIRONMENT</h1>
             <p>
-              Environments own the Sandbox, Workspace and coding-agent account
-              shared by their Sessions.
+              One persistent Sandbox, one native coding-agent TUI, available
+              from every device.
             </p>
             <button
               type="button"
@@ -1077,7 +588,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
               onClick={() => setNewEnvironmentOpen(true)}
             >
               <Plus size={15} aria-hidden="true" />
-              New Environment
+              [NEW ENVIRONMENT]
             </button>
           </div>
         </section>
@@ -1095,22 +606,19 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
   return (
     <AppFrame
       as="main"
-      className={`app-shell ${showInspector ? "inspector-is-open" : ""} ${
-        showTerminal ? "terminal-is-open" : ""
-      } ${sidebarOpen ? "sidebar-is-open" : ""} ${
-        sidebarCollapsed ? "sidebar-is-collapsed" : ""
-      }`}
+      className={`app-shell terminal-v2-shell ${showInspector ? "inspector-is-open" : ""} ${
+        sidebarOpen ? "sidebar-is-open" : ""
+      } ${sidebarCollapsed ? "sidebar-is-collapsed" : ""}`}
       style={workspaceStyle}
     >
       <NativePullToRefresh
         language={preferences.general.language}
         onRefresh={() => cloudSync.refresh("pull", { force: true })}
       />
-      <a className="skip-link" href="#conversation">
-        Skip to conversation
+      <a className="skip-link" href="#agent-terminal">
+        Skip to Agent terminal
       </a>
       {sidebar}
-
       {sidebarOpen ? (
         <button
           type="button"
@@ -1120,68 +628,39 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
         />
       ) : null}
 
-      {selectedSession ? (
-        <Conversation
-          language={preferences.general.language}
-          timeZone={preferences.general.timeZone}
-          sendShortcut={preferences.general.sendShortcut}
-          viewer={initialData.viewer}
+      <div id="agent-terminal" style={{ display: "contents" }}>
+        <AgentTerminalWorkspace
           environment={selectedEnvironment}
-          session={selectedSession}
-          refreshEpoch={cloudRefreshEpoch}
-          inspectorOpen={showInspector}
-          inspectorTab={inspectorTab}
-          inspectorWidthRatio={inspectorWidthRatio}
-          previewUrl={
-            sandboxPreviewRequest?.environmentId === selectedEnvironment.id
-              ? sandboxPreviewRequest.url
-              : undefined
-          }
-          terminalOpen={showTerminal}
           onToggleSidebar={handleToggleNavigation}
-          onToggleInspector={() => handleInspectorOpenChange(!showInspector)}
-          onInspectorTabChange={handleInspectorTabChange}
-          onInspectorWidthRatioChange={handleInspectorWidthRatioChange}
-          onToggleTerminal={() => setTerminalOpen((open) => !open)}
-          onNewSession={() => handleNewSession(selectedEnvironment.id)}
-          onOpenEnvironmentSettings={(tab, options) =>
-            openEnvironmentSettings(selectedEnvironment.id, tab, options)
-          }
-          onOpenInspector={(tab) => {
-            handleInspectorTabChange(tab);
+          onOpenFiles={() => {
+            handleInspectorTabChange("files");
             handleInspectorOpenChange(true);
           }}
-          workspaceNavigationRequest={workspaceNavigationRequest}
-          onOpenWorkspacePath={openWorkspacePath}
-          onOpenSandboxPreview={openSandboxPreview}
-          onWorkspaceNavigationHandled={handleWorkspaceNavigationHandled}
-          onSessionChange={handleSessionChange}
-          onToggleSessionCompleted={handleToggleSessionCompleted}
-          onDerivedSessionCreated={handleSessionCreated}
-        />
-      ) : (
-        <NewSessionWorkspace
-          language={preferences.general.language}
-          sendShortcut={preferences.general.sendShortcut}
-          environment={selectedEnvironment}
-          canManageEnvironment={canManageEnvironment(selectedEnvironment)}
-          onEnvironmentChange={handleEnvironmentChange}
-          onCreated={handleSessionCreated}
-          onOpenAgentHarnessSettings={() =>
-            openEnvironmentSettings(selectedEnvironment.id, "credentials")
+          onOpenSnapshots={() =>
+            openEnvironmentSettings(selectedEnvironment.id, "sandbox")
           }
-          onToggleSidebar={handleToggleNavigation}
-          inspectorOpen={showInspector}
-          onToggleInspector={() => handleInspectorOpenChange(!showInspector)}
-          terminalOpen={showTerminal}
-          onToggleTerminal={() => setTerminalOpen((open) => !open)}
-          onOpenWorkspacePath={openWorkspacePath}
+          onOpenFork={() => setForkSourceEnvironmentId(selectedEnvironment.id)}
+          onOpenSettings={() => openEnvironmentSettings(selectedEnvironment.id)}
+          onPause={async () => {
+            const response = await apiFetch<ApiEnvelope<Environment>>(
+              `/api/v1/environments/${encodeURIComponent(selectedEnvironment.id)}/sandbox/pause`,
+              { method: "PUT" },
+            );
+            handleEnvironmentChange(response.data);
+          }}
+          onResume={async () => {
+            const response = await apiFetch<ApiEnvelope<Environment>>(
+              `/api/v1/environments/${encodeURIComponent(selectedEnvironment.id)}/sandbox/restart`,
+              { method: "PUT" },
+            );
+            handleEnvironmentChange(response.data);
+          }}
+          onOpenSandboxPreview={openSandboxPreview}
         />
-      )}
+      </div>
 
-      {!selectedSession &&
-      (showInspector ||
-        mountedNewSessionInspectorEnvironmentId === selectedEnvironment.id) ? (
+      {showInspector ||
+      mountedInspectorEnvironmentId === selectedEnvironment.id ? (
         <Inspector
           language={preferences.general.language}
           timeZone={preferences.general.timeZone}
@@ -1205,18 +684,6 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
         />
       ) : null}
 
-      {showTerminal ? (
-        <TerminalDock
-          environment={selectedEnvironment}
-          height={terminalHeight}
-          maximized={terminalMaximized}
-          onHeightChange={handleTerminalHeightChange}
-          onToggleMaximize={handleToggleTerminalMaximize}
-          onClose={() => setTerminalOpen(false)}
-          onOpenSandboxPreview={openSandboxPreview}
-        />
-      ) : null}
-
       {settingsEnvironment ? (
         <EnvironmentSettings
           key={settingsEnvironment.id}
@@ -1225,25 +692,12 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
           initialMcpVerbose={settingsTarget?.mcpVerbose}
           language={preferences.general.language}
           timeZone={preferences.general.timeZone}
-          sessions={sessions.filter(
-            (session) =>
-              session.environmentId === settingsEnvironment.id &&
-              !session.archived,
-          )}
-          archivedSessions={sessions
-            .filter(
-              (session) =>
-                session.environmentId === settingsEnvironment.id &&
-                session.archived,
-            )
-            .sort(
-              (left, right) =>
-                right.updatedAt - left.updatedAt,
-            )}
+          sessions={[]}
+          archivedSessions={[]}
           onChange={handleEnvironmentChange}
-          onWorkspaceRestore={handleEnvironmentWorkspaceRestore}
+          onWorkspaceRestore={handleEnvironmentChange}
           onDelete={handleEnvironmentDeleted}
-          onRestoreSession={handleRestoreSession}
+          onRestoreSession={() => undefined}
           onClose={() => setSettingsTarget(null)}
         />
       ) : null}
@@ -1253,6 +707,17 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
           environments={environments}
           onCreated={handleEnvironmentCreated}
           onClose={() => setNewEnvironmentOpen(false)}
+        />
+      ) : null}
+
+      {forkSourceEnvironmentId ? (
+        <EnvironmentForkDialog
+          source={
+            environments.find(({ id }) => id === forkSourceEnvironmentId) ??
+            selectedEnvironment
+          }
+          onCreated={handleEnvironmentCreated}
+          onClose={() => setForkSourceEnvironmentId(undefined)}
         />
       ) : null}
     </AppFrame>

@@ -19,6 +19,171 @@ components:
         Built-in-admin deployments authenticate the local administrator
         implicitly unless signed out.
   schemas:
+    AgentTerminalClientMessage:
+      anyOf:
+        - $ref: "#/components/schemas/TerminalClientMessage"
+        - oneOf:
+            - type: object
+              properties:
+                type:
+                  type: string
+                  enum:
+                    - control.takeover
+                requestId:
+                  type: string
+              required:
+                - type
+              additionalProperties: false
+            - type: object
+              properties:
+                type:
+                  type: string
+                  enum:
+                    - control.heartbeat
+                requestId:
+                  type: string
+              required:
+                - type
+              additionalProperties: false
+    AgentTerminalServerMessage:
+      anyOf:
+        - type: object
+          properties:
+            type:
+              type: string
+              enum:
+                - ready
+            agentId:
+              type: string
+              enum:
+                - codex
+                - claude-code
+                - pi
+            sessionId:
+              type: string
+            attemptId:
+              type: string
+            runtimeGeneration:
+              type: integer
+              minimum: 0
+              maximum: 9007199254740991
+            replayAfter:
+              type: integer
+              minimum: -9007199254740991
+              maximum: 9007199254740991
+            replayUntil:
+              type: integer
+              minimum: -9007199254740991
+              maximum: 9007199254740991
+            replayReset:
+              type: boolean
+            control:
+              type: object
+              properties:
+                role:
+                  type: string
+                  enum:
+                    - controller
+                    - viewer
+                leaseVersion:
+                  type: integer
+                  minimum: 0
+                  exclusiveMinimum: true
+                  maximum: 9007199254740991
+                expiresAt:
+                  type: number
+                  description: Unix time in seconds; fractional values preserve milliseconds.
+              required:
+                - role
+                - leaseVersion
+                - expiresAt
+              additionalProperties: false
+          required:
+            - type
+            - agentId
+            - sessionId
+            - attemptId
+            - runtimeGeneration
+            - replayAfter
+            - replayUntil
+            - replayReset
+            - control
+          additionalProperties: false
+        - type: object
+          properties:
+            type:
+              type: string
+              enum:
+                - control.granted
+                - control.revoked
+                - control.state
+            control:
+              type: object
+              properties:
+                role:
+                  type: string
+                  enum:
+                    - controller
+                    - viewer
+                leaseVersion:
+                  type: integer
+                  minimum: 0
+                  exclusiveMinimum: true
+                  maximum: 9007199254740991
+                expiresAt:
+                  type: number
+                  description: Unix time in seconds; fractional values preserve milliseconds.
+              required:
+                - role
+                - leaseVersion
+                - expiresAt
+              additionalProperties: false
+            requestId:
+              type: string
+          required:
+            - type
+            - control
+          additionalProperties: false
+        - type: object
+          properties:
+            type:
+              type: string
+              enum:
+                - ack
+                - error
+                - event
+            requestId:
+              type: string
+            error:
+              type: string
+            code:
+              type: string
+            event:
+              type: object
+              properties:
+                seq:
+                  type: integer
+                  minimum: -9007199254740991
+                  maximum: 9007199254740991
+                attemptId:
+                  type: string
+                stream:
+                  type: string
+                dataBase64:
+                  type: string
+                type:
+                  type: string
+                occurredAt:
+                  type: number
+                  description: Unix time in seconds; fractional values preserve milliseconds.
+              required:
+                - seq
+                - type
+                - occurredAt
+              additionalProperties: false
+          required:
+            - type
+          additionalProperties: false
     CodexAccountRateLimits:
       type: object
       properties:
@@ -835,7 +1000,6 @@ components:
               enum:
                 - codex
                 - claude-code
-                - opencode
                 - pi
             label:
               type: string
@@ -973,7 +1137,6 @@ components:
               enum:
                 - codex
                 - claude-code
-                - opencode
                 - pi
             label:
               type: string
@@ -1695,6 +1858,30 @@ components:
         - status
         - createdAt
         - updatedAt
+      additionalProperties: false
+    EnvironmentSnapshot:
+      type: object
+      properties:
+        id:
+          type: string
+        environmentId:
+          type: string
+        name:
+          type: string
+        kind:
+          type: string
+          enum:
+            - automatic
+            - manual
+        createdAt:
+          type: number
+          description: Unix time in seconds; fractional values preserve milliseconds.
+      required:
+        - id
+        - environmentId
+        - name
+        - kind
+        - createdAt
       additionalProperties: false
     EnvironmentWebhook:
       type: object
@@ -2570,6 +2757,81 @@ components:
         - email
         - avatarInitials
       additionalProperties: false
+    TerminalClientMessage:
+      oneOf:
+        - type: object
+          properties:
+            type:
+              type: string
+              enum:
+                - input
+            data:
+              type: string
+              maxLength: 1000000
+            requestId:
+              type: string
+          required:
+            - type
+            - data
+          additionalProperties: false
+        - type: object
+          properties:
+            type:
+              type: string
+              enum:
+                - binary
+            dataBase64:
+              type: string
+              maxLength: 1000000
+              pattern: ^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$
+            requestId:
+              type: string
+          required:
+            - type
+            - dataBase64
+          additionalProperties: false
+        - type: object
+          properties:
+            type:
+              type: string
+              enum:
+                - resize
+            rows:
+              type: integer
+              minimum: 1
+              maximum: 1000
+            cols:
+              type: integer
+              minimum: 1
+              maximum: 1000
+            requestId:
+              type: string
+          required:
+            - type
+            - rows
+            - cols
+          additionalProperties: false
+        - type: object
+          properties:
+            type:
+              type: string
+              enum:
+                - signal
+            signal:
+              type: string
+              enum:
+                - HUP
+                - INT
+                - QUIT
+                - TERM
+                - KILL
+                - WINCH
+            requestId:
+              type: string
+          required:
+            - type
+            - signal
+          additionalProperties: false
     TerminalClientMessageInput:
       oneOf:
         - type: object
@@ -3659,8 +3921,16 @@ paths:
                   type: string
                   minLength: 1
                   maxLength: 80
+                agentId:
+                  default: codex
+                  type: string
+                  enum:
+                    - codex
+                    - claude-code
+                    - pi
               required:
                 - name
+              additionalProperties: false
       responses:
         "201":
           description: Created.
@@ -3890,6 +4160,52 @@ paths:
                 required:
                   - data
                 additionalProperties: false
+        default:
+          description: Sandpi error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/environments/{environmentId}/agent-terminal:
+    get:
+      operationId: connectEnvironmentAgentTerminal
+      summary: Connect to the native Environment coding-agent TUI
+      tags:
+        - Terminal
+      parameters:
+        - schema:
+            type: integer
+            minimum: 0
+            maximum: 9007199254740991
+          in: query
+          name: after
+          required: false
+        - schema:
+            type: string
+          in: query
+          name: agentSessionId
+          required: false
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 200
+          in: query
+          name: clientId
+          required: true
+        - schema:
+            type: string
+            minLength: 1
+          in: path
+          name: environmentId
+          required: true
+      x-sandpi-websocket:
+        clientMessages:
+          $ref: "#/components/schemas/AgentTerminalClientMessage"
+        serverMessages:
+          $ref: "#/components/schemas/AgentTerminalServerMessage"
+      responses:
+        "101":
+          description: Switching protocols.
         default:
           description: Sandpi error.
           content:
@@ -4817,6 +5133,64 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /api/v1/environments/{environmentId}/forks:
+    post:
+      operationId: forkEnvironment
+      summary: Fork an Environment
+      tags:
+        - Environments
+      description: Creates an idempotent paused Sandbox0 fork from the Environment's
+        current RootFS or one of its named snapshots. Credentials and
+        terminal-control leases are not copied.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 80
+                idempotencyKey:
+                  type: string
+                  minLength: 16
+                  maxLength: 128
+                snapshotId:
+                  type: string
+                  minLength: 1
+                  maxLength: 200
+              required:
+                - name
+                - idempotencyKey
+              additionalProperties: false
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+          in: path
+          name: environmentId
+          required: true
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/Environment"
+                required:
+                  - data
+                additionalProperties: false
+        default:
+          description: Sandpi error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /api/v1/environments/{environmentId}/harnesses/codex/account:
     get:
       operationId: getCodexAccount
@@ -4997,6 +5371,8 @@ paths:
       summary: List Environment Codex MCP servers
       tags:
         - Codex
+      description: Retained as a read-only v1 migration boundary. Sandpi v2 returns
+        HTTP 410 because native TUI input is not a durable automation protocol.
       parameters:
         - schema:
             type: string
@@ -5012,6 +5388,7 @@ paths:
           in: path
           name: environmentId
           required: true
+      deprecated: true
       responses:
         "200":
           description: Successful response.
@@ -5025,6 +5402,12 @@ paths:
                 required:
                   - data
                 additionalProperties: false
+        "410":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         default:
           description: Sandpi error.
           content:
@@ -5037,6 +5420,8 @@ paths:
       summary: Create or replace one Environment Codex MCP server
       tags:
         - Codex
+      description: Retained as a read-only v1 migration boundary. Sandpi v2 returns
+        HTTP 410 because native TUI input is not a durable automation protocol.
       requestBody:
         required: true
         content:
@@ -5192,6 +5577,7 @@ paths:
           in: path
           name: name
           required: true
+      deprecated: true
       responses:
         "200":
           description: Successful response.
@@ -5205,6 +5591,12 @@ paths:
                 required:
                   - data
                 additionalProperties: false
+        "410":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         default:
           description: Sandpi error.
           content:
@@ -5216,6 +5608,8 @@ paths:
       summary: Delete one user-managed Environment Codex MCP server
       tags:
         - Codex
+      description: Retained as a read-only v1 migration boundary. Sandpi v2 returns
+        HTTP 410 because native TUI input is not a durable automation protocol.
       parameters:
         - schema:
             type: string
@@ -5229,6 +5623,7 @@ paths:
           in: path
           name: name
           required: true
+      deprecated: true
       responses:
         "200":
           description: Successful response.
@@ -5242,6 +5637,12 @@ paths:
                 required:
                   - data
                 additionalProperties: false
+        "410":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         default:
           description: Sandpi error.
           content:
@@ -5254,6 +5655,8 @@ paths:
       summary: Enable or disable an Environment Codex MCP server
       tags:
         - Codex
+      description: Retained as a read-only v1 migration boundary. Sandpi v2 returns
+        HTTP 410 because native TUI input is not a durable automation protocol.
       requestBody:
         required: true
         content:
@@ -5278,6 +5681,7 @@ paths:
           in: path
           name: name
           required: true
+      deprecated: true
       responses:
         "200":
           description: Successful response.
@@ -5291,6 +5695,12 @@ paths:
                 required:
                   - data
                 additionalProperties: false
+        "410":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         default:
           description: Sandpi error.
           content:
@@ -5303,6 +5713,8 @@ paths:
       summary: Start MCP server OAuth login
       tags:
         - Codex
+      description: Retained as a read-only v1 migration boundary. Sandpi v2 returns
+        HTTP 410 because native TUI input is not a durable automation protocol.
       parameters:
         - schema:
             type: string
@@ -5316,6 +5728,7 @@ paths:
           in: path
           name: name
           required: true
+      deprecated: true
       responses:
         "202":
           description: Accepted.
@@ -5329,6 +5742,12 @@ paths:
                 required:
                   - data
                 additionalProperties: false
+        "410":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         default:
           description: Sandpi error.
           content:
@@ -5341,6 +5760,8 @@ paths:
       summary: Get Environment Codex memory settings
       tags:
         - Codex
+      description: Retained as a read-only v1 migration boundary. Sandpi v2 returns
+        HTTP 410 because native TUI input is not a durable automation protocol.
       parameters:
         - schema:
             type: string
@@ -5348,6 +5769,7 @@ paths:
           in: path
           name: environmentId
           required: true
+      deprecated: true
       responses:
         "200":
           description: Successful response.
@@ -5361,6 +5783,12 @@ paths:
                 required:
                   - data
                 additionalProperties: false
+        "410":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         default:
           description: Sandpi error.
           content:
@@ -5372,6 +5800,8 @@ paths:
       summary: Set Environment Codex memory settings
       tags:
         - Codex
+      description: Retained as a read-only v1 migration boundary. Sandpi v2 returns
+        HTTP 410 because native TUI input is not a durable automation protocol.
       requestBody:
         required: true
         content:
@@ -5396,6 +5826,7 @@ paths:
           in: path
           name: environmentId
           required: true
+      deprecated: true
       responses:
         "200":
           description: Successful response.
@@ -5409,6 +5840,12 @@ paths:
                 required:
                   - data
                 additionalProperties: false
+        "410":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         default:
           description: Sandpi error.
           content:
@@ -5420,6 +5857,8 @@ paths:
       summary: Reset Environment Codex memories
       tags:
         - Codex
+      description: Retained as a read-only v1 migration boundary. Sandpi v2 returns
+        HTTP 410 because native TUI input is not a durable automation protocol.
       parameters:
         - schema:
             type: string
@@ -5427,6 +5866,7 @@ paths:
           in: path
           name: environmentId
           required: true
+      deprecated: true
       responses:
         "200":
           description: Successful response.
@@ -5446,6 +5886,12 @@ paths:
                 required:
                   - data
                 additionalProperties: false
+        "410":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         default:
           description: Sandpi error.
           content:
@@ -5458,8 +5904,8 @@ paths:
       summary: List native Codex model capabilities
       tags:
         - Codex
-      description: The nested model records are owned by the pinned Codex app-server
-        protocol and may gain fields without a Sandpi API version change.
+      description: Retained as a read-only v1 migration boundary. Sandpi v2 returns
+        HTTP 410 because native TUI input is not a durable automation protocol.
       parameters:
         - schema:
             type: string
@@ -5467,6 +5913,7 @@ paths:
           in: path
           name: environmentId
           required: true
+      deprecated: true
       x-sandpi-native-schema: codex-app-server
       responses:
         "200":
@@ -5507,6 +5954,12 @@ paths:
                   - data
                   - meta
                 additionalProperties: false
+        "410":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         default:
           description: Sandpi error.
           content:
@@ -5519,6 +5972,8 @@ paths:
       summary: Get Codex account rate limits
       tags:
         - Codex
+      description: Retained as a read-only v1 migration boundary. Sandpi v2 returns
+        HTTP 410 because native TUI input is not a durable automation protocol.
       parameters:
         - schema:
             type: string
@@ -5526,6 +5981,7 @@ paths:
           in: path
           name: environmentId
           required: true
+      deprecated: true
       responses:
         "200":
           description: Successful response.
@@ -5539,6 +5995,12 @@ paths:
                 required:
                   - data
                 additionalProperties: false
+        "410":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         default:
           description: Sandpi error.
           content:
@@ -5551,6 +6013,8 @@ paths:
       summary: Consume one Codex rate-limit reset credit
       tags:
         - Codex
+      description: Retained as a read-only v1 migration boundary. Sandpi v2 returns
+        HTTP 410 because native TUI input is not a durable automation protocol.
       requestBody:
         required: true
         content:
@@ -5572,6 +6036,7 @@ paths:
           in: path
           name: environmentId
           required: true
+      deprecated: true
       responses:
         "200":
           description: Successful response.
@@ -5585,6 +6050,12 @@ paths:
                 required:
                   - data
                 additionalProperties: false
+        "410":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         default:
           description: Sandpi error.
           content:
@@ -5597,6 +6068,8 @@ paths:
       summary: List Environment Codex skills
       tags:
         - Codex
+      description: Retained as a read-only v1 migration boundary. Sandpi v2 returns
+        HTTP 410 because native TUI input is not a durable automation protocol.
       parameters:
         - schema:
             type: string
@@ -5611,6 +6084,7 @@ paths:
           in: path
           name: environmentId
           required: true
+      deprecated: true
       responses:
         "200":
           description: Successful response.
@@ -5624,6 +6098,12 @@ paths:
                 required:
                   - data
                 additionalProperties: false
+        "410":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         default:
           description: Sandpi error.
           content:
@@ -5636,6 +6116,8 @@ paths:
       summary: Enable or disable one Environment Codex skill
       tags:
         - Codex
+      description: Retained as a read-only v1 migration boundary. Sandpi v2 returns
+        HTTP 410 because native TUI input is not a durable automation protocol.
       requestBody:
         required: true
         content:
@@ -5659,6 +6141,7 @@ paths:
           in: path
           name: environmentId
           required: true
+      deprecated: true
       responses:
         "200":
           description: Successful response.
@@ -5681,6 +6164,12 @@ paths:
                 required:
                   - data
                 additionalProperties: false
+        "410":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         default:
           description: Sandpi error.
           content:
@@ -5693,6 +6182,8 @@ paths:
       summary: Create or replace one user-owned Environment Codex skill
       tags:
         - Codex
+      description: Retained as a read-only v1 migration boundary. Sandpi v2 returns
+        HTTP 410 because native TUI input is not a durable automation protocol.
       requestBody:
         required: true
         content:
@@ -5741,6 +6232,7 @@ paths:
           in: path
           name: name
           required: true
+      deprecated: true
       responses:
         "200":
           description: Successful response.
@@ -5754,6 +6246,12 @@ paths:
                 required:
                   - data
                 additionalProperties: false
+        "410":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         default:
           description: Sandpi error.
           content:
@@ -5765,6 +6263,8 @@ paths:
       summary: Delete one user-owned Environment Codex skill
       tags:
         - Codex
+      description: Retained as a read-only v1 migration boundary. Sandpi v2 returns
+        HTTP 410 because native TUI input is not a durable automation protocol.
       parameters:
         - schema:
             type: string
@@ -5778,6 +6278,7 @@ paths:
           in: path
           name: name
           required: true
+      deprecated: true
       responses:
         "200":
           description: Successful response.
@@ -5791,6 +6292,12 @@ paths:
                 required:
                   - data
                 additionalProperties: false
+        "410":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         default:
           description: Sandpi error.
           content:
@@ -5803,6 +6310,8 @@ paths:
       summary: Upload a file for Codex composer input
       tags:
         - Codex
+      description: Retained as a read-only v1 migration boundary. Sandpi v2 returns
+        HTTP 410 because native TUI input is not a durable automation protocol.
       requestBody:
         required: true
         content:
@@ -5833,6 +6342,7 @@ paths:
           in: path
           name: environmentId
           required: true
+      deprecated: true
       responses:
         "201":
           description: Created.
@@ -5846,6 +6356,12 @@ paths:
                 required:
                   - data
                 additionalProperties: false
+        "410":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         default:
           description: Sandpi error.
           content:
@@ -6561,6 +7077,8 @@ paths:
       summary: Create an Environment automation
       tags:
         - Schedules
+      description: Retained as a read-only v1 migration boundary. Sandpi v2 returns
+        HTTP 410 because native TUI input is not a durable automation protocol.
       requestBody:
         required: true
         content:
@@ -6673,6 +7191,7 @@ paths:
           in: path
           name: environmentId
           required: true
+      deprecated: true
       responses:
         "201":
           description: Created.
@@ -6686,6 +7205,12 @@ paths:
                 required:
                   - data
                 additionalProperties: false
+        "410":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         default:
           description: Sandpi error.
           content:
@@ -6698,6 +7223,8 @@ paths:
       summary: Replace an Environment automation
       tags:
         - Schedules
+      description: Retained as a read-only v1 migration boundary. Sandpi v2 returns
+        HTTP 410 because native TUI input is not a durable automation protocol.
       requestBody:
         required: true
         content:
@@ -6816,6 +7343,7 @@ paths:
           in: path
           name: scheduleId
           required: true
+      deprecated: true
       responses:
         "200":
           description: Successful response.
@@ -6829,6 +7357,12 @@ paths:
                 required:
                   - data
                 additionalProperties: false
+        "410":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         default:
           description: Sandpi error.
           content:
@@ -6916,6 +7450,150 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/EnvironmentScheduleRun"
+                required:
+                  - data
+                additionalProperties: false
+        default:
+          description: Sandpi error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/environments/{environmentId}/snapshots:
+    get:
+      operationId: listEnvironmentSnapshots
+      summary: List Environment snapshots
+      tags:
+        - Environment snapshots
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+          in: path
+          name: environmentId
+          required: true
+      responses:
+        "200":
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/EnvironmentSnapshot"
+                required:
+                  - data
+                additionalProperties: false
+        default:
+          description: Sandpi error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      operationId: createEnvironmentSnapshot
+      summary: Snapshot a running Environment
+      tags:
+        - Environment snapshots
+      description: Creates a native Sandbox0 RootFS snapshot through a brief writer
+        barrier. A running source Sandbox and Agent remain running.
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+          in: path
+          name: environmentId
+          required: true
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      snapshot:
+                        $ref: "#/components/schemas/EnvironmentSnapshot"
+                      environment:
+                        $ref: "#/components/schemas/Environment"
+                    required:
+                      - snapshot
+                      - environment
+                    additionalProperties: false
+                required:
+                  - data
+                additionalProperties: false
+        default:
+          description: Sandpi error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/environments/{environmentId}/snapshots/{snapshotId}/restore:
+    put:
+      operationId: restoreEnvironmentSnapshot
+      summary: Restore an Environment snapshot
+      tags:
+        - Environment snapshots
+      description: Pauses the Sandbox, restores the selected RootFS snapshot,
+        invalidates old Agent terminal coordinates, and resumes only when the
+        Environment was previously running.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                confirmation:
+                  type: string
+                  minLength: 1
+                  maxLength: 80
+              required:
+                - confirmation
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+          in: path
+          name: environmentId
+          required: true
+        - schema:
+            type: string
+            minLength: 1
+          in: path
+          name: snapshotId
+          required: true
+      responses:
+        "200":
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      snapshot:
+                        $ref: "#/components/schemas/EnvironmentSnapshot"
+                      environment:
+                        $ref: "#/components/schemas/Environment"
+                      unavailableSessionCount:
+                        type: integer
+                        minimum: 0
+                        maximum: 9007199254740991
+                    required:
+                      - snapshot
+                      - environment
+                      - unavailableSessionCount
+                    additionalProperties: false
                 required:
                   - data
                 additionalProperties: false
@@ -7046,6 +7724,8 @@ paths:
       summary: Start a GitHub App installation for Webhooks
       tags:
         - Webhooks
+      description: Retained as a read-only v1 migration boundary. Sandpi v2 returns
+        HTTP 410 because native TUI input is not a durable automation protocol.
       parameters:
         - schema:
             type: string
@@ -7053,6 +7733,7 @@ paths:
           in: path
           name: environmentId
           required: true
+      deprecated: true
       responses:
         "201":
           description: Created.
@@ -7066,6 +7747,12 @@ paths:
                 required:
                   - data
                 additionalProperties: false
+        "410":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         default:
           description: Sandpi error.
           content:
@@ -7111,6 +7798,8 @@ paths:
       summary: Create an Environment Webhook
       tags:
         - Webhooks
+      description: Retained as a read-only v1 migration boundary. Sandpi v2 returns
+        HTTP 410 because native TUI input is not a durable automation protocol.
       requestBody:
         required: true
         content:
@@ -7248,6 +7937,7 @@ paths:
           in: path
           name: environmentId
           required: true
+      deprecated: true
       responses:
         "201":
           description: Created.
@@ -7261,6 +7951,12 @@ paths:
                 required:
                   - data
                 additionalProperties: false
+        "410":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         default:
           description: Sandpi error.
           content:
@@ -7273,6 +7969,8 @@ paths:
       summary: Replace an Environment Webhook
       tags:
         - Webhooks
+      description: Retained as a read-only v1 migration boundary. Sandpi v2 returns
+        HTTP 410 because native TUI input is not a durable automation protocol.
       requestBody:
         required: true
         content:
@@ -7416,6 +8114,7 @@ paths:
           in: path
           name: webhookId
           required: true
+      deprecated: true
       responses:
         "200":
           description: Successful response.
@@ -7429,6 +8128,12 @@ paths:
                 required:
                   - data
                 additionalProperties: false
+        "410":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         default:
           description: Sandpi error.
           content:
@@ -7578,6 +8283,8 @@ paths:
       summary: Replace or rotate an Environment webhook secret
       tags:
         - Webhooks
+      description: Retained as a read-only v1 migration boundary. Sandpi v2 returns
+        HTTP 410 because native TUI input is not a durable automation protocol.
       requestBody:
         required: true
         content:
@@ -7603,6 +8310,7 @@ paths:
           in: path
           name: webhookId
           required: true
+      deprecated: true
       responses:
         "200":
           description: Successful response.
@@ -7616,6 +8324,12 @@ paths:
                 required:
                   - data
                 additionalProperties: false
+        "410":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         default:
           description: Sandpi error.
           content:
@@ -7848,6 +8562,8 @@ paths:
       summary: Create a product Session and its first native Turn
       tags:
         - Sessions
+      description: Retained as a read-only v1 migration boundary. Sandpi v2 returns
+        HTTP 410 because native TUI input is not a durable automation protocol.
       requestBody:
         required: true
         content:
@@ -7931,6 +8647,7 @@ paths:
                 - environmentId
               description: At least one of prompt, images, or localImages is required.
         description: At least one of prompt, images, or localImages is required.
+      deprecated: true
       responses:
         "201":
           description: Created.
@@ -7944,6 +8661,12 @@ paths:
                 required:
                   - data
                 additionalProperties: false
+        "410":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         default:
           description: Sandpi error.
           content:
@@ -7988,6 +8711,8 @@ paths:
       summary: Stream the native Session snapshot and live events
       tags:
         - Sessions
+      description: Retained as a read-only v1 migration boundary. Sandpi v2 returns
+        HTTP 410 because native TUI input is not a durable automation protocol.
       parameters:
         - schema:
             type: string
@@ -7995,6 +8720,7 @@ paths:
           in: path
           name: sessionId
           required: true
+      deprecated: true
       x-sandpi-sse:
         events:
           snapshot:
@@ -8020,6 +8746,12 @@ paths:
             text/event-stream:
               schema:
                 type: string
+        "410":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         default:
           description: Sandpi error.
           content:
@@ -8032,6 +8764,8 @@ paths:
       summary: Fork a Session from its current native branch
       tags:
         - Sessions
+      description: Retained as a read-only v1 migration boundary. Sandpi v2 returns
+        HTTP 410 because native TUI input is not a durable automation protocol.
       requestBody:
         required: false
         content:
@@ -8051,6 +8785,7 @@ paths:
           in: path
           name: sessionId
           required: true
+      deprecated: true
       x-sandpi-optional-request-body: true
       responses:
         "201":
@@ -8065,6 +8800,12 @@ paths:
                 required:
                   - data
                 additionalProperties: false
+        "410":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         default:
           description: Sandpi error.
           content:
@@ -8077,6 +8818,8 @@ paths:
       summary: Update product Session metadata
       tags:
         - Sessions
+      description: Retained as a read-only v1 migration boundary. Sandpi v2 returns
+        HTTP 410 because native TUI input is not a durable automation protocol.
       requestBody:
         required: true
         content:
@@ -8105,6 +8848,7 @@ paths:
           in: path
           name: sessionId
           required: true
+      deprecated: true
       responses:
         "200":
           description: Successful response.
@@ -8118,6 +8862,12 @@ paths:
                 required:
                   - data
                 additionalProperties: false
+        "410":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         default:
           description: Sandpi error.
           content:
@@ -8130,6 +8880,8 @@ paths:
       summary: List native Codex model capabilities for a Session
       tags:
         - Sessions
+      description: Retained as a read-only v1 migration boundary. Sandpi v2 returns
+        HTTP 410 because native TUI input is not a durable automation protocol.
       parameters:
         - schema:
             type: string
@@ -8137,6 +8889,7 @@ paths:
           in: path
           name: sessionId
           required: true
+      deprecated: true
       x-sandpi-native-schema: codex-app-server
       responses:
         "200":
@@ -8177,6 +8930,12 @@ paths:
                   - data
                   - meta
                 additionalProperties: false
+        "410":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         default:
           description: Sandpi error.
           content:
@@ -8189,6 +8948,8 @@ paths:
       summary: Start a native Turn
       tags:
         - Sessions
+      description: Retained as a read-only v1 migration boundary. Sandpi v2 returns
+        HTTP 410 because native TUI input is not a durable automation protocol.
       requestBody:
         required: true
         content:
@@ -8272,6 +9033,7 @@ paths:
           in: path
           name: sessionId
           required: true
+      deprecated: true
       responses:
         "202":
           description: Accepted.
@@ -8296,6 +9058,12 @@ paths:
                 required:
                   - data
                 additionalProperties: false
+        "410":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         default:
           description: Sandpi error.
           content:
@@ -8308,6 +9076,8 @@ paths:
       summary: Interrupt the active native Turn
       tags:
         - Sessions
+      description: Retained as a read-only v1 migration boundary. Sandpi v2 returns
+        HTTP 410 because native TUI input is not a durable automation protocol.
       requestBody:
         required: true
         content:
@@ -8326,6 +9096,7 @@ paths:
           in: path
           name: sessionId
           required: true
+      deprecated: true
       responses:
         "202":
           description: Accepted.
@@ -8360,6 +9131,12 @@ paths:
                 required:
                   - data
                 additionalProperties: false
+        "410":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         default:
           description: Sandpi error.
           content:
@@ -8372,6 +9149,8 @@ paths:
       summary: Add user input to the active native Turn
       tags:
         - Sessions
+      description: Retained as a read-only v1 migration boundary. Sandpi v2 returns
+        HTTP 410 because native TUI input is not a durable automation protocol.
       requestBody:
         required: true
         content:
@@ -8445,6 +9224,7 @@ paths:
           in: path
           name: sessionId
           required: true
+      deprecated: true
       responses:
         "202":
           description: Accepted.
@@ -8469,6 +9249,12 @@ paths:
                 required:
                   - data
                 additionalProperties: false
+        "410":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         default:
           description: Sandpi error.
           content:
@@ -8481,6 +9267,8 @@ paths:
       summary: Fork a Session at a completed native Turn
       tags:
         - Sessions
+      description: Retained as a read-only v1 migration boundary. Sandpi v2 returns
+        HTTP 410 because native TUI input is not a durable automation protocol.
       requestBody:
         required: false
         content:
@@ -8506,6 +9294,7 @@ paths:
           in: path
           name: nativeTurnId
           required: true
+      deprecated: true
       x-sandpi-optional-request-body: true
       responses:
         "201":
@@ -8520,6 +9309,12 @@ paths:
                 required:
                   - data
                 additionalProperties: false
+        "410":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         default:
           description: Sandpi error.
           content:
@@ -8575,6 +9370,8 @@ paths:
       summary: Complete GitHub App installation for Webhooks
       tags:
         - Webhooks
+      description: Retained as a read-only v1 migration boundary. Sandpi v2 returns
+        HTTP 410 because native TUI input is not a durable automation protocol.
       parameters:
         - schema:
             type: string
@@ -8599,6 +9396,7 @@ paths:
           in: query
           name: setup_action
           required: false
+      deprecated: true
       security: []
       x-sandpi-content-type: text/html
       responses:
@@ -8608,6 +9406,12 @@ paths:
             text/html:
               schema:
                 type: string
+        "410":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         default:
           description: Sandpi error.
           content:
@@ -8620,8 +9424,8 @@ paths:
       summary: Receive a signed GitHub App webhook delivery
       tags:
         - Webhooks
-      description: Verifies the deployment GitHub App signature, durably acknowledges
-        the delivery, and routes it to matching Environment Webhooks.
+      description: Retained as a read-only v1 migration boundary. Sandpi v2 returns
+        HTTP 410 because native TUI input is not a durable automation protocol.
       requestBody:
         required: true
         content:
@@ -8643,6 +9447,7 @@ paths:
           in: header
           name: x-github-event
           required: true
+      deprecated: true
       security: []
       responses:
         "200":
@@ -8681,6 +9486,12 @@ paths:
                   - status
                   - deliveryId
                 additionalProperties: false
+        "410":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         default:
           description: Sandpi error.
           content:
@@ -8693,11 +9504,8 @@ paths:
       summary: Receive an authenticated Environment webhook delivery
       tags:
         - Webhooks
-      description: Accepts JSON, form, or text payloads authenticated with a bearer or
-        query token. A JSON object or form body may include a top-level prompt
-        string of 1-50,000 characters; Sandpi appends it as per-delivery
-        instructions after the owner-configured Webhook base prompt, which takes
-        precedence on conflict.
+      description: Retained as a read-only v1 migration boundary. Sandpi v2 returns
+        HTTP 410 because native TUI input is not a durable automation protocol.
       requestBody:
         required: true
         content:
@@ -8746,6 +9554,7 @@ paths:
           in: header
           name: x-sandpi-event
           required: false
+      deprecated: true
       security: []
       responses:
         "200":
@@ -8790,6 +9599,12 @@ paths:
                   - status
                   - deliveryId
                 additionalProperties: false
+        "410":
+          description: Default Response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         default:
           description: Sandpi error.
           content:

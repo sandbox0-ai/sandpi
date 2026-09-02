@@ -1,10 +1,12 @@
 # Environment egress credentials
 
-Sandpi models outbound credentials as Environment-owned configuration. Every
-product Session in an Environment shares one Sandbox and therefore shares the
-same network policy and credential bindings. **Agent harness** remains a
-separate setting: it identifies the coding agent used by that Environment and
-owns that harness's provider login.
+Sandpi models outbound credentials as Environment-owned configuration. One v2
+Environment owns one Sandbox and one native coding-agent terminal, so its
+processes share the same network policy and credential bindings. The selected
+native agent and its provider login are separate Environment settings; native
+agent credentials use the memory-backed projection described in
+[Native agent terminal authority](./native-agent-terminal-authority.md), not
+Sandbox0 egress injection.
 
 ## Authority boundaries
 

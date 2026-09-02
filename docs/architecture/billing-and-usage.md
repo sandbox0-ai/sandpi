@@ -39,8 +39,8 @@ closed windows + open allocations
 
 Sandpi imports only closed `sandbox.runtime_mib_milliseconds` windows. The
 cursor and window ids are durable and idempotent. A window is stored only when
-its Sandbox id has a Sandpi attribution, which excludes short-lived Codex
-device-login runners and unrelated Sandboxes sharing the deployment team.
+its Sandbox id has a Sandpi attribution, which excludes unrelated Sandboxes
+sharing the deployment team.
 
 Closed windows are eventually consistent. For timely admission, Sandpi combines
 the imported closed windows with an ephemeral observation of each currently
@@ -98,7 +98,7 @@ The runtime entitlement gate is shared by:
 
 - initial Environment provisioning and provisioning retry
 - Workspace and Terminal runtime access
-- Codex Session and Turn admission
+- native agent terminal start and writable input admission
 - runtime repair and startup recovery
 
 An over-limit operation cannot wake or allocate a Sandbox. The usage worker

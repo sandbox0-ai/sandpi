@@ -57,6 +57,7 @@ test("creates a Free Environment with the plan's fixed 4 GiB memory", async () =
   const created = await service.create({
     userId: "user-test",
     name: "Free Environment",
+    agentId: "codex",
   });
   await service.reconcilePending();
 
@@ -64,6 +65,7 @@ test("creates a Free Environment with the plan's fixed 4 GiB memory", async () =
   assert.deepEqual(createInput, {
     userId: "user-test",
     name: "Free Environment",
+    agentId: "codex",
     environmentLimit: 1,
     sandboxMemoryMiB: 4 * 1024,
   });

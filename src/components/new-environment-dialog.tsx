@@ -2,9 +2,7 @@
 
 import {
   ArrowRight,
-  Check,
   LoaderCircle,
-  LockKeyhole,
   X,
 } from "lucide-react";
 import {
@@ -18,7 +16,7 @@ import {
 } from "react";
 
 import { apiFetch, type ApiEnvelope } from "@/lib/api-client";
-import type { Environment } from "@/lib/types";
+import type { Environment, EnvironmentAgentId } from "@/lib/types";
 
 import styles from "./new-environment-dialog.module.css";
 
@@ -27,6 +25,32 @@ interface NewEnvironmentDialogProps {
   onCreated: (environment: Environment) => void;
   onClose: () => void;
 }
+
+const AGENT_OPTIONS: ReadonlyArray<{
+  id: EnvironmentAgentId;
+  label: string;
+  description: string;
+  mark: string;
+}> = [
+  {
+    id: "codex",
+    label: "Codex",
+    description: "OpenAI's native coding-agent TUI",
+    mark: "CX",
+  },
+  {
+    id: "claude-code",
+    label: "Claude Code",
+    description: "Anthropic's native coding-agent TUI",
+    mark: "CC",
+  },
+  {
+    id: "pi",
+    label: "Pi",
+    description: "Pi's native extensible coding-agent TUI",
+    mark: "PI",
+  },
+];
 
 function normalizedName(value: string) {
   return value.trim().replace(/\s+/g, " ").toLocaleLowerCase();
@@ -46,6 +70,7 @@ export function NewEnvironmentDialog({
   const dialogRef = useRef<HTMLElement>(null);
 
   const [name, setName] = useState("");
+  const [agentId, setAgentId] = useState<EnvironmentAgentId>("codex");
   const [nameError, setNameError] = useState("");
   const [submitError, setSubmitError] = useState("");
   const [creating, setCreating] = useState(false);
@@ -146,6 +171,7 @@ export function NewEnvironmentDialog({
           method: "POST",
           body: JSON.stringify({
             name: name.trim(),
+            agentId,
           }),
         },
       );
@@ -246,33 +272,40 @@ export function NewEnvironmentDialog({
             </fieldset>
             <fieldset className={styles.fieldset} disabled={creating}>
               <legend>Agent harness</legend>
-              <label className={styles.agentOption} aria-describedby={agentHelpId}>
-                <input
-                  className={styles.agentRadio}
-                  type="radio"
-                  name="coding-agent"
-                  value="codex"
-                  defaultChecked
-                  disabled
-                />
-                <span className={styles.codexMark} aria-hidden="true">
-                  <span />
-                  <span />
-                </span>
-                <span className={styles.agentCopy}>
-                  <span className={styles.agentEyebrow}>First supported harness</span>
-                  <strong>Codex</strong>
-                  <small>Native agent harness</small>
-                </span>
-                <span className={styles.lockedBadge}>
-                  <Check size={12} aria-hidden="true" /> Selected · locked
-                  <LockKeyhole size={13} aria-hidden="true" />
-                </span>
-              </label>
+              <div className={styles.agentGrid}>
+                {AGENT_OPTIONS.map((agent) => (
+                  <label
+                    key={agent.id}
+                    className={`${styles.agentOption} ${
+                      agentId === agent.id ? styles.agentOptionSelected : ""
+                    }`}
+                    aria-describedby={agentHelpId}
+                  >
+                    <input
+                      className={styles.agentRadio}
+                      type="radio"
+                      name="coding-agent"
+                      value={agent.id}
+                      checked={agentId === agent.id}
+                      onChange={() => setAgentId(agent.id)}
+                    />
+                    <span className={styles.agentMark} aria-hidden="true">
+                      {agent.mark}
+                    </span>
+                    <span className={styles.agentCopy}>
+                      <strong>{agent.label}</strong>
+                      <small>{agent.description}</small>
+                    </span>
+                    <span className={styles.agentSelected} aria-hidden="true">
+                      {agentId === agent.id ? "[SELECTED]" : "[SELECT]"}
+                    </span>
+                  </label>
+                ))}
+              </div>
               <p id={agentHelpId} className={styles.agentHelp}>
-                <LockKeyhole size={15} aria-hidden="true" />
                 <span>
-                  Every Session in this Environment uses Codex. This cannot be changed later.
+                  The Environment owns one persistent native agent TUI. Agent type cannot be
+                  changed after creation; fork the Environment to experiment safely.
                 </span>
               </p>
             </fieldset>

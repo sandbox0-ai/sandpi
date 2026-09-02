@@ -7845,6 +7845,112 @@ html[data-resolved-theme="dark"] .send-button.is-interrupt:hover:not(:disabled) 
   background: var(--hover);
 }
 
+/* Sandpi v2 is an Environment terminal, including its clickable chrome. */
+.terminal-v2-shell,
+.terminal-v2-settings {
+  --canvas: #101210;
+  --sidebar: #121512;
+  --panel: #151815;
+  --panel-strong: #191d19;
+  --ink: #e0e8dd;
+  --ink-soft: #a5b1a2;
+  --ink-faint: #7e8a7c;
+  --line: #343b34;
+  --line-soft: #282e28;
+  --hover: #202620;
+  --selected: #263329;
+  --green: #7ee39a;
+  --green-soft: #183021;
+  --amber: #e7bd65;
+  --amber-soft: #352d1b;
+  --red: #f08a82;
+  --red-soft: #382321;
+  --blue: #91b9e3;
+  --blue-soft: #203248;
+  --radius-sm: 2px;
+  --radius-md: 2px;
+  --radius-lg: 2px;
+
+  color-scheme: dark;
+  font-family: var(--font-mono, "SFMono-Regular", Consolas, monospace);
+}
+
+.terminal-v2-shell .environment-empty-pane,
+.terminal-v2-shell .environment-empty-card {
+  background: var(--canvas);
+  color: var(--ink);
+}
+
+.terminal-v2-shell .environment-empty-card {
+  border-color: var(--line);
+  border-radius: 2px;
+  box-shadow: 8px 8px 0 rgb(0 0 0 / 26%);
+}
+
+.terminal-v2-settings {
+  background: rgb(5 7 5 / 76%);
+  backdrop-filter: blur(2px);
+}
+
+.terminal-v2-settings .settings-drawer {
+  border-color: var(--line);
+  background: var(--panel);
+  box-shadow: -10px 0 0 rgb(0 0 0 / 32%);
+  color: var(--ink);
+}
+
+.terminal-v2-settings .settings-header,
+.terminal-v2-settings .settings-footer {
+  background: var(--panel);
+}
+
+.terminal-v2-settings .settings-header h1,
+.terminal-v2-settings .settings-section h2 {
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.terminal-v2-settings .settings-environment-avatar,
+.terminal-v2-settings .settings-card,
+.terminal-v2-settings button,
+.terminal-v2-settings input,
+.terminal-v2-settings textarea,
+.terminal-v2-settings select {
+  border-radius: 1px;
+}
+
+.terminal-v2-settings .settings-nav button {
+  min-height: 40px;
+  border: 1px solid transparent;
+  border-radius: 1px;
+  font-family: inherit;
+  text-transform: uppercase;
+}
+
+.terminal-v2-settings .settings-nav button.is-active {
+  border-color: var(--green);
+  background: color-mix(in srgb, var(--green) 8%, var(--panel));
+  color: var(--green);
+}
+
+.terminal-v2-settings .settings-card {
+  box-shadow: none;
+}
+
+.terminal-v2-settings .button-primary,
+.terminal-v2-settings .button-secondary,
+.terminal-v2-settings .secondary-action-button {
+  min-height: 38px;
+  font-family: inherit;
+  text-transform: uppercase;
+}
+
+@media (max-width: 680px) {
+  .terminal-v2-settings .settings-nav button {
+    min-height: 44px;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

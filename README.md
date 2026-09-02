@@ -5,7 +5,7 @@
 <h1 align="center">Sandpi</h1>
 
 <p align="center">
-  <strong>Your coding agent in a persistent cloud sandbox—continue the same session on web, desktop, or mobile.</strong>
+  <strong>Native coding-agent TUIs in persistent cloud sandboxes—continue from web, desktop, or mobile.</strong>
 </p>
 
 <p align="center">
@@ -16,126 +16,115 @@
   <a href="https://sandpi.ai">Open Sandpi</a> · <a href="https://sandbox0.ai">Sandbox0</a>
 </p>
 
-Sandpi is an open-source [Sandbox0](https://github.com/sandbox0-ai/sandbox0)
-side project for running native coding agents in persistent cloud Sandboxes.
-It lets you continue the same coding session from any Sandpi client.
+Sandpi v2 is an open-source [Sandbox0](https://github.com/sandbox0-ai/sandbox0)
+client for running official coding-agent TUIs in persistent cloud Sandboxes.
+The browser renders the real PTY instead of translating an agent into a custom
+chat protocol. Refreshing the page or changing devices reconnects to the same
+Environment-scoped process and terminal journal.
 
-The Web app and first-party native clients for iOS, iPadOS, Android,
-OpenHarmony, Windows and macOS use the same Sandpi product UI and API. Every
-client stays lightweight: the coding-agent harness and terminal run in the
-cloud, with files stored in the Sandbox's persistent writable rootfs.
-You can close your laptop, switch devices or disconnect a client without
-ending your coding session.
+Codex, Claude Code, and Pi are first-class v2 agents. The `coding-agent`
+template also contains OpenCode, Playwright CLI, and a pinned `ttyd` binary for
+diagnostics and compatibility. Production Sandpi terminal authority remains
+Sandbox0 procd plus Sandpi's xterm client; ttyd is not a second session store.
 
-Codex is the first supported coding agent.
-
-![A Codex Session and Workspace file browser in Sandpi](./docs/images/sandpi-session-files.png)
-
-<p align="center"><sub>A Codex Session alongside its persistent Workspace files.</sub></p>
-
-![Environment Settings in Sandpi](./docs/images/sandpi-environment-settings.png)
-
-<p align="center"><sub>Environment-scoped runtime, Workspace, agent and security settings.</sub></p>
-
-<p align="center"><sub>Captured from the current Web app with public fixture data.</sub></p>
-
-## Why run a coding agent in a cloud sandbox?
-
-| Need | What Sandpi gives you |
-| --- | --- |
-| Work from anywhere | Open the same cloud-hosted session from another client or device. Your PC does not need to stay awake while the agent works. |
-| Durable sessions | Native session state and the Workspace live outside the browser. Refreshes, client disconnects and runtime recovery do not erase the session. |
-| Focused isolation | Create one Environment per project, task or concern. Each gets its own Sandbox, Workspace, coding-agent account, network policy and credentials. |
-| Multiple coding plans | Connect different Environments to different Codex/ChatGPT accounts, or keep work separated while using the same account. |
-| Controlled outbound access | Restrict sandbox egress by destination and inject supported credentials only into matching traffic, instead of placing service secrets in the repository or browser. |
-| Workspace protection | Create manual or scheduled Workspace backups with retention and restore them through Sandbox0 rootfs snapshots. |
-| Encrypted persisted state | Sandbox0 encrypts persisted Environment rootfs checkpoint objects at the application layer before object storage. |
-| Durable Automation | Schedule a Codex prompt or trigger it from a connected GitHub App or authenticated custom Webhook. Sandpi persists run intent outside the Sandbox and reconciles native Turn completion after server or runtime recovery. |
-
-An Environment is deliberately larger than a chat:
+## Product model
 
 ```text
-Environment
-├── Sandbox with a persistent writable rootfs
-├── one native coding-agent harness and provider account
-├── network policy and egress credentials
-├── runtime resources, terminal and metrics
-├── durable Automation Schedules and Webhooks
-└── many native coding-agent Sessions
+User
+└── Environment
+    ├── one Sandbox0 Sandbox
+    ├── one persistent writable RootFS
+    ├── one native coding-agent TUI
+    ├── one supervised PTY session and replay journal
+    ├── network policy and encrypted agent credential
+    └── named snapshots, restore, and fork
 ```
 
-Use separate Environments when you want isolation or a different provider
-account. Use multiple Sessions inside one Environment when they should share the
-same files, tools and execution context.
+An Environment is the unit users open, pause, snapshot, fork, and move between
+devices. There is no browser-owned conversation transcript and no v2 product
+Session hierarchy. The native agent owns its own history and project state in
+the Environment RootFS.
 
-## CLI and local environment migration
+One browser tab holds the writable controller lease at a time. Other devices
+can watch the live terminal and explicitly take over. The lease is fenced in
+PostgreSQL, heartbeated, and revoked on takeover, so two tabs cannot silently
+type into the same TUI.
 
-The Go `sandpi` CLI operates Sandpi and supports migrating selected local
-coding-agent configuration into a new or existing Sandpi Environment. See
-[Migrate a local coding-agent environment to Sandpi](./docs/local-environment-migration.md).
+## What v2 supports
 
-## Design principles
+- Native Codex, Claude Code, and Pi terminal experiences without patching the
+  upstream agents.
+- Full-page terminal UI with desktop keyboard input and touch controls for
+  Escape, Tab, Ctrl-C, Ctrl-D, arrows, paste, clear, files, snapshots, fork,
+  pause, and settings.
+- Multi-device terminal replay and a single explicit writable controller.
+- One persistent Sandbox0 Sandbox per Environment, with Sandpi-owned idle
+  pause, manual pause/restart, memory selection, and runtime recovery.
+- Named RootFS snapshots, restore, current-state fork, and fork from a named
+  snapshot. Forks are crash-recoverable and idempotent across Sandpi and
+  Sandbox0.
+- Per-Environment native agent credentials encrypted in PostgreSQL and exposed
+  only through a memory-backed file while the agent runs. Credentials are not
+  inherited by snapshots or forks.
+- Per-Environment network policy and Sandbox0-backed egress credential
+  injection.
+- Workspace file access, Git-aware editing, runtime metrics, and the
+  version-matched Playwright Agent Skill supplied by the template.
+- Built-in single-user authentication or OIDC, with optional Stripe-backed
+  product quotas.
 
-1. **No invasive harness changes.** Sandpi is designed to run the official
-   coding-agent harness without forking, patching or replacing its
-   implementation. Integrations use the harness's native external interface;
-   the Codex adapter speaks the native app-server protocol.
-2. **Keep the native agent experience native.** The harness remains
-   authoritative for its Sessions, model catalog, reasoning options, history,
-   tools, Skills and MCP configuration. Sandpi does not flatten every coding
-   agent into a lowest-common-denominator chat protocol.
-3. **Make the Environment the isolation boundary.** Workspace, provider
-   identity, network and credentials move together. This makes an Environment
-   useful both for account separation and for keeping one piece of work focused.
-4. **Keep clients thin and interchangeable.** The Web app and native clients
-   for iOS, iPadOS, Android, OpenHarmony, Windows and macOS use the same Sandpi
-   server and product implementation. A client disconnect must not become an
-   instruction to stop the coding agent.
-5. **Recover native state; do not guess or replay mutations.** Sandpi reconnects
-   to the persisted native Session and Workspace rather than maintaining a
-   second chat transcript or silently resubmitting an interrupted request. A
-   Sandbox-caused interruption may receive one visible, conservative recovery
-   Turn that inspects durable state before continuing; the original request is
-   never replayed.
+The v1 structured Codex app-server execution surface, Schedules, and Webhook
+execution are retired in v2. Their read/cleanup endpoints remain temporarily
+available for migration; execution-producing mutations return HTTP 410. A
+future automation feature must use a separate headless adapter rather than
+pretending a human-operated TUI is a durable job protocol.
 
-## What works today
+## Why the terminal is the product surface
 
-- Native Codex device login and Environment-scoped account connections
-- Native model and reasoning discovery, Session/Turn history and branching
-- Same-Turn Codex steering while tools are running, with native message ordering
-- Sandbox/Codex process self-recovery with a bounded visible continuation
-- Live native context-window and Sandbox CPU/memory usage in the composer
-- Codex tools, Skills, MCP configuration, approvals and browser-native Session
-  and Workspace controls
-- Persistent multi-Environment and multi-Session Web UI with compact,
-  progressively paginated Session lists that keep every running Session
-  visible, and completion state distinct from archival that automatically
-  reopens when another Turn starts
-- Preview-first Workspace file browser with a resizable, collapsible file tree;
-  explicit refresh feedback; fast source, GitHub-like Markdown and CSV views;
-  image, audio, video, PDF and PPTX previews; on-demand Monaco editing; and Git
-  changes
-- Version-matched Playwright Agent Skill materialization when the Environment
-  image provides the official `playwright-cli`; Sandpi does not wrap it in a
-  second automation protocol
-- Environment terminal, runtime metrics, configurable idle pause, and manual
-  Sandbox pause/restart recovery controls
-- Environment Schedules with one-time or human-friendly recurring timing,
-  Advanced cron, IANA time zones, upcoming-run previews, durable run history
-  and overlap skipping
-- Environment Webhooks with direct GitHub App repository/event selection or a
-  bearer-authenticated custom URL, declarative trigger filters, durable delivery
-  history, cooldown batching and bounded run admission
-- Per-Environment network policy and Sandbox0-backed egress credential injection
-- Manual and scheduled Workspace backups, retention and restore; a quiescent
-  running Environment is paused only long enough to pin a stable rootfs
-  generation and is then resumed to its desired lifecycle state
-- Built-in single-user identity or OIDC
-- Optional Stripe subscriptions and product quota enforcement
+Coding agents increasingly expose their newest capabilities through their
+native TUIs. Rendering the PTY preserves slash commands, approvals, tool output,
+mouse support, color, layout, and agent-specific interaction without waiting
+for a lowest-common-denominator schema.
 
-Sandpi is pre-1.0. Codex is currently the only implemented harness. The Web app
-and first-party native shells share one product implementation; additional
-harnesses and clients can be added as independent integrations.
+Sandpi's page is terminal-styled but does not require a physical keyboard.
+Mobile users get large touch targets and horizontally scrollable special-key
+and Environment action bars. Files, snapshots, fork, lifecycle, credentials,
+and network controls remain ordinary accessible dialogs around the terminal.
+
+## Authority boundaries
+
+```text
+Browser / native shell
+    │ HTTPS + WebSocket
+    ▼
+Sandpi server ───────── PostgreSQL
+    │                   ownership, controller lease, fork saga,
+    │                   encrypted credentials and product policy
+    │ Sandbox0 SDK
+    ▼
+Sandbox0 regional API
+    ├── Sandbox lifecycle and resource lease
+    ├── persistent encrypted block-COW RootFS
+    ├── snapshots, restore, fork, and network policy
+    └── procd supervised PTY session + replay journal
+            └── official coding-agent TUI
+```
+
+- Browsers never receive the Sandbox0 deployment API key or a direct procd
+  endpoint.
+- PostgreSQL owns product metadata and terminal control leases, but not a copy
+  of terminal output or agent conversation history.
+- Sandbox0 owns Sandbox lifecycle truth, writable RootFS persistence,
+  snapshots/forks, network enforcement, process supervision, and usage truth.
+- A pause or runtime replacement preserves committed RootFS state, not process
+  memory, sockets, or a live PTY process. procd restarts the logical supervised
+  session and Sandpi reconnects to its new attempt.
+- `ttyd` is available for direct diagnostics. It can render all three supported
+  TUIs, but Sandpi does not use it as durable authority because ttyd alone does
+  not own cross-runtime replay, controller fencing, or Sandbox lifecycle.
+
+See [the v2 architecture](./docs/architecture/native-agent-terminal-authority.md)
+and the detailed [design record](./sandpi-v2.md).
 
 ## Quick start
 
@@ -144,32 +133,24 @@ harnesses and clients can be added as independent integrations.
 - Node.js 24 and npm 11
 - PostgreSQL 15 or newer
 - A Sandbox0 deployment
-- A Sandbox0 deployment API key with Sandbox access plus
-  `credentialsource:read`, `credentialsource:write` and
-  `credentialsource:delete`
-- A current Sandbox0 `coding-agent` template with the official Playwright CLI
+- A Sandbox0 API key with Sandbox access plus `credentialsource:read`,
+  `credentialsource:write`, and `credentialsource:delete`
+- A current Sandbox0 `coding-agent` template containing the native agents
 - Docker Engine with Compose v2 for the container workflow
 
 Optional subscription quota mode also requires `usage:read`.
 
 ### Local development
 
-Create a local configuration:
+Create a local configuration and an independent encryption key:
 
 ```bash
 cp .env.example .env
 chmod 600 .env
-```
-
-Set `SANDBOX0_API_HOST` and `SANDBOX0_API_KEY` in `.env`, then generate an
-independent key for encrypted coding-agent credentials:
-
-```bash
 printf '\nSANDPI_SECRET_KEY=%s\n' "$(openssl rand -base64 32)" >> .env
 ```
 
-Start PostgreSQL, install dependencies and run the Web and API development
-servers:
+Set `SANDBOX0_API_HOST` and `SANDBOX0_API_KEY`, then start the services:
 
 ```bash
 docker compose up -d postgres
@@ -182,18 +163,12 @@ npm ci
 npm run dev
 ```
 
-In this workspace the development servers intentionally listen on
-<http://172.16.100.2:3000>, so the app is reachable from the HarmonyOS fusion
-network. Adapt the development scripts for another host, or use the container
-workflow below.
-
-Sandpi applies pending PostgreSQL migrations on startup. The default
-`SANDPI_AUTH_MODE=admin` seeds one trusted local administrator and an initial
-Environment.
+In this workspace the development servers listen on
+<http://172.16.100.2:3000> so the app is reachable from the HarmonyOS fusion
+network. Sandpi applies PostgreSQL migrations at startup; built-in administrator
+mode seeds one default Environment.
 
 ### Container deployment
-
-The included Compose file runs PostgreSQL and the same Sandpi server:
 
 ```bash
 cp .env.example .env
@@ -203,38 +178,20 @@ docker compose up -d --build
 docker compose ps
 ```
 
-The container listens on port `3000`; PostgreSQL is published only on host
-loopback port `55432`. Set `SANDPI_PUBLIC_URL` to the externally reachable HTTPS
-origin before enabling OIDC.
+The application listens on port `3000`; PostgreSQL is published only on host
+loopback port `55432`. For the production Kubernetes control-plane deployment,
+see [`deploy/kubernetes`](./deploy/kubernetes/README.md).
 
-For Kubernetes deployment, see
-[`deploy/kubernetes`](./deploy/kubernetes/README.md).
+## Native credentials
 
-## OpenAPI contract
+Each Environment can complete the agent's normal login flow in its TUI.
+Sandpi captures the resulting credential, validates that the managed path is
+not a symlink, encrypts it in PostgreSQL, and replaces the persistent path with
+a link to an Environment-specific `/dev/shm` file. Before every supervised
+agent start, Sandpi writes the decrypted credential into that memory-backed
+path. On exit or rotation, a valid refreshed credential is captured again.
 
-The generated [OpenAPI 3.0.3 contract](./openapi.yaml) covers Sandpi's HTTP,
-SSE and WebSocket surfaces. Generate and verify it with:
-
-```bash
-npm run openapi:generate
-npm run openapi:check
-```
-
-Do not edit `openapi.yaml` directly. Generation reuses the server's real route
-registrations and fails on route/contract drift without requiring PostgreSQL or
-Sandbox0. See
-[`docs/architecture/openapi-contract.md`](./docs/architecture/openapi-contract.md)
-for the source-of-truth and special-transport rules.
-
-## Connect Codex
-
-Create or open an Environment, then choose **Connect Codex** from the New
-Session page or **Environment Settings → Agent harness**. Sandpi starts Codex's
-native device-login flow and stores the resulting Environment-scoped credential
-encrypted at rest.
-
-For local development, an existing login can be imported without sending the
-file through the browser:
+For local Codex migration without sending the file through a browser:
 
 ```bash
 npm run codex:import-auth -- \
@@ -242,92 +199,41 @@ npm run codex:import-auth -- \
   --file ~/.codex/auth.json
 ```
 
-The persistent Workspace does not store the plaintext Codex credential. Sandpi
-materializes it into the running Environment's memory-backed filesystem when
-starting the native harness.
+## OpenAPI contract
 
-## Architecture and trust boundaries
+The generated [OpenAPI 3.0.3 contract](./openapi.yaml) covers Sandpi's HTTP and
+WebSocket surfaces:
 
-```text
-Sandpi clients
-(Web and first-party native shells)
-    │ HTTPS / SSE / WebSocket
-    ▼
-Sandpi server ───────── PostgreSQL
-    │                   users, ownership and control state
-    │ official JavaScript SDK
-    ▼
-Sandbox0
-    ├── Sandbox + native Codex app-server
-    ├── persistent writable rootfs and native snapshots
-    ├── official Playwright CLI and version-matched Agent Skill
-    ├── terminal and runtime metrics
-    ├── network policy and credential injection
-    └── Environment rootfs snapshots
+```bash
+npm run openapi:generate
+npm run openapi:check
 ```
 
-- Sandpi clients talk only to Sandpi. They receive neither the Sandbox0
-  deployment API key nor a direct Sandbox0 endpoint. Sandpi materializes the
-  official Playwright Agent Skill when `playwright-cli` is available, but it
-  does not start a browser, manage a profile, proxy a Dashboard or VNC stream,
-  or define a second browser-control protocol. Environment-local URLs shown in
-  chat remain inert until a dedicated Preview surface exists.
-- Sandpi uses Sandbox0 through the official JavaScript SDK; it does not read a
-  Sandbox0 database, internal metering endpoint or ClickHouse credential.
-- Sandbox0 owns Sandbox lifecycle, writable rootfs persistence, network enforcement, credential
-  injection and usage truth. Sandpi owns its users, Environment attribution,
-  native Session references and optional product entitlements. Public
-  Environment reads resolve lifecycle state through the Sandbox0 SDK; Sandpi
-  PostgreSQL stores lifecycle intent and runtime fencing coordinates, not a
-  second observed Sandbox state.
-- With Sandbox0's default storage runtime, persisted Environment rootfs
-  checkpoint objects are encrypted at the application layer before object
-  storage. Sandbox0 manager and the active
-  ctld hold the installation key, so this is service-side rather than
-  end-to-end encryption. Self-hosted operators control it with
-  `spec.storage.runtime.objectEncryptionEnabled`.
-- Native Codex Session history remains in the Environment Workspace. PostgreSQL
-  stores the opaque native reference and product control state, not a duplicate
-  conversation transcript. Environment Automation definitions are an explicit
-  exception for future user-authored input: Sandpi stores Schedule prompts and
-  Webhook policies plus immutable active-run snapshots, while the resulting
-  native Thread remains the only conversation authority.
-- Egress credential injection reduces secret exposure, but the coding agent can
-  still exercise any credential and destination explicitly granted to its
-  Environment. Treat allowed tools and destinations as part of the security
-  boundary.
+Do not edit `openapi.yaml` directly. Generation uses the server's real route
+registrations and fails on route/contract drift. See
+[OpenAPI contract](./docs/architecture/openapi-contract.md).
 
 ## Current limits
 
-- A Sandbox runtime or Codex process restart does not erase the persisted
-  Session or Workspace. Sandpi restores the harness and may run one visible,
-  state-inspecting recovery Turn for an old-runtime interruption; explicit user
-  interruption and a failed recovery stop there. The original user request is
-  never replayed.
-- External deletion of the entire Sandbox resource is not treated as a runtime
-  restart. Sandpi reports the missing resource instead of silently allocating a
-  replacement with potentially different policy or credentials.
-- Sessions inside one Environment share one mutable Workspace and harness
-  account. They are not isolated checkouts. Use separate Environments when work
-  must not affect each other.
-- Sandpi currently exposes neither an Environment Browser nor an application
-  Preview tab. Playwright remains available to the coding agent when the
-  Environment separately provides a compatible browser executable.
-- Built-in administrator mode is for a trusted single-user deployment. Use OIDC
-  and a proper network/TLS boundary for public or multi-user deployments.
-- The `/api/v1` contract is versioned but may still change between pre-1.0
-  releases.
+- An in-flight agent operation can be interrupted when the Sandbox runtime is
+  replaced; the durable RootFS and native history remain, but process memory
+  does not.
+- An externally deleted Sandbox is reported as missing instead of silently
+  creating a replacement with potentially different policy.
+- The application has no managed browser or Preview surface. Playwright still
+  requires a compatible browser executable in the Environment.
+- Built-in administrator mode is for trusted single-user deployments. Use OIDC
+  and HTTPS for public or multi-user deployments.
+- `/api/v1` is versioned but remains pre-1.0.
 
 ## Documentation
 
 - [Coding-agent Environment guide (`/llms.txt`)](./public/llms.txt)
-- [Local coding-agent environment migration](./docs/local-environment-migration.md)
-- [CLI architecture and API boundaries](./docs/architecture/cli.md)
-- [OpenAPI contract](./docs/architecture/openapi-contract.md)
-- [Native Session authority and recovery](./docs/architecture/native-session-authority.md)
-- [Environment Schedules](./docs/architecture/environment-schedules.md)
-- [Environment Webhooks](./docs/architecture/environment-webhooks.md)
+- [Sandpi v2 design record](./sandpi-v2.md)
+- [Native agent terminal authority](./docs/architecture/native-agent-terminal-authority.md)
 - [Environment egress credentials](./docs/architecture/environment-egress-credentials.md)
+- [Local coding-agent environment migration](./docs/local-environment-migration.md)
+- [CLI architecture](./docs/architecture/cli.md)
 - [Billing and usage boundaries](./docs/architecture/billing-and-usage.md)
 - [Kubernetes deployment](./deploy/kubernetes/README.md)
 - [Complete configuration template](./.env.example)

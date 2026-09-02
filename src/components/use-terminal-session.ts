@@ -10,6 +10,7 @@ import type {
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { apiWebSocketUrl } from "@/lib/api-client";
+import { randomToken } from "@/lib/id";
 import {
   sandboxLoopbackMatches,
   sandboxLoopbackUrl,
@@ -43,7 +44,14 @@ interface TerminalEvent {
 }
 
 interface TerminalMessage {
-  type: "ack" | "error" | "event" | "ready";
+  type:
+    | "ack"
+    | "error"
+    | "event"
+    | "ready"
+    | "control.granted"
+    | "control.revoked"
+    | "control.state";
   code?: string;
   error?: string;
   sessionId?: string;
@@ -52,9 +60,40 @@ interface TerminalMessage {
   replayUntil?: number;
   replayReset?: boolean;
   event?: TerminalEvent;
+  control?: {
+    role: "controller" | "viewer";
+    leaseVersion: number;
+    expiresAt: number;
+  };
 }
 
 const MAX_TERMINAL_RECONNECT_ATTEMPTS = 5;
+const TERMINAL_CLIENT_ID_STORAGE_KEY = "sandpi.terminal-client.v1";
+const TERMINAL_ATTACHMENT_ID_STORAGE_KEY = "sandpi.terminal-attachment.v1";
+
+function terminalClientId() {
+  const generated = () => randomToken(32);
+  try {
+    let deviceId = window.localStorage.getItem(TERMINAL_CLIENT_ID_STORAGE_KEY);
+    if (!deviceId) {
+      deviceId = generated();
+      window.localStorage.setItem(TERMINAL_CLIENT_ID_STORAGE_KEY, deviceId);
+    }
+    let attachmentId = window.sessionStorage.getItem(
+      TERMINAL_ATTACHMENT_ID_STORAGE_KEY,
+    );
+    if (!attachmentId) {
+      attachmentId = generated();
+      window.sessionStorage.setItem(
+        TERMINAL_ATTACHMENT_ID_STORAGE_KEY,
+        attachmentId,
+      );
+    }
+    return `device-${deviceId}:attachment-${attachmentId}`;
+  } catch {
+    return `ephemeral-${generated()}`;
+  }
+}
 
 function terminalColumnForStringIndex(
   line: IBufferLine,
@@ -139,19 +178,29 @@ export function useTerminalSession(
   environmentId: string,
   onOpenSearch: () => void,
   onOpenSandboxPreview: (url: string) => void,
+  options: { surface?: "shell" | "agent" } = {},
 ) {
+  const surface = options.surface ?? "shell";
   const [connectionState, setConnectionState] =
     useState<TerminalConnectionState>("initializing");
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [hasSelection, setHasSelection] = useState(false);
   const [copied, setCopied] = useState(false);
   const [rendererGeneration, setRendererGeneration] = useState(0);
+  const [controlRole, setControlRole] = useState<"controller" | "viewer">(
+    surface === "agent" ? "viewer" : "controller",
+  );
 
   const terminalHostRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<XTerm | null>(null);
   const fitAddonRef = useRef<XTermFitAddon | null>(null);
   const searchAddonRef = useRef<XTermSearchAddon | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
+  const sendMessageRef = useRef<(message: Record<string, unknown>) => boolean>(
+    () => false,
+  );
+  const controlRoleRef = useRef(controlRole);
+  controlRoleRef.current = controlRole;
   const replayStateRef = useRef<TerminalReplayState | null>(null);
   if (replayStateRef.current === null) {
     if (typeof window === "undefined") {
@@ -159,7 +208,11 @@ export function useTerminalSession(
     } else {
       try {
         replayStateRef.current = parseTerminalReplayState(
-          window.localStorage.getItem(terminalReplayStorageKey(environmentId)),
+          window.localStorage.getItem(
+            terminalReplayStorageKey(
+              surface === "agent" ? `${environmentId}:agent` : environmentId,
+            ),
+          ),
         );
       } catch {
         replayStateRef.current = emptyTerminalReplayState();
@@ -178,13 +231,15 @@ export function useTerminalSession(
     if (typeof window === "undefined" || !replayStateRef.current) return;
     try {
       window.localStorage.setItem(
-        terminalReplayStorageKey(environmentId),
+        terminalReplayStorageKey(
+          surface === "agent" ? `${environmentId}:agent` : environmentId,
+        ),
         JSON.stringify(replayStateRef.current),
       );
     } catch {
       // Terminal recovery remains available for this mount when storage is disabled.
     }
-  }, [environmentId]);
+  }, [environmentId, surface]);
 
   const focusTerminal = useCallback(() => terminalRef.current?.focus(), []);
 
@@ -227,6 +282,22 @@ export function useTerminalSession(
     setRendererGeneration((generation) => generation + 1);
   }, []);
 
+  const takeControl = useCallback(() => {
+    sendMessageRef.current({
+      type: "control.takeover",
+      requestId: terminalRequestId("take-control"),
+    });
+  }, []);
+
+  const sendInput = useCallback((data: string) => {
+    if (controlRoleRef.current !== "controller") return false;
+    return sendMessageRef.current({
+      type: "input",
+      requestId: terminalRequestId("input"),
+      data,
+    });
+  }, []);
+
   useEffect(() => {
     const terminalHost = terminalHostRef.current;
     if (!terminalHost) return;
@@ -248,14 +319,19 @@ export function useTerminalSession(
       socket.send(JSON.stringify(message));
       return true;
     };
+    sendMessageRef.current = send;
 
     const sendResize = (rows: number, cols: number) => {
+      if (surface === "agent" && controlRoleRef.current !== "controller") {
+        return false;
+      }
       send({
         type: "resize",
         requestId: terminalRequestId("resize"),
         rows,
         cols,
       });
+      return true;
     };
 
     const scheduleReplayPersist = () => {
@@ -316,11 +392,17 @@ export function useTerminalSession(
       const expectedTerminalSessionId =
         replayStateRef.current?.terminalSessionId;
       if (expectedTerminalSessionId) {
-        search.set("terminalSessionId", expectedTerminalSessionId);
+        search.set(
+          surface === "agent" ? "agentSessionId" : "terminalSessionId",
+          expectedTerminalSessionId,
+        );
       }
+      if (surface === "agent") search.set("clientId", terminalClientId());
       const socket = new WebSocket(
         apiWebSocketUrl(
-          `/api/v1/environments/${encodeURIComponent(environmentId)}/terminal?${search.toString()}`,
+          `/api/v1/environments/${encodeURIComponent(environmentId)}/${
+            surface === "agent" ? "agent-terminal" : "terminal"
+          }?${search.toString()}`,
         ),
       );
       socketRef.current = socket;
@@ -337,7 +419,10 @@ export function useTerminalSession(
           return;
         }
         replayFinished = true;
-        if (terminal) terminal.options.disableStdin = false;
+        if (terminal) {
+          terminal.options.disableStdin =
+            surface === "agent" && controlRoleRef.current !== "controller";
+        }
         setConnectionState("connected");
         setConnectionError(null);
         fitTerminal();
@@ -393,13 +478,50 @@ export function useTerminalSession(
               }
             }
             currentAttemptIdRef.current = payload.attemptId ?? null;
+            if (surface === "agent" && payload.control) {
+              controlRoleRef.current = payload.control.role;
+              setControlRole(payload.control.role);
+            }
             setConnectionError(null);
             scheduleFit();
             if (receivedSequenceRef.current >= replayUntil) finishReplay();
             else setConnectionState("restoring");
             return;
           }
+          if (
+            payload.type === "control.granted" ||
+            payload.type === "control.revoked" ||
+            payload.type === "control.state"
+          ) {
+            if (!payload.control) return;
+            controlRoleRef.current = payload.control.role;
+            setControlRole(payload.control.role);
+            if (terminal) {
+              terminal.options.disableStdin =
+                payload.control.role !== "controller";
+            }
+            if (payload.control.role === "controller") {
+              fitTerminal();
+              if (terminalRef.current) {
+                sendResize(
+                  terminalRef.current.rows,
+                  terminalRef.current.cols,
+                );
+                terminalRef.current.focus();
+              }
+            }
+            return;
+          }
           if (payload.type === "error") {
+            if (
+              surface === "agent" &&
+              payload.code === "agent_terminal_control_required"
+            ) {
+              controlRoleRef.current = "viewer";
+              setControlRole("viewer");
+              if (terminal) terminal.options.disableStdin = true;
+              return;
+            }
             // A structured server error is an operation failure, not a network
             // interruption. Keep it visible and wait for an explicit Retry;
             // otherwise an auth/configuration error reconnects forever.
@@ -685,6 +807,7 @@ export function useTerminalSession(
       disposables.forEach((disposable) => disposable.dispose());
       socketRef.current?.close();
       socketRef.current = null;
+      sendMessageRef.current = () => false;
       terminal?.dispose();
       terminalRef.current = null;
       fitAddonRef.current = null;
@@ -697,6 +820,7 @@ export function useTerminalSession(
     onOpenSearch,
     persistReplayState,
     rendererGeneration,
+    surface,
   ]);
 
   useEffect(
@@ -720,5 +844,8 @@ export function useTerminalSession(
     copySelection,
     clearTerminal,
     restartTerminal,
+    controlRole,
+    takeControl,
+    sendInput,
   };
 }

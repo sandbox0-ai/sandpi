@@ -5,6 +5,7 @@ import type { CodexHarnessState } from "@/harnesses/codex/types";
 import type {
   CodingSession,
   Environment,
+  EnvironmentAgentId,
   EnvironmentPauseInterval,
   EnvironmentWorkspaceBackup,
   NetworkPolicy,
@@ -80,6 +81,58 @@ export interface StoredEnvironmentRuntime extends EnvironmentRuntimeRecord {
   lifecycleError?: string;
   pausedAt?: Date;
 }
+
+export interface EnvironmentTerminalCoordinates {
+  runtimeGeneration: number;
+  agentSessionId: string;
+  agentAttemptId: string;
+}
+
+export interface EnvironmentTerminalControlLease
+  extends EnvironmentTerminalCoordinates {
+  role: "controller" | "viewer";
+  clientId: string;
+  leaseVersion: number;
+  expiresAt: Date;
+}
+
+export interface EnvironmentForkOperation {
+  targetEnvironmentId: string;
+  sourceEnvironmentId?: string;
+  sourceSnapshotId?: string;
+  operationId: string;
+  sandboxId?: string;
+  phase: "prepared" | "forking" | "native-ready" | "completed" | "failed";
+  lastError?: string;
+}
+
+export interface RecoverableEnvironmentForkOperation
+  extends EnvironmentForkOperation {
+  userId: string;
+}
+
+interface EnvironmentTerminalControllerRow extends QueryResultRow {
+  runtime_generation: string | number;
+  agent_session_id: string;
+  agent_attempt_id: string;
+  holder_user_id: string;
+  client_id: string;
+  lease_version: string | number;
+  expires_at: Date;
+  expired?: boolean;
+}
+
+interface EnvironmentForkOperationRow extends QueryResultRow {
+  target_environment_id: string;
+  source_environment_id: string | null;
+  source_snapshot_id: string | null;
+  operation_id: string;
+  sandbox_id: string | null;
+  phase: EnvironmentForkOperation["phase"];
+  last_error: string | null;
+}
+
+const ENVIRONMENT_TERMINAL_CONTROL_LEASE_SECONDS = 30;
 
 export interface PreparedEnvironmentWorkspaceBackup {
   runtime: StoredEnvironmentRuntime;
@@ -232,6 +285,9 @@ interface EnvironmentRuntimeRow extends QueryResultRow {
   sandbox_id: string | null;
   supervisor_session_id: string | null;
   terminal_session_id: string | null;
+  agent_session_id: string | null;
+  agent_attempt_id: string | null;
+  harness?: EnvironmentAgentId;
   supervisor_cursor: string | number;
   stdout_tail: string;
   attempt_id: string | null;
@@ -717,6 +773,7 @@ export class SandpiStore {
   async createEnvironmentMetadata(input: {
     userId: string;
     name: string;
+    agentId: EnvironmentAgentId;
     sandboxMemoryMiB: number;
     environmentLimit?: number | null;
   }) {
@@ -752,13 +809,20 @@ export class SandpiStore {
            display_order
          ) VALUES (
            $1, $2, $3, '', '#151515', 'updating', 1, 'coding-agent', 0,
-           'codex', '{"label":"Codex","status":"not-connected"}'::JSONB,
-           '{"mode":"allow-all","domainExceptions":[]}'::JSONB, $4,
+           $4, jsonb_build_object(
+             'label', CASE $4
+               WHEN 'codex' THEN 'Codex'
+               WHEN 'claude-code' THEN 'Claude Code'
+               WHEN 'pi' THEN 'Pi'
+             END,
+             'status', 'not-connected'
+           ),
+           '{"mode":"allow-all","domainExceptions":[]}'::JSONB, $5,
            (SELECT COALESCE(MAX(display_order), -1) + 1
             FROM environments
             WHERE created_by_user_id = $2)
          )`,
-        [id, input.userId, input.name, input.sandboxMemoryMiB],
+        [id, input.userId, input.name, input.agentId, input.sandboxMemoryMiB],
       );
       await client.query(
         `INSERT INTO environment_runtime (
@@ -774,6 +838,311 @@ export class SandpiStore {
       client.release();
     }
     return this.getEnvironment(input.userId, id);
+  }
+
+  async createEnvironmentForkTarget(input: {
+    userId: string;
+    sourceEnvironmentId: string;
+    targetEnvironmentId: string;
+    name: string;
+    operationId: string;
+    sourceSnapshotId?: string;
+    environmentLimit?: number | null;
+  }): Promise<EnvironmentForkOperation> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+        [`sandpi:environment-limit:${input.userId}`],
+      );
+      const source = await client.query<{
+        id: string;
+        sandbox_id: string | null;
+        desired_state: StoredEnvironmentRuntime["desiredState"];
+      }>(
+        `SELECT environment.id, runtime.sandbox_id, runtime.desired_state
+         FROM environments environment
+         JOIN environment_runtime runtime
+           ON runtime.environment_id = environment.id
+         WHERE environment.id = $1
+           AND environment.created_by_user_id = $2
+           AND environment.status = 'ready'
+         FOR UPDATE OF environment, runtime`,
+        [input.sourceEnvironmentId, input.userId],
+      );
+      const sourceRow = source.rows[0];
+      if (!sourceRow) {
+        throw conflict(
+          "environment_fork_source_not_ready",
+          "The source Environment is not ready to fork.",
+        );
+      }
+      if (!sourceRow.sandbox_id || sourceRow.desired_state === "terminated") {
+        throw conflict(
+          "environment_fork_source_not_ready",
+          "The source Environment does not have a forkable Sandbox.",
+        );
+      }
+      if (input.sourceSnapshotId) {
+        const snapshot = await client.query(
+          `SELECT 1
+           FROM environment_workspace_backups
+           WHERE environment_id = $1 AND snapshot_id = $2`,
+          [input.sourceEnvironmentId, input.sourceSnapshotId],
+        );
+        if (!snapshot.rowCount) {
+          throw notFound(
+            "environment_snapshot_not_found",
+            "Environment snapshot not found.",
+          );
+        }
+      }
+      if (input.environmentLimit != null) {
+        const count = await client.query<{ count: string }>(
+          `SELECT COUNT(*)::TEXT AS count
+           FROM environments
+           WHERE created_by_user_id = $1 AND status <> 'archived'`,
+          [input.userId],
+        );
+        if (Number(count.rows[0]?.count ?? 0) >= input.environmentLimit) {
+          throw new HttpError(
+            429,
+            "environment_plan_limit",
+            `The current plan allows ${input.environmentLimit} Environment${input.environmentLimit === 1 ? "" : "s"}.`,
+            { environmentLimit: input.environmentLimit },
+          );
+        }
+      }
+      const inserted = await client.query(
+        `INSERT INTO environments (
+           id, created_by_user_id, name, description, color, status,
+           revision, template_id, rootfs_snapshot_id, credential_revision,
+           harness, harness_metadata, network_policy, sandbox_memory_mib,
+           idle_pause_timeout_seconds, workspace_backup_interval_seconds,
+           workspace_backup_retention_count, display_order
+         )
+         SELECT $3, created_by_user_id, $4, description, color, 'updating',
+                1, template_id, NULL, 0, harness,
+                (harness_metadata - 'account' - 'lastVerified')
+                  || '{"status":"not-connected"}'::JSONB,
+                network_policy, sandbox_memory_mib,
+                idle_pause_timeout_seconds, workspace_backup_interval_seconds,
+                workspace_backup_retention_count,
+                (SELECT COALESCE(MAX(display_order), -1) + 1
+                 FROM environments
+                 WHERE created_by_user_id = $2)
+         FROM environments
+         WHERE id = $1 AND created_by_user_id = $2
+         RETURNING id`,
+        [
+          input.sourceEnvironmentId,
+          input.userId,
+          input.targetEnvironmentId,
+          input.name,
+        ],
+      );
+      if (!inserted.rowCount) {
+        throw notFound("environment_not_found", "Environment not found.");
+      }
+      await client.query(
+        `INSERT INTO environment_runtime (
+           environment_id, desired_state
+         ) VALUES ($1, 'paused')`,
+        [input.targetEnvironmentId],
+      );
+      await client.query(
+        `INSERT INTO environment_fork_operations (
+           target_environment_id, source_environment_id, source_snapshot_id,
+           operation_id
+         ) VALUES ($1, $2, $3, $4)`,
+        [
+          input.targetEnvironmentId,
+          input.sourceEnvironmentId,
+          input.sourceSnapshotId ?? null,
+          input.operationId,
+        ],
+      );
+      await client.query("COMMIT");
+      return {
+        targetEnvironmentId: input.targetEnvironmentId,
+        sourceEnvironmentId: input.sourceEnvironmentId,
+        ...(input.sourceSnapshotId
+          ? { sourceSnapshotId: input.sourceSnapshotId }
+          : {}),
+        operationId: input.operationId,
+        phase: "prepared",
+      };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async getEnvironmentForkOperation(
+    targetEnvironmentId: string,
+  ): Promise<EnvironmentForkOperation> {
+    const result = await this.pool.query<EnvironmentForkOperationRow>(
+      `SELECT target_environment_id, source_environment_id,
+              source_snapshot_id, operation_id, sandbox_id, phase, last_error
+       FROM environment_fork_operations
+       WHERE target_environment_id = $1`,
+      [targetEnvironmentId],
+    );
+    const row = result.rows[0];
+    if (!row) {
+      throw notFound(
+        "environment_fork_not_found",
+        "Environment fork operation not found.",
+      );
+    }
+    return environmentForkOperationFromRow(row);
+  }
+
+  async environmentForkOperationsNeedingRecovery(
+    limit = 50,
+  ): Promise<RecoverableEnvironmentForkOperation[]> {
+    const result = await this.pool.query<
+      EnvironmentForkOperationRow & { user_id: string }
+    >(
+      `SELECT operation.target_environment_id,
+              operation.source_environment_id, operation.source_snapshot_id,
+              operation.operation_id,
+              operation.sandbox_id, operation.phase, operation.last_error,
+              environment.created_by_user_id AS user_id
+       FROM environment_fork_operations operation
+       JOIN environments environment
+         ON environment.id = operation.target_environment_id
+       WHERE operation.phase NOT IN ('completed', 'failed')
+       ORDER BY operation.updated_at, operation.target_environment_id
+       LIMIT $1`,
+      [limit],
+    );
+    return result.rows.map((row) => ({
+      ...environmentForkOperationFromRow(row),
+      userId: row.user_id,
+    }));
+  }
+
+  async markEnvironmentForkStarted(targetEnvironmentId: string) {
+    await this.pool.query(
+      `UPDATE environment_fork_operations
+       SET phase = 'forking', last_error = NULL
+       WHERE target_environment_id = $1 AND phase IN ('prepared', 'forking')`,
+      [targetEnvironmentId],
+    );
+  }
+
+  async recordEnvironmentForkSandbox(
+    targetEnvironmentId: string,
+    sandboxId: string,
+    runtimeGeneration: number,
+  ) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const operation = await client.query<EnvironmentForkOperationRow>(
+        `UPDATE environment_fork_operations
+         SET sandbox_id = COALESCE(sandbox_id, $2), phase = 'native-ready',
+             last_error = NULL
+         WHERE target_environment_id = $1
+           AND phase IN ('prepared', 'forking', 'native-ready')
+           AND (sandbox_id IS NULL OR sandbox_id = $2)
+         RETURNING target_environment_id, source_environment_id, operation_id,
+                   source_snapshot_id, sandbox_id, phase, last_error`,
+        [targetEnvironmentId, sandboxId],
+      );
+      if (!operation.rowCount) {
+        throw conflict(
+          "environment_fork_runtime_changed",
+          "The Environment fork no longer owns this Sandbox target.",
+        );
+      }
+      await client.query(
+        `UPDATE environment_runtime
+         SET sandbox_id = $2, runtime_generation = $3,
+             desired_state = 'paused',
+             paused_at = COALESCE(paused_at, NOW()), provisioning_error = NULL,
+             lifecycle_policy_version = $4,
+             agent_session_id = NULL, agent_attempt_id = NULL
+         WHERE environment_id = $1`,
+        [
+          targetEnvironmentId,
+          sandboxId,
+          runtimeGeneration,
+          ENVIRONMENT_LIFECYCLE_POLICY_VERSION,
+        ],
+      );
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async completeEnvironmentFork(targetEnvironmentId: string) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const completed = await client.query(
+        `UPDATE environment_fork_operations operation
+         SET phase = 'completed', last_error = NULL
+         FROM environment_runtime runtime
+         WHERE operation.target_environment_id = $1
+           AND runtime.environment_id = operation.target_environment_id
+           AND operation.phase IN ('native-ready', 'completed')
+           AND operation.sandbox_id = runtime.sandbox_id
+         RETURNING operation.target_environment_id`,
+        [targetEnvironmentId],
+      );
+      if (!completed.rowCount) {
+        throw conflict(
+          "environment_fork_not_ready",
+          "The native fork target has not been recorded yet.",
+        );
+      }
+      await client.query(
+        `UPDATE environments
+         SET status = 'ready', provisioning_error = NULL
+         WHERE id = $1`,
+        [targetEnvironmentId],
+      );
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async failEnvironmentFork(targetEnvironmentId: string, error: string) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        `UPDATE environment_fork_operations
+         SET phase = 'failed', last_error = $2
+         WHERE target_environment_id = $1 AND phase <> 'completed'`,
+        [targetEnvironmentId, error],
+      );
+      await client.query(
+        `UPDATE environments
+         SET status = 'error', provisioning_error = $2
+         WHERE id = $1 AND status <> 'ready'`,
+        [targetEnvironmentId, error],
+      );
+      await client.query("COMMIT");
+    } catch (transactionError) {
+      await client.query("ROLLBACK");
+      throw transactionError;
+    } finally {
+      client.release();
+    }
   }
 
   async recordEnvironmentAllocation(
@@ -933,6 +1302,11 @@ export class SandpiStore {
        WHERE environment.status IN ('updating', 'error')
          AND environment.status <> 'archived'
          AND runtime.sandbox_id IS NULL
+         AND NOT EXISTS (
+           SELECT 1
+           FROM environment_fork_operations fork
+           WHERE fork.target_environment_id = environment.id
+         )
        ORDER BY environment.created_at`,
     );
     return result.rows;
@@ -1367,18 +1741,6 @@ export class SandpiStore {
        WHERE environment.status = 'ready'
          AND runtime.sandbox_id IS NOT NULL
          AND runtime.desired_state <> 'terminated'
-         AND NOT EXISTS (
-           SELECT 1
-           FROM sessions session
-           JOIN session_runtime session_state
-             ON session_state.session_id = session.id
-           WHERE session.environment_id = runtime.environment_id
-             AND (
-               session.status IN ('provisioning', 'running')
-               OR session_state.active_native_turn_id IS NOT NULL
-               OR session_state.pending_turn_phase IS NOT NULL
-             )
-         )
          AND (
            runtime.workspace_backup_retry_at IS NULL
            OR runtime.workspace_backup_retry_at <= NOW()
@@ -1428,18 +1790,6 @@ export class SandpiStore {
          AND environment.status = 'ready'
          AND runtime.sandbox_id IS NOT NULL
          AND runtime.desired_state <> 'terminated'
-         AND NOT EXISTS (
-           SELECT 1
-           FROM sessions session
-           JOIN session_runtime session_state
-             ON session_state.session_id = session.id
-           WHERE session.environment_id = runtime.environment_id
-             AND (
-               session.status IN ('provisioning', 'running')
-               OR session_state.active_native_turn_id IS NOT NULL
-               OR session_state.pending_turn_phase IS NOT NULL
-             )
-         )
          AND (
            $2::BOOLEAN
            OR (
@@ -1732,6 +2082,19 @@ export class SandpiStore {
       );
       await client.query(
         "UPDATE sessions SET unread = TRUE WHERE environment_id = $1",
+        [environmentId],
+      );
+      await client.query(
+        `UPDATE environment_runtime
+         SET agent_session_id = NULL, agent_attempt_id = NULL,
+             terminal_session_id = NULL, attempt_id = NULL,
+             version = version + 1
+         WHERE environment_id = $1 AND sandbox_id = $2`,
+        [environmentId, sandboxId],
+      );
+      await client.query(
+        `DELETE FROM environment_terminal_controllers
+         WHERE environment_id = $1`,
         [environmentId],
       );
       await client.query("COMMIT");
@@ -2246,6 +2609,222 @@ export class SandpiStore {
        WHERE environment_id = $1`,
       [environmentId, terminalSessionId],
     );
+  }
+
+  /**
+   * Publishes the native Agent Session and invalidates controller leases fenced
+   * to an older Sandbox generation or process attempt.
+   */
+  async recordEnvironmentAgentSession(
+    environmentId: string,
+    sandboxId: string,
+    coordinates: EnvironmentTerminalCoordinates,
+  ) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const updated = await client.query(
+        `UPDATE environment_runtime
+         SET agent_session_id = $3, agent_attempt_id = $4,
+             runtime_generation = $5, version = version + 1
+         WHERE environment_id = $1 AND sandbox_id = $2
+           AND runtime_generation <= $5
+         RETURNING environment_id`,
+        [
+          environmentId,
+          sandboxId,
+          coordinates.agentSessionId,
+          coordinates.agentAttemptId,
+          coordinates.runtimeGeneration,
+        ],
+      );
+      if (!updated.rowCount) {
+        throw conflict(
+          "agent_terminal_runtime_changed",
+          "The Environment runtime changed while its Agent terminal was opening.",
+        );
+      }
+      await client.query(
+        `DELETE FROM environment_terminal_controllers
+         WHERE environment_id = $1
+           AND (
+             runtime_generation <> $2
+             OR agent_session_id <> $3
+             OR agent_attempt_id <> $4
+           )`,
+        [
+          environmentId,
+          coordinates.runtimeGeneration,
+          coordinates.agentSessionId,
+          coordinates.agentAttemptId,
+        ],
+      );
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  /** Atomically acquires, renews, or explicitly transfers terminal control. */
+  async acquireEnvironmentTerminalControl(input: {
+    userId: string;
+    environmentId: string;
+    clientId: string;
+    coordinates: EnvironmentTerminalCoordinates;
+    takeover?: boolean;
+  }): Promise<EnvironmentTerminalControlLease> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const authorized = await client.query<{
+        runtime_generation: string | number;
+        agent_session_id: string | null;
+        agent_attempt_id: string | null;
+      }>(
+        `SELECT runtime.runtime_generation, runtime.agent_session_id,
+                runtime.agent_attempt_id
+         FROM environments environment
+         JOIN environment_runtime runtime
+           ON runtime.environment_id = environment.id
+         WHERE environment.id = $2
+           AND environment.created_by_user_id = $1
+           AND environment.status <> 'archived'
+         FOR UPDATE OF runtime`,
+        [input.userId, input.environmentId],
+      );
+      const runtime = authorized.rows[0];
+      if (!runtime) {
+        throw notFound("environment_not_found", "Environment not found.");
+      }
+      if (
+        Number(runtime.runtime_generation) !==
+          input.coordinates.runtimeGeneration ||
+        runtime.agent_session_id !== input.coordinates.agentSessionId ||
+        runtime.agent_attempt_id !== input.coordinates.agentAttemptId
+      ) {
+        throw conflict(
+          "agent_terminal_runtime_changed",
+          "The Environment Agent terminal changed. Reconnect to continue.",
+        );
+      }
+
+      const currentResult =
+        await client.query<EnvironmentTerminalControllerRow>(
+          `SELECT controller.*,
+                  controller.expires_at <= NOW() AS expired
+           FROM environment_terminal_controllers controller
+           WHERE controller.environment_id = $1
+           FOR UPDATE`,
+          [input.environmentId],
+        );
+      const current = currentResult.rows[0];
+      const sameCoordinates =
+        current?.runtime_generation !== undefined &&
+        Number(current.runtime_generation) === input.coordinates.runtimeGeneration &&
+        current.agent_session_id === input.coordinates.agentSessionId &&
+        current.agent_attempt_id === input.coordinates.agentAttemptId;
+      const sameHolder =
+        sameCoordinates &&
+        current?.holder_user_id === input.userId &&
+        current.client_id === input.clientId;
+      const canControl =
+        !current || current.expired === true || !sameCoordinates || sameHolder ||
+        input.takeover === true;
+
+      if (!canControl) {
+        await client.query("COMMIT");
+        return terminalControlLeaseFromRow(current, "viewer");
+      }
+
+      const leaseVersion = current
+        ? Number(current.lease_version) + (sameHolder ? 0 : 1)
+        : 1;
+      const granted = await client.query<EnvironmentTerminalControllerRow>(
+        `INSERT INTO environment_terminal_controllers (
+           environment_id, runtime_generation, agent_session_id,
+           agent_attempt_id, holder_user_id, client_id, lease_version,
+           expires_at
+         ) VALUES (
+           $1, $2, $3, $4, $5, $6, $7,
+           NOW() + ($8::INTEGER * INTERVAL '1 second')
+         )
+         ON CONFLICT (environment_id) DO UPDATE SET
+           runtime_generation = EXCLUDED.runtime_generation,
+           agent_session_id = EXCLUDED.agent_session_id,
+           agent_attempt_id = EXCLUDED.agent_attempt_id,
+           holder_user_id = EXCLUDED.holder_user_id,
+           client_id = EXCLUDED.client_id,
+           lease_version = EXCLUDED.lease_version,
+           expires_at = EXCLUDED.expires_at
+         RETURNING *`,
+        [
+          input.environmentId,
+          input.coordinates.runtimeGeneration,
+          input.coordinates.agentSessionId,
+          input.coordinates.agentAttemptId,
+          input.userId,
+          input.clientId,
+          leaseVersion,
+          ENVIRONMENT_TERMINAL_CONTROL_LEASE_SECONDS,
+        ],
+      );
+      await client.query("COMMIT");
+      return terminalControlLeaseFromRow(granted.rows[0]!, "controller");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  /** Renews an existing lease and rejects every stale or view-only client. */
+  async renewEnvironmentTerminalControl(input: {
+    userId: string;
+    environmentId: string;
+    clientId: string;
+    coordinates: EnvironmentTerminalCoordinates;
+  }): Promise<EnvironmentTerminalControlLease> {
+    const renewed = await this.pool.query<EnvironmentTerminalControllerRow>(
+      `UPDATE environment_terminal_controllers controller
+       SET expires_at = NOW() + ($7::INTEGER * INTERVAL '1 second')
+       FROM environments environment, environment_runtime runtime
+       WHERE controller.environment_id = $2
+         AND environment.id = controller.environment_id
+         AND runtime.environment_id = controller.environment_id
+         AND environment.created_by_user_id = $1
+         AND environment.status <> 'archived'
+         AND controller.holder_user_id = $1
+         AND controller.client_id = $3
+         AND controller.runtime_generation = $4
+         AND controller.agent_session_id = $5
+         AND controller.agent_attempt_id = $6
+         AND runtime.runtime_generation = controller.runtime_generation
+         AND runtime.agent_session_id = controller.agent_session_id
+         AND runtime.agent_attempt_id = controller.agent_attempt_id
+         AND controller.expires_at > NOW()
+       RETURNING controller.*`,
+      [
+        input.userId,
+        input.environmentId,
+        input.clientId,
+        input.coordinates.runtimeGeneration,
+        input.coordinates.agentSessionId,
+        input.coordinates.agentAttemptId,
+        ENVIRONMENT_TERMINAL_CONTROL_LEASE_SECONDS,
+      ],
+    );
+    const lease = renewed.rows[0];
+    if (!lease) {
+      throw conflict(
+        "agent_terminal_control_required",
+        "This device is view-only. Take control before sending terminal input.",
+      );
+    }
+    return terminalControlLeaseFromRow(lease, "controller");
   }
 
   async listSessions(userId: string): Promise<CodingSession[]> {
@@ -3672,7 +4251,7 @@ const ENVIRONMENT_SELECT = `
 `;
 
 const ENVIRONMENT_RUNTIME_SELECT = `
-  SELECT runtime.*, environment.credential_revision,
+  SELECT runtime.*, environment.harness, environment.credential_revision,
          credential_binding.source_revision AS bound_credential_revision,
          credential_binding.status AS credential_binding_status
   FROM environment_runtime runtime
@@ -3818,6 +4397,24 @@ function environmentWorkspaceBackupFromRow(
   };
 }
 
+function environmentForkOperationFromRow(
+  row: EnvironmentForkOperationRow,
+): EnvironmentForkOperation {
+  return {
+    targetEnvironmentId: row.target_environment_id,
+    ...(row.source_environment_id
+      ? { sourceEnvironmentId: row.source_environment_id }
+      : {}),
+    ...(row.source_snapshot_id
+      ? { sourceSnapshotId: row.source_snapshot_id }
+      : {}),
+    operationId: row.operation_id,
+    ...(row.sandbox_id ? { sandboxId: row.sandbox_id } : {}),
+    phase: row.phase,
+    ...(row.last_error ? { lastError: row.last_error } : {}),
+  };
+}
+
 function environmentRuntimeFromRow(
   row: EnvironmentRuntimeRow,
 ): StoredEnvironmentRuntime {
@@ -3828,6 +4425,13 @@ function environmentRuntimeFromRow(
     sandboxId: row.sandbox_id!,
     supervisorSessionId: row.supervisor_session_id ?? undefined,
     terminalSessionId: row.terminal_session_id ?? undefined,
+    ...(row.agent_session_id
+      ? { agentSessionId: row.agent_session_id }
+      : {}),
+    ...(row.agent_attempt_id
+      ? { agentAttemptId: row.agent_attempt_id }
+      : {}),
+    ...(row.harness ? { agentId: row.harness } : {}),
     attemptId: row.attempt_id ?? undefined,
     runtimeGeneration: Number(row.runtime_generation),
     ...(hasCredentialBindingProjection
@@ -3856,6 +4460,21 @@ function environmentRuntimeFromRow(
     idlePauseDueAt: row.idle_pause_due_at ?? undefined,
     lifecycleError: row.lifecycle_error ?? undefined,
     pausedAt: row.paused_at ?? undefined,
+  };
+}
+
+function terminalControlLeaseFromRow(
+  row: EnvironmentTerminalControllerRow,
+  role: EnvironmentTerminalControlLease["role"],
+): EnvironmentTerminalControlLease {
+  return {
+    role,
+    clientId: row.client_id,
+    runtimeGeneration: Number(row.runtime_generation),
+    agentSessionId: row.agent_session_id,
+    agentAttemptId: row.agent_attempt_id,
+    leaseVersion: Number(row.lease_version),
+    expiresAt: row.expires_at,
   };
 }
 

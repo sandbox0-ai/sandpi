@@ -94,8 +94,38 @@ test("migration history contains every durable Sandpi boundary", async () => {
       "0063_simplify_environment_webhooks",
       "0064_default_environment_memory_4_gib",
       "0065_rootfs_environment_runtime",
+      "0066_native_agent_terminal",
+      "0067_environment_forks",
+      "0068_native_agent_credentials",
+      "0069_disable_legacy_automation",
     ],
   );
+
+  const nativeAgentTerminalSql = migrations[65]?.sql ?? "";
+  assert.match(nativeAgentTerminalSql, /ADD COLUMN agent_session_id TEXT/);
+  assert.match(
+    nativeAgentTerminalSql,
+    /CREATE TABLE environment_terminal_controllers\b/,
+  );
+  assert.match(nativeAgentTerminalSql, /runtime_generation BIGINT NOT NULL/);
+  assert.match(nativeAgentTerminalSql, /agent_attempt_id TEXT NOT NULL/);
+
+  const environmentForksSql = migrations[66]?.sql ?? "";
+  assert.match(environmentForksSql, /environment_fork_operations/);
+  assert.match(environmentForksSql, /operation_id/);
+
+  const nativeAgentCredentialsSql = migrations[67]?.sql ?? "";
+  assert.match(
+    nativeAgentCredentialsSql,
+    /harness_credentials_native_agent_account_check/,
+  );
+  assert.match(nativeAgentCredentialsSql, /sandpi-claude-code-auth\.json/);
+  assert.match(nativeAgentCredentialsSql, /sandpi-pi-auth\.json/);
+
+  const disableLegacyAutomationSql = migrations[68]?.sql ?? "";
+  assert.match(disableLegacyAutomationSql, /UPDATE environment_schedules/);
+  assert.match(disableLegacyAutomationSql, /UPDATE environment_webhooks/);
+  assert.match(disableLegacyAutomationSql, /native TUI v2 migration/);
 
   const sql = migrations[0]?.sql ?? "";
   const requiredTables = [

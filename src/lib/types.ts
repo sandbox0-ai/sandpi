@@ -1,11 +1,10 @@
 import type { UnixTimestamp } from "./time";
 
-/**
- * Codex is the only MVP implementation. The other identifiers reserve the Environment-level
- * integration boundary; they must not appear as a per-Session switch before their native
- * harness adapters are implemented.
- */
 export type HarnessId = "codex" | "claude-code" | "opencode" | "pi";
+
+/** Agents that can own an Environment's native v2 TUI process. */
+export const ENVIRONMENT_AGENT_IDS = ["codex", "claude-code", "pi"] as const;
+export type EnvironmentAgentId = (typeof ENVIRONMENT_AGENT_IDS)[number];
 
 export type SessionStatus =
   "running" | "waiting" | "paused" | "completed" | "failed";
@@ -304,7 +303,7 @@ export interface Environment {
   provisioningError?: string;
   /** Opaque revision of Environment-scoped harness authentication. */
   credentialRevision: number;
-  codingAgent: HarnessAccount;
+  codingAgent: HarnessAccount & { harness: EnvironmentAgentId };
   networkPolicy: NetworkPolicy;
 }
 

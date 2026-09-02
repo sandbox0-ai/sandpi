@@ -52,6 +52,7 @@ import type {
 } from "@/harnesses/codex/types";
 import { WORKSPACE_ROOT } from "@/lib/workspace-path-policy";
 import {
+  agentTerminalInputSchema,
   preferencesSchema,
   terminalInputSchema,
   workspaceIdeWatchSubscriptionSchema as workspaceIdeWatchSubscriptionInputSchema,
@@ -137,7 +138,7 @@ export const deploymentSummarySchema = component(
 );
 
 const harnessAccountSchema = z.object({
-  harness: z.enum(["codex", "claude-code", "opencode", "pi"]),
+  harness: z.enum(["codex", "claude-code", "pi"]),
   label: z.string(),
   status: z.enum(["connected", "not-connected", "coming-soon"]),
   account: z.string().optional(),
@@ -197,6 +198,17 @@ export const environmentCloudStateSchema = component(
 
 export const workspaceBackupSchema = component(
   "EnvironmentWorkspaceBackup",
+  z.object({
+    id: z.string(),
+    environmentId: z.string(),
+    name: z.string(),
+    kind: z.enum(["automatic", "manual"]),
+    createdAt: unixTimestampSchema,
+  }),
+);
+
+export const environmentSnapshotSchema = component(
+  "EnvironmentSnapshot",
   z.object({
     id: z.string(),
     environmentId: z.string(),
@@ -1085,6 +1097,55 @@ export const terminalServerMessageSchema = component(
       replayAfter: z.number().int(),
       replayUntil: z.number().int(),
       replayReset: z.boolean(),
+    }),
+    z.object({
+      type: z.enum(["ack", "error", "event"]),
+      requestId: z.string().optional(),
+      error: z.string().optional(),
+      code: z.string().optional(),
+      event: z
+        .object({
+          seq: z.number().int(),
+          attemptId: z.string().optional(),
+          stream: z.string().optional(),
+          dataBase64: z.string().optional(),
+          type: z.string(),
+          occurredAt: unixTimestampSchema,
+        })
+        .optional(),
+    }),
+  ]),
+);
+
+const agentTerminalControlSchema = z.object({
+  role: z.enum(["controller", "viewer"]),
+  leaseVersion: z.number().int().positive(),
+  expiresAt: unixTimestampSchema,
+});
+
+export const agentTerminalClientMessageSchema = component(
+  "AgentTerminalClientMessage",
+  agentTerminalInputSchema,
+);
+
+export const agentTerminalServerMessageSchema = component(
+  "AgentTerminalServerMessage",
+  z.union([
+    z.object({
+      type: z.literal("ready"),
+      agentId: z.enum(["codex", "claude-code", "pi"]),
+      sessionId: z.string(),
+      attemptId: z.string(),
+      runtimeGeneration: z.number().int().nonnegative(),
+      replayAfter: z.number().int(),
+      replayUntil: z.number().int(),
+      replayReset: z.boolean(),
+      control: agentTerminalControlSchema,
+    }),
+    z.object({
+      type: z.enum(["control.granted", "control.revoked", "control.state"]),
+      control: agentTerminalControlSchema,
+      requestId: z.string().optional(),
     }),
     z.object({
       type: z.enum(["ack", "error", "event"]),

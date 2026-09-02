@@ -27,6 +27,7 @@ test("serializes Environment creation against the user plan limit", async () => 
     store.createEnvironmentMetadata({
       userId: "user-viewer",
       name: "Second Environment",
+      agentId: "codex",
       sandboxMemoryMiB: 2 * 1024,
       environmentLimit: 1,
     }),
@@ -68,6 +69,7 @@ test("persists the plan-selected Sandbox memory during Environment creation", as
   await store.createEnvironmentMetadata({
     userId: "user-viewer",
     name: "Free Environment",
+    agentId: "claude-code",
     sandboxMemoryMiB: 2 * 1024,
     environmentLimit: 1,
   });
@@ -80,6 +82,7 @@ test("persists the plan-selected Sandbox memory during Environment creation", as
   assert.deepEqual(insert.values?.slice(1), [
     "user-viewer",
     "Free Environment",
+    "claude-code",
     2 * 1024,
   ]);
 });
