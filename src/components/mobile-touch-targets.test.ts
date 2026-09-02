@@ -7,9 +7,10 @@ async function css(name: string) {
 }
 
 test("native terminal mobile controls keep a 44px touch target", async () => {
-  const [globals, guest, terminal, sidebar, tips] = await Promise.all([
+  const [globals, guest, workspace, terminal, sidebar, tips] = await Promise.all([
     css("../app/globals.css"),
     css("./guest-sandpi-app.module.css"),
+    css("./new-session-workspace.module.css"),
     css("./agent-terminal-workspace.module.css"),
     css("./environment-sidebar.module.css"),
     css("./sidebar-tips.module.css"),
@@ -30,6 +31,10 @@ test("native terminal mobile controls keep a 44px touch target", async () => {
   assert.match(
     guest,
     /\.helpButton\s*\{[^}]*width: 44px;[^}]*height: 44px;/,
+  );
+  assert.match(
+    workspace,
+    /\.mobileMenuButton\s*\{[^}]*display: inline-flex;[^}]*width: 44px;[^}]*height: 44px;/,
   );
   assert.match(
     terminal,
