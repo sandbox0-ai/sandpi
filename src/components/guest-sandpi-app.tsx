@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  ArrowUp,
   CircleHelp,
   Cloud,
   LockKeyhole,
@@ -9,28 +8,20 @@ import {
   Menu,
   PanelLeftClose,
   PanelLeftOpen,
-  Search,
   ShieldCheck,
-  Sparkles,
+  TerminalSquare,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 
 import { AppFrame, AppSidebar } from "@/components/app-frame";
 import { HelpFeedbackDialog } from "@/components/help-feedback-dialog";
 import { SidebarTips } from "@/components/sidebar-tips";
-import {
-  navigateToAuthLogin,
-  newSessionAuthLoginUrl,
-  storePendingGuestPrompt,
-} from "@/lib/auth-navigation";
+import { navigateToAuthLogin } from "@/lib/auth-navigation";
 import {
   DEFAULT_CLIENT_PREFERENCES,
   loadClientPreferences,
 } from "@/lib/client-preferences";
-import {
-  getOperationUiCopy,
-  shouldSubmitComposer,
-} from "@/lib/operation-ui";
+import { getOperationUiCopy } from "@/lib/operation-ui";
 import { useNativeChromeSurfaces } from "@/lib/use-native-chrome-surfaces";
 
 import workspaceStyles from "@/components/new-session-workspace.module.css";
@@ -45,50 +36,19 @@ export function GuestSandpiApp({
 }) {
   const preferences = loadClientPreferences(DEFAULT_CLIENT_PREFERENCES);
   const ui = getOperationUiCopy(preferences.general.language);
-  const [prompt, setPrompt] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [helpFeedbackOpen, setHelpFeedbackOpen] = useState(false);
   const signInLabel = registrationOpen
     ? ui.guest.signInOrSignUp
     : ui.guest.signIn;
-  const promptRef = useRef<HTMLTextAreaElement>(null);
   useNativeChromeSurfaces(
     sidebarOpen ? "sidebar" : "canvas",
     sidebarOpen ? "sidebar" : "canvas",
   );
 
-  useEffect(() => {
-    if (!window.matchMedia("(min-width: 641px)").matches) return;
-    const focusFrame = window.requestAnimationFrame(() =>
-      promptRef.current?.focus(),
-    );
-    return () => window.cancelAnimationFrame(focusFrame);
-  }, []);
-
   function continueToLogin() {
-    const hasPendingPrompt = Boolean(prompt.trim());
-    if (hasPendingPrompt) {
-      try {
-        storePendingGuestPrompt(window.sessionStorage, prompt);
-      } catch {
-        // Storage can be unavailable in restricted browser contexts. Login
-        // remains usable even when Sandpi cannot carry this draft across OIDC.
-      }
-    }
-    navigateToAuthLogin(
-      hasPendingPrompt
-        ? newSessionAuthLoginUrl(loginUrl, window.location.href)
-        : loginUrl,
-    );
-  }
-
-  function sendMessage() {
-    if (!prompt.trim()) {
-      promptRef.current?.focus();
-      return;
-    }
-    continueToLogin();
+    navigateToAuthLogin(loginUrl);
   }
 
   const sidebar = (
@@ -144,25 +104,19 @@ export function GuestSandpiApp({
         </div>
       }
     >
-      <button
-        className="new-session-button"
-        type="button"
-        onClick={() => {
-          setSidebarOpen(false);
-          promptRef.current?.focus();
-        }}
-      >
-        <Sparkles size={17} strokeWidth={2.2} aria-hidden="true" />
-        {ui.sidebar.newSession}
-      </button>
+      <div className={styles.releaseLine}>
+        <TerminalSquare size={13} aria-hidden="true" />
+        <span>SANDPI V2 // WEB TTY</span>
+        <strong>ONLINE</strong>
+      </div>
 
       <button
-        className="sidebar-search"
+        className={styles.openEnvironmentButton}
         type="button"
-        onClick={() => continueToLogin()}
+        onClick={continueToLogin}
       >
-        <Search size={16} aria-hidden="true" />
-        <span>{ui.sidebar.searchSessions}</span>
+        <LogIn size={15} aria-hidden="true" />
+        [ {ui.sidebar.newEnvironment.toUpperCase()} ]
       </button>
 
       <div className="sidebar-scroll-region">
@@ -178,7 +132,7 @@ export function GuestSandpiApp({
   return (
     <AppFrame
       as="main"
-      className={`app-shell ${sidebarOpen ? "sidebar-is-open" : ""} ${
+      className={`app-shell terminal-v2-shell ${sidebarOpen ? "sidebar-is-open" : ""} ${
         sidebarCollapsed ? "sidebar-is-collapsed" : ""
       }`}
     >
@@ -220,7 +174,7 @@ export function GuestSandpiApp({
           </button>
           <div className={workspaceStyles.heading}>
             <div className={workspaceStyles.breadcrumb}>
-              <span>Sandpi</span>
+              <span>SANDPI</span>
               <i>/</i>
               <strong>{ui.guest.newSession}</strong>
             </div>
@@ -231,103 +185,85 @@ export function GuestSandpiApp({
           </div>
         </header>
 
-        <div className={workspaceStyles.content}>
-          <div className={workspaceStyles.intro}>
-            <span className={workspaceStyles.agentMark} aria-hidden="true">
-              <span />
-            </span>
-            <h1>{ui.guest.question}</h1>
-            <p>{ui.guest.introduction}</p>
-            {!registrationOpen ? (
-              <div className={styles.betaNotice} role="status">
-                <LockKeyhole size={15} aria-hidden="true" />
-                <div>
-                  <strong>{ui.guest.privateBeta}</strong>
-                  <span>{ui.guest.registrationClosed}</span>
-                </div>
-              </div>
-            ) : null}
-            <div className={workspaceStyles.facts}>
-              <span>
-                <Cloud size={13} aria-hidden="true" />{" "}
-                {ui.guest.persistentWorkspace}
-              </span>
-              <span>
-                <ShieldCheck size={13} aria-hidden="true" />{" "}
-                {ui.guest.secureSandbox}
-              </span>
-              <span>{ui.guest.backgroundWork}</span>
-            </div>
-          </div>
-
-          <div className={`composer-shell ${workspaceStyles.composer}`}>
-            <textarea
-              ref={promptRef}
-              name="guest-session-instruction"
-              autoComplete="off"
-              rows={3}
-              value={prompt}
-              placeholder={ui.guest.placeholder}
-              onChange={(event) => setPrompt(event.target.value)}
-              onKeyDown={(event) => {
-                if (
-                  shouldSubmitComposer(
-                    {
-                      key: event.key,
-                      shiftKey: event.shiftKey,
-                      metaKey: event.metaKey,
-                      ctrlKey: event.ctrlKey,
-                      isComposing: event.nativeEvent.isComposing,
-                    },
-                    preferences.general.sendShortcut,
-                  )
-                ) {
-                  event.preventDefault();
-                  sendMessage();
-                }
-              }}
-            />
-            <div className="composer-toolbar">
-              <div className="composer-tools">
-                <span className="composer-agent-bound">
-                  <LockKeyhole size={12} aria-hidden="true" />
-                  Codex
-                </span>
-              </div>
-              <div className="composer-send-area">
-                <span className={styles.loginOnSend}>
-                  {ui.guest.signedOut}
-                </span>
-                <button
-                  type="button"
-                  className="send-button"
-                  disabled={!prompt.trim()}
-                  aria-label={ui.guest.send}
-                  onClick={sendMessage}
-                >
-                  <ArrowUp size={17} strokeWidth={2.5} aria-hidden="true" />
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <div
-            className={workspaceStyles.starters}
-            aria-label={ui.guest.starterLabel}
+        <div className={styles.terminalStage}>
+          <section
+            className={styles.terminalWindow}
+            aria-label="Sandpi native coding-agent terminal"
           >
-            {ui.guest.starters.map((starter) => (
-              <button
-                type="button"
-                key={starter}
-                onClick={() => {
-                  setPrompt(starter);
-                  promptRef.current?.focus();
-                }}
-              >
-                <Sparkles size={13} aria-hidden="true" />
-                {starter}
+            <div className={styles.terminalTitlebar}>
+              <span>
+                <TerminalSquare size={13} aria-hidden="true" /> WEB-TTY
+              </span>
+              <span>AUTH: GUEST</span>
+            </div>
+            <div className={styles.terminalOutput}>
+              <p className={styles.command}>
+                <span>$</span> sandpi environment attach
+              </p>
+              <p className={styles.banner}>SANDPI V2 / NATIVE AGENT TERMINAL</p>
+              <dl className={styles.statusGrid}>
+                <div>
+                  <dt>GATEWAY</dt>
+                  <dd>ONLINE</dd>
+                </div>
+                <div>
+                  <dt>AGENTS</dt>
+                  <dd>CODEX · CLAUDE CODE · PI</dd>
+                </div>
+                <div>
+                  <dt>RUNTIME</dt>
+                  <dd>PERSISTENT SANDBOX0 ENVIRONMENT</dd>
+                </div>
+                <div>
+                  <dt>CLIENTS</dt>
+                  <dd>WEB · DESKTOP · MOBILE</dd>
+                </div>
+              </dl>
+              <h1>{ui.guest.question}</h1>
+              <p>{ui.guest.introduction}</p>
+              {!registrationOpen ? (
+                <div className={styles.betaNotice} role="status">
+                  <LockKeyhole size={15} aria-hidden="true" />
+                  <div>
+                    <strong>{ui.guest.privateBeta}</strong>
+                    <span>{ui.guest.registrationClosed}</span>
+                  </div>
+                </div>
+              ) : null}
+              <div className={styles.facts}>
+                <span>
+                  <Cloud size={13} aria-hidden="true" />
+                  {ui.guest.persistentWorkspace}
+                </span>
+                <span>
+                  <ShieldCheck size={13} aria-hidden="true" />
+                  {ui.guest.secureSandbox}
+                </span>
+                <span>{ui.guest.backgroundWork}</span>
+              </div>
+              <p className={styles.command}>
+                <span>$</span> login --open-environment
+                <span className={styles.cursor} aria-hidden="true">
+                  _
+                </span>
+              </p>
+            </div>
+            <div
+              className={styles.touchActions}
+              aria-label="Guest terminal actions"
+            >
+              <button type="button" onClick={continueToLogin}>
+                <LogIn size={14} aria-hidden="true" /> [{" "}
+                {signInLabel.toUpperCase()} ]
               </button>
-            ))}
+              <button type="button" onClick={() => setHelpFeedbackOpen(true)}>
+                <CircleHelp size={14} aria-hidden="true" /> [{" "}
+                {ui.sidebar.help.toUpperCase()} ]
+              </button>
+            </div>
+          </section>
+          <div className={styles.pointerNote}>
+            TOUCH / MOUSE / KEYBOARD READY · A PHYSICAL KEYBOARD IS OPTIONAL
           </div>
         </div>
       </section>
