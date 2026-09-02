@@ -28,6 +28,7 @@ import {
 
 export type TerminalConnectionState =
   | "initializing"
+  | "waiting"
   | "connecting"
   | "restoring"
   | "connected"
@@ -153,6 +154,8 @@ export function terminalConnectionLabel(state: TerminalConnectionState) {
       return "process exited";
     case "initializing":
       return "starting renderer";
+    case "waiting":
+      return "waiting for Environment";
     default:
       return "connecting";
   }
@@ -178,9 +181,10 @@ export function useTerminalSession(
   environmentId: string,
   onOpenSearch: () => void,
   onOpenSandboxPreview: (url: string) => void,
-  options: { surface?: "shell" | "agent" } = {},
+  options: { surface?: "shell" | "agent"; enabled?: boolean } = {},
 ) {
   const surface = options.surface ?? "shell";
+  const enabled = options.enabled ?? true;
   const [connectionState, setConnectionState] =
     useState<TerminalConnectionState>("initializing");
   const [connectionError, setConnectionError] = useState<string | null>(null);
@@ -301,6 +305,11 @@ export function useTerminalSession(
   useEffect(() => {
     const terminalHost = terminalHostRef.current;
     if (!terminalHost) return;
+    if (!enabled) {
+      setConnectionState("waiting");
+      setConnectionError(null);
+      return;
+    }
 
     let disposed = false;
     let reconnectTimer: number | undefined;
@@ -815,6 +824,7 @@ export function useTerminalSession(
     };
   }, [
     environmentId,
+    enabled,
     fitTerminal,
     onOpenSandboxPreview,
     onOpenSearch,

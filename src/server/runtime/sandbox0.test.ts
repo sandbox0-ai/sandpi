@@ -849,6 +849,86 @@ test("disables Environment TTLs and executes Sandpi-owned pause and resume", asy
   assert.equal(resumes, 1);
 });
 
+test("confirms ambiguous pause and resume responses from Sandbox0 lifecycle state", async () => {
+  let state = {
+    status: "running",
+    paused: false,
+    runtimeGeneration: 10,
+  };
+  const waits: string[] = [];
+  const runtime = runtimeWithClient({
+    sandboxes: {
+      async get() {
+        return state;
+      },
+      async pauseAndWait() {
+        state = { ...state, status: "paused", paused: true };
+        throw new APIError({
+          statusCode: 504,
+          code: "unexpected_response",
+          message: "Gateway Timeout",
+        });
+      },
+      async resumeAndWait() {
+        state = {
+          status: "running",
+          paused: false,
+          runtimeGeneration: 11,
+        };
+        throw new APIError({
+          statusCode: 502,
+          code: "unexpected_response",
+          message: "Bad Gateway",
+        });
+      },
+      async waitForLifecycle(
+        sandboxId: string,
+        predicate: (sandbox: typeof state) => boolean | Promise<boolean>,
+      ) {
+        assert.equal(sandboxId, "sandbox-environment");
+        assert.equal(await predicate(state), true);
+        waits.push(state.status);
+        return state;
+      },
+    },
+  });
+
+  await runtime.pauseEnvironment(environmentRuntimeRecord());
+  await runtime.resumeEnvironment(environmentRuntimeRecord());
+
+  assert.deepEqual(waits, ["paused", "running"]);
+});
+
+test("does not hide a definitive Sandbox0 lifecycle rejection", async () => {
+  let waits = 0;
+  const runtime = runtimeWithClient({
+    sandboxes: {
+      async get() {
+        return { status: "paused", paused: true, runtimeGeneration: 10 };
+      },
+      async resumeAndWait() {
+        throw new APIError({
+          statusCode: 503,
+          code: "sandbox_resume_failed",
+          message: "sandbox resume failed",
+        });
+      },
+      async waitForLifecycle() {
+        waits += 1;
+      },
+    },
+  });
+
+  await assert.rejects(
+    runtime.resumeEnvironment(environmentRuntimeRecord()),
+    (error: unknown) =>
+      error instanceof HttpError &&
+      error.statusCode === 503 &&
+      error.code === "sandbox0_sandbox_resume_failed",
+  );
+  assert.equal(waits, 0);
+});
+
 test("retires the legacy app-server Supervisor with durable desired state", async () => {
   const calls: Array<{ sessionId: string; state: string }> = [];
   const runtime = runtimeWithClient({
@@ -1524,6 +1604,61 @@ test("uses Sandbox0 runtime access to auto-resume a paused Environment", async (
   assert.ok(
     operations.indexOf("credential-write") < operations.indexOf("workspace"),
   );
+});
+
+test("observes lifecycle state before replaying an idempotent access after a gateway timeout", async () => {
+  let workspaceAccesses = 0;
+  let lifecycleWaits = 0;
+  const runtime = runtimeWithClient({
+    sandboxes: {
+      sandbox() {
+        return {
+          async listFiles(path: string) {
+            assert.equal(path, "/workspace");
+            workspaceAccesses += 1;
+            if (workspaceAccesses === 1) {
+              throw new APIError({
+                statusCode: 504,
+                code: "unexpected_response",
+                message: "Gateway Timeout",
+              });
+            }
+            return [];
+          },
+        };
+      },
+      async get() {
+        return {
+          status: "running",
+          paused: false,
+          runtimeGeneration: 2,
+        };
+      },
+      async waitForLifecycle(
+        sandboxId: string,
+        predicate: (sandbox: {
+          status: string;
+          paused: boolean;
+          runtimeGeneration: number;
+        }) => boolean | Promise<boolean>,
+      ) {
+        assert.equal(sandboxId, "sandbox-environment");
+        lifecycleWaits += 1;
+        const running = {
+          status: "running",
+          paused: false,
+          runtimeGeneration: 2,
+        };
+        assert.equal(await predicate(running), true);
+        return running;
+      },
+    },
+  });
+
+  await runtime.ensureEnvironmentRuntimeAccess(environmentRuntimeRecord());
+
+  assert.equal(workspaceAccesses, 2);
+  assert.equal(lifecycleWaits, 1);
 });
 
 test("retries one definitive Sandbox0 auto-resume failure without lifecycle polling", async () => {
