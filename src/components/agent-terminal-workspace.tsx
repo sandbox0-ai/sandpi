@@ -60,6 +60,8 @@ export function AgentTerminalWorkspace({
   const [lifecycleBusy, setLifecycleBusy] = useState(false);
   const [actionError, setActionError] = useState<string>();
   const noopSearch = useCallback(() => undefined, []);
+  const terminalAvailable =
+    environment.status === "ready" && Boolean(environment.sandboxId);
   const {
     terminalHostRef,
     terminalRef,
@@ -74,7 +76,7 @@ export function AgentTerminalWorkspace({
     environment.id,
     noopSearch,
     onOpenSandboxPreview,
-    { surface: "agent" },
+    { surface: "agent", enabled: terminalAvailable },
   );
 
   const runLifecycleAction = async (operation: () => Promise<void>) => {
@@ -104,7 +106,16 @@ export function AgentTerminalWorkspace({
   };
 
   const agentLabel = environment.codingAgent.label;
-  const stateLabel = terminalConnectionLabel(connectionState);
+  const stateLabel = terminalAvailable
+    ? terminalConnectionLabel(connectionState)
+    : environment.status === "error"
+      ? "provisioning failed"
+      : "provisioning";
+  const terminalNotice = terminalAvailable
+    ? connectionError ?? stateLabel
+    : environment.status === "error"
+      ? environment.provisioningError ?? "Environment provisioning failed."
+      : "Environment Sandbox is being provisioned.";
   const sandboxPaused = environment.sandboxState === "paused";
 
   return (
@@ -129,9 +140,11 @@ export function AgentTerminalWorkspace({
         <div className={styles.status} aria-label="Agent terminal status">
           <span
             className={`${styles.statusDot} ${
-              connectionState === "connected"
+              terminalAvailable && connectionState === "connected"
                 ? styles.statusLive
-                : connectionState === "error" || connectionState === "exited"
+                : environment.status === "error" ||
+                    connectionState === "error" ||
+                    connectionState === "exited"
                   ? styles.statusError
                   : styles.statusPending
             }`}
@@ -154,15 +167,22 @@ export function AgentTerminalWorkspace({
             </button>
           </div>
         ) : null}
-        {connectionState !== "connected" ? (
+        {!terminalAvailable || connectionState !== "connected" ? (
           <div
             className={`${styles.connectionNotice} ${
-              connectionState === "error" ? styles.connectionError : ""
+              environment.status === "error" || connectionState === "error"
+                ? styles.connectionError
+                : ""
             }`}
-            role={connectionState === "error" ? "alert" : "status"}
+            role={
+              environment.status === "error" || connectionState === "error"
+                ? "alert"
+                : "status"
+            }
           >
-            <span>{connectionError ?? stateLabel}</span>
-            {(connectionState === "error" || connectionState === "exited") && (
+            <span>{terminalNotice}</span>
+            {terminalAvailable &&
+              (connectionState === "error" || connectionState === "exited") && (
               <button type="button" onClick={restartTerminal}>
                 <RotateCcw size={13} aria-hidden="true" />
                 RECONNECT
@@ -210,7 +230,7 @@ export function AgentTerminalWorkspace({
         </button>
         <button
           type="button"
-          disabled={lifecycleBusy}
+          disabled={lifecycleBusy || !terminalAvailable}
           onClick={() =>
             void runLifecycleAction(sandboxPaused ? onResume : onPause)
           }

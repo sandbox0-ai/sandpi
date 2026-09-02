@@ -146,6 +146,7 @@ const CODEX_ROLLOUT_REPRESENTATION_RETRY_MS = 50;
 const GIT_STATUS_CONCURRENCY = 4;
 const WORKSPACE_GIT_CACHE_TTL_MS = 2_000;
 const WORKSPACE_GIT_CACHE_MAX_ENTRIES = 64;
+const SANDBOX_LIFECYCLE_TIMEOUT_MS = 120_000;
 const SANDBOX_AUTO_RESUME_TIMEOUT_MS = 120_000;
 const SANDBOX_AUTO_RESUME_RETRY_DELAY_MS = 250;
 const SANDBOX_RESUME_FAILURE_MAX_RETRIES = 1;
@@ -720,10 +721,19 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     try {
       const current = await this.client.sandboxes.get(runtime.sandboxId);
       if (current.paused || current.status === "paused") return;
-      await this.client.sandboxes.pauseAndWait(runtime.sandboxId, {
-        timeoutMs: 120_000,
-        signal,
-      });
+      try {
+        await this.client.sandboxes.pauseAndWait(runtime.sandboxId, {
+          timeoutMs: SANDBOX_LIFECYCLE_TIMEOUT_MS,
+          signal,
+        });
+      } catch (error) {
+        await this.confirmAmbiguousLifecycleMutation(
+          runtime.sandboxId,
+          (sandbox) => sandbox.status === "paused" && sandbox.paused,
+          error,
+          signal,
+        );
+      }
     } catch (error) {
       throw translateSandbox0Error(error);
     }
@@ -736,12 +746,53 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     try {
       const current = await this.client.sandboxes.get(runtime.sandboxId);
       if (current.status === "running" && !current.paused) return;
-      await this.client.sandboxes.resumeAndWait(runtime.sandboxId, {
-        timeoutMs: 120_000,
-        signal,
-      });
+      const minimumRuntimeGeneration = current.runtimeGeneration + 1;
+      try {
+        await this.client.sandboxes.resumeAndWait(runtime.sandboxId, {
+          timeoutMs: SANDBOX_LIFECYCLE_TIMEOUT_MS,
+          signal,
+        });
+      } catch (error) {
+        await this.confirmAmbiguousLifecycleMutation(
+          runtime.sandboxId,
+          (sandbox) =>
+            sandbox.status === "running" &&
+            !sandbox.paused &&
+            sandbox.runtimeGeneration >= minimumRuntimeGeneration,
+          error,
+          signal,
+        );
+      }
     } catch (error) {
       throw translateSandbox0Error(error);
+    }
+  }
+
+  /**
+   * A gateway timeout does not prove that Sandbox0 rejected a lifecycle
+   * mutation. Observe the durable Sandbox state before reporting failure so a
+   * late commit cannot leave Sandpi's desired state behind the live runtime.
+   */
+  private async confirmAmbiguousLifecycleMutation(
+    sandboxId: string,
+    predicate: Parameters<Client["sandboxes"]["waitForLifecycle"]>[1],
+    mutationError: unknown,
+    signal?: AbortSignal,
+  ) {
+    if (!isAmbiguousSandbox0MutationError(mutationError)) {
+      throw mutationError;
+    }
+    try {
+      await this.client.sandboxes.waitForLifecycle(sandboxId, predicate, {
+        timeoutMs: SANDBOX_LIFECYCLE_TIMEOUT_MS,
+        signal,
+      });
+    } catch (confirmationError) {
+      signal?.throwIfAborted();
+      if (confirmationError instanceof SandboxWaitTimeoutError) {
+        throw mutationError;
+      }
+      throw confirmationError;
     }
   }
 
@@ -1281,9 +1332,11 @@ export class Sandbox0Runtime implements RuntimeAdapter {
   }
 
   /**
-   * Lets a supported runtime request trigger Sandbox0 auto-resume and waits for
-   * the resulting native lifecycle transition. This deliberately never calls
-   * the explicit resume endpoint; Sandpi only owns explicit pause operations.
+   * Lets an idempotent supported runtime request trigger Sandbox0 auto-resume
+   * and waits for the resulting native lifecycle transition. This deliberately
+   * never calls the explicit resume endpoint; Sandpi only owns explicit pause
+   * operations. A 502/504 can hide an accepted wake-up, so observe the runtime
+   * before replaying the idempotent access.
    */
   private async withSandboxAutoResume<T>(
     sandboxId: string,
@@ -1306,7 +1359,12 @@ export class Sandbox0Runtime implements RuntimeAdapter {
           await delay(sandboxAutoResumeRetryDelay(error, remainingMs));
           continue;
         }
-        if (!isSandboxWakingUp(error)) throw error;
+        if (
+          !isSandboxWakingUp(error) &&
+          !isAmbiguousSandbox0MutationError(error)
+        ) {
+          throw error;
+        }
         const remainingMs =
           SANDBOX_AUTO_RESUME_TIMEOUT_MS - (Date.now() - startedAt);
         if (remainingMs <= 0) throw sandboxAutoResumeTimeout(sandboxId);
@@ -4247,6 +4305,13 @@ function isSandboxResumeFailed(error: unknown): error is APIError {
     error instanceof APIError &&
     error.statusCode === 503 &&
     error.code === "sandbox_resume_failed"
+  );
+}
+
+function isAmbiguousSandbox0MutationError(error: unknown): error is APIError {
+  return (
+    error instanceof APIError &&
+    (error.statusCode === 502 || error.statusCode === 504)
   );
 }
 
