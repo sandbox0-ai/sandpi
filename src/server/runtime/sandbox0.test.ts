@@ -849,6 +849,56 @@ test("disables Environment TTLs and executes Sandpi-owned pause and resume", asy
   assert.equal(resumes, 1);
 });
 
+test("retires the legacy app-server Supervisor with durable desired state", async () => {
+  const calls: Array<{ sessionId: string; state: string }> = [];
+  const runtime = runtimeWithClient({
+    sandboxes: {
+      sandbox(sandboxId: string) {
+        assert.equal(sandboxId, environment.sandboxId);
+        return {
+          async setSessionDesiredState(sessionId: string, state: string) {
+            calls.push({ sessionId, state });
+            return { id: sessionId, phase: "stopped" };
+          },
+        };
+      },
+    },
+  });
+  const coordinates = {
+    ...environmentRuntimeRecord(),
+    supervisorSessionId: "legacy-supervisor",
+  };
+
+  await runtime.retireLegacyEnvironmentSupervisor(coordinates);
+
+  assert.deepEqual(calls, [
+    { sessionId: "legacy-supervisor", state: "stopped" },
+  ]);
+});
+
+test("treats a missing legacy app-server Supervisor as already retired", async () => {
+  const runtime = runtimeWithClient({
+    sandboxes: {
+      sandbox() {
+        return {
+          async setSessionDesiredState() {
+            throw new APIError({
+              statusCode: 404,
+              code: "session_not_found",
+              message: "session not found",
+            });
+          },
+        };
+      },
+    },
+  });
+
+  await runtime.retireLegacyEnvironmentSupervisor({
+    ...environmentRuntimeRecord(),
+    supervisorSessionId: "missing-supervisor",
+  });
+});
+
 test("updates the existing Environment Sandbox memory", async () => {
   const updates: Array<{ sandboxId: string; memory: string }> = [];
   const runtime = runtimeWithClient({

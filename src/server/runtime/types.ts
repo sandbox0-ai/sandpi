@@ -257,6 +257,13 @@ export interface RuntimeAdapter {
   applyEnvironmentLifecyclePolicy(
     runtime: EnvironmentRuntimeRecord,
   ): Promise<void>;
+  /**
+   * Persists a stopped desired state for the v1 Codex app-server Supervisor.
+   * Native TUI v2 must retire it before releasing its legacy coordinates.
+   */
+  retireLegacyEnvironmentSupervisor(
+    runtime: EnvironmentRuntimeRecord,
+  ): Promise<void>;
   pauseEnvironment(
     runtime: EnvironmentRuntimeRecord,
     signal?: AbortSignal,

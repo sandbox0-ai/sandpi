@@ -163,6 +163,13 @@ the UI and server workers. Read and cleanup routes remain temporarily available
 for migration; execution-producing mutations return HTTP 410 with
 `native_tui_structured_operation_unavailable`.
 
+Migration `0070_retire_legacy_app_server` terminalizes any in-flight v1 Session
+projection without deleting its native history. The lifecycle reconciler then
+writes `stopped` to the legacy procd Supervisor and clears its coordinates only
+after Sandbox0 accepts that durable desired state (or proves the Session is
+already absent). A failed stop remains retryable, and legacy Session rows no
+longer prevent the Environment idle-pause policy from releasing compute.
+
 Future unattended automation must have an explicit headless adapter with its
 own durable execution contract. It must not inject keystrokes into the shared
 human TUI.

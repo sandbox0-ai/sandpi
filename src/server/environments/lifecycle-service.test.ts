@@ -38,6 +38,9 @@ test("one elected worker applies policy and pauses a due idle Environment", asyn
   const calls: string[] = [];
   const policyRuntime = storedRuntime({ lifecyclePolicyVersion: 0 });
   const store = {
+    async environmentLegacySupervisorCandidateIds() {
+      return [];
+    },
     async environmentLifecyclePolicyCandidateIds() {
       return [policyRuntime.id];
     },
@@ -105,6 +108,64 @@ test("one elected worker applies policy and pauses a due idle Environment", asyn
   ]);
 });
 
+test("one elected worker durably retires a legacy app-server Supervisor", async () => {
+  const calls: string[] = [];
+  const runtimeState = storedRuntime();
+  const scopedStore = {
+    async prepareEnvironmentLegacySupervisorRetirement() {
+      calls.push("prepare");
+      return runtimeState;
+    },
+    async recordEnvironmentLegacySupervisorRetired(
+      environmentId: string,
+      sandboxId: string,
+      supervisorSessionId: string,
+    ) {
+      assert.equal(environmentId, runtimeState.id);
+      assert.equal(sandboxId, runtimeState.sandboxId);
+      assert.equal(supervisorSessionId, runtimeState.supervisorSessionId);
+      calls.push("record");
+    },
+    async recordEnvironmentLifecycleError() {
+      assert.fail("successful retirement must not record an error");
+    },
+  } as unknown as SandpiStore;
+  const store = {
+    async environmentLegacySupervisorCandidateIds() {
+      return [runtimeState.id];
+    },
+    async environmentLifecyclePolicyCandidateIds() {
+      return [];
+    },
+    async environmentIdlePauseCandidateIds() {
+      return [];
+    },
+    async withEnvironmentLifecycleLock(
+      environmentId: string,
+      operation: (lockedStore: SandpiStore) => Promise<unknown>,
+    ) {
+      assert.equal(environmentId, runtimeState.id);
+      calls.push("lock");
+      return { acquired: true as const, value: await operation(scopedStore) };
+    },
+  } as unknown as SandpiStore;
+  const runtime = {
+    mode: "sandbox0",
+    async retireLegacyEnvironmentSupervisor(
+      received: StoredEnvironmentRuntime,
+    ) {
+      assert.strictEqual(received, runtimeState);
+      calls.push("stop");
+    },
+  } as unknown as RuntimeAdapter;
+  const service = new EnvironmentLifecycleService(store, runtime, logger);
+
+  await service.reconcileOnce();
+  await service.close();
+
+  assert.deepEqual(calls, ["lock", "prepare", "stop", "record"]);
+});
+
 test("idle pause passes the lifecycle-scoped Store through credential flush", async () => {
   const calls: string[] = [];
   const runtimeState = storedRuntime();
@@ -127,6 +188,9 @@ test("idle pause passes the lifecycle-scoped Store through credential flush", as
     },
   } as unknown as SandpiStore;
   const rootStore = {
+    async environmentLegacySupervisorCandidateIds() {
+      return [];
+    },
     async environmentLifecyclePolicyCandidateIds() {
       return [];
     },
@@ -184,6 +248,9 @@ test("idle pause passes the lifecycle-scoped Store through credential flush", as
 test("a replica that loses the advisory-lock election does no external work", async () => {
   let externalCalls = 0;
   const store = {
+    async environmentLegacySupervisorCandidateIds() {
+      return [];
+    },
     async environmentLifecyclePolicyCandidateIds() {
       return [];
     },
@@ -212,6 +279,9 @@ test("a failed pause remains a durable retry instead of failing the scheduler", 
   const runtimeState = storedRuntime();
   let recordedError = "";
   const store = {
+    async environmentLegacySupervisorCandidateIds() {
+      return [];
+    },
     async environmentLifecyclePolicyCandidateIds() {
       return [];
     },

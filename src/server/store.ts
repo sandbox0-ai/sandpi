@@ -1179,6 +1179,7 @@ export class SandpiStore {
       `UPDATE environment_runtime
        SET sandbox_id = NULL, supervisor_session_id = NULL,
            terminal_session_id = NULL, attempt_id = NULL,
+           agent_session_id = NULL, agent_attempt_id = NULL,
            supervisor_cursor = 0, stdout_tail = '', runtime_generation = 0,
            decoder_attempt_id = NULL, decoder_runtime_generation = 0,
            lifecycle_policy_version = 0,
@@ -1694,6 +1695,58 @@ export class SandpiStore {
     return result.rows.map((row) => row.environment_id);
   }
 
+  async environmentLegacySupervisorCandidateIds(limit = 50) {
+    const result = await this.pool.query<{ environment_id: string }>(
+      `SELECT runtime.environment_id
+       FROM environment_runtime runtime
+       JOIN environments environment ON environment.id = runtime.environment_id
+       WHERE environment.status = 'ready'
+         AND runtime.sandbox_id IS NOT NULL
+         AND runtime.supervisor_session_id IS NOT NULL
+         AND runtime.desired_state <> 'terminated'
+         AND (
+           runtime.lifecycle_error IS NULL
+           OR runtime.updated_at <= NOW() - INTERVAL '1 minute'
+         )
+       ORDER BY runtime.created_at, runtime.environment_id
+       LIMIT $1`,
+      [limit],
+    );
+    return result.rows.map((row) => row.environment_id);
+  }
+
+  async prepareEnvironmentLegacySupervisorRetirement(environmentId: string) {
+    const result = await this.pool.query<{ environment_id: string }>(
+      `UPDATE environment_runtime
+       SET lifecycle_error = NULL
+       WHERE environment_id = $1
+         AND sandbox_id IS NOT NULL
+         AND supervisor_session_id IS NOT NULL
+         AND desired_state <> 'terminated'
+       RETURNING environment_id`,
+      [environmentId],
+    );
+    if (!result.rowCount) return undefined;
+    return this.environmentRuntime(environmentId);
+  }
+
+  async recordEnvironmentLegacySupervisorRetired(
+    environmentId: string,
+    sandboxId: string,
+    supervisorSessionId: string,
+  ) {
+    await this.pool.query(
+      `UPDATE environment_runtime
+       SET supervisor_session_id = NULL, attempt_id = NULL,
+           supervisor_cursor = 0, stdout_tail = '',
+           decoder_attempt_id = NULL, decoder_runtime_generation = 0,
+           lifecycle_error = NULL, version = version + 1
+       WHERE environment_id = $1 AND sandbox_id = $2
+         AND supervisor_session_id = $3`,
+      [environmentId, sandboxId, supervisorSessionId],
+    );
+  }
+
   async prepareEnvironmentLifecyclePolicy(environmentId: string) {
     const result = await this.pool.query<{ environment_id: string }>(
       `UPDATE environment_runtime
@@ -2152,7 +2205,7 @@ export class SandpiStore {
     return result.rows.map((row) => row.environment_id);
   }
 
-  /** Rechecks the native Turn projection while holding the advisory lock. */
+  /** Rechecks the idle deadline while holding the advisory lock. */
   async prepareEnvironmentIdlePause(environmentId: string) {
     const result = await this.pool.query<{ environment_id: string }>(
       `UPDATE environment_runtime runtime
@@ -2166,19 +2219,6 @@ export class SandpiStore {
          AND runtime.idle_pause_due_at <= NOW()
          AND runtime.desired_state IN ('running', 'paused')
          AND runtime.paused_at IS NULL
-         AND NOT EXISTS (
-           SELECT 1
-           FROM sessions session
-           JOIN session_runtime session_state
-             ON session_state.session_id = session.id
-           WHERE session.environment_id = runtime.environment_id
-             AND session.archived = FALSE
-             AND (
-               session.status IN ('provisioning', 'running')
-               OR session_state.active_native_turn_id IS NOT NULL
-               OR session_state.pending_turn_phase IS NOT NULL
-             )
-         )
        RETURNING runtime.environment_id`,
       [environmentId],
     );

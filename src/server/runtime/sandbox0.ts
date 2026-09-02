@@ -699,6 +699,20 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     }
   }
 
+  async retireLegacyEnvironmentSupervisor(runtime: EnvironmentRuntimeRecord) {
+    if (!runtime.supervisorSessionId) return;
+    try {
+      await this.client.sandboxes
+        .sandbox(runtime.sandboxId)
+        .setSessionDesiredState(runtime.supervisorSessionId, "stopped");
+    } catch (error) {
+      // A missing Session is already terminal. The caller may safely release
+      // its stale v1 coordinates without recreating an app-server process.
+      if (isMissingResource(error)) return;
+      throw translateSandbox0Error(error);
+    }
+  }
+
   async pauseEnvironment(
     runtime: EnvironmentRuntimeRecord,
     signal?: AbortSignal,

@@ -33,6 +33,7 @@ export class UnconfiguredRuntime implements RuntimeAdapter {
   restoreEnvironmentWorkspaceBackup = unavailable;
   forkEnvironment = unavailable;
   applyEnvironmentLifecyclePolicy = unavailable;
+  retireLegacyEnvironmentSupervisor = unavailable;
   pauseEnvironment = unavailable;
   resumeEnvironment = unavailable;
   ensureEnvironmentRuntimeAccess = unavailable;

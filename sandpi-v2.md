@@ -440,7 +440,13 @@ v1 migration is proven.
 ### Phase 5: v1 retirement
 
 - Migrate existing Environment RootFS and credential bindings.
-- Stop Codex app-server Supervisors.
+- Mark in-flight v1 Session projections terminal while retaining native history
+  as read-only migration data.
+- Persist `stopped` as the desired state of every legacy Codex app-server
+  Supervisor before clearing its runtime coordinates. Failed Sandbox0 calls
+  remain durable lifecycle retries.
+- Remove legacy Session projections from the Environment idle-pause authority;
+  only the native Agent Terminal and Environment activity extend its deadline.
 - Ensure the native Codex TUI can discover persisted history.
 - Remove Conversation, Turn, app-server projection, and obsolete database
   state only after migration and rollback paths are tested.

@@ -98,6 +98,7 @@ test("migration history contains every durable Sandpi boundary", async () => {
       "0067_environment_forks",
       "0068_native_agent_credentials",
       "0069_disable_legacy_automation",
+      "0070_retire_legacy_app_server",
     ],
   );
 
@@ -126,6 +127,19 @@ test("migration history contains every durable Sandpi boundary", async () => {
   assert.match(disableLegacyAutomationSql, /UPDATE environment_schedules/);
   assert.match(disableLegacyAutomationSql, /UPDATE environment_webhooks/);
   assert.match(disableLegacyAutomationSql, /native TUI v2 migration/);
+
+  const retireLegacyAppServerSql = migrations[69]?.sql ?? "";
+  assert.match(
+    retireLegacyAppServerSql,
+    /status IN \('provisioning', 'running'\)/,
+  );
+  assert.match(retireLegacyAppServerSql, /nativeTuiV2Migration/);
+  assert.match(
+    retireLegacyAppServerSql,
+    /runtime_error_code = 'native_tui_v2_legacy_session_retired'/,
+  );
+  assert.match(retireLegacyAppServerSql, /active_native_turn_id = NULL/);
+  assert.match(retireLegacyAppServerSql, /pending_turn_phase = NULL/);
 
   const sql = migrations[0]?.sql ?? "";
   const requiredTables = [
@@ -1281,5 +1295,133 @@ test(
        )`,
       [seed.environment.id],
     );
+  },
+);
+
+test(
+  "native TUI migration terminalizes in-flight v1 Session projections",
+  { skip: !process.env.DATABASE_URL },
+  async (context) => {
+    const schema = `sandpi_native_tui_migration_${randomUUID().replaceAll("-", "")}`;
+    const administration = new Pool({
+      connectionString: process.env.DATABASE_URL,
+      application_name: "sandpi-native-tui-migration-administration",
+      max: 1,
+    });
+    await administration.query(`CREATE SCHEMA "${schema}"`);
+    const database = new Pool({
+      connectionString: process.env.DATABASE_URL,
+      application_name: "sandpi-native-tui-migration-test",
+      options: `-c search_path=${schema}`,
+      max: 2,
+    });
+    context.after(async () => {
+      await database.end();
+      await administration.query(`DROP SCHEMA "${schema}" CASCADE`);
+      await administration.end();
+    });
+
+    const migrations = await loadMigrations();
+    await migrateDatabase(database, migrations.slice(0, 69));
+    const seed = await seedCommunityDefaults(database, {
+      admin: {
+        id: "user-native-tui-migration",
+        email: "native-tui-migration@sandpi.local",
+        identitySubject: "native-tui-migration",
+      },
+      environment: {
+        id: "environment-native-tui-migration",
+        name: "Native TUI migration",
+      },
+    });
+    await database.query(
+      `INSERT INTO sessions (
+         id, environment_id, created_by_user_id, title, status, harness,
+         environment_revision
+       ) VALUES
+         ('session-provisioning', $1, $2, 'Provisioning', 'provisioning', 'codex', 1),
+         ('session-active-waiting', $1, $2, 'Active waiting', 'waiting', 'codex', 1),
+         ('session-completed', $1, $2, 'Completed', 'completed', 'codex', 1)`,
+      [seed.environment.id, seed.admin.id],
+    );
+    await database.query(
+      `INSERT INTO session_runtime (
+         session_id, native_session_id, active_native_turn_id,
+         active_turn_attempt_id, active_turn_runtime_generation,
+         recovery_source_native_turn_id, recovery_prompt_version,
+         recovery_attempt_count
+       ) VALUES
+         ('session-provisioning', 'native-provisioning', NULL, NULL, NULL,
+          NULL, NULL, 0),
+         ('session-active-waiting', 'native-active', 'turn-active',
+          'attempt-active', 7, 'turn-interrupted', 1, 1),
+         ('session-completed', 'native-completed', NULL, NULL, NULL,
+          NULL, NULL, 0)`,
+    );
+
+    const migration = migrations[69];
+    assert.equal(migration?.version, "0070_retire_legacy_app_server");
+    await migrateDatabase(database, [migration!]);
+
+    const sessions = await database.query<{
+      id: string;
+      status: string;
+      migration_reason: string | null;
+    }>(
+      `SELECT id, status,
+              metadata #>> '{nativeTuiV2Migration,reason}' AS migration_reason
+       FROM sessions ORDER BY id`,
+    );
+    assert.deepEqual(sessions.rows, [
+      {
+        id: "session-active-waiting",
+        status: "failed",
+        migration_reason: "legacy-app-server-retired",
+      },
+      {
+        id: "session-completed",
+        status: "completed",
+        migration_reason: null,
+      },
+      {
+        id: "session-provisioning",
+        status: "failed",
+        migration_reason: "legacy-app-server-retired",
+      },
+    ]);
+    const runtimes = await database.query<{
+      session_id: string;
+      native_session_id: string;
+      active_native_turn_id: string | null;
+      recovery_attempt_count: number;
+      runtime_error_code: string | null;
+    }>(
+      `SELECT session_id, native_session_id, active_native_turn_id,
+              recovery_attempt_count, runtime_error_code
+       FROM session_runtime ORDER BY session_id`,
+    );
+    assert.deepEqual(runtimes.rows, [
+      {
+        session_id: "session-active-waiting",
+        native_session_id: "native-active",
+        active_native_turn_id: null,
+        recovery_attempt_count: 0,
+        runtime_error_code: "native_tui_v2_legacy_session_retired",
+      },
+      {
+        session_id: "session-completed",
+        native_session_id: "native-completed",
+        active_native_turn_id: null,
+        recovery_attempt_count: 0,
+        runtime_error_code: null,
+      },
+      {
+        session_id: "session-provisioning",
+        native_session_id: "native-provisioning",
+        active_native_turn_id: null,
+        recovery_attempt_count: 0,
+        runtime_error_code: "native_tui_v2_legacy_session_retired",
+      },
+    ]);
   },
 );
