@@ -206,6 +206,7 @@
 @media (max-width: 960px) {
   .row {
     min-height: 58px;
+    grid-template-columns: 44px minmax(0, 1fr) 44px;
   }
 
   .settingsButton {

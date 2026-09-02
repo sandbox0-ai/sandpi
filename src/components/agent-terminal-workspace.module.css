@@ -257,8 +257,16 @@
 
 @media (max-width: 720px) {
   .header {
-    min-height: 46px;
+    min-height: 54px;
     padding: 0 8px;
+  }
+
+  .menuButton,
+  .header button,
+  .viewerNotice button,
+  .connectionNotice button {
+    min-width: 44px;
+    min-height: 44px;
   }
 
   .status .separator,
@@ -280,12 +288,12 @@
 
   .virtualKeys,
   .actions {
-    min-height: 49px;
+    min-height: 56px;
   }
 
   .virtualKeys button,
   .actions button {
-    min-height: 40px;
+    min-height: 44px;
   }
 
   .coordinates {

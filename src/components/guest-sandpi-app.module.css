@@ -347,7 +347,12 @@
   }
 
   .touchActions button {
-    min-height: 42px;
+    min-height: 44px;
+  }
+
+  .helpButton {
+    width: 44px;
+    height: 44px;
   }
 
   .pointerNote {

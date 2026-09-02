@@ -7331,8 +7331,8 @@ code.codex-compact-activity-subject {
   .icon-button.mobile-menu-button {
     position: static;
     display: inline-flex;
-    width: 32px;
-    height: 32px;
+    width: 44px;
+    height: 44px;
     padding: 0;
     margin: 0;
     overflow: visible;
@@ -7946,7 +7946,10 @@ html[data-resolved-theme="dark"] .send-button.is-interrupt:hover:not(:disabled) 
 }
 
 @media (max-width: 680px) {
-  .terminal-v2-settings .settings-nav button {
+  .terminal-v2-settings .settings-nav button,
+  .terminal-v2-settings .button-primary,
+  .terminal-v2-settings .button-secondary,
+  .terminal-v2-settings .secondary-action-button {
     min-height: 44px;
   }
 }
