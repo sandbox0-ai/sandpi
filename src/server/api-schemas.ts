@@ -1,7 +1,10 @@
 import { z } from "zod";
 
 import { SANDPI_PAID_PLAN_IDS } from "@/lib/billing";
-import type { SandpiPreferences } from "@/lib/types";
+import {
+  ENVIRONMENT_AGENT_IDS,
+  type SandpiPreferences,
+} from "@/lib/types";
 import {
   ENVIRONMENT_SANDBOX_MEMORY_MAX_MIB,
   ENVIRONMENT_SANDBOX_MEMORY_MIN_MIB,
@@ -195,9 +198,20 @@ export const billingCheckoutSchema = z
   })
   .strict();
 
-export const environmentCreateSchema = z.object({
-  name: z.string().trim().min(1).max(80),
-});
+export const environmentCreateSchema = z
+  .object({
+    name: z.string().trim().min(1).max(80),
+    agentId: z.enum(ENVIRONMENT_AGENT_IDS).default("codex"),
+  })
+  .strict();
+
+export const environmentForkSchema = z
+  .object({
+    name: z.string().trim().min(1).max(80),
+    idempotencyKey: idempotencyKeySchema,
+    snapshotId: z.string().trim().min(1).max(200).optional(),
+  })
+  .strict();
 
 export const environmentOrderSchema = z
   .object({
@@ -541,4 +555,18 @@ export const terminalInputSchema = z.discriminatedUnion("type", [
     signal: z.enum(["HUP", "INT", "QUIT", "TERM", "KILL", "WINCH"]),
     requestId: z.string().optional(),
   }),
+]);
+
+export const agentTerminalInputSchema = z.union([
+  terminalInputSchema,
+  z.discriminatedUnion("type", [
+    z.object({
+      type: z.literal("control.takeover"),
+      requestId: z.string().optional(),
+    }),
+    z.object({
+      type: z.literal("control.heartbeat"),
+      requestId: z.string().optional(),
+    }),
+  ]),
 ]);

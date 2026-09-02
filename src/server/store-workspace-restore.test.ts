@@ -103,5 +103,16 @@ test("recording a portable native Workspace restore invalidates only Sessions ne
     backupCreatedAt,
     WORKSPACE_RESTORE_UNAVAILABLE_SESSION_ERROR,
   ]);
+  const terminalReset = queries.find(({ sql }) =>
+    sql.includes("SET agent_session_id = NULL"),
+  );
+  assert.ok(terminalReset);
+  assert.match(terminalReset.sql, /agent_attempt_id = NULL/);
+  assert.deepEqual(terminalReset.values, ["environment-one", "sandbox-one"]);
+  assert.ok(
+    queries.some(({ sql }) =>
+      sql.includes("DELETE FROM environment_terminal_controllers"),
+    ),
+  );
   assert.equal(queries.at(-1)?.sql, "COMMIT");
 });

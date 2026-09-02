@@ -79,3 +79,30 @@ test("stops forwarding after authorization fails", async () => {
   assert.deepEqual(forwarded, []);
   assert.deepEqual(errors, [failure]);
 });
+
+test("keeps a view-only Agent queue available after rejected input", async () => {
+  const errors: string[] = [];
+  const forwarded: string[] = [];
+  let authorized = false;
+  const queue = new TerminalInputQueue<string>({
+    requiresAuthorization: () => true,
+    async authorizeAndForward(message) {
+      if (!authorized) throw new Error("view only");
+      forwarded.push(message);
+    },
+    forward() {},
+    closeOnError: false,
+    onError(error) {
+      errors.push(error instanceof Error ? error.message : String(error));
+    },
+  });
+
+  queue.enqueue("first");
+  await queue.drain();
+  authorized = true;
+  queue.enqueue("second");
+  await queue.drain();
+
+  assert.deepEqual(errors, ["view only"]);
+  assert.deepEqual(forwarded, ["second"]);
+});

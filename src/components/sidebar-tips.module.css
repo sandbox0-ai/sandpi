@@ -118,3 +118,15 @@
   margin-top: 6px;
   padding: 6px 7px;
 }
+
+@media (max-width: 960px) {
+  .header {
+    min-height: 44px;
+    padding-right: 94px;
+  }
+
+  .iconButton {
+    width: 44px;
+    height: 44px;
+  }
+}

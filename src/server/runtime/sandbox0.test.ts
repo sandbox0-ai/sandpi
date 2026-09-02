@@ -105,6 +105,178 @@ test("maps public Environment lifecycle state from Sandbox0", async () => {
   }
 });
 
+test("forwards a stable idempotency key when forking an Environment", async () => {
+  const calls: unknown[] = [];
+  const runtime = runtimeWithClient({
+    apispec: {
+      sandboxRootfs: {
+        async apiV1SandboxesIdForkPost(
+          request: unknown,
+          overrides: unknown,
+        ) {
+          calls.push({ request, overrides });
+          return {
+            success: true,
+            data: {
+              sourceSandboxId: environment.sandboxId,
+              sandbox: {
+                id: "sandbox-fork",
+                paused: true,
+                status: "paused",
+                runtimeGeneration: 0,
+              },
+            },
+          };
+        },
+      },
+    },
+  });
+
+  assert.deepEqual(
+    await runtime.forkEnvironment({
+      source: environmentRuntimeRecord(),
+      operationId: "sandpi-environment-fork-env-target",
+    }),
+    { sandboxId: "sandbox-fork", runtimeGeneration: 0 },
+  );
+  assert.deepEqual(calls, [
+    {
+      request: {
+        id: environment.sandboxId,
+        forkSandboxRequest: { config: { ttl: 0, hardTtl: 0 } },
+      },
+      overrides: {
+        headers: {
+          "Idempotency-Key": "sandpi-environment-fork-env-target",
+        },
+      },
+    },
+  ]);
+});
+
+test("restores a named snapshot into the idempotent paused fork child", async () => {
+  const calls: string[] = [];
+  const runtime = runtimeWithClient({
+    apispec: {
+      sandboxRootfs: {
+        async apiV1SandboxesIdForkPost() {
+          calls.push("fork");
+          return {
+            success: true,
+            data: {
+              sourceSandboxId: environment.sandboxId,
+              sandbox: {
+                id: "sandbox-snapshot-fork",
+                paused: true,
+                status: "paused",
+                runtimeGeneration: 0,
+              },
+            },
+          };
+        },
+      },
+    },
+    sandboxes: {
+      async restoreRootFS(sandboxId: string, input: { snapshotId: string }) {
+        assert.equal(sandboxId, "sandbox-snapshot-fork");
+        assert.equal(input.snapshotId, "rootfs-snapshot-one");
+        calls.push("restore");
+      },
+      async get(sandboxId: string) {
+        assert.equal(sandboxId, "sandbox-snapshot-fork");
+        calls.push("read");
+        return {
+          id: sandboxId,
+          paused: true,
+          status: "paused",
+          runtimeGeneration: 2,
+        };
+      },
+    },
+  });
+
+  assert.deepEqual(
+    await runtime.forkEnvironment({
+      source: environmentRuntimeRecord(),
+      sourceSnapshotId: "rootfs-snapshot-one",
+      operationId: "sandpi-environment-fork-env-snapshot-target",
+    }),
+    { sandboxId: "sandbox-snapshot-fork", runtimeGeneration: 2 },
+  );
+  assert.deepEqual(calls, ["fork", "restore", "read"]);
+});
+
+test("opens Pi as the Environment native TUI instead of a browser-owned shell", async () => {
+  let preparedCommand = "";
+  let createdSpec: Record<string, unknown> | undefined;
+  let idempotencyKey = "";
+  const session = {
+    id: "agent-session-pi",
+    spec: {
+      name: "sandpi-agent-pi",
+      command: ["pi"],
+      env: {
+        HOME: "/workspace",
+        TERM: "xterm-256color",
+        COLORTERM: "truecolor",
+      },
+      eventRetention: {
+        maxBytes: 4 * 1024 * 1024,
+        maxAgeSeconds: 30 * 24 * 60 * 60,
+      },
+    },
+    phase: "running",
+    runtimeGeneration: 7,
+    attempt: { id: "agent-attempt-pi", runtimeGeneration: 7 },
+    cursor: { earliest: 0, latest: 0 },
+  };
+  const runtime = runtimeWithClient({
+    sandboxes: {
+      sandbox(sandboxId: string) {
+        assert.equal(sandboxId, environment.sandboxId);
+        return {
+          async cmd(_name: string, input: { command: string[] }) {
+            preparedCommand = input.command[2] ?? "";
+            return { exitCode: 0 };
+          },
+          async createSession(
+            spec: Record<string, unknown>,
+            options: { idempotencyKey: string },
+          ) {
+            createdSpec = spec;
+            idempotencyKey = options.idempotencyKey;
+            return session;
+          },
+          async connectSession() {
+            return {
+              async *messages() {},
+              send() {},
+              close() {},
+            };
+          },
+        };
+      },
+    },
+  });
+
+  const handle = await runtime.openAgentTerminal(
+    { ...environmentRuntimeRecord(), agentId: "pi" },
+    "pi",
+  );
+
+  assert.equal(handle.sessionId, "agent-session-pi");
+  assert.equal(handle.attemptId, "agent-attempt-pi");
+  assert.equal(handle.runtimeGeneration, 7);
+  assert.equal(idempotencyKey, "sandpi-agent-pi-environment-test");
+  assert.deepEqual(createdSpec?.command, ["pi"]);
+  assert.deepEqual(createdSpec?.io, {
+    mode: "pty",
+    terminal: { rows: 28, cols: 120, term: "xterm-256color" },
+  });
+  assert.match(preparedCommand, /sandpi-pi-auth\.json/);
+  assert.match(preparedCommand, /Persistent agent credential file is unsafe/);
+});
+
 test("projects the active Sandbox allocation start for live usage", async () => {
   let sandbox = {
     status: "running",
@@ -675,6 +847,56 @@ test("disables Environment TTLs and executes Sandpi-owned pause and resume", asy
   assert.equal(resumes, 1);
   await runtime.resumeEnvironment(coordinates);
   assert.equal(resumes, 1);
+});
+
+test("retires the legacy app-server Supervisor with durable desired state", async () => {
+  const calls: Array<{ sessionId: string; state: string }> = [];
+  const runtime = runtimeWithClient({
+    sandboxes: {
+      sandbox(sandboxId: string) {
+        assert.equal(sandboxId, environment.sandboxId);
+        return {
+          async setSessionDesiredState(sessionId: string, state: string) {
+            calls.push({ sessionId, state });
+            return { id: sessionId, phase: "stopped" };
+          },
+        };
+      },
+    },
+  });
+  const coordinates = {
+    ...environmentRuntimeRecord(),
+    supervisorSessionId: "legacy-supervisor",
+  };
+
+  await runtime.retireLegacyEnvironmentSupervisor(coordinates);
+
+  assert.deepEqual(calls, [
+    { sessionId: "legacy-supervisor", state: "stopped" },
+  ]);
+});
+
+test("treats a missing legacy app-server Supervisor as already retired", async () => {
+  const runtime = runtimeWithClient({
+    sandboxes: {
+      sandbox() {
+        return {
+          async setSessionDesiredState() {
+            throw new APIError({
+              statusCode: 404,
+              code: "session_not_found",
+              message: "session not found",
+            });
+          },
+        };
+      },
+    },
+  });
+
+  await runtime.retireLegacyEnvironmentSupervisor({
+    ...environmentRuntimeRecord(),
+    supervisorSessionId: "missing-supervisor",
+  });
 });
 
 test("updates the existing Environment Sandbox memory", async () => {

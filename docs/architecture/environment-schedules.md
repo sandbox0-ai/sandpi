@@ -1,4 +1,10 @@
-# Environment Schedules
+# Legacy v1 Environment Schedules
+
+> **Retired in Sandpi v2.** Schedule workers no longer start, the UI no longer
+> exposes Schedule configuration, and execution-producing API mutations return
+> HTTP 410. Read and cleanup endpoints remain temporarily available for
+> migration. Future automation requires an explicit headless adapter and must
+> not inject keystrokes into a human-operated TUI.
 
 Environment Schedules are Sandpi-owned Automation. They trigger native coding
 agent Turns for one Environment, but they are not timers running inside its

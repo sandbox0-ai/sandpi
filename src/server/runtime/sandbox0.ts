@@ -18,6 +18,7 @@ import {
 
 import type {
   Environment,
+  EnvironmentAgentId,
   EnvironmentResourceMetrics,
   EnvironmentSandboxState,
   RuntimeMetricSeries,
@@ -49,6 +50,12 @@ import {
 } from "@/lib/workspace-path-policy";
 import { detectWorkspaceFilePreview } from "@/lib/workspace-file-preview";
 import { HttpError } from "@/server/http-error";
+import {
+  agentAdapter,
+  agentSessionIdempotencyKey,
+  agentSessionName,
+  type AgentAdapter,
+} from "@/server/agents/registry";
 import {
   isCodexComposerUploadPath,
   MAX_CODEX_COMPOSER_UPLOAD_BYTES,
@@ -616,6 +623,55 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     }
   }
 
+  async forkEnvironment(
+    input: import("./types").RuntimeEnvironmentForkInput,
+  ): Promise<import("./types").RuntimeForkedEnvironment> {
+    try {
+      const response =
+        await this.client.apispec.sandboxRootfs.apiV1SandboxesIdForkPost(
+          {
+            id: input.source.sandboxId,
+            forkSandboxRequest: { config: { ttl: 0, hardTtl: 0 } },
+          },
+          {
+            headers: { "Idempotency-Key": input.operationId },
+          },
+        );
+      const sandbox = response.data?.sandbox;
+      if (!sandbox?.id || !sandbox.paused || sandbox.status !== "paused") {
+        throw new HttpError(
+          502,
+          "sandbox0_fork_invalid_response",
+          "Sandbox0 did not return a paused fork target.",
+        );
+      }
+      if (input.sourceSnapshotId) {
+        await this.client.sandboxes.restoreRootFS(sandbox.id, {
+          snapshotId: input.sourceSnapshotId,
+        });
+        const restored = await this.client.sandboxes.get(sandbox.id);
+        if (!restored.paused || restored.status !== "paused") {
+          throw new HttpError(
+            502,
+            "sandbox0_snapshot_fork_invalid_response",
+            "Sandbox0 did not keep the snapshot fork target paused.",
+          );
+        }
+        return {
+          sandboxId: restored.id,
+          runtimeGeneration: restored.runtimeGeneration,
+        };
+      }
+      return {
+        sandboxId: sandbox.id,
+        runtimeGeneration: sandbox.runtimeGeneration,
+      };
+    } catch (error) {
+      if (error instanceof HttpError) throw error;
+      throw translateSandbox0Error(error);
+    }
+  }
+
   private async applyEnvironmentSandboxNetworkPolicy(
     runtime: EnvironmentRuntimeRecord,
     policy: Sandbox0NetworkPolicy,
@@ -639,6 +695,20 @@ export class Sandbox0Runtime implements RuntimeAdapter {
         },
       });
     } catch (error) {
+      throw translateSandbox0Error(error);
+    }
+  }
+
+  async retireLegacyEnvironmentSupervisor(runtime: EnvironmentRuntimeRecord) {
+    if (!runtime.supervisorSessionId) return;
+    try {
+      await this.client.sandboxes
+        .sandbox(runtime.sandboxId)
+        .setSessionDesiredState(runtime.supervisorSessionId, "stopped");
+    } catch (error) {
+      // A missing Session is already terminal. The caller may safely release
+      // its stale v1 coordinates without recreating an app-server process.
+      if (isMissingResource(error)) return;
       throw translateSandbox0Error(error);
     }
   }
@@ -862,6 +932,53 @@ export class Sandbox0Runtime implements RuntimeAdapter {
       throw new Error("Codex Environment credential file is invalid");
     }
     return Buffer.from(bytes).toString("utf8");
+  }
+
+  async installAgentCredential(
+    runtime: EnvironmentRuntimeRecord,
+    agentId: EnvironmentAgentId,
+    credentialJson: string,
+  ) {
+    const target = agentAdapter(agentId).credentialProjection.ephemeralPath;
+    if (!target) return;
+    await installAgentCredentialFile(
+      this.client.sandboxes.sandbox(runtime.sandboxId),
+      target,
+      credentialJson,
+      agentId,
+    );
+  }
+
+  async readAgentCredential(
+    runtime: EnvironmentRuntimeRecord,
+    agentId: EnvironmentAgentId,
+  ) {
+    const target = agentAdapter(agentId).credentialProjection.ephemeralPath;
+    if (!target) return undefined;
+    try {
+      const bytes = await this.client.sandboxes
+        .sandbox(runtime.sandboxId)
+        .readFile(target);
+      if (bytes.byteLength === 0 || bytes.byteLength > CODEX_AUTH_MAX_BYTES) {
+        throw new Error(
+          `${agentAdapter(agentId).label} credential file is invalid`,
+        );
+      }
+      return Buffer.from(bytes).toString("utf8");
+    } catch (error) {
+      if (isMissingResource(error)) return undefined;
+      throw translateSandbox0Error(error);
+    }
+  }
+
+  async prepareAgentStateForPersistence(
+    runtime: EnvironmentRuntimeRecord,
+    agentId: EnvironmentAgentId,
+  ) {
+    const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
+    const adapter = agentAdapter(agentId);
+    await prepareNativeAgentState(sandbox, adapter);
+    if (agentId === "codex") await prepareEnvironmentCodexHome(sandbox);
   }
 
   /**
@@ -2467,6 +2584,195 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     return {
       sessionId: terminal.id,
       attemptId,
+      runtimeGeneration: terminal.runtimeGeneration,
+      replayAfter: replay.after,
+      replayUntil: terminal.cursor.latest,
+      replayReset: replay.reset,
+      messages: {
+        async *[Symbol.asyncIterator]() {
+          for await (const message of connection.messages()) {
+            yield {
+              ...message,
+              event: message.event
+                ? {
+                    seq: message.event.seq,
+                    attemptId: message.event.attemptId,
+                    stream: message.event.stream,
+                    dataBase64: message.event.dataBase64,
+                    type: message.event.type,
+                    occurredAt: toUnixTimestamp(message.event.occurredAt),
+                  }
+                : undefined,
+            };
+          }
+        },
+      },
+      send(message) {
+        if (message.type === "input") {
+          connection.send({
+            type: "input",
+            requestId: message.requestId,
+            inputId: message.requestId,
+            expectedAttemptId: attemptId,
+            dataBase64: Buffer.from(message.data ?? []).toString("base64"),
+          });
+          return;
+        }
+        if (message.type === "resize") {
+          connection.send({
+            type: "resize",
+            requestId: message.requestId,
+            expectedAttemptId: attemptId,
+            rows: message.rows ?? 28,
+            cols: message.cols ?? 120,
+          });
+          return;
+        }
+        connection.send({
+          type: "signal",
+          requestId: message.requestId,
+          expectedAttemptId: attemptId,
+          signal: message.signal ?? "TERM",
+        });
+      },
+      close: () => connection.close(),
+    };
+  }
+
+  async openAgentTerminal(
+    runtime: EnvironmentRuntimeRecord,
+    agentId: EnvironmentAgentId,
+    options: {
+      after?: number;
+      expectedAgentSessionId?: string;
+      credentialJson?: string;
+    } = {},
+  ): Promise<RuntimeTerminalHandle> {
+    const adapter = agentAdapter(agentId);
+    const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
+
+    await prepareNativeAgentState(sandbox, adapter);
+    if (agentId === "codex") await prepareEnvironmentCodexHome(sandbox);
+    if (options.credentialJson && adapter.credentialProjection.ephemeralPath) {
+      await installAgentCredentialFile(
+        sandbox,
+        adapter.credentialProjection.ephemeralPath,
+        options.credentialJson,
+        agentId,
+      );
+    }
+
+    let terminal: Awaited<ReturnType<typeof sandbox.getSession>> | undefined;
+    if (runtime.agentSessionId) {
+      try {
+        terminal = await sandbox.getSession(runtime.agentSessionId);
+      } catch (error) {
+        if (!isMissingResource(error)) throw translateSandbox0Error(error);
+      }
+    }
+    const desiredEnvironment = {
+      ...adapter.environment,
+      TERM: "xterm-256color",
+      COLORTERM: "truecolor",
+    };
+    if (!terminal) {
+      terminal = await sandbox.createSession(
+        {
+          name: agentSessionName(agentId),
+          command: [...adapter.command],
+          cwd: "/workspace",
+          env: desiredEnvironment,
+          io: {
+            mode: "pty",
+            terminal: { rows: 28, cols: 120, term: "xterm-256color" },
+          },
+          lifecycle: {
+            restart: { policy: "never" },
+            runtimeRecovery: adapter.runtimeRecovery,
+          },
+          readiness: { type: "process" },
+          eventRetention: {
+            maxBytes: TERMINAL_EVENT_RETENTION_BYTES,
+            maxAgeSeconds: EVENT_RETENTION_SECONDS,
+          },
+        },
+        {
+          idempotencyKey: agentSessionIdempotencyKey(runtime.id, agentId),
+        },
+      );
+    }
+
+    const finishedAttemptId = terminal.attempt?.finishedAt
+      ? terminal.attempt.id
+      : undefined;
+    const terminalStopped =
+      finishedAttemptId !== undefined ||
+      terminal.phase === "exited" ||
+      terminal.phase === "failed" ||
+      terminal.phase === "stopped";
+    const retention = {
+      maxBytes: TERMINAL_EVENT_RETENTION_BYTES,
+      maxAgeSeconds: EVENT_RETENTION_SECONDS,
+    };
+    const retentionNeedsUpdate =
+      terminal.spec.eventRetention?.maxBytes !== retention.maxBytes ||
+      terminal.spec.eventRetention?.maxAgeSeconds !== retention.maxAgeSeconds;
+    const commandNeedsUpdate =
+      terminalStopped &&
+      !stringArrayEqual(terminal.spec.command, adapter.command);
+    const environmentNeedsUpdate =
+      terminalStopped &&
+      Object.entries(desiredEnvironment).some(
+        ([name, value]) => terminal?.spec.env?.[name] !== value,
+      );
+    if (retentionNeedsUpdate || commandNeedsUpdate || environmentNeedsUpdate) {
+      // A live native TUI is never replaced merely because Sandpi was upgraded.
+      // Migration of its launch contract happens only after the user exits it.
+      terminal = await sandbox.updateSession(terminal.id, {
+        ...terminal.spec,
+        ...(commandNeedsUpdate ? { command: [...adapter.command] } : {}),
+        ...(environmentNeedsUpdate ? { env: desiredEnvironment } : {}),
+        eventRetention: retention,
+      });
+    }
+    if (terminalStopped) {
+      terminal = await sandbox.createSessionAttempt(terminal.id, true);
+      if (!terminal.attempt || terminal.attempt.id === finishedAttemptId) {
+        terminal = await waitForNewAttempt(
+          sandbox,
+          terminal.id,
+          finishedAttemptId,
+        );
+      }
+    }
+    if (!terminal.attempt) {
+      terminal = await waitForAttempt(sandbox, terminal.id);
+    }
+    if (!terminal.attempt) {
+      throw new HttpError(
+        502,
+        "agent_terminal_not_ready",
+        `${adapter.label} did not start.`,
+      );
+    }
+
+    const terminalSessionChanged = Boolean(
+      options.expectedAgentSessionId &&
+        options.expectedAgentSessionId !== terminal.id,
+    );
+    const replay = reconcileTerminalReplayCursor(
+      options.after ?? 0,
+      terminal.cursor,
+      terminalSessionChanged,
+    );
+    const connection = await sandbox.connectSession(terminal.id, {
+      after: replay.after,
+    });
+    const attemptId = terminal.attempt.id;
+    return {
+      sessionId: terminal.id,
+      attemptId,
+      runtimeGeneration: terminal.runtimeGeneration,
       replayAfter: replay.after,
       replayUntil: terminal.cursor.latest,
       replayReset: replay.reset,
@@ -2676,6 +2982,73 @@ install_managed_file "$managed_skill_agents/openai.yaml" "${interfaceReference}"
   return { envVars, installCommands };
 }
 
+function stringArrayEqual(
+  left: readonly string[] | undefined,
+  right: readonly string[],
+) {
+  return (
+    left?.length === right.length &&
+    right.every((value, index) => left[index] === value)
+  );
+}
+
+async function prepareNativeAgentState(
+  sandbox: ReturnType<Client["sandboxes"]["sandbox"]>,
+  adapter: AgentAdapter,
+) {
+  const stateDirectories = adapter.persistentStatePaths
+    .map(
+      (statePath) =>
+        `test ! -L ${shellSingleQuoted(statePath)}\ninstall -d -m 700 ${shellSingleQuoted(statePath)}`,
+    )
+    .join("\n");
+  const credential = adapter.credentialProjection;
+  const credentialPreparation =
+    credential.persistentLink && credential.ephemeralPath
+      ? `credential_link=${shellSingleQuoted(credential.persistentLink)}
+credential_target=${shellSingleQuoted(credential.ephemeralPath)}
+install -d -m 700 ${shellSingleQuoted(path.posix.dirname(credential.persistentLink))}
+if [ -e "$credential_link" ] && [ ! -L "$credential_link" ]; then
+  printf '%s\\n' 'Persistent agent credential file is unsafe to snapshot.' >&2
+  exit 42
+fi
+if [ -L "$credential_link" ] && [ "$(readlink "$credential_link")" != "$credential_target" ]; then
+  printf '%s\\n' 'Agent credential link points outside Sandpi ephemeral storage.' >&2
+  exit 42
+fi
+if [ ! -L "$credential_link" ]; then
+  ln -s "$credential_target" "$credential_link"
+fi`
+      : "";
+  const result = await sandbox.cmd(`prepare-${adapter.id}-home`, {
+    command: [
+      "/bin/sh",
+      "-lc",
+      `set -eu
+install -d -m 700 /workspace/.sandpi /workspace/.sandpi/harnesses
+${stateDirectories}
+${credentialPreparation}
+sync -f /workspace 2>/dev/null || sync`,
+    ],
+    cwd: "/workspace",
+    ttlSec: 30,
+  });
+  if (result.exitCode === 42) {
+    throw new HttpError(
+      409,
+      "agent_credential_path_unsafe",
+      `${adapter.label} has a persistent credential file that must be migrated before the Environment can be snapshotted safely.`,
+    );
+  }
+  if (result.exitCode !== undefined && result.exitCode !== 0) {
+    throw new HttpError(
+      502,
+      "agent_state_prepare_failed",
+      `Unable to prepare ${adapter.label} native state in the Environment.`,
+    );
+  }
+}
+
 async function prepareEnvironmentCodexHome(
   sandbox: ReturnType<Client["sandboxes"]["sandbox"]>,
 ) {
@@ -2773,6 +3146,33 @@ async function installCodexCredential(
   const result = await sandbox.cmd(`chmod 600 ${authFile}`, { wait: true });
   if (result.exitCode !== undefined && result.exitCode !== 0) {
     throw new Error("Unable to protect the ephemeral Codex credential file");
+  }
+}
+
+async function installAgentCredentialFile(
+  sandbox: ReturnType<Client["sandboxes"]["sandbox"]>,
+  credentialPath: string,
+  credentialJson: string,
+  agentId: EnvironmentAgentId,
+) {
+  const bytes = Buffer.from(credentialJson, "utf8");
+  if (bytes.byteLength === 0 || bytes.byteLength > CODEX_AUTH_MAX_BYTES) {
+    throw new HttpError(
+      500,
+      "agent_credential_invalid",
+      `Stored ${agentAdapter(agentId).label} credentials are invalid.`,
+    );
+  }
+  await sandbox.mkdir(path.posix.dirname(credentialPath), true);
+  await sandbox.writeFile(credentialPath, bytes);
+  const result = await sandbox.cmd(
+    `chmod 600 ${shellSingleQuoted(credentialPath)}`,
+    { wait: true },
+  );
+  if (result.exitCode !== undefined && result.exitCode !== 0) {
+    throw new Error(
+      `Unable to protect the ephemeral ${agentAdapter(agentId).label} credential file`,
+    );
   }
 }
 

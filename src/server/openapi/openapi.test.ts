@@ -24,7 +24,7 @@ test("OpenAPI publishes every supported operation with a unique id", async () =>
   const operations = allOperations(document);
   const operationIds = operations.map((operation) => operation.operationId);
 
-  assert.equal(operations.length, 105);
+  assert.equal(operations.length, 110);
   assert.ok(operationIds.every(Boolean));
   assert.equal(new Set(operationIds).size, operationIds.length);
   assert.ok(Object.keys(document.paths).every((path) => !path.includes(":")));
@@ -142,15 +142,18 @@ test("OpenAPI excludes the removed Browser API and preserves streaming semantics
   ]) {
     assert.ok(operation(document, path, "get")["x-sandpi-websocket"]);
   }
-  const ideClientMessages = (
-    operation(
-      document,
-      "/api/v1/environments/{environmentId}/ide/events",
-      "get",
-    )["x-sandpi-websocket"] as {
-      clientMessages?: OpenAPIV3.SchemaObject;
-    }
-  ).clientMessages;
+  const ideClientMessages = resolveSchema(
+    document,
+    (
+      operation(
+        document,
+        "/api/v1/environments/{environmentId}/ide/events",
+        "get",
+      )["x-sandpi-websocket"] as {
+        clientMessages?: OpenAPIV3.ReferenceObject | OpenAPIV3.SchemaObject;
+      }
+    ).clientMessages,
+  );
   assert.ok(ideClientMessages);
   assert.deepEqual(ideClientMessages.required, ["type", "paths"]);
   assert.deepEqual(ideClientMessages.properties?.type, {
@@ -218,6 +221,20 @@ function allOperations(document: OpenAPIV3.Document) {
       return operation ? [operation] : [];
     }),
   );
+}
+
+function resolveSchema(
+  document: OpenAPIV3.Document,
+  schema: OpenAPIV3.ReferenceObject | OpenAPIV3.SchemaObject | undefined,
+) {
+  if (!schema || !("$ref" in schema)) return schema;
+  const prefix = "#/components/schemas/";
+  assert.ok(schema.$ref.startsWith(prefix));
+  const component = document.components?.schemas?.[
+    schema.$ref.slice(prefix.length)
+  ];
+  assert.ok(component && !("$ref" in component));
+  return component;
 }
 
 function operation(

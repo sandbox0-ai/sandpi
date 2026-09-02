@@ -17,7 +17,7 @@ import type { Pool } from "pg";
 import WebSocket from "ws";
 import { ZodError, z } from "zod";
 
-import type { SandpiDeploymentSummary } from "@/lib/types";
+import type { Environment, SandpiDeploymentSummary } from "@/lib/types";
 import { BillingQuotaService } from "@/server/billing/quota-service";
 import { BillingRepository } from "@/server/billing/repository";
 import { StripeBillingService } from "@/server/billing/stripe-service";
@@ -63,6 +63,9 @@ import {
 import { GitHubWebhookSourceService } from "@/server/environments/github-webhook-service";
 import { GitHubWebhookSourceStore } from "@/server/environments/github-webhook-store";
 import { EnvironmentWorkspaceBackupService } from "@/server/environments/workspace-backup-service";
+import { EnvironmentForkService } from "@/server/environments/fork-service";
+import { AgentCredentialService } from "@/server/agents/credential-service";
+import { AgentCredentialStore } from "@/server/agents/credential-store";
 import { CodexEnvironmentAuthService } from "@/server/harnesses/codex/auth-service";
 import { CodexAuthStore } from "@/server/harnesses/codex/auth-store";
 import {
@@ -88,6 +91,7 @@ import {
 } from "@/server/cloud-sync";
 import { createRuntime } from "@/server/runtime";
 import type {
+  EnvironmentRuntimeRecord,
   RuntimeAdapter,
   RuntimeSandboxPreviewGrant,
 } from "@/server/runtime/types";
@@ -98,8 +102,10 @@ import {
 } from "@/server/request-origin";
 import { SecretBox } from "@/server/secrets";
 import { SandpiStore } from "@/server/store";
+import { rejectNativeTuiV2LegacyOperation } from "@/server/native-tui-v2";
 import { TerminalInputQueue } from "@/server/terminal-input-queue";
 import {
+  agentTerminalInputSchema,
   billingCheckoutSchema,
   codexComposerUploadSchema,
   codexMcpServerConfigurationSchema,
@@ -109,6 +115,7 @@ import {
   codexSkillConfigurationSchema,
   codexSkillPutSchema,
   environmentCreateSchema,
+  environmentForkSchema,
   environmentOrderSchema,
   environmentProvisioningSchema,
   environmentPreviewCreateSchema,
@@ -225,6 +232,13 @@ export async function createSandpiServer(
   const secretBox = config.secretKey
     ? new SecretBox(config.secretKey)
     : undefined;
+  const agentCredentials = new AgentCredentialService(
+    store,
+    new AgentCredentialStore(pool),
+    runtime,
+    secretBox,
+    app.log,
+  );
   const codexAuth = new CodexEnvironmentAuthService(
     store,
     new CodexAuthStore(pool),
@@ -239,6 +253,12 @@ export async function createSandpiServer(
     store,
     runtime,
     app.log,
+  );
+  const environmentForks = new EnvironmentForkService(
+    store,
+    runtime,
+    app.log,
+    billingQuota,
   );
   const runtimeAccess = new EnvironmentRuntimeAccessService(store, runtime, {
     quotaGate: billingQuota,
@@ -290,6 +310,7 @@ export async function createSandpiServer(
     app.log,
   );
   lifecycle.setBeforePause(async (environmentId) => {
+    await agentCredentials.protectPersistenceBoundary(environmentId);
     await codex.flushEnvironmentCredentials(environmentId);
     codex.suspendEnvironmentWorker(environmentId);
   });
@@ -301,12 +322,19 @@ export async function createSandpiServer(
   });
   workspaceBackups.setRestoreHooks({
     before: async (environmentId) => {
+      await agentCredentials.protectPersistenceBoundary(environmentId);
       await codex.flushEnvironmentCredentials(environmentId);
       codex.suspendEnvironmentWorker(environmentId);
     },
     afterAttempt: (environmentId, result) =>
       codex.finishEnvironmentWorkspaceRestoreAttempt(environmentId, result),
   });
+  workspaceBackups.setBeforeSnapshot((environmentId, scopedStore) =>
+    agentCredentials.protectPersistenceBoundary(environmentId, scopedStore),
+  );
+  environmentForks.setBeforeFork((environmentId, scopedStore) =>
+    agentCredentials.protectPersistenceBoundary(environmentId, scopedStore),
+  );
   environments.setBeforeDelete(async (userId, environmentId) => {
     await codex.flushEnvironmentCredentials(environmentId);
     codex.suspendEnvironmentWorker(environmentId);
@@ -392,6 +420,7 @@ export async function createSandpiServer(
   });
 
   app.addHook("onRequest", async (request) => {
+    rejectNativeTuiV2LegacyOperation(request.method, request.url);
     if (!request.url.startsWith("/api/v1") || publicAuthPath(request.url)) {
       return;
     }
@@ -414,6 +443,8 @@ export async function createSandpiServer(
     stripeBilling,
     egressCredentials,
     workspaceBackups,
+    environmentForks,
+    agentCredentials,
     schedules,
     webhooks,
     githubWebhooks,
@@ -447,6 +478,7 @@ export async function createSandpiServer(
     await schedules.close();
     await githubWebhooks.close();
     await webhooks.close();
+    await environmentForks.close();
     await workspaceBackups.close();
     await lifecycle.close();
     await codexAuth.close();
@@ -460,16 +492,11 @@ export async function createSandpiServer(
   await lifecycle.start();
   sandboxUsage?.start();
   await workspaceBackups.start();
+  environmentForks.start();
   await codexAuth.resumePending();
-  // Runtime recovery is Environment-scoped and may wait for Sandbox0
-  // scheduling. Keep API readiness independent so one slow/failed Sandbox
-  // cannot hold the entire Sandpi server offline during startup.
-  void codex.resumeWorkers().catch((error) => {
-    app.log.warn({ err: error }, "Codex Environment recovery deferred");
-  });
-  await schedules.start();
-  await webhooks.start();
-  await githubWebhooks.start();
+  // v2 interactive Environments are native TUI-only. The legacy Codex
+  // app-server, Schedule, and Webhook workers remain stopped; their durable
+  // rows are retained read-only for migration and audit.
 
   return {
     app,
@@ -718,6 +745,8 @@ export function registerApiRoutes(
     stripeBilling: StripeBillingService;
     egressCredentials: EnvironmentEgressCredentialService;
     workspaceBackups: EnvironmentWorkspaceBackupService;
+    environmentForks: EnvironmentForkService;
+    agentCredentials: AgentCredentialService;
     schedules: EnvironmentScheduleService;
     webhooks: EnvironmentWebhookService;
     githubWebhooks: GitHubWebhookSourceService;
@@ -871,6 +900,53 @@ export function registerApiRoutes(
       );
       reply.header("Cache-Control", "no-store");
       return { data: environmentPreviewResponse(grant) };
+    },
+  );
+  app.get<{ Params: { environmentId: string } }>(
+    "/api/v1/environments/:environmentId/snapshots",
+    async (request) => ({
+      data: await services.workspaceBackups.list(
+        request.principal.userId,
+        request.params.environmentId,
+      ),
+    }),
+  );
+  app.post<{ Params: { environmentId: string } }>(
+    "/api/v1/environments/:environmentId/snapshots",
+    async (request, reply) => {
+      const created = await services.workspaceBackups.createNow(
+        request.principal.userId,
+        request.params.environmentId,
+      );
+      return reply.status(201).send({
+        data: {
+          snapshot: created.backup,
+          environment: created.environment,
+        },
+      });
+    },
+  );
+  app.put<{
+    Params: { environmentId: string; snapshotId: string };
+  }>(
+    "/api/v1/environments/:environmentId/snapshots/:snapshotId/restore",
+    async (request) => {
+      const body = workspaceBackupRestoreSchema.parse(request.body);
+      const restored = await services.workspaceBackups.restore(
+        request.principal.userId,
+        request.params.environmentId,
+        request.params.snapshotId,
+        body.confirmation,
+      );
+      return {
+        data: {
+          snapshot: restored.backup,
+          environment: await services.environments.authoritativeEnvironment(
+            restored.environment,
+          ),
+          unavailableSessionCount: restored.unavailableSessionCount,
+        },
+      };
     },
   );
   app.delete<{
@@ -1030,6 +1106,22 @@ export function registerApiRoutes(
         request.params.environmentId,
       ),
     }),
+  );
+  app.post<{ Params: { environmentId: string } }>(
+    "/api/v1/environments/:environmentId/forks",
+    async (request, reply) => {
+      const body = environmentForkSchema.parse(request.body);
+      const environment = await services.environmentForks.create({
+        userId: request.principal.userId,
+        sourceEnvironmentId: request.params.environmentId,
+        sourceSnapshotId: body.snapshotId,
+        name: body.name,
+        idempotencyKey: body.idempotencyKey,
+      });
+      return reply.status(201).send({
+        data: await services.environments.authoritativeEnvironment(environment),
+      });
+    },
   );
   app.post<{ Params: { environmentId: string } }>(
     "/api/v1/environments/:environmentId/workspace-backups",
@@ -2328,6 +2420,343 @@ export function registerApiRoutes(
               ? 1008
               : 1011,
             "Terminal connection failed",
+          );
+        }
+      } finally {
+        cleanup();
+      }
+    },
+  );
+
+  app.get<{ Params: { environmentId: string } }>(
+    "/api/v1/environments/:environmentId/agent-terminal",
+    { websocket: true },
+    async (socket, request) => {
+      let terminal:
+        Awaited<ReturnType<RuntimeAdapter["openAgentTerminal"]>> | undefined;
+      let inputQueue:
+        | TerminalInputQueue<z.infer<typeof agentTerminalInputSchema>>
+        | undefined;
+      let heartbeat: RuntimeWebSocketHeartbeat | undefined;
+      let controlTimer: ReturnType<typeof setInterval> | undefined;
+      let credentialSyncTimer: ReturnType<typeof setInterval> | undefined;
+      let openedRuntime: EnvironmentRuntimeRecord | undefined;
+      let openedAgentId: Environment["codingAgent"]["harness"] | undefined;
+      let cleanedUp = false;
+      const cleanup = () => {
+        if (cleanedUp) return;
+        cleanedUp = true;
+        if (controlTimer) clearInterval(controlTimer);
+        if (credentialSyncTimer) clearInterval(credentialSyncTimer);
+        heartbeat?.stop();
+        inputQueue?.close();
+        terminal?.close();
+        if (openedRuntime && openedAgentId) {
+          void services.agentCredentials.trySyncFromRuntime(
+            request.params.environmentId,
+            openedAgentId,
+            openedRuntime,
+          );
+        }
+      };
+
+      try {
+        const environmentId = request.params.environmentId;
+        const userId = request.principal.userId;
+        const clientId = z
+          .string()
+          .trim()
+          .min(1)
+          .max(200)
+          .parse(queryString(request, "clientId"));
+        const after = Number(queryString(request, "after") ?? 0);
+        const environment = await services.store.getEnvironment(
+          userId,
+          environmentId,
+        );
+        const agentCredential =
+          await services.agentCredentials.credentialForEnvironment(
+            userId,
+            environmentId,
+            environment.codingAgent.harness,
+          );
+
+        const opened = await services.runtimeAccess.withRuntimeAccess(
+          userId,
+          environmentId,
+          async (runtime) => ({
+            runtime,
+            terminal: await services.runtime.openAgentTerminal(
+              runtime,
+              environment.codingAgent.harness,
+              {
+                after: Number.isFinite(after) ? after : 0,
+                expectedAgentSessionId: queryString(
+                  request,
+                  "agentSessionId",
+                ),
+                credentialJson: agentCredential?.credentialJson,
+              },
+            ),
+          }),
+        );
+        terminal = opened.terminal;
+        openedRuntime = opened.runtime;
+        openedAgentId = environment.codingAgent.harness;
+        const coordinates = {
+          runtimeGeneration: terminal.runtimeGeneration,
+          agentSessionId: terminal.sessionId,
+          agentAttemptId: terminal.attemptId,
+        };
+        await services.store.recordEnvironmentAgentSession(
+          environmentId,
+          opened.runtime.sandboxId,
+          coordinates,
+        );
+        if (agentCredential) {
+          await services.agentCredentials.trySyncFromRuntime(
+            environmentId,
+            environment.codingAgent.harness,
+            opened.runtime,
+          );
+        }
+
+        let control = await services.store.acquireEnvironmentTerminalControl({
+          userId,
+          environmentId,
+          clientId,
+          coordinates,
+        });
+        const publicControl = () => ({
+          role: control.role,
+          leaseVersion: control.leaseVersion,
+          expiresAt: toUnixTimestamp(control.expiresAt),
+        });
+        const sendControl = (
+          type: "control.granted" | "control.revoked" | "control.state",
+          requestId?: string,
+        ) => {
+          if (socket.readyState !== socket.OPEN) return;
+          socket.send(
+            JSON.stringify({
+              type,
+              control: publicControl(),
+              ...(requestId ? { requestId } : {}),
+            }),
+          );
+        };
+
+        const forwardTerminalMessage = (
+          message: z.infer<typeof agentTerminalInputSchema>,
+        ) => {
+          const requestId = message.requestId ?? randomUUID();
+          if (message.type === "input") {
+            terminal?.send({
+              type: "input",
+              requestId,
+              data: Buffer.from(message.data, "utf8"),
+            });
+          } else if (message.type === "binary") {
+            terminal?.send({
+              type: "input",
+              requestId,
+              data: Buffer.from(message.dataBase64, "base64"),
+            });
+          } else if (message.type === "resize" || message.type === "signal") {
+            terminal?.send({ ...message, requestId });
+          }
+        };
+
+        inputQueue = new TerminalInputQueue({
+          requiresAuthorization: () => true,
+          authorizeAndForward: async (message) => {
+            if (message.type === "control.takeover") {
+              control =
+                await services.store.acquireEnvironmentTerminalControl({
+                  userId,
+                  environmentId,
+                  clientId,
+                  coordinates,
+                  takeover: true,
+                });
+              sendControl("control.granted", message.requestId);
+              return;
+            }
+            if (message.type === "control.heartbeat") {
+              control = await services.store.renewEnvironmentTerminalControl({
+                userId,
+                environmentId,
+                clientId,
+                coordinates,
+              });
+              sendControl("control.state", message.requestId);
+              return;
+            }
+            control = await services.store.renewEnvironmentTerminalControl({
+              userId,
+              environmentId,
+              clientId,
+              coordinates,
+            });
+            forwardTerminalMessage(message);
+            heartbeat?.markActivity();
+          },
+          forward: () => undefined,
+          closeOnError: false,
+          onError: (error) => {
+            const normalized = normalizeError(error);
+            control = { ...control, role: "viewer" };
+            if (socket.readyState === socket.OPEN) {
+              socket.send(
+                JSON.stringify({
+                  type: "error",
+                  code: normalized.code,
+                  error: normalized.message,
+                }),
+              );
+              sendControl("control.revoked");
+            }
+          },
+        });
+
+        socket.send(
+          JSON.stringify({
+            type: "ready",
+            agentId: environment.codingAgent.harness,
+            sessionId: terminal.sessionId,
+            attemptId: terminal.attemptId,
+            runtimeGeneration: terminal.runtimeGeneration,
+            replayAfter: terminal.replayAfter,
+            replayUntil: terminal.replayUntil,
+            replayReset: terminal.replayReset,
+            control: publicControl(),
+          }),
+        );
+
+        heartbeat = new RuntimeWebSocketHeartbeat(
+          socket,
+          () => services.runtimeAccess.touchRunningRuntimeActivity(environmentId),
+          {
+            onActivityTouchError: (error) => {
+              request.log.debug(
+                { err: error, environmentId },
+                "Environment Agent activity could not extend idle access",
+              );
+            },
+          },
+        );
+        heartbeat.start();
+
+        credentialSyncTimer = setInterval(() => {
+          void services.agentCredentials.trySyncFromRuntime(
+            environmentId,
+            environment.codingAgent.harness,
+            opened.runtime,
+          );
+        }, 5_000);
+        credentialSyncTimer.unref();
+
+        let controlSyncActive = false;
+        controlTimer = setInterval(() => {
+          if (controlSyncActive || socket.readyState !== socket.OPEN) return;
+          controlSyncActive = true;
+          void (async () => {
+            const previousRole = control.role;
+            const previousVersion = control.leaseVersion;
+            try {
+              control =
+                previousRole === "controller"
+                  ? await services.store.renewEnvironmentTerminalControl({
+                      userId,
+                      environmentId,
+                      clientId,
+                      coordinates,
+                    })
+                  : await services.store.acquireEnvironmentTerminalControl({
+                      userId,
+                      environmentId,
+                      clientId,
+                      coordinates,
+                    });
+            } catch (error) {
+              if (
+                error instanceof HttpError &&
+                error.code === "agent_terminal_control_required"
+              ) {
+                control = { ...control, role: "viewer" };
+              } else {
+                throw error;
+              }
+            }
+            if (previousRole === "controller" && control.role === "viewer") {
+              sendControl("control.revoked");
+            } else if (
+              previousRole === "viewer" &&
+              control.role === "controller"
+            ) {
+              sendControl("control.granted");
+            } else if (control.leaseVersion !== previousVersion) {
+              sendControl("control.state");
+            }
+          })()
+            .catch((error) => {
+              request.log.debug(
+                { err: error, environmentId },
+                "Environment Agent control lease synchronization failed",
+              );
+            })
+            .finally(() => {
+              controlSyncActive = false;
+            });
+        }, 1_000);
+
+        socket.on("message", (raw) => {
+          try {
+            inputQueue?.enqueue(
+              agentTerminalInputSchema.parse(JSON.parse(raw.toString())),
+            );
+          } catch (error) {
+            if (socket.readyState === socket.OPEN) {
+              socket.send(
+                JSON.stringify({
+                  type: "error",
+                  error: normalizeError(error).message,
+                }),
+              );
+            }
+          }
+        });
+        socket.on("close", cleanup);
+        for await (const message of terminal.messages) {
+          if (socket.readyState !== socket.OPEN) break;
+          socket.send(JSON.stringify(message));
+        }
+        if (socket.readyState === socket.OPEN) {
+          socket.close(1011, "Agent terminal stream ended");
+        }
+      } catch (error) {
+        const normalized = normalizeError(error);
+        request.log.warn(
+          {
+            err: error,
+            code: normalized.code,
+            environmentId: request.params.environmentId,
+          },
+          "Environment Agent terminal connection failed",
+        );
+        if (socket.readyState === socket.OPEN) {
+          socket.send(
+            JSON.stringify({
+              type: "error",
+              code: normalized.code,
+              error: normalized.message,
+            }),
+          );
+          socket.close(
+            normalized.statusCode === 401 || normalized.statusCode === 403
+              ? 1008
+              : 1011,
+            "Agent terminal connection failed",
           );
         }
       } finally {

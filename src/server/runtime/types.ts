@@ -1,5 +1,6 @@
 import type {
   Environment,
+  EnvironmentAgentId,
   EnvironmentResourceMetrics,
   EnvironmentSandboxState,
   NetworkPolicy,
@@ -72,6 +73,10 @@ export interface EnvironmentRuntimeRecord {
   sandboxId: string;
   supervisorSessionId?: string;
   terminalSessionId?: string;
+  /** Native coding-agent PTY Session, separate from the legacy Bash shell. */
+  agentSessionId?: string;
+  agentAttemptId?: string;
+  agentId?: EnvironmentAgentId;
   attemptId?: string;
   runtimeGeneration: number;
   decoder: CodexDecoderState;
@@ -81,6 +86,19 @@ export interface RuntimeWorkspaceBackupSnapshot {
   id: string;
   name: string;
   createdAt: Date;
+}
+
+export interface RuntimeForkedEnvironment {
+  sandboxId: string;
+  runtimeGeneration: number;
+}
+
+export interface RuntimeEnvironmentForkInput {
+  source: EnvironmentRuntimeRecord;
+  /** Optional named snapshot to restore into the paused fork child. */
+  sourceSnapshotId?: string;
+  /** Stable across Sandpi retries and forwarded to Sandbox0. */
+  operationId: string;
 }
 
 export interface RuntimeProvisionEnvironmentInput {
@@ -233,7 +251,17 @@ export interface RuntimeAdapter {
     runtime: EnvironmentRuntimeRecord,
     snapshotId: string,
   ): Promise<void>;
+  forkEnvironment(
+    input: RuntimeEnvironmentForkInput,
+  ): Promise<RuntimeForkedEnvironment>;
   applyEnvironmentLifecyclePolicy(
+    runtime: EnvironmentRuntimeRecord,
+  ): Promise<void>;
+  /**
+   * Persists a stopped desired state for the v1 Codex app-server Supervisor.
+   * Native TUI v2 must retire it before releasing its legacy coordinates.
+   */
+  retireLegacyEnvironmentSupervisor(
     runtime: EnvironmentRuntimeRecord,
   ): Promise<void>;
   pauseEnvironment(
@@ -282,6 +310,19 @@ export interface RuntimeAdapter {
   readCodexEnvironmentCredential(
     runtime: EnvironmentRuntimeRecord,
   ): Promise<string>;
+  installAgentCredential(
+    runtime: EnvironmentRuntimeRecord,
+    agentId: EnvironmentAgentId,
+    credentialJson: string,
+  ): Promise<void>;
+  readAgentCredential(
+    runtime: EnvironmentRuntimeRecord,
+    agentId: EnvironmentAgentId,
+  ): Promise<string | undefined>;
+  prepareAgentStateForPersistence(
+    runtime: EnvironmentRuntimeRecord,
+    agentId: EnvironmentAgentId,
+  ): Promise<void>;
   writeCodexMessage(
     runtime: EnvironmentRuntimeRecord,
     message: unknown,
@@ -381,6 +422,15 @@ export interface RuntimeAdapter {
     after?: number,
     expectedTerminalSessionId?: string,
   ): Promise<RuntimeTerminalHandle>;
+  openAgentTerminal(
+    runtime: EnvironmentRuntimeRecord,
+    agentId: EnvironmentAgentId,
+    options?: {
+      after?: number;
+      expectedAgentSessionId?: string;
+      credentialJson?: string;
+    },
+  ): Promise<RuntimeTerminalHandle>;
 }
 
 export interface RuntimeTerminalMessage {
@@ -400,6 +450,7 @@ export interface RuntimeTerminalMessage {
 export interface RuntimeTerminalHandle {
   sessionId: string;
   attemptId: string;
+  runtimeGeneration: number;
   /** Effective Supervisor cursor used for this attachment. */
   replayAfter: number;
   /** Journal head captured before attaching the live event stream. */

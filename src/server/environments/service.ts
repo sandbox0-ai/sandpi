@@ -2,6 +2,7 @@ import { setTimeout as delay } from "node:timers/promises";
 
 import type {
   Environment,
+  EnvironmentAgentId,
   NetworkPolicy,
   SandpiBootstrap,
   SandpiDeploymentSummary,
@@ -152,6 +153,7 @@ export class EnvironmentService {
   async create(input: {
     userId: string;
     name: string;
+    agentId: EnvironmentAgentId;
   }) {
     const policy = await this.quota?.environmentCreationPolicy(input.userId);
     const environment = await this.store.createEnvironmentMetadata({

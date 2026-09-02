@@ -1,9 +1,55 @@
 .sidebarEmpty {
   max-width: 190px;
-  margin: 2px 8px;
+  margin: 4px 12px;
   color: var(--ink-faint);
-  font-size: 10.5px;
+  font-size: 10px;
   line-height: 1.55;
+}
+
+.sidebarEmpty::before {
+  color: var(--green);
+  content: "$ ";
+}
+
+.releaseLine {
+  display: flex;
+  min-height: 36px;
+  align-items: center;
+  gap: 7px;
+  padding: 0 12px;
+  border-block: 1px solid var(--line);
+  color: var(--ink-faint);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+}
+
+.releaseLine strong {
+  margin-left: auto;
+  color: var(--green);
+  font-size: 9px;
+  font-weight: 650;
+}
+
+.openEnvironmentButton {
+  display: flex;
+  min-height: 44px;
+  width: calc(100% - 20px);
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  margin: 10px;
+  border: 1px solid var(--green);
+  border-radius: 1px;
+  background: color-mix(in srgb, var(--green) 8%, transparent);
+  color: var(--green);
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.openEnvironmentButton:hover,
+.openEnvironmentButton:focus-visible {
+  background: color-mix(in srgb, var(--green) 16%, transparent);
 }
 
 .signInAvatar {
@@ -32,7 +78,7 @@
   align-items: center;
   justify-content: center;
   border: 0;
-  border-radius: 8px;
+  border-radius: 1px;
   background: transparent;
   color: var(--ink-faint);
   cursor: pointer;
@@ -44,9 +90,204 @@
   color: var(--ink);
 }
 
-.loginOnSend {
+.terminalStage {
+  display: grid;
+  min-height: 0;
+  flex: 1;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 8px;
+  padding: 14px;
+  background:
+    linear-gradient(rgb(126 227 154 / 2%) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(126 227 154 / 2%) 1px, transparent 1px),
+    var(--canvas);
+  background-size: 24px 24px;
+}
+
+.terminalWindow {
+  display: grid;
+  min-height: 0;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 1px;
+  background: #151715;
+  box-shadow: 8px 8px 0 rgb(0 0 0 / 28%);
+}
+
+.terminalTitlebar {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
   color: var(--ink-faint);
-  font-size: 9.5px;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+}
+
+.terminalTitlebar > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.terminalOutput {
+  min-height: 0;
+  overflow: auto;
+  padding: clamp(18px, 4vw, 54px);
+  color: var(--ink-soft);
+  scrollbar-color: #4c544b transparent;
+  scrollbar-width: thin;
+}
+
+.terminalOutput h1 {
+  max-width: 760px;
+  margin: 34px 0 0;
+  color: var(--ink);
+  font-size: clamp(24px, 4vw, 48px);
+  font-weight: 650;
+  letter-spacing: -0.045em;
+  line-height: 1.08;
+  text-wrap: balance;
+}
+
+.terminalOutput > p:not(.command):not(.banner) {
+  max-width: 720px;
+  margin: 14px 0 0;
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.command {
+  margin: 0;
+  color: var(--ink);
+  font-size: 11px;
+}
+
+.command:last-child {
+  margin-top: 28px;
+}
+
+.command > span:first-child,
+.banner,
+.statusGrid dd {
+  color: var(--green);
+}
+
+.banner {
+  margin: 20px 0 0;
+  font-size: 13px;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+}
+
+.statusGrid {
+  display: grid;
+  max-width: 720px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0;
+  margin: 14px 0 0;
+  border-top: 1px solid var(--line-soft);
+  border-left: 1px solid var(--line-soft);
+}
+
+.statusGrid > div {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 86px minmax(0, 1fr);
+  padding: 8px 10px;
+  border-right: 1px solid var(--line-soft);
+  border-bottom: 1px solid var(--line-soft);
+  font-size: 9px;
+}
+
+.statusGrid dt {
+  color: var(--ink-faint);
+}
+
+.statusGrid dd {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 16px;
+}
+
+.facts > span {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--ink-soft);
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
+.cursor {
+  display: inline-block;
+  margin-left: 2px;
+  color: var(--green);
+  animation: cursor-blink 1s steps(1, end) infinite;
+}
+
+.touchActions {
+  display: flex;
+  min-height: 52px;
+  align-items: center;
+  gap: 7px;
+  overflow-x: auto;
+  padding: 7px 9px;
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.touchActions button {
+  display: inline-flex;
+  min-height: 38px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 1px;
+  background: var(--panel-strong);
+  color: var(--ink);
+  font: inherit;
+  font-size: 9px;
+  cursor: pointer;
+}
+
+.touchActions button:first-child {
+  border-color: var(--green);
+  color: var(--green);
+}
+
+.touchActions button:hover,
+.touchActions button:focus-visible {
+  border-color: var(--green);
+  color: var(--green);
+}
+
+.pointerNote {
+  color: var(--ink-faint);
+  font-size: 8px;
+  letter-spacing: 0.08em;
+  text-align: right;
 }
 
 .betaNotice {
@@ -57,9 +298,10 @@
   margin-top: 13px;
   padding: 9px 12px;
   border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--sidebar);
-  color: var(--ink-soft);
+  border-color: var(--amber);
+  border-radius: 1px;
+  background: color-mix(in srgb, var(--amber) 7%, var(--panel));
+  color: var(--amber);
   text-align: left;
 }
 
@@ -75,7 +317,7 @@
 }
 
 .betaNotice strong {
-  color: var(--ink);
+  color: var(--amber);
   font-size: 10.5px;
   font-weight: 680;
 }
@@ -85,8 +327,41 @@
   line-height: 1.45;
 }
 
-@media (max-width: 520px) {
-  .loginOnSend {
-    display: none;
+@keyframes cursor-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+@media (max-width: 720px) {
+  .terminalStage {
+    padding: 8px;
+  }
+
+  .terminalOutput {
+    padding: 18px 14px;
+  }
+
+  .statusGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .touchActions button {
+    min-height: 44px;
+  }
+
+  .helpButton {
+    width: 44px;
+    height: 44px;
+  }
+
+  .pointerNote {
+    text-align: left;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cursor {
+    animation: none;
   }
 }

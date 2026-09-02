@@ -1,4 +1,9 @@
-# Native coding-agent Session authority
+# Legacy v1 native Session authority
+
+> **Retired in Sandpi v2.** This document preserves the v1 Codex app-server
+> design for migration and historical review. The current runtime contract is
+> [Native agent terminal authority](./native-agent-terminal-authority.md).
+> v2 does not expose product Sessions or structured Turn execution.
 
 Sandpi treats the coding agent's native Session as the only durable source of
 conversation truth. For Codex, the app-server Thread returned by

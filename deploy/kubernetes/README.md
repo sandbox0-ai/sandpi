@@ -78,10 +78,10 @@ Optional production Environment variables:
   including for self-hosted deployments.
 - `SANDPI_GITHUB_APP_SLUG` and `SANDPI_GITHUB_CLIENT_ID`, together with the
   `SANDPI_GITHUB_CLIENT_SECRET` and `SANDPI_GITHUB_WEBHOOK_SECRET` repository
-  secrets, enable direct GitHub App sources under Environment Webhooks. All four
-  values must be configured together. See
-  [Environment Webhooks](../../docs/architecture/environment-webhooks.md) for
-  callback URL, event URL, permissions and subscriptions.
+  secrets, are retained only for migrating and cleaning up legacy v1 GitHub App
+  records. Sandpi v2 does not accept Webhook execution ingress. If any of the
+  four values remains configured, all four must still be provided until the
+  legacy integration is removed.
 
 The production workflow requires `SANDPI_BILLING_MODE=stripe`. Configure the
 Stripe webhook endpoint as

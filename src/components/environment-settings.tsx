@@ -3,13 +3,10 @@
 import {
   Archive,
   Box,
-  Cable,
-  CalendarClock,
   Check,
   Copy,
   ExternalLink,
   Globe2,
-  KeyRound,
   LockKeyhole,
   Network,
   Pause,
@@ -18,10 +15,8 @@ import {
   RotateCcw,
   Settings2,
   ShieldCheck,
-  Sparkles,
   Trash2,
   TriangleAlert,
-  Webhook,
   X,
 } from "lucide-react";
 import {
@@ -140,13 +135,7 @@ const tabs: Array<{
   icon: React.ComponentType<{ size?: number }>;
 }> = [
   { id: "general", label: "General", icon: Settings2 },
-  { id: "sandbox", label: "Sandbox", icon: Box },
-  { id: "archived-sessions", label: "Archived sessions", icon: Archive },
-  { id: "credentials", label: "Agent harness", icon: KeyRound },
-  { id: "schedules", label: "Schedules", icon: CalendarClock },
-  { id: "webhooks", label: "Webhooks", icon: Webhook },
-  { id: "skills", label: "Skills", icon: Sparkles },
-  { id: "mcp", label: "MCP servers", icon: Cable },
+  { id: "sandbox", label: "Sandbox & snapshots", icon: Box },
   { id: "egress-credentials", label: "Credentials", icon: ShieldCheck },
   { id: "network", label: "Network", icon: Network },
 ];
@@ -354,7 +343,7 @@ export function EnvironmentSettings({
     setWorkspaceBackupsLoading(true);
     setWorkspaceBackupError("");
     void apiFetch<ApiEnvelope<EnvironmentWorkspaceBackup[]>>(
-      `/api/v1/environments/${encodeURIComponent(environment.id)}/workspace-backups`,
+      `/api/v1/environments/${encodeURIComponent(environment.id)}/snapshots`,
       { signal: controller.signal },
     )
       .then((response) => {
@@ -365,7 +354,7 @@ export function EnvironmentSettings({
           setWorkspaceBackupError(
             error instanceof Error
               ? error.message
-              : "Workspace backups could not be loaded.",
+              : "Environment snapshots could not be loaded.",
           );
         }
       })
@@ -773,17 +762,17 @@ export function EnvironmentSettings({
     try {
       const response = await apiFetch<
         ApiEnvelope<{
-          backup: EnvironmentWorkspaceBackup;
+          snapshot: EnvironmentWorkspaceBackup;
           environment: Environment;
         }>
       >(
-        `/api/v1/environments/${encodeURIComponent(environment.id)}/workspace-backups`,
+        `/api/v1/environments/${encodeURIComponent(environment.id)}/snapshots`,
         { method: "POST" },
       );
       setWorkspaceBackups((current) => [
-        response.data.backup,
+        response.data.snapshot,
         ...current.filter(
-          (backup) => backup.id !== response.data.backup.id,
+          (backup) => backup.id !== response.data.snapshot.id,
         ),
       ]);
       setDraft((current) => ({
@@ -795,7 +784,7 @@ export function EnvironmentSettings({
       setWorkspaceBackupError(
         error instanceof Error
           ? error.message
-          : "The Workspace backup could not be created.",
+          : "The Environment snapshot could not be created.",
       );
     } finally {
       setWorkspaceBackupBusy(false);
@@ -849,12 +838,12 @@ export function EnvironmentSettings({
     try {
       const response = await apiFetch<
         ApiEnvelope<{
-          backup: EnvironmentWorkspaceBackup;
+          snapshot: EnvironmentWorkspaceBackup;
           environment: Environment;
           unavailableSessionCount: number;
         }>
       >(
-        `/api/v1/environments/${encodeURIComponent(environment.id)}/workspace-backups/${encodeURIComponent(workspaceRestoreBackup.id)}/restore`,
+        `/api/v1/environments/${encodeURIComponent(environment.id)}/snapshots/${encodeURIComponent(workspaceRestoreBackup.id)}/restore`,
         {
           method: "PUT",
           body: JSON.stringify({ confirmation: workspaceRestoreName }),
@@ -879,14 +868,14 @@ export function EnvironmentSettings({
       setWorkspaceRestoreName("");
       setWorkspaceRestoreSuccess(
         response.data.unavailableSessionCount > 0
-          ? `Workspace restored. ${response.data.unavailableSessionCount} newer ${response.data.unavailableSessionCount === 1 ? "Session is" : "Sessions are"} unavailable because their native harness state was created after this backup.`
-          : "Workspace restored. The shared Sandbox is ready with the selected backup.",
+          ? `Environment restored. Legacy app-server state created after this snapshot was invalidated (${response.data.unavailableSessionCount} ${response.data.unavailableSessionCount === 1 ? "record" : "records"}).`
+          : "Environment restored. The shared Sandbox is ready with the selected snapshot.",
       );
     } catch (error) {
       setWorkspaceBackupError(
         error instanceof Error
           ? error.message
-          : "The Workspace backup could not be restored.",
+          : "The Environment snapshot could not be restored.",
       );
     } finally {
       setWorkspaceRestoreBusy(false);
@@ -982,7 +971,7 @@ export function EnvironmentSettings({
 
   return (
     <div
-      className="modal-layer settings-layer"
+      className="modal-layer settings-layer terminal-v2-settings"
       role="presentation"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget && !deleting) {
@@ -1060,7 +1049,7 @@ export function EnvironmentSettings({
               <SettingsSection
                 eyebrow="Environment identity"
                 title="General"
-                description="Sessions are grouped by Environment, and each one starts from a pinned Environment revision."
+                description="An Environment owns one persistent Sandbox and one native coding-agent terminal shared across your devices."
               >
                 <div className="field-grid two-columns">
                   <label>
@@ -1138,8 +1127,8 @@ export function EnvironmentSettings({
                     <div>
                       <strong>Delete Environment</strong>
                       <p>
-                        Permanently delete every Session, the shared Sandbox,
-                        Sandbox rootfs and stored coding-agent credential.
+                        Permanently delete the shared Sandbox, its RootFS,
+                        terminal state, and stored coding-agent credential.
                       </p>
                     </div>
                   </div>
@@ -1169,7 +1158,8 @@ export function EnvironmentSettings({
                         />
                       </label>
                       <p>
-                        This cannot be undone. Archived Sessions are deleted too.
+                        This cannot be undone. Create a named snapshot first if
+                        you need to preserve the RootFS.
                       </p>
                       {deleteError ? (
                         <p className="settings-inline-error" role="alert">
@@ -1218,7 +1208,7 @@ export function EnvironmentSettings({
               <SettingsSection
                 eyebrow="Environment runtime"
                 title="Sandbox"
-                description="Configure lifecycle and resources for the shared Sandbox used by every Session in this Environment."
+                description="Configure lifecycle, resources, and named RootFS snapshots for this Environment's Sandbox."
               >
                 <div className="settings-card sandbox-lifecycle-card">
                   <div className="sandbox-lifecycle-heading">
@@ -1226,8 +1216,8 @@ export function EnvironmentSettings({
                       <strong>Sandbox lifecycle</strong>
                       <p>
                         Pause the Sandbox when it is not needed, or restart it
-                        to recover from broken processes, terminals, or
-                        Workspace portals.
+                        to recover from broken processes, terminal sessions,
+                        or Workspace access.
                       </p>
                     </div>
                     <span
@@ -1313,9 +1303,8 @@ export function EnvironmentSettings({
                             : "Restart the shared Sandbox?"}
                         </strong>
                         <small>
-                          Running Turns, terminals, and live connections may be
-                          interrupted. Workspace files and native Session
-                          history remain durable.
+                          The live agent process, terminal, and connections are
+                          interrupted. Committed RootFS data remains durable.
                         </small>
                       </span>
                       <div>
@@ -1469,7 +1458,7 @@ export function EnvironmentSettings({
                 <div className="settings-card workspace-backup-card">
                   <div className="workspace-backup-heading">
                     <div>
-                      <strong>Workspace backups</strong>
+                      <strong>Environment snapshots</strong>
                       <p>
                         Create native snapshots of the Environment rootfs,
                         including Workspace and harness state. Retention removes
@@ -1492,15 +1481,15 @@ export function EnvironmentSettings({
                         className={workspaceBackupBusy ? "is-spinning" : undefined}
                         aria-hidden="true"
                       />
-                      {workspaceBackupBusy ? "Backing up…" : "Back up now"}
+                      {workspaceBackupBusy ? "Snapshotting…" : "Snapshot now"}
                     </button>
                   </div>
                   <div className="workspace-backup-fields">
                     <label className="full-field">
-                      Automatic backup frequency
+                      Automatic snapshot frequency
                       <select
                         name="environment-workspace-backup-interval"
-                        aria-label="Workspace backup frequency"
+                        aria-label="Environment snapshot frequency"
                         value={draft.workspaceBackup.intervalSeconds}
                         onChange={(event) => {
                           const intervalSeconds = Number(
@@ -1531,7 +1520,7 @@ export function EnvironmentSettings({
                         )}
                       </select>
                       <small>
-                        Off disables scheduled backups; manual backups remain
+                        Off disables scheduled snapshots; manual snapshots remain
                         available.
                       </small>
                     </label>
@@ -1539,7 +1528,7 @@ export function EnvironmentSettings({
                       Retention
                       <select
                         name="environment-workspace-backup-retention"
-                        aria-label="Workspace backup retention"
+                        aria-label="Environment snapshot retention"
                         value={draft.workspaceBackup.retentionCount}
                         onChange={(event) => {
                           const retentionCount = Number(
@@ -1565,19 +1554,19 @@ export function EnvironmentSettings({
                           (retentionCount) => (
                             <option key={retentionCount} value={retentionCount}>
                               Keep {retentionCount}{" "}
-                              {retentionCount === 1 ? "backup" : "backups"}
+                              {retentionCount === 1 ? "snapshot" : "snapshots"}
                             </option>
                           ),
                         )}
                       </select>
                       <small>
-                        Applies to both automatic and manual Sandpi backups.
+                        Applies to both automatic and manual Sandpi snapshots.
                       </small>
                     </label>
                   </div>
                   <div className="workspace-backup-status" aria-live="polite">
                     <span>
-                      <small>Last backup</small>
+                      <small>Last snapshot</small>
                       <strong>
                         {draft.workspaceBackup.lastBackupAt
                           ? formatArchivedSessionTime(
@@ -1585,14 +1574,14 @@ export function EnvironmentSettings({
                               language,
                               timeZone,
                             )
-                          : "No backup yet"}
+                          : "No snapshot yet"}
                       </strong>
                     </span>
                     <span>
-                      <small>Next backup</small>
+                      <small>Next snapshot</small>
                       <strong>
                         {draft.workspaceBackup.intervalSeconds === 0
-                          ? "Scheduled backups off"
+                          ? "Scheduled snapshots off"
                           : draft.workspaceBackup.nextBackupAt
                             ? formatArchivedSessionTime(
                                 draft.workspaceBackup.nextBackupAt,
@@ -1613,19 +1602,19 @@ export function EnvironmentSettings({
                     </p>
                   ) : null}
                   {workspaceBackupsLoading ? (
-                    <p className="workspace-backup-empty">Loading backups…</p>
+                    <p className="workspace-backup-empty">Loading snapshots…</p>
                   ) : workspaceBackups.length > 0 ? (
                     <div
                       className="workspace-backup-list"
-                      aria-label="Workspace backups"
+                      aria-label="Environment snapshots"
                     >
                       {workspaceBackups.slice(0, 7).map((backup) => (
                         <div key={backup.id} className="workspace-backup-row">
                           <span>
                             <strong>
                               {backup.kind === "automatic"
-                                ? "Automatic backup"
-                                : "Manual backup"}
+                                ? "Automatic snapshot"
+                                : "Manual snapshot"}
                             </strong>
                             <time dateTime={unixTimestampToIso(backup.createdAt)}>
                               {formatArchivedSessionTime(
@@ -1639,7 +1628,7 @@ export function EnvironmentSettings({
                             <button
                               type="button"
                               className="workspace-backup-restore-button"
-                              aria-label={`Restore backup from ${formatArchivedSessionTime(
+                              aria-label={`Restore snapshot from ${formatArchivedSessionTime(
                                 backup.createdAt,
                                 language,
                                 timeZone,
@@ -1663,24 +1652,25 @@ export function EnvironmentSettings({
                     </div>
                   ) : (
                     <p className="workspace-backup-empty">
-                      No Sandpi Workspace backups yet.
+                      No Sandpi Environment snapshots yet.
                     </p>
                   )}
                   {workspaceRestoreBackup ? (
                     <div
                       className="workspace-backup-restore-confirm"
                       role="group"
-                      aria-label="Confirm Workspace restore"
+                      aria-label="Confirm Environment snapshot restore"
                     >
                       <div>
                         <TriangleAlert size={16} aria-hidden="true" />
                         <span>
-                          <strong>Restore the entire shared Workspace?</strong>
+                          <strong>Restore this Environment snapshot?</strong>
                           <small>
-                            Sandpi pauses the Sandbox and rolls every Workspace
-                            file plus Agent Harness state back to this backup.
-                            Sessions created after it will become unavailable.
-                            This cannot be undone unless you have a newer backup.
+                            Sandpi pauses the Sandbox and rolls the complete RootFS,
+                            Workspace, and Agent state back to this snapshot.
+                            Agent filesystem changes made after it will be
+                            discarded. This cannot be undone unless you have a
+                            newer snapshot.
                           </small>
                         </span>
                       </div>
@@ -1688,7 +1678,7 @@ export function EnvironmentSettings({
                         Type <code>{environment.name}</code> to confirm
                         <input
                           name="environment-workspace-restore-confirmation"
-                          aria-label="Environment name confirmation for Workspace restore"
+                          aria-label="Environment name confirmation for snapshot restore"
                           autoComplete="off"
                           value={workspaceRestoreName}
                           disabled={workspaceRestoreBusy}
@@ -1726,8 +1716,8 @@ export function EnvironmentSettings({
                             aria-hidden="true"
                           />
                           {workspaceRestoreBusy
-                            ? "Restoring Workspace…"
-                            : "Restore Workspace"}
+                            ? "Restoring snapshot…"
+                            : "Restore snapshot"}
                         </button>
                       </div>
                     </div>
@@ -1751,9 +1741,8 @@ export function EnvironmentSettings({
                   />
                   <DefinitionRow label="Sandbox" value={draft.sandboxId} code />
                   <DefinitionRow
-                    label="Harness Supervisor"
-                    value={draft.supervisorSessionId || "Starts on demand"}
-                    code={Boolean(draft.supervisorSessionId)}
+                    label="Native Agent"
+                    value={`${draft.codingAgent.label} · starts on terminal connect`}
                   />
                 </div>
               </SettingsSection>
@@ -2345,7 +2334,7 @@ export function EnvironmentSettings({
               <SettingsSection
                 eyebrow="Environment runtime"
                 title="Credentials"
-                description="Attach write-only credentials to exact outbound destinations for every Session in this Environment's shared Sandbox."
+                description="Attach write-only credentials to exact outbound destinations for this Environment's Sandbox."
               >
                 <EnvironmentEgressCredentials
                   environmentId={draft.id}
@@ -2358,7 +2347,7 @@ export function EnvironmentSettings({
               <SettingsSection
                 eyebrow="Environment runtime"
                 title="Network policy"
-                description="Choose the default outbound action, then add only the domain exceptions. The policy covers every Session in this Environment's shared Sandbox."
+                description="Choose the default outbound action, then add only the domain exceptions. The policy covers every process in this Environment's Sandbox."
               >
                 <fieldset className="network-mode-fieldset">
                   <legend>Default outbound access</legend>
@@ -2569,24 +2558,14 @@ export function EnvironmentSettings({
               <>Confirm or cancel the pending Network mode change.</>
             ) : activeTab === "egress-credentials" ? (
               <>Credential changes are applied immediately.</>
-            ) : activeTab === "schedules" ? (
-              <>Schedule changes are persisted and applied immediately.</>
-            ) : activeTab === "webhooks" ? (
-              <>Webhook changes are persisted and applied immediately.</>
-            ) : activeTab === "skills" || activeTab === "mcp" ? (
-              <>{draft.codingAgent.label} changes are saved immediately.</>
             ) : activeTab === "network" ? (
-              <>Network changes apply to every Session in this Environment.</>
+              <>Network changes apply to every process in this Environment.</>
             ) : (
               <>Changes apply to this Environment and its shared Sandbox.</>
             )}
           </span>
           <div>
-            {activeTab === "skills" ||
-            activeTab === "mcp" ||
-            activeTab === "egress-credentials" ||
-            activeTab === "schedules" ||
-            activeTab === "webhooks" ? (
+            {activeTab === "egress-credentials" ? (
               <button type="button" className="button-primary" onClick={onClose}>
                 Done
               </button>

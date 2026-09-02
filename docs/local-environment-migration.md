@@ -1,5 +1,12 @@
 # Migrate a local coding-agent environment to Sandpi
 
+> **v2 compatibility note.** Environment creation, Workspace files, lifecycle,
+> network, and egress credentials remain supported. Skill, MCP, memory, Session,
+> and Turn migration commands target the retired v1 Codex app-server API and
+> return HTTP 410 on a v2 server. Native agent login is now completed in the
+> Environment TUI; Codex also retains the explicit server-side auth import shown
+> in the project README.
+
 The `sandpi` CLI lets a user or a local coding agent inspect a local setup and apply selected configuration to a Sandpi Environment. Migration is resource-oriented: there is no proprietary bundle, no whole-Workspace upload, and no command that guesses how every coding-agent product should be converted.
 
 This model supports both an empty target and an Environment that already contains instructions, Skills, MCP servers, memory settings, or credentials.

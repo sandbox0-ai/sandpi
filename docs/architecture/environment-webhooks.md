@@ -1,4 +1,11 @@
-# Environment Webhooks
+# Legacy v1 Environment Webhooks
+
+> **Retired in Sandpi v2.** Webhook execution workers and ingress no longer
+> start, the UI no longer exposes Webhook configuration, and
+> execution-producing API mutations return HTTP 410. Read and cleanup endpoints
+> remain temporarily available for migration. Future automation requires an
+> explicit headless adapter and must not inject keystrokes into a human-operated
+> TUI.
 
 Environment Webhooks let an external system trigger a native coding-agent Turn
 without exposing a Sandbox process or using Sandbox Functions as an HTTP

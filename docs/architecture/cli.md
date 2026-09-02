@@ -1,5 +1,12 @@
 # Sandpi CLI and configuration migration
 
+> **v2 compatibility note.** Environment, Workspace file, lifecycle, snapshot,
+> fork, network, and egress-credential operations remain valid. The native
+> Codex Skill, MCP, memory, Session, and Turn resources described below belong
+> to the retired v1 app-server surface; their execution/configuration mutations
+> return HTTP 410 in v2. They remain in this document only to define migration
+> behavior for older deployments.
+
 ## Decision
 
 Sandpi ships one Go CLI from `cli/` in this repository. The CLI mirrors Sandpi

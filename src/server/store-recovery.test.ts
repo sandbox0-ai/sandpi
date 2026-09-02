@@ -1087,7 +1087,7 @@ test("exceptional native recovery candidates exclude archived and waiting Sessio
   assert.deepEqual(query.values, ["environment-one"]);
 });
 
-test("idle pause is guarded only by visible pending or active Turn projections", async () => {
+test("native TUI idle pause no longer depends on legacy Session projections", async () => {
   const fixture = transactionalStore(() => ({ rows: [], rowCount: 0 }));
 
   assert.equal(
@@ -1101,10 +1101,47 @@ test("idle pause is guarded only by visible pending or active Turn projections",
   assert.ok(update);
   assert.match(update.sql, /environment\.idle_pause_timeout_seconds > 0/);
   assert.match(update.sql, /idle_pause_due_at <= NOW\(\)/);
-  assert.match(update.sql, /session\.archived = FALSE/);
-  assert.match(update.sql, /session\.status IN \('provisioning', 'running'\)/);
-  assert.match(update.sql, /active_native_turn_id IS NOT NULL/);
-  assert.match(update.sql, /pending_turn_phase IS NOT NULL/);
+  assert.doesNotMatch(update.sql, /FROM sessions/);
+  assert.doesNotMatch(update.sql, /active_native_turn_id/);
+  assert.doesNotMatch(update.sql, /pending_turn_phase/);
+});
+
+test("legacy app-server Supervisor retirement is selected and fenced", async () => {
+  const fixture = transactionalStore((sql) => ({
+    rows: sql.includes("SELECT runtime.environment_id")
+      ? [{ environment_id: "environment-one" }]
+      : [],
+    rowCount: 1,
+  }));
+
+  assert.deepEqual(
+    await fixture.store.environmentLegacySupervisorCandidateIds(17),
+    ["environment-one"],
+  );
+  await fixture.store.recordEnvironmentLegacySupervisorRetired(
+    "environment-one",
+    "sandbox-one",
+    "supervisor-one",
+  );
+
+  const candidate = fixture.calls[0];
+  assert.match(candidate.sql, /runtime\.supervisor_session_id IS NOT NULL/);
+  assert.match(candidate.sql, /runtime\.desired_state <> 'terminated'/);
+  assert.match(
+    candidate.sql,
+    /runtime\.updated_at <= NOW\(\) - INTERVAL '1 minute'/,
+  );
+  assert.deepEqual(candidate.values, [17]);
+
+  const retired = fixture.calls[1];
+  assert.match(retired.sql, /supervisor_session_id = NULL/);
+  assert.match(retired.sql, /decoder_attempt_id = NULL/);
+  assert.match(retired.sql, /supervisor_session_id = \$3/);
+  assert.deepEqual(retired.values, [
+    "environment-one",
+    "sandbox-one",
+    "supervisor-one",
+  ]);
 });
 
 test("archiving requires an idle Session projection", async () => {

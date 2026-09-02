@@ -123,16 +123,12 @@ test("one elected worker snapshots the Workspace and prunes only journaled backu
   } as unknown as SandpiStore;
   const runtime = {
     mode: "sandbox0",
-    async pauseEnvironment(received: StoredEnvironmentRuntime) {
-      assert.strictEqual(received, runtimeState);
-      calls.push("pause");
-    },
     async createEnvironmentWorkspaceBackup(
       received: StoredEnvironmentRuntime,
       input: { name: string; description: string },
     ) {
       assert.strictEqual(received, runtimeState);
-      assert.match(input.name, /^sandpi-workspace-/);
+      assert.match(input.name, /^sandpi-snapshot-/);
       assert.match(input.description, /automatic/);
       calls.push("create");
       return {
@@ -140,10 +136,6 @@ test("one elected worker snapshots the Workspace and prunes only journaled backu
         name: input.name,
         createdAt: new Date("2026-07-21T12:00:00.000Z"),
       };
-    },
-    async resumeEnvironment(received: StoredEnvironmentRuntime) {
-      assert.strictEqual(received, runtimeState);
-      calls.push("resume");
     },
     async deleteEnvironmentWorkspaceBackup(
       received: StoredEnvironmentRuntime,
@@ -166,9 +158,7 @@ test("one elected worker snapshots the Workspace and prunes only journaled backu
   assert.deepEqual(calls, [
     "lock",
     "prepare",
-    "pause",
     "create",
-    "resume",
     "record",
     "list-expired",
     "delete-native",
@@ -203,15 +193,9 @@ test("a failed native snapshot remains a durable retry", async () => {
   } as unknown as SandpiStore;
   const runtime = {
     mode: "sandbox0",
-    async pauseEnvironment() {
-      calls.push("pause");
-    },
     async createEnvironmentWorkspaceBackup() {
       calls.push("create");
       throw new Error("snapshot quota exceeded");
-    },
-    async resumeEnvironment() {
-      calls.push("resume");
     },
   } as unknown as RuntimeAdapter;
   const service = new EnvironmentWorkspaceBackupService(store, runtime, logger);
@@ -220,10 +204,10 @@ test("a failed native snapshot remains a durable retry", async () => {
   await service.close();
 
   assert.equal(recordedError, "snapshot quota exceeded");
-  assert.deepEqual(calls, ["pause", "create", "resume"]);
+  assert.deepEqual(calls, ["create"]);
 });
 
-test("a failed post-snapshot resume deletes the unrecorded rootfs snapshot", async () => {
+test("a failed snapshot journal write deletes the unrecorded rootfs snapshot", async () => {
   const calls: string[] = [];
   let recordedError = "";
   const store = {
@@ -240,7 +224,7 @@ test("a failed post-snapshot resume deletes the unrecorded rootfs snapshot", asy
       return prepared;
     },
     async recordEnvironmentWorkspaceBackup() {
-      assert.fail("an unresumed backup must not be recorded");
+      throw new Error("snapshot journal unavailable");
     },
     async recordEnvironmentWorkspaceBackupFailure(
       _environmentId: string,
@@ -252,9 +236,6 @@ test("a failed post-snapshot resume deletes the unrecorded rootfs snapshot", asy
   } as unknown as SandpiStore;
   const runtime = {
     mode: "sandbox0",
-    async pauseEnvironment() {
-      calls.push("pause");
-    },
     async createEnvironmentWorkspaceBackup() {
       calls.push("create");
       return {
@@ -262,10 +243,6 @@ test("a failed post-snapshot resume deletes the unrecorded rootfs snapshot", asy
         name: "unrecorded",
         createdAt: new Date("2026-07-21T12:00:00.000Z"),
       };
-    },
-    async resumeEnvironment() {
-      calls.push("resume");
-      throw new Error("resume unavailable");
     },
     async deleteEnvironmentWorkspaceBackup(
       _runtime: StoredEnvironmentRuntime,
@@ -280,8 +257,8 @@ test("a failed post-snapshot resume deletes the unrecorded rootfs snapshot", asy
   await service.reconcileOnce();
   await service.close();
 
-  assert.equal(recordedError, "resume unavailable");
-  assert.deepEqual(calls, ["pause", "create", "resume", "delete"]);
+  assert.equal(recordedError, "snapshot journal unavailable");
+  assert.deepEqual(calls, ["create", "delete"]);
 });
 
 test("manual backup authorizes management and returns the refreshed policy state", async () => {
@@ -301,7 +278,6 @@ test("manual backup authorizes management and returns the refreshed policy state
       environmentReads += 1;
       return environmentReads > 1 ? refreshedEnvironment : environment;
     },
-    async assertEnvironmentWorkspaceQuiescent() {},
     async prepareEnvironmentWorkspaceBackup(
       _environmentId: string,
       force: boolean,
@@ -331,7 +307,6 @@ test("manual backup authorizes management and returns the refreshed policy state
   } as unknown as SandpiStore;
   const runtime = {
     mode: "sandbox0",
-    async pauseEnvironment() {},
     async createEnvironmentWorkspaceBackup(
       _runtime: StoredEnvironmentRuntime,
       input: { name: string },
@@ -342,7 +317,6 @@ test("manual backup authorizes management and returns the refreshed policy state
         createdAt: new Date("2026-07-21T12:00:00.000Z"),
       };
     },
-    async resumeEnvironment() {},
   } as unknown as RuntimeAdapter;
   const service = new EnvironmentWorkspaceBackupService(
     rootStore,

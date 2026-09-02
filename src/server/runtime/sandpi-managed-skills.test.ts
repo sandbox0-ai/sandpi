@@ -43,38 +43,42 @@ test("loads every release-owned Sandpi skill and interface", () => {
   );
 });
 
-test("keeps the public guide aligned with Playwright, lifecycle, and canonical references", () => {
+test("keeps the public guide aligned with v2 terminal authority and canonical references", () => {
   const guide = readFileSync(
     new URL("../../../public/llms.txt", import.meta.url),
     "utf8",
   );
 
+  assert.match(guide, /## Native terminal/);
+  assert.match(guide, /Sandpi renders the procd PTY/);
+  assert.match(guide, /Only one browser tab holds the writable terminal controller lease/);
+  assert.match(guide, /`ttyd` is installed as a pinned diagnostic/);
   assert.match(guide, /## Playwright CLI/);
-  assert.match(guide, /materializes its version-matched upstream Agent Skill/);
+  assert.match(guide, /provides its version-matched upstream Agent Skill/);
   assert.match(
     guide,
-    /neither an Environment Browser nor an application Preview tab/,
+    /neither an Environment Browser nor an application\s+Preview tab/,
   );
-  assert.match(guide, /browser executable must be provisioned separately/);
-  assert.match(guide, /soft TTL and hard TTL to zero/);
-  assert.match(guide, /does not idle-pause an Environment while/);
-  assert.match(guide, /Process memory, sockets, terminal process state/);
+  assert.match(guide, /browser executable must be\s+provisioned separately/);
+  assert.match(guide, /soft TTL and hard TTL are zero/);
+  assert.match(guide, /live PTY process/);
   assert.match(guide, /\/cli\/README\.md/);
   assert.match(guide, /docs\/local-environment-migration\.md/);
   assert.match(guide, /docs\/architecture\/cli\.md/);
+  assert.match(guide, /docs\/architecture\/native-agent-terminal-authority\.md/);
   assert.doesNotMatch(guide, /30-day|30 day|another full month/i);
 });
 
 test("keeps current lifecycle documentation free of the retired hard expiry", () => {
   const architecture = readFileSync(
     new URL(
-      "../../../docs/architecture/native-session-authority.md",
+      "../../../docs/architecture/native-agent-terminal-authority.md",
       import.meta.url,
     ),
     "utf8",
   );
 
-  assert.match(architecture, /soft `ttl=0` and\n`hard_ttl=0`/);
+  assert.match(architecture, /Sandbox0 pause\/resume preserves a committed RootFS generation/);
   assert.doesNotMatch(
     architecture,
     /30-day Sandbox0 hard TTL|another full month/i,

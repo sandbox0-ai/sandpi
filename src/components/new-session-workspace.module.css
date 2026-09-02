@@ -367,6 +367,8 @@
 
   .mobileMenuButton {
     display: inline-flex;
+    width: 44px;
+    height: 44px;
   }
 }
 

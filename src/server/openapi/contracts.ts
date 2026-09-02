@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { ENVIRONMENT_METRIC_RANGES_SECONDS } from "@/lib/environment-metrics";
 import { WORKSPACE_ROOT } from "@/lib/workspace-path-policy";
+import { isNativeTuiV2LegacyOperation } from "@/server/native-tui-v2";
 import {
   billingCheckoutSchema,
   codexComposerUploadSchema,
@@ -12,6 +13,7 @@ import {
   codexSkillConfigurationSchema,
   codexSkillPutSchema,
   environmentCreateSchema,
+  environmentForkSchema,
   environmentOrderSchema,
   environmentProvisioningSchema,
   environmentPreviewCreateSchema,
@@ -55,6 +57,7 @@ import {
   environmentMetricsSchema,
   environmentPreviewGrantSchema,
   environmentScheduleRunSchema,
+  environmentSnapshotSchema,
   environmentScheduleSchema,
   environmentWebhookDeliverySchema,
   githubWebhookConnectionInventorySchema,
@@ -102,6 +105,7 @@ export interface OpenApiRouteContract {
     body?: z.ZodType;
     response?: Record<string | number, z.ZodType>;
     hide?: boolean;
+    deprecated?: boolean;
     [extension: `x-${string}`]: unknown;
   };
 }
@@ -182,7 +186,7 @@ const workspaceRawFile = z.object({
   kind: z.enum(["binary", "text"]),
 });
 
-export const openApiRouteContracts: readonly OpenApiRouteContract[] = [
+const allOpenApiRouteContracts: readonly OpenApiRouteContract[] = [
   defineContract({
     method: "GET",
     url: "/health/live",
@@ -678,6 +682,69 @@ export const openApiRouteContracts: readonly OpenApiRouteContract[] = [
       summary: "List Workspace backups",
       tags: ["Workspace backups"],
       response: { 200: dataEnvelope(z.array(workspaceBackupSchema)) },
+    },
+  }),
+  defineContract({
+    method: "GET",
+    url: "/api/v1/environments/:environmentId/snapshots",
+    schema: {
+      operationId: "listEnvironmentSnapshots",
+      summary: "List Environment snapshots",
+      tags: ["Environment snapshots"],
+      response: { 200: dataEnvelope(z.array(environmentSnapshotSchema)) },
+    },
+  }),
+  defineContract({
+    method: "POST",
+    url: "/api/v1/environments/:environmentId/forks",
+    schema: {
+      operationId: "forkEnvironment",
+      summary: "Fork an Environment",
+      description:
+        "Creates an idempotent paused Sandbox0 fork from the Environment's current RootFS or one of its named snapshots. Credentials and terminal-control leases are not copied.",
+      tags: ["Environments"],
+      body: environmentForkSchema,
+      response: { 201: dataEnvelope(environmentSchema) },
+    },
+  }),
+  defineContract({
+    method: "POST",
+    url: "/api/v1/environments/:environmentId/snapshots",
+    schema: {
+      operationId: "createEnvironmentSnapshot",
+      summary: "Snapshot a running Environment",
+      description:
+        "Creates a native Sandbox0 RootFS snapshot through a brief writer barrier. A running source Sandbox and Agent remain running.",
+      tags: ["Environment snapshots"],
+      response: {
+        201: dataEnvelope(
+          z.object({
+            snapshot: environmentSnapshotSchema,
+            environment: environmentSchema,
+          }),
+        ),
+      },
+    },
+  }),
+  defineContract({
+    method: "PUT",
+    url: "/api/v1/environments/:environmentId/snapshots/:snapshotId/restore",
+    schema: {
+      operationId: "restoreEnvironmentSnapshot",
+      summary: "Restore an Environment snapshot",
+      description:
+        "Pauses the Sandbox, restores the selected RootFS snapshot, invalidates old Agent terminal coordinates, and resumes only when the Environment was previously running.",
+      tags: ["Environment snapshots"],
+      body: workspaceBackupRestoreSchema,
+      response: {
+        200: dataEnvelope(
+          z.object({
+            snapshot: environmentSnapshotSchema,
+            environment: environmentSchema,
+            unavailableSessionCount: z.number().int().nonnegative(),
+          }),
+        ),
+      },
     },
   }),
   defineContract({
@@ -1527,6 +1594,29 @@ export const openApiRouteContracts: readonly OpenApiRouteContract[] = [
   }),
   defineContract({
     method: "GET",
+    url: "/api/v1/environments/:environmentId/agent-terminal",
+    schema: {
+      operationId: "connectEnvironmentAgentTerminal",
+      summary: "Connect to the native Environment coding-agent TUI",
+      tags: ["Terminal"],
+      querystring: z.object({
+        after: z.coerce.number().int().nonnegative().optional(),
+        agentSessionId: z.string().optional(),
+        clientId: z.string().trim().min(1).max(200),
+      }),
+      response: { 101: noContent },
+      "x-sandpi-websocket": {
+        clientMessages: {
+          $ref: "#/components/schemas/AgentTerminalClientMessage",
+        },
+        serverMessages: {
+          $ref: "#/components/schemas/AgentTerminalServerMessage",
+        },
+      },
+    },
+  }),
+  defineContract({
+    method: "GET",
     url: "/api/v1/preferences",
     schema: {
       operationId: "getPreferences",
@@ -1547,6 +1637,25 @@ export const openApiRouteContracts: readonly OpenApiRouteContract[] = [
     },
   }),
 ] as const;
+
+export const openApiRouteContracts: readonly OpenApiRouteContract[] =
+  allOpenApiRouteContracts.map((contract) =>
+    isNativeTuiV2LegacyOperation(contract.method, contract.url)
+      ? {
+          ...contract,
+          schema: {
+            ...contract.schema,
+            deprecated: true,
+            description:
+              "Retained as a read-only v1 migration boundary. Sandpi v2 returns HTTP 410 because native TUI input is not a durable automation protocol.",
+            response: {
+              ...contract.schema.response,
+              410: errorSchema,
+            },
+          },
+        }
+      : contract,
+  );
 
 export function openApiContractKey(
   method: string,

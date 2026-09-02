@@ -3,6 +3,8 @@ export interface TerminalInputQueueOptions<Message> {
   forward: (message: Message) => Promise<void> | void;
   requiresAuthorization: (message: Message) => boolean;
   onError: (error: unknown) => void;
+  /** View-only Agent terminals stay connected after rejected input. */
+  closeOnError?: boolean;
 }
 
 /**
@@ -27,7 +29,7 @@ export class TerminalInputQueue<Message> {
     });
     this.tail = task.catch((error) => {
       if (this.closed) return;
-      this.closed = true;
+      if (this.options.closeOnError !== false) this.closed = true;
       this.options.onError(error);
     });
   }

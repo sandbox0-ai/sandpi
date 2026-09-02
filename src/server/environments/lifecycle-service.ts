@@ -264,6 +264,60 @@ export class EnvironmentLifecycleService {
 
   private async reconcileLifecycle() {
     const limit = this.options.batchSize ?? 50;
+    const legacySupervisorCandidates =
+      await this.store.environmentLegacySupervisorCandidateIds(limit);
+    for (const environmentId of legacySupervisorCandidates) {
+      await this.store.withEnvironmentLifecycleLock(
+        environmentId,
+        async (lockedStore) => {
+          const scopedStore = lockedStore ?? this.store;
+          const runtime =
+            await scopedStore.prepareEnvironmentLegacySupervisorRetirement(
+              environmentId,
+            );
+          if (!runtime?.supervisorSessionId) return;
+          try {
+            await this.runtime.retireLegacyEnvironmentSupervisor(runtime);
+            // Updating the legacy Session desired state may auto-resume a
+            // paused Sandbox so procd can perform the stop. Preserve Sandpi's
+            // existing lifecycle intent before releasing the last v1
+            // coordinates; otherwise the Sandbox can remain physically
+            // running while this row is already marked paused.
+            if (runtime.desiredState === "paused") {
+              await this.beforePause?.(environmentId, scopedStore);
+              await this.runtime.pauseEnvironment(
+                runtime,
+                this.controller.signal,
+              );
+              await scopedStore.recordEnvironmentPaused(
+                environmentId,
+                runtime.sandboxId,
+              );
+            }
+            await scopedStore.recordEnvironmentLegacySupervisorRetired(
+              environmentId,
+              runtime.sandboxId,
+              runtime.supervisorSessionId,
+            );
+            this.logger.info(
+              { environmentId },
+              "Legacy Environment app-server Supervisor retired",
+            );
+          } catch (error) {
+            await scopedStore.recordEnvironmentLifecycleError(
+              environmentId,
+              runtime.sandboxId,
+              errorMessage(error),
+            );
+            this.logger.warn(
+              { environmentId, error: errorMessage(error) },
+              "Legacy Environment app-server Supervisor retirement deferred",
+            );
+          }
+        },
+      );
+    }
+
     const policyCandidates =
       await this.store.environmentLifecyclePolicyCandidateIds(limit);
     for (const environmentId of policyCandidates) {
