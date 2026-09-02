@@ -278,6 +278,22 @@ export class EnvironmentLifecycleService {
           if (!runtime?.supervisorSessionId) return;
           try {
             await this.runtime.retireLegacyEnvironmentSupervisor(runtime);
+            // Updating the legacy Session desired state may auto-resume a
+            // paused Sandbox so procd can perform the stop. Preserve Sandpi's
+            // existing lifecycle intent before releasing the last v1
+            // coordinates; otherwise the Sandbox can remain physically
+            // running while this row is already marked paused.
+            if (runtime.desiredState === "paused") {
+              await this.beforePause?.(environmentId, scopedStore);
+              await this.runtime.pauseEnvironment(
+                runtime,
+                this.controller.signal,
+              );
+              await scopedStore.recordEnvironmentPaused(
+                environmentId,
+                runtime.sandboxId,
+              );
+            }
             await scopedStore.recordEnvironmentLegacySupervisorRetired(
               environmentId,
               runtime.sandboxId,

@@ -166,6 +166,85 @@ test("one elected worker durably retires a legacy app-server Supervisor", async 
   assert.deepEqual(calls, ["lock", "prepare", "stop", "record"]);
 });
 
+test("legacy Supervisor retirement restores an Environment's paused state", async () => {
+  const calls: string[] = [];
+  const runtimeState = storedRuntime({
+    desiredState: "paused",
+    pausedAt: new Date("2026-09-02T00:00:00.000Z"),
+  });
+  const scopedStore = {
+    async prepareEnvironmentLegacySupervisorRetirement() {
+      calls.push("prepare");
+      return runtimeState;
+    },
+    async recordEnvironmentPaused(
+      environmentId: string,
+      sandboxId: string,
+    ) {
+      assert.equal(environmentId, runtimeState.id);
+      assert.equal(sandboxId, runtimeState.sandboxId);
+      calls.push("record-paused");
+    },
+    async recordEnvironmentLegacySupervisorRetired() {
+      calls.push("record-retired");
+    },
+    async recordEnvironmentLifecycleError() {
+      assert.fail("successful retirement must not record an error");
+    },
+  } as unknown as SandpiStore;
+  const store = {
+    async environmentLegacySupervisorCandidateIds() {
+      return [runtimeState.id];
+    },
+    async environmentLifecyclePolicyCandidateIds() {
+      return [];
+    },
+    async environmentIdlePauseCandidateIds() {
+      return [];
+    },
+    async withEnvironmentLifecycleLock(
+      environmentId: string,
+      operation: (lockedStore: SandpiStore) => Promise<unknown>,
+    ) {
+      assert.equal(environmentId, runtimeState.id);
+      calls.push("lock");
+      return { acquired: true as const, value: await operation(scopedStore) };
+    },
+  } as unknown as SandpiStore;
+  const runtime = {
+    mode: "sandbox0",
+    async retireLegacyEnvironmentSupervisor(
+      received: StoredEnvironmentRuntime,
+    ) {
+      assert.strictEqual(received, runtimeState);
+      calls.push("stop");
+    },
+    async pauseEnvironment(received: StoredEnvironmentRuntime) {
+      assert.strictEqual(received, runtimeState);
+      calls.push("pause");
+    },
+  } as unknown as RuntimeAdapter;
+  const service = new EnvironmentLifecycleService(store, runtime, logger);
+  service.setBeforePause((environmentId, receivedStore) => {
+    assert.equal(environmentId, runtimeState.id);
+    assert.strictEqual(receivedStore, scopedStore);
+    calls.push("flush");
+  });
+
+  await service.reconcileOnce();
+  await service.close();
+
+  assert.deepEqual(calls, [
+    "lock",
+    "prepare",
+    "stop",
+    "flush",
+    "pause",
+    "record-paused",
+    "record-retired",
+  ]);
+});
+
 test("idle pause passes the lifecycle-scoped Store through credential flush", async () => {
   const calls: string[] = [];
   const runtimeState = storedRuntime();
