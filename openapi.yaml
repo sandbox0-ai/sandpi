@@ -98,6 +98,8 @@ components:
                 - leaseVersion
                 - expiresAt
               additionalProperties: false
+            protocol:
+              type: string
           required:
             - type
             - agentId
@@ -108,6 +110,34 @@ components:
             - replayUntil
             - replayReset
             - control
+          additionalProperties: false
+        - type: object
+          properties:
+            type:
+              type: string
+              enum:
+                - events
+            fromSeq:
+              type: integer
+              minimum: -9007199254740991
+              maximum: 9007199254740991
+            toSeq:
+              type: integer
+              minimum: -9007199254740991
+              maximum: 9007199254740991
+            attemptId:
+              type: string
+            stream:
+              type: string
+            dataBase64:
+              type: string
+          required:
+            - type
+            - fromSeq
+            - toSeq
+            - attemptId
+            - stream
+            - dataBase64
           additionalProperties: false
         - type: object
           properties:
@@ -2925,6 +2955,8 @@ components:
               maximum: 9007199254740991
             replayReset:
               type: boolean
+            protocol:
+              type: string
           required:
             - type
             - sessionId
@@ -2932,6 +2964,34 @@ components:
             - replayAfter
             - replayUntil
             - replayReset
+          additionalProperties: false
+        - type: object
+          properties:
+            type:
+              type: string
+              enum:
+                - events
+            fromSeq:
+              type: integer
+              minimum: -9007199254740991
+              maximum: 9007199254740991
+            toSeq:
+              type: integer
+              minimum: -9007199254740991
+              maximum: 9007199254740991
+            attemptId:
+              type: string
+            stream:
+              type: string
+            dataBase64:
+              type: string
+          required:
+            - type
+            - fromSeq
+            - toSeq
+            - attemptId
+            - stream
+            - dataBase64
           additionalProperties: false
         - type: object
           properties:
@@ -4194,6 +4254,19 @@ paths:
           required: true
         - schema:
             type: string
+            enum:
+              - terminal-fast-v1
+          in: query
+          name: protocol
+          required: false
+        - schema:
+            type: string
+            pattern: ^[A-Za-z0-9_-]{16,128}$
+          in: query
+          name: inputId
+          required: false
+        - schema:
+            type: string
             minLength: 1
           in: path
           name: environmentId
@@ -4203,6 +4276,9 @@ paths:
           $ref: "#/components/schemas/AgentTerminalClientMessage"
         serverMessages:
           $ref: "#/components/schemas/AgentTerminalServerMessage"
+        x-sandpi-terminal-binary-frame: When protocol=terminal-fast-v1, contiguous PTY
+          output is sent as a binary _0v1 frame and input may be sent as a
+          binary _0v1 input frame. JSON messages remain the fallback.
       responses:
         "101":
           description: Switching protocols.
@@ -7624,6 +7700,19 @@ paths:
           required: false
         - schema:
             type: string
+            enum:
+              - terminal-fast-v1
+          in: query
+          name: protocol
+          required: false
+        - schema:
+            type: string
+            pattern: ^[A-Za-z0-9_-]{16,128}$
+          in: query
+          name: inputId
+          required: false
+        - schema:
+            type: string
             minLength: 1
           in: path
           name: environmentId
@@ -7633,6 +7722,9 @@ paths:
           $ref: "#/components/schemas/TerminalClientMessageInput"
         serverMessages:
           $ref: "#/components/schemas/TerminalServerMessage"
+        x-sandpi-terminal-binary-frame: When protocol=terminal-fast-v1, contiguous PTY
+          output is sent as a binary _0v1 frame and input may be sent as a
+          binary _0v1 input frame. JSON messages remain the fallback.
       responses:
         "101":
           description: Switching protocols.

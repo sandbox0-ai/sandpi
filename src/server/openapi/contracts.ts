@@ -1580,6 +1580,11 @@ const allOpenApiRouteContracts: readonly OpenApiRouteContract[] = [
       querystring: z.object({
         after: z.coerce.number().int().nonnegative().optional(),
         terminalSessionId: z.string().optional(),
+        protocol: z.enum(["terminal-fast-v1"]).optional(),
+        inputId: z
+          .string()
+          .regex(/^[A-Za-z0-9_-]{16,128}$/)
+          .optional(),
       }),
       response: { 101: noContent },
       "x-sandpi-websocket": {
@@ -1589,6 +1594,8 @@ const allOpenApiRouteContracts: readonly OpenApiRouteContract[] = [
         serverMessages: {
           $ref: "#/components/schemas/TerminalServerMessage",
         },
+        "x-sandpi-terminal-binary-frame":
+          "When protocol=terminal-fast-v1, contiguous PTY output is sent as a binary _0v1 frame and input may be sent as a binary _0v1 input frame. JSON messages remain the fallback.",
       },
     },
   }),
@@ -1603,6 +1610,11 @@ const allOpenApiRouteContracts: readonly OpenApiRouteContract[] = [
         after: z.coerce.number().int().nonnegative().optional(),
         agentSessionId: z.string().optional(),
         clientId: z.string().trim().min(1).max(200),
+        protocol: z.enum(["terminal-fast-v1"]).optional(),
+        inputId: z
+          .string()
+          .regex(/^[A-Za-z0-9_-]{16,128}$/)
+          .optional(),
       }),
       response: { 101: noContent },
       "x-sandpi-websocket": {
@@ -1612,6 +1624,8 @@ const allOpenApiRouteContracts: readonly OpenApiRouteContract[] = [
         serverMessages: {
           $ref: "#/components/schemas/AgentTerminalServerMessage",
         },
+        "x-sandpi-terminal-binary-frame":
+          "When protocol=terminal-fast-v1, contiguous PTY output is sent as a binary _0v1 frame and input may be sent as a binary _0v1 input frame. JSON messages remain the fallback.",
       },
     },
   }),

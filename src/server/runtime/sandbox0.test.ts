@@ -277,6 +277,73 @@ test("opens Pi as the Environment native TUI instead of a browser-owned shell", 
   assert.match(preparedCommand, /Persistent agent credential file is unsafe/);
 });
 
+test("reuses hot native Agent metadata without repeating preparation commands", async () => {
+  const calls: string[] = [];
+  const session = {
+    id: "agent-session-hot",
+    spec: {
+      name: "sandpi-agent-pi",
+      command: ["pi"],
+      env: {
+        HOME: "/workspace",
+        TERM: "xterm-256color",
+        COLORTERM: "truecolor",
+      },
+      eventRetention: {
+        maxBytes: 4 * 1024 * 1024,
+        maxAgeSeconds: 30 * 24 * 60 * 60,
+      },
+    },
+    phase: "running",
+    runtimeGeneration: 9,
+    attempt: { id: "agent-attempt-hot", runtimeGeneration: 9 },
+    cursor: { earliest: 0, latest: 0 },
+  };
+  const runtime = runtimeWithClient({
+    sandboxes: {
+      sandbox(sandboxId: string) {
+        assert.equal(sandboxId, environment.sandboxId);
+        return {
+          async cmd() {
+            calls.push("prepare");
+            return { exitCode: 0 };
+          },
+          async getSession(sessionId: string) {
+            assert.equal(sessionId, session.id);
+            calls.push("get");
+            return session;
+          },
+          async connectSession() {
+            calls.push("connect");
+            return {
+              async *messages() {},
+              send() {},
+              close() {},
+            };
+          },
+        };
+      },
+    },
+  });
+  const runtimeRecord: EnvironmentRuntimeRecord = {
+    ...environmentRuntimeRecord(),
+    runtimeGeneration: 9,
+    agentId: "pi",
+    agentSessionId: session.id,
+    agentAttemptId: session.attempt.id,
+  };
+
+  await runtime.openAgentTerminal(runtimeRecord, "pi");
+  await runtime.openAgentTerminal(runtimeRecord, "pi");
+
+  assert.deepEqual(calls, [
+    "prepare",
+    "get",
+    "connect",
+    "connect",
+  ]);
+});
+
 test("projects the active Sandbox allocation start for live usage", async () => {
   let sandbox = {
     status: "running",

@@ -12,6 +12,7 @@ import {
   SandboxRuntimeMetricStatistic,
   models,
   runtime as generatedRuntime,
+  type Sandbox,
   type SandboxMetrics,
   type SandboxPreviewGrant,
 } from "sandbox0";
@@ -116,6 +117,9 @@ const CREDENTIAL_SOURCE_DELETE_RETRY_DELAYS_MS = [
 // as JSON on disk. A terminal only needs enough tail to rebuild xterm's visible
 // history, so it must not inherit the much larger coding-agent event budget.
 const TERMINAL_EVENT_RETENTION_BYTES = 4 * 1024 * 1024;
+const TERMINAL_SESSION_CACHE_MAX_ENTRIES = 256;
+const TERMINAL_SESSION_CACHE_TTL_MS = 5_000;
+const PREPARED_AGENT_CACHE_TTL_MS = 10_000;
 const ENVIRONMENT_CODEX_HOME = "/workspace/.sandpi/harnesses/codex";
 const WORKSPACE_CODEX_LAYOUT_MARKER = `${ENVIRONMENT_CODEX_HOME}/.sandpi-layout-environment-v1`;
 const ENVIRONMENT_CODEX_AUTH_FILE = CODEX_ENVIRONMENT_CREDENTIAL_PATH;
@@ -168,6 +172,20 @@ find . -mindepth 1 \\
 head -z -n ${MAX_WORKSPACE_FILE_SEARCH_CANDIDATES * 2}`;
 
 type SdkRuntimeMetricSeries = SandboxMetrics["series"][number];
+type SandboxSession = Awaited<ReturnType<Sandbox["getSession"]>>;
+interface TerminalSessionCacheEntry {
+  sandboxId: string;
+  runtimeGeneration: number;
+  cachedAt: number;
+  session: SandboxSession;
+}
+interface PreparedAgentRun {
+  sandboxId: string;
+  agentId: EnvironmentAgentId;
+  runtimeGeneration: number;
+  credentialFingerprint: string;
+  preparedAt: number;
+}
 const decompressZstd = promisify(zstdDecompress);
 
 function environmentSandboxState(sandbox: {
@@ -209,6 +227,15 @@ export class Sandbox0Runtime implements RuntimeAdapter {
       pending?: Promise<WorkspaceGitState>;
     }
   >();
+  private readonly shellSessionCache = new Map<
+    string,
+    TerminalSessionCacheEntry
+  >();
+  private readonly agentSessionCache = new Map<
+    string,
+    TerminalSessionCacheEntry
+  >();
+  private readonly preparedAgentRuns = new Map<string, PreparedAgentRun>();
 
   constructor(options: { apiHost: string; apiKey: string }) {
     this.client = new Client({
@@ -220,6 +247,109 @@ export class Sandbox0Runtime implements RuntimeAdapter {
       // semantic boundaries, where idempotency can be proven separately.
       fetch: fetchSandbox0WithRetry,
     });
+  }
+
+  private cachedTerminalSession(
+    cache: Map<string, TerminalSessionCacheEntry>,
+    environmentId: string,
+    runtime: EnvironmentRuntimeRecord,
+    sessionId: string | undefined,
+  ) {
+    if (!sessionId) return undefined;
+    const entry = cache.get(environmentId);
+    if (
+      !entry ||
+      entry.sandboxId !== runtime.sandboxId ||
+      entry.runtimeGeneration !== runtime.runtimeGeneration ||
+      Date.now() - entry.cachedAt >= TERMINAL_SESSION_CACHE_TTL_MS ||
+      entry.session.runtimeGeneration !== runtime.runtimeGeneration ||
+      entry.session.id !== sessionId
+    ) {
+      cache.delete(environmentId);
+      return undefined;
+    }
+    return entry.session;
+  }
+
+  private rememberTerminalSession(
+    cache: Map<string, TerminalSessionCacheEntry>,
+    environmentId: string,
+    runtime: EnvironmentRuntimeRecord,
+    session: SandboxSession,
+  ) {
+    cache.set(environmentId, {
+      sandboxId: runtime.sandboxId,
+      runtimeGeneration: runtime.runtimeGeneration,
+      cachedAt: Date.now(),
+      session,
+    });
+    while (cache.size > TERMINAL_SESSION_CACHE_MAX_ENTRIES) {
+      const oldest = cache.keys().next().value;
+      if (oldest === undefined) break;
+      cache.delete(oldest);
+    }
+  }
+
+  private agentPreparationMatches(
+    runtime: EnvironmentRuntimeRecord,
+    agentId: EnvironmentAgentId,
+    credentialJson: string | undefined,
+  ) {
+    const prepared = this.preparedAgentRuns.get(runtime.id);
+    return Boolean(
+      prepared &&
+        prepared.sandboxId === runtime.sandboxId &&
+        prepared.agentId === agentId &&
+        prepared.runtimeGeneration === runtime.runtimeGeneration &&
+        Date.now() - prepared.preparedAt < PREPARED_AGENT_CACHE_TTL_MS &&
+        prepared.credentialFingerprint ===
+          createHash("sha256").update(credentialJson ?? "").digest("hex"),
+    );
+  }
+
+  private rememberAgentPreparation(
+    runtime: EnvironmentRuntimeRecord,
+    agentId: EnvironmentAgentId,
+    credentialJson: string | undefined,
+  ) {
+    this.preparedAgentRuns.set(runtime.id, {
+      sandboxId: runtime.sandboxId,
+      agentId,
+      runtimeGeneration: runtime.runtimeGeneration,
+      preparedAt: Date.now(),
+      credentialFingerprint: createHash("sha256")
+        .update(credentialJson ?? "")
+        .digest("hex"),
+    });
+    while (this.preparedAgentRuns.size > TERMINAL_SESSION_CACHE_MAX_ENTRIES) {
+      const oldest = this.preparedAgentRuns.keys().next().value;
+      if (oldest === undefined) break;
+      this.preparedAgentRuns.delete(oldest);
+    }
+  }
+
+  /**
+   * Opens Supervisor WebSockets with the SDK's `ws` implementation while this
+   * Node process is serving terminals. Node's built-in WebSocket can turn a
+   * non-101 response into an empty TypeError, which prevents useful stale-cache
+   * recovery; the temporary global override is scoped to the connect await.
+   */
+  private async connectTerminalSession(
+    sandbox: Sandbox,
+    sessionId: string,
+    after: number,
+  ) {
+    if (typeof process.versions.node !== "string") {
+      return sandbox.connectSession(sessionId, { after });
+    }
+    const globalRecord = globalThis as Record<string, unknown>;
+    const originalWebSocket = globalRecord.WebSocket;
+    globalRecord.WebSocket = undefined;
+    try {
+      return await sandbox.connectSession(sessionId, { after });
+    } finally {
+      globalRecord.WebSocket = originalWebSocket;
+    }
   }
 
   async getEnvironmentSandboxState(
@@ -2542,13 +2672,39 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     after = 0,
     expectedTerminalSessionId?: string,
   ): Promise<RuntimeTerminalHandle> {
+    return this.openTerminalWithMetadataRetry(
+      runtime,
+      after,
+      expectedTerminalSessionId,
+      false,
+    );
+  }
+
+  private async openTerminalWithMetadataRetry(
+    runtime: EnvironmentRuntimeRecord,
+    after: number,
+    expectedTerminalSessionId: string | undefined,
+    metadataRetry: boolean,
+  ): Promise<RuntimeTerminalHandle> {
     const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
-    let terminal: Awaited<ReturnType<typeof sandbox.getSession>> | undefined;
+    let terminal: SandboxSession | undefined;
+    let usedCachedSession = false;
     if (runtime.terminalSessionId) {
-      try {
-        terminal = await sandbox.getSession(runtime.terminalSessionId);
-      } catch (error) {
-        if (!isMissingResource(error)) throw translateSandbox0Error(error);
+      const cached = this.cachedTerminalSession(
+        this.shellSessionCache,
+        runtime.id,
+        runtime,
+        runtime.terminalSessionId,
+      );
+      if (cached) {
+        terminal = cached;
+        usedCachedSession = true;
+      } else {
+        try {
+          terminal = await sandbox.getSession(runtime.terminalSessionId);
+        } catch (error) {
+          if (!isMissingResource(error)) throw translateSandbox0Error(error);
+        }
       }
     }
     if (!terminal) {
@@ -2635,10 +2791,32 @@ export class Sandbox0Runtime implements RuntimeAdapter {
       terminal.cursor,
       terminalSessionChanged,
     );
-    const connection = await sandbox.connectSession(terminal.id, {
-      after: replay.after,
-    });
+    let connection;
+    try {
+      connection = await this.connectTerminalSession(
+        sandbox,
+        terminal.id,
+        replay.after,
+      );
+    } catch (error) {
+      if (usedCachedSession && !metadataRetry) {
+        this.shellSessionCache.delete(runtime.id);
+        return this.openTerminalWithMetadataRetry(
+          runtime,
+          after,
+          expectedTerminalSessionId,
+          true,
+        );
+      }
+      throw error;
+    }
     const attemptId = terminal.attempt.id;
+    this.rememberTerminalSession(
+      this.shellSessionCache,
+      runtime.id,
+      runtime,
+      terminal,
+    );
     return {
       sessionId: terminal.id,
       attemptId,
@@ -2706,26 +2884,59 @@ export class Sandbox0Runtime implements RuntimeAdapter {
       credentialJson?: string;
     } = {},
   ): Promise<RuntimeTerminalHandle> {
+    return this.openAgentTerminalWithMetadataRetry(
+      runtime,
+      agentId,
+      options,
+      false,
+    );
+  }
+
+  private async openAgentTerminalWithMetadataRetry(
+    runtime: EnvironmentRuntimeRecord,
+    agentId: EnvironmentAgentId,
+    options: {
+      after?: number;
+      expectedAgentSessionId?: string;
+      credentialJson?: string;
+    },
+    metadataRetry: boolean,
+  ): Promise<RuntimeTerminalHandle> {
     const adapter = agentAdapter(agentId);
     const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
 
-    await prepareNativeAgentState(sandbox, adapter);
-    if (agentId === "codex") await prepareEnvironmentCodexHome(sandbox);
-    if (options.credentialJson && adapter.credentialProjection.ephemeralPath) {
-      await installAgentCredentialFile(
-        sandbox,
-        adapter.credentialProjection.ephemeralPath,
-        options.credentialJson,
-        agentId,
-      );
+    if (!this.agentPreparationMatches(runtime, agentId, options.credentialJson)) {
+      await prepareNativeAgentState(sandbox, adapter);
+      if (agentId === "codex") await prepareEnvironmentCodexHome(sandbox);
+      if (options.credentialJson && adapter.credentialProjection.ephemeralPath) {
+        await installAgentCredentialFile(
+          sandbox,
+          adapter.credentialProjection.ephemeralPath,
+          options.credentialJson,
+          agentId,
+        );
+      }
+      this.rememberAgentPreparation(runtime, agentId, options.credentialJson);
     }
 
-    let terminal: Awaited<ReturnType<typeof sandbox.getSession>> | undefined;
+    let terminal: SandboxSession | undefined;
+    let usedCachedSession = false;
     if (runtime.agentSessionId) {
-      try {
-        terminal = await sandbox.getSession(runtime.agentSessionId);
-      } catch (error) {
-        if (!isMissingResource(error)) throw translateSandbox0Error(error);
+      const cached = this.cachedTerminalSession(
+        this.agentSessionCache,
+        runtime.id,
+        runtime,
+        runtime.agentSessionId,
+      );
+      if (cached) {
+        terminal = cached;
+        usedCachedSession = true;
+      } else {
+        try {
+          terminal = await sandbox.getSession(runtime.agentSessionId);
+        } catch (error) {
+          if (!isMissingResource(error)) throw translateSandbox0Error(error);
+        }
       }
     }
     const desiredEnvironment = {
@@ -2823,10 +3034,32 @@ export class Sandbox0Runtime implements RuntimeAdapter {
       terminal.cursor,
       terminalSessionChanged,
     );
-    const connection = await sandbox.connectSession(terminal.id, {
-      after: replay.after,
-    });
+    let connection;
+    try {
+      connection = await this.connectTerminalSession(
+        sandbox,
+        terminal.id,
+        replay.after,
+      );
+    } catch (error) {
+      if (usedCachedSession && !metadataRetry) {
+        this.agentSessionCache.delete(runtime.id);
+        return this.openAgentTerminalWithMetadataRetry(
+          runtime,
+          agentId,
+          options,
+          true,
+        );
+      }
+      throw error;
+    }
     const attemptId = terminal.attempt.id;
+    this.rememberTerminalSession(
+      this.agentSessionCache,
+      runtime.id,
+      runtime,
+      terminal,
+    );
     return {
       sessionId: terminal.id,
       attemptId,

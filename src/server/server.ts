@@ -18,6 +18,13 @@ import WebSocket from "ws";
 import { ZodError, z } from "zod";
 
 import type { Environment, SandpiDeploymentSummary } from "@/lib/types";
+import {
+  TERMINAL_FAST_PATH_PROTOCOL,
+  TerminalBinaryOpcode,
+  decodeTerminalBinaryFrame,
+  encodeTerminalBinaryOutput,
+  isTerminalEventBatchMessage,
+} from "@/lib/terminal-fast-path";
 import { BillingQuotaService } from "@/server/billing/quota-service";
 import { BillingRepository } from "@/server/billing/repository";
 import { StripeBillingService } from "@/server/billing/stripe-service";
@@ -104,6 +111,7 @@ import { SecretBox } from "@/server/secrets";
 import { SandpiStore } from "@/server/store";
 import { rejectNativeTuiV2LegacyOperation } from "@/server/native-tui-v2";
 import { TerminalInputQueue } from "@/server/terminal-input-queue";
+import { TerminalOutputBatcher } from "@/server/terminal-output-batcher";
 import {
   agentTerminalInputSchema,
   billingCheckoutSchema,
@@ -149,6 +157,24 @@ const CODEX_UPLOAD_BODY_LIMIT_BYTES =
   MAX_CODEX_COMPOSER_UPLOAD_BASE64_LENGTH + 64 * 1024;
 const WORKSPACE_FILE_BODY_LIMIT_BYTES = 7 * 1024 * 1024;
 const CODEX_SKILL_BODY_LIMIT_BYTES = 14 * 1024 * 1024;
+const TERMINAL_AUTHORITY_CACHE_MS = 100;
+
+function terminalControlLeaseFresh(expiresAt: Date | number) {
+  const expiresAtMs =
+    expiresAt instanceof Date ? expiresAt.getTime() : expiresAt * 1_000;
+  return Date.now() + TERMINAL_AUTHORITY_CACHE_MS < expiresAtMs;
+}
+
+function validateTerminalInputId(value: string | undefined) {
+  if (!value || !/^[A-Za-z0-9_-]{16,128}$/.test(value)) {
+    throw new HttpError(
+      400,
+      "terminal_input_id_invalid",
+      "The terminal input identifier is invalid.",
+    );
+  }
+  return value;
+}
 
 function environmentPreviewResponse(grant: RuntimeSandboxPreviewGrant) {
   return {
@@ -2266,16 +2292,24 @@ export function registerApiRoutes(
       let inputQueue:
         TerminalInputQueue<z.infer<typeof terminalInputSchema>> | undefined;
       let heartbeat: RuntimeWebSocketHeartbeat | undefined;
+      let outputBatcher: TerminalOutputBatcher | undefined;
       let cleanedUp = false;
       const cleanup = () => {
         if (cleanedUp) return;
         cleanedUp = true;
         heartbeat?.stop();
         inputQueue?.close();
+        outputBatcher?.close();
         terminal?.close();
       };
       try {
         const after = Number(queryString(request, "after") ?? 0);
+        const fastPath =
+          queryString(request, "protocol") === TERMINAL_FAST_PATH_PROTOCOL;
+        const inputId = fastPath
+          ? validateTerminalInputId(queryString(request, "inputId"))
+          : undefined;
+        let runtimeAccessCacheExpiresAt = 0;
         const opened = await services.runtimeAccess.withRuntimeAccess(
           request.principal.userId,
           request.params.environmentId,
@@ -2321,15 +2355,23 @@ export function registerApiRoutes(
           terminal?.send({ ...message, requestId });
         };
         inputQueue = new TerminalInputQueue({
-          authorizeAndForward: (message) =>
-            services.store.withTerminalAccess(
+          authorizeAndForward: async (message) => {
+            if (Date.now() < runtimeAccessCacheExpiresAt) {
+              forwardTerminalMessage(message);
+              heartbeat?.markActivity();
+              return;
+            }
+            await services.store.withTerminalAccess(
               request.principal.userId,
               request.params.environmentId,
               () => {
                 forwardTerminalMessage(message);
                 heartbeat?.markActivity();
               },
-            ),
+            );
+            runtimeAccessCacheExpiresAt =
+              Date.now() + TERMINAL_AUTHORITY_CACHE_MS;
+          },
           requiresAuthorization: (message) => message.type !== "resize",
           forward: forwardTerminalMessage,
           onError: (error) => {
@@ -2344,6 +2386,24 @@ export function registerApiRoutes(
             }
           },
         });
+        const sendTerminalMessage = (message: unknown) => {
+          if (socket.readyState !== socket.OPEN) return;
+          if (fastPath && isTerminalEventBatchMessage(message)) {
+            socket.send(
+              encodeTerminalBinaryOutput(
+                message.fromSeq,
+                message.toSeq,
+                Buffer.from(message.dataBase64, "base64"),
+              ),
+            );
+            return;
+          }
+          socket.send(JSON.stringify(message));
+        };
+        outputBatcher = new TerminalOutputBatcher({
+          attemptId: terminal.attemptId,
+          send: sendTerminalMessage,
+        });
         socket.send(
           JSON.stringify({
             type: "ready",
@@ -2352,6 +2412,7 @@ export function registerApiRoutes(
             replayAfter: terminal.replayAfter,
             replayUntil: terminal.replayUntil,
             replayReset: terminal.replayReset,
+            ...(fastPath ? { protocol: TERMINAL_FAST_PATH_PROTOCOL } : {}),
           }),
         );
         heartbeat = new RuntimeWebSocketHeartbeat(
@@ -2375,6 +2436,24 @@ export function registerApiRoutes(
         heartbeat.start();
         socket.on("message", (raw) => {
           try {
+            if (
+              fastPath &&
+              Buffer.isBuffer(raw) &&
+              raw.length > 1 &&
+              raw[0] === 0x5f &&
+              raw[1] === 0x30
+            ) {
+              const frame = decodeTerminalBinaryFrame(raw);
+              if (!frame || frame.opcode !== TerminalBinaryOpcode.Input) {
+                throw new Error("Invalid terminal input frame.");
+              }
+              inputQueue?.enqueue({
+                type: "binary",
+                requestId: `b:${inputId}:${frame.sequence}`,
+                dataBase64: Buffer.from(frame.payload).toString("base64"),
+              });
+              return;
+            }
             inputQueue?.enqueue(
               terminalInputSchema.parse(JSON.parse(raw.toString())),
             );
@@ -2392,7 +2471,8 @@ export function registerApiRoutes(
         socket.on("close", cleanup);
         for await (const message of terminal.messages) {
           if (socket.readyState !== socket.OPEN) break;
-          socket.send(JSON.stringify(message));
+          if (fastPath) outputBatcher?.push(message);
+          else socket.send(JSON.stringify(message));
         }
         if (socket.readyState === socket.OPEN) {
           socket.close(1011, "Terminal stream ended");
@@ -2440,6 +2520,7 @@ export function registerApiRoutes(
       let heartbeat: RuntimeWebSocketHeartbeat | undefined;
       let controlTimer: ReturnType<typeof setInterval> | undefined;
       let credentialSyncTimer: ReturnType<typeof setInterval> | undefined;
+      let outputBatcher: TerminalOutputBatcher | undefined;
       let openedRuntime: EnvironmentRuntimeRecord | undefined;
       let openedAgentId: Environment["codingAgent"]["harness"] | undefined;
       let cleanedUp = false;
@@ -2450,6 +2531,7 @@ export function registerApiRoutes(
         if (credentialSyncTimer) clearInterval(credentialSyncTimer);
         heartbeat?.stop();
         inputQueue?.close();
+        outputBatcher?.close();
         terminal?.close();
         if (openedRuntime && openedAgentId) {
           void services.agentCredentials.trySyncFromRuntime(
@@ -2470,6 +2552,11 @@ export function registerApiRoutes(
           .max(200)
           .parse(queryString(request, "clientId"));
         const after = Number(queryString(request, "after") ?? 0);
+        const fastPath =
+          queryString(request, "protocol") === TERMINAL_FAST_PATH_PROTOCOL;
+        const inputId = fastPath
+          ? validateTerminalInputId(queryString(request, "inputId"))
+          : undefined;
         const environment = await services.store.getEnvironment(
           userId,
           environmentId,
@@ -2508,11 +2595,17 @@ export function registerApiRoutes(
           agentSessionId: terminal.sessionId,
           agentAttemptId: terminal.attemptId,
         };
-        await services.store.recordEnvironmentAgentSession(
-          environmentId,
-          opened.runtime.sandboxId,
-          coordinates,
-        );
+        const runtimeCoordinatesChanged =
+          opened.runtime.agentSessionId !== coordinates.agentSessionId ||
+          opened.runtime.agentAttemptId !== coordinates.agentAttemptId ||
+          opened.runtime.runtimeGeneration < coordinates.runtimeGeneration;
+        if (runtimeCoordinatesChanged) {
+          await services.store.recordEnvironmentAgentSession(
+            environmentId,
+            opened.runtime.sandboxId,
+            coordinates,
+          );
+        }
         if (agentCredential) {
           await services.agentCredentials.trySyncFromRuntime(
             environmentId,
@@ -2592,6 +2685,17 @@ export function registerApiRoutes(
               sendControl("control.state", message.requestId);
               return;
             }
+            if (
+              control.role === "controller" &&
+              terminalControlLeaseFresh(control.expiresAt)
+            ) {
+              // A short connection-local lease cache keeps interactive input
+              // out of the PostgreSQL round-trip path without extending the
+              // lease beyond its existing expiry or generation fence.
+              forwardTerminalMessage(message);
+              heartbeat?.markActivity();
+              return;
+            }
             control = await services.store.renewEnvironmentTerminalControl({
               userId,
               environmentId,
@@ -2619,6 +2723,24 @@ export function registerApiRoutes(
           },
         });
 
+        const sendTerminalMessage = (message: unknown) => {
+          if (socket.readyState !== socket.OPEN) return;
+          if (fastPath && isTerminalEventBatchMessage(message)) {
+            socket.send(
+              encodeTerminalBinaryOutput(
+                message.fromSeq,
+                message.toSeq,
+                Buffer.from(message.dataBase64, "base64"),
+              ),
+            );
+            return;
+          }
+          socket.send(JSON.stringify(message));
+        };
+        outputBatcher = new TerminalOutputBatcher({
+          attemptId: terminal.attemptId,
+          send: sendTerminalMessage,
+        });
         socket.send(
           JSON.stringify({
             type: "ready",
@@ -2630,6 +2752,7 @@ export function registerApiRoutes(
             replayUntil: terminal.replayUntil,
             replayReset: terminal.replayReset,
             control: publicControl(),
+            ...(fastPath ? { protocol: TERMINAL_FAST_PATH_PROTOCOL } : {}),
           }),
         );
 
@@ -2712,6 +2835,24 @@ export function registerApiRoutes(
 
         socket.on("message", (raw) => {
           try {
+            if (
+              fastPath &&
+              Buffer.isBuffer(raw) &&
+              raw.length > 1 &&
+              raw[0] === 0x5f &&
+              raw[1] === 0x30
+            ) {
+              const frame = decodeTerminalBinaryFrame(raw);
+              if (!frame || frame.opcode !== TerminalBinaryOpcode.Input) {
+                throw new Error("Invalid terminal input frame.");
+              }
+              inputQueue?.enqueue({
+                type: "binary",
+                requestId: `b:${inputId}:${frame.sequence}`,
+                dataBase64: Buffer.from(frame.payload).toString("base64"),
+              });
+              return;
+            }
             inputQueue?.enqueue(
               agentTerminalInputSchema.parse(JSON.parse(raw.toString())),
             );
@@ -2729,7 +2870,8 @@ export function registerApiRoutes(
         socket.on("close", cleanup);
         for await (const message of terminal.messages) {
           if (socket.readyState !== socket.OPEN) break;
-          socket.send(JSON.stringify(message));
+          if (fastPath) outputBatcher?.push(message);
+          else socket.send(JSON.stringify(message));
         }
         if (socket.readyState === socket.OPEN) {
           socket.close(1011, "Agent terminal stream ended");

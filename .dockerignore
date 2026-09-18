@@ -9,3 +9,6 @@ npm-debug.log*
 !.env.example
 *.tsbuildinfo
 .DS_Store
+.playwright-cli
+.pw-home
+test-results

@@ -25,6 +25,16 @@ import {
   terminalReplayStorageKey,
   type TerminalReplayState,
 } from "@/lib/terminal-replay-state";
+import {
+  TERMINAL_FAST_PATH_PROTOCOL,
+  TerminalBinaryOpcode,
+  decodeTerminalBase64,
+  decodeTerminalBinaryFrame,
+  encodeTerminalBinaryInput,
+  isTerminalEventBatchMessage,
+  TerminalFastPathMetrics,
+} from "@/lib/terminal-fast-path";
+import { terminalReplayMemoryCache } from "@/lib/terminal-replay-cache";
 
 export type TerminalConnectionState =
   | "initializing"
@@ -49,18 +59,25 @@ interface TerminalMessage {
     | "ack"
     | "error"
     | "event"
+    | "events"
     | "ready"
     | "control.granted"
     | "control.revoked"
     | "control.state";
   code?: string;
   error?: string;
+  requestId?: string;
   sessionId?: string;
   attemptId?: string;
   replayAfter?: number;
   replayUntil?: number;
   replayReset?: boolean;
+  protocol?: string;
   event?: TerminalEvent;
+  fromSeq?: number;
+  toSeq?: number;
+ stream?: string;
+  dataBase64?: string;
   control?: {
     role: "controller" | "viewer";
     leaseVersion: number;
@@ -68,9 +85,16 @@ interface TerminalMessage {
   };
 }
 
+interface TerminalFastPathWindow extends Window {
+  __sandpiTerminalFastPathMetrics?: TerminalFastPathMetrics;
+}
+
 const MAX_TERMINAL_RECONNECT_ATTEMPTS = 5;
 const TERMINAL_CLIENT_ID_STORAGE_KEY = "sandpi.terminal-client.v1";
 const TERMINAL_ATTACHMENT_ID_STORAGE_KEY = "sandpi.terminal-attachment.v1";
+const TERMINAL_SCREEN_READER_STORAGE_KEY = "sandpi.terminal.screen-reader.v1";
+const TERMINAL_INPUT_OUTBOX_MAX_ENTRIES = 256;
+const TERMINAL_INPUT_OUTBOX_MAX_BYTES = 1_000_000;
 
 function terminalClientId() {
   const generated = () => randomToken(32);
@@ -111,13 +135,17 @@ function terminalColumnForStringIndex(
   return remaining === 0 ? line.length : undefined;
 }
 
-function decodeBase64(data: string) {
-  const raw = window.atob(data);
-  return Uint8Array.from(raw, (character) => character.charCodeAt(0));
-}
-
 function terminalRequestId(kind: string) {
   return `terminal-${kind}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function terminalScreenReaderMode() {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.localStorage.getItem(TERMINAL_SCREEN_READER_STORAGE_KEY) === "true";
+  } catch {
+    return false;
+  }
 }
 
 async function copyText(text: string) {
@@ -181,10 +209,15 @@ export function useTerminalSession(
   environmentId: string,
   onOpenSearch: () => void,
   onOpenSandboxPreview: (url: string) => void,
-  options: { surface?: "shell" | "agent"; enabled?: boolean } = {},
+  options: {
+    surface?: "shell" | "agent";
+    enabled?: boolean;
+    screenReaderMode?: boolean;
+  } = {},
 ) {
   const surface = options.surface ?? "shell";
   const enabled = options.enabled ?? true;
+  const screenReaderMode = options.screenReaderMode ?? terminalScreenReaderMode();
   const [connectionState, setConnectionState] =
     useState<TerminalConnectionState>("initializing");
   const [connectionError, setConnectionError] = useState<string | null>(null);
@@ -230,6 +263,12 @@ export function useTerminalSession(
   const currentAttemptIdRef = useRef<string | null>(null);
   const copiedTimerRef = useRef<number | undefined>(undefined);
   const pendingCommandStartRef = useRef<number | null>(null);
+  const fastPathMetricsRef = useRef(new TerminalFastPathMetrics());
+  const sendInputRef = useRef<(data: string, binary?: boolean) => boolean>(
+    () => false,
+  );
+  const inputSequenceRef = useRef(0);
+  const fastPathMetrics = fastPathMetricsRef.current;
 
   const persistReplayState = useCallback(() => {
     if (typeof window === "undefined" || !replayStateRef.current) return;
@@ -295,12 +334,24 @@ export function useTerminalSession(
 
   const sendInput = useCallback((data: string) => {
     if (controlRoleRef.current !== "controller") return false;
-    return sendMessageRef.current({
-      type: "input",
-      requestId: terminalRequestId("input"),
-      data,
-    });
+    return sendInputRef.current(data);
   }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const terminalWindow = window as TerminalFastPathWindow;
+    const previousMetrics = terminalWindow.__sandpiTerminalFastPathMetrics;
+    terminalWindow.__sandpiTerminalFastPathMetrics = fastPathMetrics;
+    return () => {
+      if (
+        terminalWindow.__sandpiTerminalFastPathMetrics === fastPathMetrics
+      ) {
+        delete terminalWindow.__sandpiTerminalFastPathMetrics;
+      } else if (previousMetrics) {
+        terminalWindow.__sandpiTerminalFastPathMetrics = previousMetrics;
+      }
+    };
+  }, [fastPathMetrics]);
 
   useEffect(() => {
     const terminalHost = terminalHostRef.current;
@@ -318,8 +369,16 @@ export function useTerminalSession(
     let replayPersistTimer: number | undefined;
     let terminalExited = false;
     let terminalFailed = false;
+    let replayComplete = false;
+    let fastPathEnabled = false;
     let terminal: XTerm | undefined;
     let resizeObserver: ResizeObserver | undefined;
+    const textEncoder = new TextEncoder();
+    const inputIdPrefix = randomToken(24);
+    const replayCacheKey =
+      surface === "agent" ? `${environmentId}:agent` : environmentId;
+    const inputOutbox: Array<{ data: Uint8Array; binary: boolean }> = [];
+    let inputOutboxBytes = 0;
     const disposables: Array<{ dispose: () => void }> = [];
 
     const send = (message: Record<string, unknown>) => {
@@ -329,6 +388,63 @@ export function useTerminalSession(
       return true;
     };
     sendMessageRef.current = send;
+
+    const flushInputOutbox = () => {
+      if (!replayComplete) return;
+      while (inputOutbox.length > 0) {
+        const pending = inputOutbox[0];
+        const socket = socketRef.current;
+        if (!socket || socket.readyState !== WebSocket.OPEN) return;
+        inputSequenceRef.current += 1;
+        const sequence = inputSequenceRef.current;
+        const requestId = `${pending.binary ? "b" : "j"}:${inputIdPrefix}:${sequence}`;
+        if (fastPathEnabled) {
+          socket.send(encodeTerminalBinaryInput(sequence, pending.data));
+          fastPathMetricsRef.current.recordInputSent(requestId, true);
+        } else if (pending.binary) {
+          let binary = "";
+          for (const byte of pending.data) binary += String.fromCharCode(byte);
+          fastPathMetricsRef.current.recordInputSent(requestId, false);
+          socket.send(
+            JSON.stringify({
+              type: "binary",
+              requestId,
+              dataBase64: window.btoa(binary),
+            }),
+          );
+        } else {
+          fastPathMetricsRef.current.recordInputSent(requestId, false);
+          socket.send(
+            JSON.stringify({
+              type: "input",
+              requestId,
+              data: new TextDecoder().decode(pending.data),
+            }),
+          );
+        }
+        inputOutbox.shift();
+        inputOutboxBytes -= pending.data.byteLength;
+      }
+    };
+
+    sendInputRef.current = (data: string, binary = false) => {
+      const payload = binary
+        ? Uint8Array.from(data, (character) => character.charCodeAt(0) & 0xff)
+        : textEncoder.encode(data);
+      if (payload.byteLength === 0) return true;
+      if (
+        inputOutbox.length >= TERMINAL_INPUT_OUTBOX_MAX_ENTRIES ||
+        inputOutboxBytes + payload.byteLength > TERMINAL_INPUT_OUTBOX_MAX_BYTES
+      ) {
+        setConnectionState("error");
+        setConnectionError("Too much terminal input is waiting to reconnect.");
+        return false;
+      }
+      inputOutbox.push({ data: payload, binary });
+      inputOutboxBytes += payload.byteLength;
+      flushInputOutbox();
+      return true;
+    };
 
     const sendResize = (rows: number, cols: number) => {
       if (surface === "agent" && controlRoleRef.current !== "controller") {
@@ -397,6 +513,8 @@ export function useTerminalSession(
 
       const search = new URLSearchParams({
         after: String(receivedSequenceRef.current),
+        protocol: TERMINAL_FAST_PATH_PROTOCOL,
+        inputId: inputIdPrefix,
       });
       const expectedTerminalSessionId =
         replayStateRef.current?.terminalSessionId;
@@ -414,9 +532,44 @@ export function useTerminalSession(
           }?${search.toString()}`,
         ),
       );
+      socket.binaryType = "arraybuffer";
       socketRef.current = socket;
       let replayUntil = receivedSequenceRef.current;
       let replayFinished = false;
+      let currentSessionId: string | undefined;
+
+      const writeTerminalOutput = (
+        fromSeq: number,
+        toSeq: number,
+        bytes: Uint8Array,
+      ) => {
+        receivedSequenceRef.current = toSeq;
+        fastPathMetricsRef.current.recordOutputReceived(toSeq, bytes.byteLength);
+        if (currentSessionId) {
+          terminalReplayMemoryCache().append(replayCacheKey, currentSessionId, {
+            fromSeq,
+            toSeq,
+            data: bytes,
+          });
+        }
+        fastPathMetricsRef.current.markOutputDecoded(toSeq);
+        fastPathMetricsRef.current.markOutputWriteQueued(toSeq);
+        const commitRenderedOutput = () => {
+          fastPathMetricsRef.current.markOutputWriteComplete(toSeq);
+          if (toSeq > lastSequenceRef.current) {
+            lastSequenceRef.current = toSeq;
+            if (replayStateRef.current) {
+              replayStateRef.current = advanceTerminalSequence(
+                replayStateRef.current,
+                toSeq,
+              );
+              scheduleReplayPersist();
+            }
+          }
+          if (toSeq >= replayUntil) finishReplay();
+        };
+        terminal?.write(bytes, commitRenderedOutput);
+      };
 
       const finishReplay = () => {
         if (
@@ -428,6 +581,7 @@ export function useTerminalSession(
           return;
         }
         replayFinished = true;
+        replayComplete = true;
         if (terminal) {
           terminal.options.disableStdin =
             surface === "agent" && controlRoleRef.current !== "controller";
@@ -439,6 +593,7 @@ export function useTerminalSession(
           sendResize(terminalRef.current.rows, terminalRef.current.cols);
           terminalRef.current.focus();
         }
+        flushInputOutbox();
       };
 
       socket.addEventListener("open", () => {
@@ -446,6 +601,18 @@ export function useTerminalSession(
       });
       socket.addEventListener("message", (message) => {
         try {
+          if (message.data instanceof ArrayBuffer) {
+            const frame = decodeTerminalBinaryFrame(message.data);
+            if (
+              !frame ||
+              frame.opcode !== TerminalBinaryOpcode.Output ||
+              frame.fromSeq !== receivedSequenceRef.current + 1
+            ) {
+              throw new Error("Invalid terminal output frame.");
+            }
+            writeTerminalOutput(frame.fromSeq, frame.toSeq, frame.payload);
+            return;
+          }
           const payload = JSON.parse(String(message.data)) as TerminalMessage;
           if (payload.type === "ready") {
             reconnectAttempt = 0;
@@ -456,6 +623,13 @@ export function useTerminalSession(
                 payload.sessionId &&
                 priorTerminalSessionId !== payload.sessionId,
             );
+            fastPathEnabled = payload.protocol === TERMINAL_FAST_PATH_PROTOCOL;
+            replayComplete = false;
+            if (terminalChanged) {
+              inputOutbox.length = 0;
+              inputOutboxBytes = 0;
+            }
+            currentSessionId = payload.sessionId;
             if (typeof payload.replayAfter === "number") {
               const replayReset = Boolean(
                 payload.replayReset || terminalChanged,
@@ -463,6 +637,11 @@ export function useTerminalSession(
               if (replayReset) {
                 terminal?.reset();
                 lastSequenceRef.current = payload.replayAfter;
+                terminalReplayMemoryCache().reset(
+                  replayCacheKey,
+                  payload.sessionId ?? "",
+                  true,
+                );
               }
               receivedSequenceRef.current = payload.replayAfter;
               replayUntil =
@@ -495,6 +674,14 @@ export function useTerminalSession(
             scheduleFit();
             if (receivedSequenceRef.current >= replayUntil) finishReplay();
             else setConnectionState("restoring");
+            return;
+          }
+          if (payload.type === "ack") {
+            if (payload.requestId) {
+              fastPathMetricsRef.current.markInputAcknowledged(
+                payload.requestId,
+              );
+            }
             return;
           }
           if (
@@ -539,36 +726,38 @@ export function useTerminalSession(
             setConnectionError(payload.error ?? "Terminal request failed.");
             return;
           }
+          if (payload.type === "events") {
+            if (!isTerminalEventBatchMessage(payload)) return;
+            if (
+              payload.fromSeq !== receivedSequenceRef.current + 1 ||
+              payload.toSeq < payload.fromSeq
+            ) {
+              throw new Error("Terminal event batch has a sequence gap.");
+            }
+            writeTerminalOutput(
+              payload.fromSeq,
+              payload.toSeq,
+              decodeTerminalBase64(payload.dataBase64),
+            );
+            return;
+          }
           if (payload.type !== "event" || !payload.event) return;
           if (payload.event.seq <= receivedSequenceRef.current) return;
-
-          receivedSequenceRef.current = payload.event.seq;
-          const commitRenderedEvent = () => {
-            if (payload.event!.seq > lastSequenceRef.current) {
-              lastSequenceRef.current = payload.event!.seq;
-              if (replayStateRef.current) {
-                replayStateRef.current = advanceTerminalSequence(
-                  replayStateRef.current,
-                  payload.event!.seq,
-                );
-                scheduleReplayPersist();
-              }
-            }
-            if (payload.event!.seq >= replayUntil) finishReplay();
-          };
+          const event = payload.event;
           // Decoding PTY chunks as text first would corrupt split UTF-8 and
           // ANSI control sequences. The callback also makes the persisted
           // cursor represent output xterm has actually parsed, not merely
           // WebSocket frames the browser received.
-          terminal?.write(
-            payload.event.dataBase64
-              ? decodeBase64(payload.event.dataBase64)
+          writeTerminalOutput(
+            event.seq,
+            event.seq,
+            event.dataBase64
+              ? decodeTerminalBase64(event.dataBase64)
               : new Uint8Array(),
-            commitRenderedEvent,
           );
           if (
             isCurrentTerminalExit(
-              payload.event,
+              event,
               currentAttemptIdRef.current,
             )
           ) {
@@ -592,6 +781,7 @@ export function useTerminalSession(
           return;
         }
         if (terminal) terminal.options.disableStdin = true;
+        replayComplete = false;
         if (reconnectAttempt >= MAX_TERMINAL_RECONNECT_ATTEMPTS) {
           terminalFailed = true;
           setConnectionState("error");
@@ -612,13 +802,19 @@ export function useTerminalSession(
 
     const initialize = async () => {
       try {
-        const [xtermModule, fitModule, searchModule, webLinksModule] =
-          await Promise.all([
-            import("@xterm/xterm"),
-            import("@xterm/addon-fit"),
-            import("@xterm/addon-search"),
-            import("@xterm/addon-web-links"),
-          ]);
+        const [
+          xtermModule,
+          fitModule,
+          searchModule,
+          webLinksModule,
+          webglModule,
+        ] = await Promise.all([
+          import("@xterm/xterm"),
+          import("@xterm/addon-fit"),
+          import("@xterm/addon-search"),
+          import("@xterm/addon-web-links"),
+          import("@xterm/addon-webgl"),
+        ]);
         if (disposed) return;
 
         terminal = new xtermModule.Terminal({
@@ -634,7 +830,7 @@ export function useTerminalSession(
           lineHeight: 1.25,
           macOptionIsMeta: true,
           rightClickSelectsWord: true,
-          screenReaderMode: true,
+          screenReaderMode,
           scrollback: 10_000,
           theme: {
             background: "#151715",
@@ -687,6 +883,20 @@ export function useTerminalSession(
         terminal.loadAddon(webLinksAddon);
         terminal.open(terminalHost);
         terminal.textarea?.setAttribute("aria-label", "Terminal screen");
+        try {
+          const webglAddon = new webglModule.WebglAddon();
+          terminal.loadAddon(webglAddon);
+          webglAddon.onContextLoss(() => {
+            webglAddon.dispose();
+            fastPathMetricsRef.current.setRenderer("dom-fallback");
+          });
+          fastPathMetricsRef.current.setRenderer("webgl");
+        } catch {
+          // WebGL can be unavailable because of GPU policy, memory pressure,
+          // or browser support. xterm's DOM renderer remains the compatible
+          // fallback without changing the VT parser or input model.
+          fastPathMetricsRef.current.setRenderer("dom");
+        }
         terminalRef.current = terminal;
         fitAddonRef.current = fitAddon;
         searchAddonRef.current = searchAddon;
@@ -729,11 +939,7 @@ export function useTerminalSession(
 
         disposables.push(
           terminal.onData((data) => {
-            const sent = send({
-              type: "input",
-              requestId: terminalRequestId("input"),
-              data,
-            });
+            const sent = sendInputRef.current(data);
             if (sent && terminal?.buffer.active.type === "normal") {
               trackSubmittedCommands(data);
             } else if (terminal?.buffer.active.type === "alternate") {
@@ -743,11 +949,7 @@ export function useTerminalSession(
             }
           }),
           terminal.onBinary((data) => {
-            send({
-              type: "binary",
-              requestId: terminalRequestId("binary"),
-              dataBase64: window.btoa(data),
-            });
+            sendInputRef.current(data, true);
           }),
           terminal.onResize(({ rows, cols }) => sendResize(rows, cols)),
           terminal.onSelectionChange(() =>
@@ -790,7 +992,30 @@ export function useTerminalSession(
         resizeObserver = new ResizeObserver(scheduleFit);
         resizeObserver.observe(terminalHost);
         scheduleFit();
-        connect();
+        const cachedSessionId = replayStateRef.current?.terminalSessionId;
+        const cachedChunks =
+          cachedSessionId &&
+          terminalReplayMemoryCache().usable(
+            replayCacheKey,
+            cachedSessionId,
+            receivedSequenceRef.current,
+          );
+        if (cachedChunks) {
+          // Reusing a page-lifetime journal tail avoids redownloading a valid
+          // retained replay when the user returns to this Environment route.
+          // The procd journal remains authoritative; a server reset still
+          // rebuilds xterm when this tail is no longer sufficient.
+          setConnectionState("restoring");
+          let remainingWrites = cachedChunks.length;
+          for (const chunk of cachedChunks) {
+            terminal.write(chunk.data, () => {
+              remainingWrites -= 1;
+              if (remainingWrites === 0 && !disposed) connect();
+            });
+          }
+        } else {
+          connect();
+        }
       } catch (error) {
         if (disposed) return;
         setConnectionState("error");
@@ -817,6 +1042,7 @@ export function useTerminalSession(
       socketRef.current?.close();
       socketRef.current = null;
       sendMessageRef.current = () => false;
+      sendInputRef.current = () => false;
       terminal?.dispose();
       terminalRef.current = null;
       fitAddonRef.current = null;
@@ -830,6 +1056,7 @@ export function useTerminalSession(
     onOpenSearch,
     persistReplayState,
     rendererGeneration,
+    screenReaderMode,
     surface,
   ]);
 
@@ -857,5 +1084,6 @@ export function useTerminalSession(
     controlRole,
     takeControl,
     sendInput,
+    fastPathMetrics,
   };
 }

@@ -1097,6 +1097,15 @@ export const terminalServerMessageSchema = component(
       replayAfter: z.number().int(),
       replayUntil: z.number().int(),
       replayReset: z.boolean(),
+      protocol: z.string().optional(),
+    }),
+    z.object({
+      type: z.literal("events"),
+      fromSeq: z.number().int(),
+      toSeq: z.number().int(),
+      attemptId: z.string(),
+      stream: z.string(),
+      dataBase64: z.string(),
     }),
     z.object({
       type: z.enum(["ack", "error", "event"]),
@@ -1141,6 +1150,15 @@ export const agentTerminalServerMessageSchema = component(
       replayUntil: z.number().int(),
       replayReset: z.boolean(),
       control: agentTerminalControlSchema,
+      protocol: z.string().optional(),
+    }),
+    z.object({
+      type: z.literal("events"),
+      fromSeq: z.number().int(),
+      toSeq: z.number().int(),
+      attemptId: z.string(),
+      stream: z.string(),
+      dataBase64: z.string(),
     }),
     z.object({
       type: z.enum(["control.granted", "control.revoked", "control.state"]),

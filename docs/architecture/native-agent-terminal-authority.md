@@ -67,9 +67,36 @@ A cursor from another agent or runtime attempt cannot silently skip output.
 When a journal cursor expires or belongs to a replaced journal, the client
 rebuilds from the retained tail.
 
-Terminal input is serialized in arrival order. Every writable frame is checked
-against the current controller lease immediately before it is forwarded.
-Resize-only frames remain safe for viewers and do not grant input authority.
+Terminal input is serialized in arrival order. Writable frames are checked
+against the controller lease before they are forwarded. A connection may use a
+short-lived lease snapshot (bounded well below the lease expiry) so a burst of
+keystrokes is not amplified into one PostgreSQL round trip per key; explicit
+takeover and lease synchronization revoke that snapshot. Resize-only frames
+remain safe for viewers and do not grant input authority.
+
+### Terminal fast path
+
+When the browser sends `protocol=terminal-fast-v1`, Sandpi negotiates a
+binary terminal fast path in the `ready` message. The protocol preserves the
+native TUI byte stream: Sandpi never decodes ANSI into product semantics,
+reorders events, or drops a sequence. Consecutive PTY output events from one
+attempt and stream are combined into a compact binary frame, while lifecycle,
+control, acknowledgement, and error messages remain JSON. If the negotiated
+protocol is unavailable, the browser automatically falls back to the original
+JSON event transport.
+
+Binary input uses a connection-scoped random input-id prefix plus a monotonic
+sequence. This keeps Supervisor input deduplication idempotent across browser
+reconnects without allocating a cryptographic random identifier for every key.
+The browser keeps a small ordered input outbox across terminal replay and
+brief reconnects, but never predicts remote PTY echo.
+
+The browser renders xterm with the WebGL addon when the browser exposes a
+usable context and falls back to xterm's DOM renderer otherwise. Screen-reader
+mode is an explicit terminal mode rather than always doubling the terminal's
+render work. A page-lifetime replay cache may avoid redownloading a journal
+tail when returning to an in-app Environment route; procd's retained journal
+remains the authoritative replay source.
 
 ## Multi-device controller lease
 
