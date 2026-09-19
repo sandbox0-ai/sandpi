@@ -32,7 +32,13 @@ const adapters = {
   codex: {
     id: "codex",
     label: "Codex",
+    // Resolve PATH inside the guest: procd resolves bare executable names
+    // before applying session env. npm upgrades must win over template links.
     command: [
+      "/bin/sh",
+      "-c",
+      'export PATH="$npm_config_prefix/bin:$PATH"; exec "$@"',
+      "sandpi-codex",
       "codex",
       "--dangerously-bypass-approvals-and-sandbox",
       "-c",
@@ -49,6 +55,9 @@ const adapters = {
     environment: {
       HOME: WORKSPACE_HOME,
       CODEX_HOME: `${AGENT_STATE_ROOT}/codex`,
+      // The template uses a local npm install, so a global self-update must
+      // have its own prefix rather than collide with /usr/local/bin/codex.
+      npm_config_prefix: `${AGENT_STATE_ROOT}/codex/npm`,
     },
     persistentStatePaths: [`${AGENT_STATE_ROOT}/codex`],
     credentialProjection: {

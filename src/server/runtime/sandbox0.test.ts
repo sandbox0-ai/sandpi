@@ -9,6 +9,7 @@ import type {
   EnvironmentCredentialResolverKind,
 } from "@/lib/environment-credentials";
 import type { Environment } from "@/lib/types";
+import { AGENT_ADAPTERS } from "@/server/agents/registry";
 import { HttpError } from "@/server/http-error";
 import { createSandbox0FetchWithRetry, Sandbox0Runtime } from "./sandbox0";
 import { SANDPI_MANAGED_SKILL_ASSETS } from "./sandpi-managed-skills";
@@ -274,10 +275,16 @@ for (const [agentId, executable] of [
     assert.equal(handle.runtimeGeneration, 7);
     assert.equal(idempotencyKey, `sandpi-agent-${agentId}-environment-test`);
     const command = createdSpec?.command as string[];
-    assert.equal(command[0], executable);
     if (agentId === "codex") {
+      assert.equal(command[0], "/bin/sh");
+      assert.equal(command[4], executable);
+      assert.equal(
+        (createdSpec?.env as Record<string, string>).npm_config_prefix,
+        "/workspace/.sandpi/harnesses/codex/npm",
+      );
       assert.ok(command.includes("--dangerously-bypass-approvals-and-sandbox"));
     } else if (agentId === "claude-code") {
+      assert.equal(command[0], executable);
       assert.ok(command.includes("--dangerously-skip-permissions"));
       assert.equal(
         (createdSpec?.env as Record<string, string>).IS_SANDBOX,
@@ -297,6 +304,58 @@ for (const [agentId, executable] of [
     });
     assert.match(preparedCommand, /sandpi-.*auth\.json/);
     assert.match(preparedCommand, /Persistent agent credential file is unsafe/);
+  });
+}
+
+for (const stopped of [false, true]) {
+  test(`Codex launch migration ${stopped ? "updates a stopped session" : "preserves a live session"}`, async () => {
+    const calls: string[] = [];
+    const session = {
+      id: "legacy-codex",
+      spec: {
+        command: ["codex"],
+        env: { HOME: "/workspace" },
+        eventRetention: { maxBytes: 4 * 1024 * 1024, maxAgeSeconds: 30 * 24 * 60 * 60 },
+      },
+      phase: stopped ? "exited" : "running",
+      runtimeGeneration: 7,
+      attempt: { id: "legacy-attempt", runtimeGeneration: 7 },
+      cursor: { earliest: 0, latest: 0 },
+    };
+    const runtime = runtimeWithClient({
+      sandboxes: {
+        sandbox() {
+          return {
+            async cmd() { return { exitCode: 0 }; },
+            async getSession() { return session; },
+            async updateSession(id: string, spec: typeof session.spec) {
+              calls.push("update");
+              assert.equal(id, session.id);
+              assert.deepEqual(spec.command, AGENT_ADAPTERS.codex.command);
+              assert.equal(
+                (spec.env as Record<string, string>).npm_config_prefix,
+                AGENT_ADAPTERS.codex.environment.npm_config_prefix,
+              );
+              return { ...session, spec };
+            },
+            async createSessionAttempt(id: string) {
+              calls.push("restart");
+              assert.equal(id, session.id);
+              return { ...session, phase: "running", attempt: { id: "new-attempt", runtimeGeneration: 7 } };
+            },
+            async connectSession() {
+              return { async *messages() {}, send() {}, close() {} };
+            },
+          };
+        },
+      },
+    });
+    const handle = await runtime.openAgentTerminal(
+      { ...environmentRuntimeRecord(), agentId: "codex", agentSessionId: session.id },
+      "codex",
+    );
+    assert.deepEqual(calls, stopped ? ["update", "restart"] : []);
+    assert.equal(handle.attemptId, stopped ? "new-attempt" : "legacy-attempt");
   });
 }
 

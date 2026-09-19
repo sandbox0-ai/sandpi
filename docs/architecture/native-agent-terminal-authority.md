@@ -47,6 +47,23 @@ The v2 registry includes Codex, Claude Code, and Pi. Commands start the official
 unmodified CLIs. Agent-specific behavior stays in the registry instead of being
 spread across route handlers or browser components.
 
+### Codex self-updates
+
+The template supplies a pinned Codex through a symlink to its local npm
+installation. Sandpi gives the native Codex TUI an independent global npm
+prefix at `/workspace/.sandpi/harnesses/codex/npm`. The built-in update command
+installs there, and the launcher prepends its `bin` directory to the inherited
+PATH before executing Codex. Before the first update, lookup falls back to the
+template binary. Reconnects and resumed runtimes use the installed update;
+normal RootFS checkpoint and restore semantics apply to the persisted package.
+
+The launcher resolves the command inside the guest shell because procd resolves
+bare executable names before applying session environment variables. It uses
+`exec` with positional arguments, preserving flags, exit status, and signals.
+Existing live TUIs are not interrupted: the launch command and npm prefix are
+reconciled when the old attempt has exited. Shell terminals launched separately
+do not inherit this agent-specific prefix.
+
 ## Terminal connection
 
 The browser opens
