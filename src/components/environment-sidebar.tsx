@@ -24,6 +24,8 @@ import {
 } from "lucide-react";
 import { useRef, useState, type ReactNode } from "react";
 
+import { NativeSessionList } from "@/components/native-session-list";
+
 import { AppSidebar } from "@/components/app-frame";
 import { SidebarAccountFooter } from "@/components/sidebar-account-footer";
 import {
@@ -42,6 +44,7 @@ interface EnvironmentSidebarProps {
   environments: Environment[];
   selectedEnvironmentId: string;
   onSelectEnvironment: (environmentId: string) => void;
+  onAgentLaunchChange: (environmentId: string, launchId: string) => void;
   onNewEnvironment: () => void;
   onEnvironmentSettings: (environmentId: string) => void;
   onReorderEnvironments: (environments: Environment[]) => void;
@@ -98,6 +101,7 @@ export function EnvironmentSidebar({
   environments,
   selectedEnvironmentId,
   onSelectEnvironment,
+  onAgentLaunchChange,
   onNewEnvironment,
   onEnvironmentSettings,
   onReorderEnvironments,
@@ -229,6 +233,7 @@ export function EnvironmentSidebar({
                     environmentId={environment.id}
                   >
                     {({ attributes, listeners }) => (
+                      <>
                       <div
                         className={`${styles.row} ${selected ? styles.selected : ""}`}
                       >
@@ -286,6 +291,14 @@ export function EnvironmentSidebar({
                           </button>
                         ) : null}
                       </div>
+                      <NativeSessionList
+                        environmentId={environment.id}
+                        selected={selected}
+                        language={language}
+                        onOpen={onSelectEnvironment}
+                        onLaunchChange={onAgentLaunchChange}
+                      />
+                      </>
                     )}
                   </SortableEnvironment>
                 );

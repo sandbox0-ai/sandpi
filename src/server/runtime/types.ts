@@ -76,6 +76,9 @@ export interface EnvironmentRuntimeRecord {
   /** Native coding-agent PTY Session, separate from the legacy Bash shell. */
   agentSessionId?: string;
   agentAttemptId?: string;
+  agentLaunchId?: string;
+  agentNativeSessionId?: string;
+  agentResumePath?: string;
   agentId?: EnvironmentAgentId;
   attemptId?: string;
   runtimeGeneration: number;
@@ -422,6 +425,14 @@ export interface RuntimeAdapter {
     after?: number,
     expectedTerminalSessionId?: string,
   ): Promise<RuntimeTerminalHandle>;
+  discoverNativeSessions(
+    runtime: EnvironmentRuntimeRecord,
+    agentId: EnvironmentAgentId,
+  ): Promise<{
+    sessions: import("@/lib/native-agent-sessions").NativeAgentSession[];
+    partial: boolean;
+  }>;
+  stopAgentTerminal(runtime: EnvironmentRuntimeRecord): Promise<void>;
   openAgentTerminal(
     runtime: EnvironmentRuntimeRecord,
     agentId: EnvironmentAgentId,

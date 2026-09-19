@@ -6859,6 +6859,260 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /api/v1/environments/{environmentId}/native-sessions:
+    get:
+      operationId: listNativeAgentSessions
+      summary: Read cached native Agent session history without waking the Environment
+      tags:
+        - Terminal
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+          in: path
+          name: environmentId
+          required: true
+      responses:
+        "200":
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      sessions:
+                        maxItems: 200
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                              format: uuid
+                              pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                            title:
+                              type: string
+                              maxLength: 160
+                            updatedAt:
+                              type: number
+                              minimum: 0
+                            resumePath:
+                              type: string
+                              maxLength: 2048
+                          required:
+                            - id
+                            - title
+                            - updatedAt
+                            - resumePath
+                          additionalProperties: false
+                      syncedAt:
+                        nullable: true
+                        type: number
+                      partial:
+                        type: boolean
+                      launchId:
+                        type: string
+                      openedSessionId:
+                        nullable: true
+                        type: string
+                    required:
+                      - sessions
+                      - syncedAt
+                      - partial
+                      - launchId
+                      - openedSessionId
+                    additionalProperties: false
+                required:
+                  - data
+                additionalProperties: false
+        default:
+          description: Sandpi error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/environments/{environmentId}/native-sessions/refresh:
+    post:
+      operationId: refreshNativeAgentSessions
+      summary: Index bounded native session metadata while the Environment is running
+      tags:
+        - Terminal
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+          in: path
+          name: environmentId
+          required: true
+      responses:
+        "200":
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      sessions:
+                        maxItems: 200
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                              format: uuid
+                              pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                            title:
+                              type: string
+                              maxLength: 160
+                            updatedAt:
+                              type: number
+                              minimum: 0
+                            resumePath:
+                              type: string
+                              maxLength: 2048
+                          required:
+                            - id
+                            - title
+                            - updatedAt
+                            - resumePath
+                          additionalProperties: false
+                      syncedAt:
+                        nullable: true
+                        type: number
+                      partial:
+                        type: boolean
+                      launchId:
+                        type: string
+                      openedSessionId:
+                        nullable: true
+                        type: string
+                    required:
+                      - sessions
+                      - syncedAt
+                      - partial
+                      - launchId
+                      - openedSessionId
+                    additionalProperties: false
+                required:
+                  - data
+                additionalProperties: false
+        default:
+          description: Sandpi error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/environments/{environmentId}/native-sessions/selection:
+    put:
+      operationId: selectNativeAgentSession
+      summary: Stop the current Agent TUI and select native history or a new
+        conversation
+      tags:
+        - Terminal
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                sessionId:
+                  nullable: true
+                  type: string
+                  format: uuid
+                  pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                expectedLaunchId:
+                  type: string
+                  maxLength: 100
+                requestId:
+                  type: string
+                  format: uuid
+                  pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                confirmReplace:
+                  type: boolean
+                  enum:
+                    - true
+              required:
+                - sessionId
+                - expectedLaunchId
+                - requestId
+                - confirmReplace
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+          in: path
+          name: environmentId
+          required: true
+      responses:
+        "200":
+          description: Successful response.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      sessions:
+                        maxItems: 200
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                              format: uuid
+                              pattern: ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$
+                            title:
+                              type: string
+                              maxLength: 160
+                            updatedAt:
+                              type: number
+                              minimum: 0
+                            resumePath:
+                              type: string
+                              maxLength: 2048
+                          required:
+                            - id
+                            - title
+                            - updatedAt
+                            - resumePath
+                          additionalProperties: false
+                      syncedAt:
+                        nullable: true
+                        type: number
+                      partial:
+                        type: boolean
+                      launchId:
+                        type: string
+                      openedSessionId:
+                        nullable: true
+                        type: string
+                    required:
+                      - sessions
+                      - syncedAt
+                      - partial
+                      - launchId
+                      - openedSessionId
+                    additionalProperties: false
+                required:
+                  - data
+                additionalProperties: false
+        default:
+          description: Sandpi error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /api/v1/environments/{environmentId}/previews:
     post:
       operationId: createEnvironmentPreview

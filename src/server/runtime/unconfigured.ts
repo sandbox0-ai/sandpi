@@ -68,4 +68,6 @@ export class UnconfiguredRuntime implements RuntimeAdapter {
   getResourceMetrics = unavailable;
   openTerminal = unavailable;
   openAgentTerminal = unavailable;
+  discoverNativeSessions = unavailable;
+  stopAgentTerminal = unavailable;
 }

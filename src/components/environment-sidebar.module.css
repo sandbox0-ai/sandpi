@@ -213,3 +213,73 @@
     min-width: 44px;
   }
 }
+
+.sessions {
+  padding: 0 8px 8px 26px;
+}
+.sessionToolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.sessionToolbar button,
+.sessionMore {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  background: transparent;
+  color: var(--terminal-side-muted);
+  padding: 6px;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.sessionToolbar button:first-child {
+  flex: 1;
+}
+.sessionButton {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  border: 0;
+  border-radius: 4px;
+  padding: 8px 6px;
+  background: transparent;
+  color: var(--terminal-side-muted);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.sessionButton svg {
+  flex-shrink: 0;
+}
+.sessionButton span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sessionButton:hover,
+.sessionSelected {
+  color: var(--terminal-side-green);
+  background: color-mix(in srgb, var(--terminal-side-green) 10%, transparent);
+}
+.sessionHint {
+  margin: 5px 6px;
+  font-size: 10px;
+  color: var(--terminal-side-muted);
+}
+.sessionError {
+  margin: 5px;
+  font-size: 11px;
+  color: #ff9999;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 680px) {
+  .sessionToolbar button,
+  .sessionButton {
+    min-height: 40px;
+  }
+}

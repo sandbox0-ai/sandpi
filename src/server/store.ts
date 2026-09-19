@@ -3,6 +3,10 @@ import type { Pool, PoolClient, QueryResultRow } from "pg";
 
 import type { CodexHarnessState } from "@/harnesses/codex/types";
 import type {
+  NativeAgentSessionIndex,
+  NativeAgentSession,
+} from "@/lib/native-agent-sessions";
+import type {
   CodingSession,
   Environment,
   EnvironmentAgentId,
@@ -287,6 +291,9 @@ interface EnvironmentRuntimeRow extends QueryResultRow {
   terminal_session_id: string | null;
   agent_session_id: string | null;
   agent_attempt_id: string | null;
+  agent_launch_id?: string;
+  agent_native_session_id?: string | null;
+  agent_resume_path?: string | null;
   harness?: EnvironmentAgentId;
   supervisor_cursor: string | number;
   stdout_tail: string;
@@ -581,10 +588,7 @@ export class SandpiStore {
     credentialId: string,
   ): Promise<StoredEnvironmentEgressCredential> {
     await this.getManageableEnvironment(userId, environmentId);
-    return this.getEnvironmentEgressCredentialById(
-      environmentId,
-      credentialId,
-    );
+    return this.getEnvironmentEgressCredentialById(environmentId, credentialId);
   }
 
   async getEnvironmentEgressCredentialById(
@@ -678,10 +682,7 @@ export class SandpiStore {
       }
       throw error;
     }
-    return this.getEnvironmentEgressCredentialById(
-      environmentId,
-      credentialId,
-    );
+    return this.getEnvironmentEgressCredentialById(environmentId, credentialId);
   }
 
   async recordEnvironmentEgressCredentialSource(
@@ -1205,10 +1206,7 @@ export class SandpiStore {
              rootfs_snapshot_id = COALESCE($2, rootfs_snapshot_id),
              provisioning_error = NULL
          WHERE id = $1`,
-        [
-          environmentId,
-          resources.rootfsSnapshotId ?? null,
-        ],
+        [environmentId, resources.rootfsSnapshotId ?? null],
       );
       await client.query(
         `INSERT INTO environment_runtime (
@@ -2140,6 +2138,7 @@ export class SandpiStore {
       await client.query(
         `UPDATE environment_runtime
          SET agent_session_id = NULL, agent_attempt_id = NULL,
+             agent_native_session_id = NULL, agent_resume_path = NULL, agent_launch_id = gen_random_uuid()::text,
              terminal_session_id = NULL, attempt_id = NULL,
              version = version + 1
          WHERE environment_id = $1 AND sandbox_id = $2`,
@@ -2148,6 +2147,10 @@ export class SandpiStore {
       await client.query(
         `DELETE FROM environment_terminal_controllers
          WHERE environment_id = $1`,
+        [environmentId],
+      );
+      await client.query(
+        "DELETE FROM environment_native_session_indexes WHERE environment_id=$1",
         [environmentId],
       );
       await client.query("COMMIT");
@@ -2242,10 +2245,7 @@ export class SandpiStore {
     return this.environmentRuntime(environmentId);
   }
 
-  async prepareEnvironmentManualPause(
-    userId: string,
-    environmentId: string,
-  ) {
+  async prepareEnvironmentManualPause(userId: string, environmentId: string) {
     const environment = await this.getManageableEnvironment(
       userId,
       environmentId,
@@ -2659,6 +2659,7 @@ export class SandpiStore {
     environmentId: string,
     sandboxId: string,
     coordinates: EnvironmentTerminalCoordinates,
+    expectedLaunchId = "",
   ) {
     const client = await this.pool.connect();
     try {
@@ -2667,7 +2668,7 @@ export class SandpiStore {
         `UPDATE environment_runtime
          SET agent_session_id = $3, agent_attempt_id = $4,
              runtime_generation = $5, version = version + 1
-         WHERE environment_id = $1 AND sandbox_id = $2
+         WHERE environment_id = $1 AND sandbox_id = $2 AND agent_launch_id = $6
            AND runtime_generation <= $5
          RETURNING environment_id`,
         [
@@ -2676,6 +2677,7 @@ export class SandpiStore {
           coordinates.agentSessionId,
           coordinates.agentAttemptId,
           coordinates.runtimeGeneration,
+          expectedLaunchId,
         ],
       );
       if (!updated.rowCount) {
@@ -2867,6 +2869,74 @@ export class SandpiStore {
     return terminalControlLeaseFromRow(lease, "controller");
   }
 
+  async getNativeSessionIndex(
+    userId: string,
+    environmentId: string,
+  ): Promise<NativeAgentSessionIndex> {
+    const environment = await this.getEnvironment(userId, environmentId);
+    const result = await this.pool.query(
+      `SELECT idx.sessions, idx.partial, idx.synced_at, runtime.agent_launch_id,
+              runtime.agent_native_session_id
+       FROM environment_runtime runtime
+       LEFT JOIN environment_native_session_indexes idx ON idx.environment_id = runtime.environment_id AND idx.harness = $2
+       WHERE runtime.environment_id = $1`,
+      [environmentId, environment.codingAgent.harness],
+    );
+    const row = result.rows[0];
+    return {
+      sessions: row?.sessions ?? [],
+      partial: row?.partial ?? false,
+      syncedAt: row?.synced_at ? new Date(row.synced_at).getTime() : null,
+      launchId: row?.agent_launch_id ?? "",
+      openedSessionId: row?.agent_native_session_id ?? null,
+    };
+  }
+
+  async saveNativeSessionIndex(
+    environmentId: string,
+    harness: EnvironmentAgentId,
+    sessions: NativeAgentSession[],
+    partial: boolean,
+  ) {
+    await this.pool.query(
+      `INSERT INTO environment_native_session_indexes(environment_id,harness,sessions,partial)
+      VALUES ($1,$2,$3::jsonb,$4) ON CONFLICT(environment_id) DO UPDATE SET
+      harness=EXCLUDED.harness,sessions=EXCLUDED.sessions,partial=EXCLUDED.partial,synced_at=NOW()`,
+      [environmentId, harness, JSON.stringify(sessions), partial],
+    );
+  }
+
+  /** Clear the old terminal coordinates only after its process has stopped. */
+  async selectNativeSession(
+    environmentId: string,
+    expectedLaunchId: string,
+    launchId: string,
+    session?: NativeAgentSession,
+  ) {
+    const result = await this.pool.query(
+      `UPDATE environment_runtime SET
+      agent_launch_id=$3,agent_native_session_id=$4,agent_resume_path=$5,
+      agent_session_id=NULL,agent_attempt_id=NULL,version=version+1
+      WHERE environment_id=$1 AND agent_launch_id=$2 RETURNING environment_id`,
+      [
+        environmentId,
+        expectedLaunchId,
+        launchId,
+        session?.id ?? null,
+        session?.resumePath ?? null,
+      ],
+    );
+    if (!result.rowCount)
+      throw conflict(
+        "agent_session_selection_changed",
+        "The Agent selection changed on another device. Refresh and retry.",
+      );
+    await this.pool.query(
+      "DELETE FROM environment_terminal_controllers WHERE environment_id=$1",
+      [environmentId],
+    );
+  }
+
   async listSessions(userId: string): Promise<CodingSession[]> {
     const result = await this.pool.query<SessionRow>(
       `${SESSION_SELECT}
@@ -2996,7 +3066,9 @@ export class SandpiStore {
       ],
     );
     if (!result.rowCount) {
-      throw new Error("The idempotent Session creation could not be completed.");
+      throw new Error(
+        "The idempotent Session creation could not be completed.",
+      );
     }
   }
 
@@ -3462,12 +3534,7 @@ export class SandpiStore {
              OR ($3::BOOLEAN AND completed)
              OR ($4::BOOLEAN AND unread = FALSE)
            )`,
-        [
-          input.sessionId,
-          status,
-          activeNativeTurnId !== null,
-          terminalFailure,
-        ],
+        [input.sessionId, status, activeNativeTurnId !== null, terminalFailure],
       );
       await client.query("COMMIT");
       return true;
@@ -4471,6 +4538,9 @@ function environmentRuntimeFromRow(
     ...(row.agent_attempt_id
       ? { agentAttemptId: row.agent_attempt_id }
       : {}),
+    ...(row.agent_launch_id ? { agentLaunchId: row.agent_launch_id } : {}),
+    ...(row.agent_native_session_id ? { agentNativeSessionId: row.agent_native_session_id } : {}),
+    ...(row.agent_resume_path ? { agentResumePath: row.agent_resume_path } : {}),
     ...(row.harness ? { agentId: row.harness } : {}),
     attemptId: row.attempt_id ?? undefined,
     runtimeGeneration: Number(row.runtime_generation),
