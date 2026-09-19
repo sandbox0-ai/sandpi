@@ -13,7 +13,7 @@
   min-height: 0;
   grid-column: 2;
   grid-row: 1;
-  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  grid-template-rows: auto minmax(0, 1fr) auto;
   overflow: hidden;
   border-left: 1px solid var(--agent-line);
   background: var(--agent-bg);
@@ -23,7 +23,7 @@
 
 .header {
   display: flex;
-  min-height: 48px;
+  min-height: 60px;
   align-items: center;
   gap: 12px;
   padding: 0 14px;
@@ -32,10 +32,8 @@
   font-size: 11px;
 }
 
-.menuButton,
-.header button,
 .actions button,
-.virtualKeys button,
+.panel button,
 .viewerNotice button,
 .connectionNotice button {
   display: inline-flex;
@@ -51,9 +49,10 @@
   cursor: pointer;
 }
 
-.menuButton {
-  width: 38px;
-  padding: 0;
+.navigationButton {
+  flex: 0 0 auto;
+  border-radius: 2px !important;
+  color: #859183 !important;
 }
 
 .identity {
@@ -171,70 +170,95 @@
   color: var(--agent-red);
 }
 
-.virtualKeys {
-  display: flex;
-  min-height: 45px;
-  align-items: center;
-  gap: 5px;
-  overflow-x: auto;
-  padding: 5px 8px;
-  border-top: 1px solid var(--agent-line);
-  background: #131613;
-}
-
-.virtualKeys button {
-  min-width: 44px;
-  min-height: 34px;
-  flex: 0 0 auto;
-  padding: 0 9px;
-  font-size: 9px;
-}
-
-.actions {
-  display: flex;
-  min-height: 49px;
-  align-items: center;
-  gap: 6px;
-  overflow-x: auto;
-  padding: 6px 9px;
+.controls {
+  position: relative;
+  min-width: 0;
   border-top: 1px solid var(--agent-line);
   background: var(--agent-panel);
 }
 
-.actions button {
-  min-height: 35px;
-  flex: 0 0 auto;
-  padding: 0 9px;
-  font-size: 9px;
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 9px max(6px, env(safe-area-inset-bottom));
+}
+
+.actions button,
+.panel button {
+  min-height: 36px;
+  padding: 0 12px;
+  font-size: 11px;
+}
+
+.actions button[aria-expanded="true"] {
+  border-color: var(--agent-green);
+  color: var(--agent-green);
+}
+
+.panel {
+  position: absolute;
+  z-index: 5;
+  left: 8px;
+  bottom: calc(100% + 8px);
+  width: min(320px, calc(100% - 16px));
+  max-height: min(360px, 50dvh);
+  overflow-y: auto;
+  padding: 8px;
+  border: 1px solid var(--agent-line);
+  border-radius: 4px;
+  background: var(--agent-panel);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 35%);
+}
+
+.virtualKeys {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.virtualKeys button {
+  padding: 0 4px;
+  font-size: 10px;
+}
+
+.environmentActions {
+  display: grid;
+  gap: 4px;
+}
+
+.environmentActions button {
+  justify-content: flex-start;
+  border-color: transparent;
+  background: transparent;
 }
 
 .actions button:hover:not(:disabled),
-.virtualKeys button:hover:not(:disabled),
+.panel button:hover:not(:disabled),
 .viewerNotice button:hover,
-.connectionNotice button:hover,
-.menuButton:hover {
+.connectionNotice button:hover {
   border-color: var(--agent-green);
   color: var(--agent-green);
 }
 
 .actions button:focus-visible,
-.virtualKeys button:focus-visible,
+.panel button:focus-visible,
 .viewerNotice button:focus-visible,
 .connectionNotice button:focus-visible,
-.menuButton:focus-visible {
+.navigationButton:focus-visible {
   outline: 2px solid var(--agent-green);
   outline-offset: 1px;
 }
 
 .actions button:disabled,
-.virtualKeys button:disabled {
+.panel button:disabled {
   cursor: not-allowed;
   opacity: 0.38;
 }
 
 .coordinates {
   min-width: 120px;
-  margin-left: auto;
+  padding: 8px 12px 4px;
   overflow: hidden;
   color: var(--agent-muted);
   font-size: 9px;
@@ -243,7 +267,14 @@
 }
 
 .actionError {
-  flex: 0 0 auto;
+  position: absolute;
+  right: 8px;
+  bottom: calc(100% + 8px);
+  left: 8px;
+  z-index: 4;
+  padding: 10px;
+  border: 1px solid var(--agent-red);
+  background: var(--agent-panel);
   color: var(--agent-red);
   font-size: 9px;
 }
@@ -257,12 +288,10 @@
 
 @media (max-width: 720px) {
   .header {
-    min-height: 54px;
+    min-height: 60px;
     padding: 0 8px;
   }
 
-  .menuButton,
-  .header button,
   .viewerNotice button,
   .connectionNotice button {
     min-width: 44px;
@@ -286,18 +315,25 @@
     justify-content: space-between;
   }
 
-  .virtualKeys,
-  .actions {
-    min-height: 56px;
+  .panel {
+    right: 8px;
+    left: auto;
   }
 
-  .virtualKeys button,
+  .actions {
+    gap: 4px;
+    padding-inline: 6px;
+  }
+
+  .actions button {
+    min-width: 0;
+    flex: 1;
+    padding-inline: 6px;
+  }
+
+  .panel button,
   .actions button {
     min-height: 44px;
-  }
-
-  .coordinates {
-    display: none;
   }
 }
 

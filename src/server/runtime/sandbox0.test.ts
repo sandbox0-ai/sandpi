@@ -206,76 +206,99 @@ test("restores a named snapshot into the idempotent paused fork child", async ()
   assert.deepEqual(calls, ["fork", "restore", "read"]);
 });
 
-test("opens Pi as the Environment native TUI instead of a browser-owned shell", async () => {
-  let preparedCommand = "";
-  let createdSpec: Record<string, unknown> | undefined;
-  let idempotencyKey = "";
-  const session = {
-    id: "agent-session-pi",
-    spec: {
-      name: "sandpi-agent-pi",
-      command: ["pi"],
-      env: {
-        HOME: "/workspace",
-        TERM: "xterm-256color",
-        COLORTERM: "truecolor",
+for (const [agentId, executable] of [
+  ["codex", "codex"],
+  ["claude-code", "claude"],
+  ["pi", "pi"],
+] as const) {
+  test(`opens ${agentId} with full permissions in the Environment native TUI`, async () => {
+    let preparedCommand = "";
+    let createdSpec: Record<string, unknown> | undefined;
+    let idempotencyKey = "";
+    const session = {
+      id: `agent-session-${agentId}`,
+      spec: {
+        name: `sandpi-agent-${agentId}`,
+        command: [executable],
+        env: {
+          HOME: "/workspace",
+          TERM: "xterm-256color",
+          COLORTERM: "truecolor",
+        },
+        eventRetention: {
+          maxBytes: 4 * 1024 * 1024,
+          maxAgeSeconds: 30 * 24 * 60 * 60,
+        },
       },
-      eventRetention: {
-        maxBytes: 4 * 1024 * 1024,
-        maxAgeSeconds: 30 * 24 * 60 * 60,
+      phase: "running",
+      runtimeGeneration: 7,
+      attempt: { id: `agent-attempt-${agentId}`, runtimeGeneration: 7 },
+      cursor: { earliest: 0, latest: 0 },
+    };
+    const runtime = runtimeWithClient({
+      sandboxes: {
+        sandbox(sandboxId: string) {
+          assert.equal(sandboxId, environment.sandboxId);
+          return {
+            async cmd(_name: string, input: { command: string[] }) {
+              preparedCommand += input.command[2] ?? "";
+              return { exitCode: 0 };
+            },
+            async createSession(
+              spec: Record<string, unknown>,
+              options: { idempotencyKey: string },
+            ) {
+              createdSpec = spec;
+              idempotencyKey = options.idempotencyKey;
+              return session;
+            },
+            async connectSession() {
+              return {
+                async *messages() {},
+                send() {},
+                close() {},
+              };
+            },
+          };
+        },
       },
-    },
-    phase: "running",
-    runtimeGeneration: 7,
-    attempt: { id: "agent-attempt-pi", runtimeGeneration: 7 },
-    cursor: { earliest: 0, latest: 0 },
-  };
-  const runtime = runtimeWithClient({
-    sandboxes: {
-      sandbox(sandboxId: string) {
-        assert.equal(sandboxId, environment.sandboxId);
-        return {
-          async cmd(_name: string, input: { command: string[] }) {
-            preparedCommand = input.command[2] ?? "";
-            return { exitCode: 0 };
-          },
-          async createSession(
-            spec: Record<string, unknown>,
-            options: { idempotencyKey: string },
-          ) {
-            createdSpec = spec;
-            idempotencyKey = options.idempotencyKey;
-            return session;
-          },
-          async connectSession() {
-            return {
-              async *messages() {},
-              send() {},
-              close() {},
-            };
-          },
-        };
-      },
-    },
-  });
+    });
 
-  const handle = await runtime.openAgentTerminal(
-    { ...environmentRuntimeRecord(), agentId: "pi" },
-    "pi",
-  );
+    const handle = await runtime.openAgentTerminal(
+      { ...environmentRuntimeRecord(), agentId },
+      agentId,
+    );
 
-  assert.equal(handle.sessionId, "agent-session-pi");
-  assert.equal(handle.attemptId, "agent-attempt-pi");
-  assert.equal(handle.runtimeGeneration, 7);
-  assert.equal(idempotencyKey, "sandpi-agent-pi-environment-test");
-  assert.deepEqual(createdSpec?.command, ["pi"]);
-  assert.deepEqual(createdSpec?.io, {
-    mode: "pty",
-    terminal: { rows: 28, cols: 120, term: "xterm-256color" },
+    assert.equal(handle.sessionId, `agent-session-${agentId}`);
+    assert.equal(handle.attemptId, `agent-attempt-${agentId}`);
+    assert.equal(handle.runtimeGeneration, 7);
+    assert.equal(idempotencyKey, `sandpi-agent-${agentId}-environment-test`);
+    const command = createdSpec?.command as string[];
+    assert.equal(command[0], executable);
+    if (agentId === "codex") {
+      assert.ok(command.includes("--dangerously-bypass-approvals-and-sandbox"));
+    } else if (agentId === "claude-code") {
+      assert.ok(command.includes("--dangerously-skip-permissions"));
+      assert.equal(
+        (createdSpec?.env as Record<string, string>).IS_SANDBOX,
+        "1",
+      );
+      assert.equal(
+        JSON.parse(command[command.indexOf("--settings") + 1])
+          .skipDangerousModePermissionPrompt,
+        true,
+      );
+    } else {
+      assert.deepEqual(command, ["pi"]);
+    }
+    assert.deepEqual(createdSpec?.io, {
+      mode: "pty",
+      terminal: { rows: 28, cols: 120, term: "xterm-256color" },
+    });
+    assert.match(preparedCommand, /sandpi-.*auth\.json/);
+    assert.match(preparedCommand, /Persistent agent credential file is unsafe/);
   });
-  assert.match(preparedCommand, /sandpi-pi-auth\.json/);
-  assert.match(preparedCommand, /Persistent agent credential file is unsafe/);
-});
+}
 
 test("reuses hot native Agent metadata without repeating preparation commands", async () => {
   const calls: string[] = [];

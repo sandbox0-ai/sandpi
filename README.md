@@ -82,13 +82,20 @@ pretending a human-operated TUI is a durable job protocol.
 ## Why the terminal is the product surface
 
 Coding agents increasingly expose their newest capabilities through their
-native TUIs. Rendering the PTY preserves slash commands, approvals, tool output,
+native TUIs. Rendering the PTY preserves slash commands, tool output,
 mouse support, color, layout, and agent-specific interaction without waiting
 for a lowest-common-denominator schema.
 
+All native harnesses start with full permissions inside their Environment:
+Codex bypasses its inner sandbox and approvals, Claude Code skips permission
+checks and its initial bypass-mode confirmation, and Pi uses its native
+permission-free execution. Sandbox0 remains the isolation and network-policy
+boundary. Existing running TUIs pick up changed launch defaults after exiting
+and reopening the agent terminal.
+
 Sandpi's page is terminal-styled but does not require a physical keyboard.
-Mobile users get large touch targets and horizontally scrollable special-key
-and Environment action bars. Files, snapshots, fork, lifecycle, credentials,
+Mobile users get large touch targets and a single compact action bar, with
+special keys and secondary Environment actions available on demand. Files, snapshots, fork, lifecycle, credentials,
 and network controls remain ordinary accessible dialogs around the terminal.
 
 ## Authority boundaries
