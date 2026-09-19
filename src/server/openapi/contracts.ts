@@ -1,3 +1,4 @@
+import { nativeAgentSessionIndexSchema, openNativeAgentSessionSchema } from "@/lib/native-agent-sessions";
 import { z } from "zod";
 
 import { ENVIRONMENT_METRIC_RANGES_SECONDS } from "@/lib/environment-metrics";
@@ -1370,9 +1371,13 @@ const allOpenApiRouteContracts: readonly OpenApiRouteContract[] = [
       },
       "x-sandpi-sse": {
         events: {
-          snapshot: { schema: { $ref: "#/components/schemas/CodexNativeSnapshot" } },
+          snapshot: {
+            schema: { $ref: "#/components/schemas/CodexNativeSnapshot" },
+          },
           activity: { schema: { type: "object" } },
-          notification: { schema: { $ref: "#/components/schemas/NativeHarnessEvent" } },
+          notification: {
+            schema: { $ref: "#/components/schemas/NativeHarnessEvent" },
+          },
           invalidation: { schema: { type: "object" } },
           "stream-error": { schema: { type: "object" } },
         },
@@ -1597,6 +1602,40 @@ const allOpenApiRouteContracts: readonly OpenApiRouteContract[] = [
         "x-sandpi-terminal-binary-frame":
           "When protocol=terminal-fast-v1, contiguous PTY output is sent as a binary _0v1 frame and input may be sent as a binary _0v1 input frame. JSON messages remain the fallback.",
       },
+    },
+  }),
+  defineContract({
+    method: "GET",
+    url: "/api/v1/environments/:environmentId/native-sessions",
+    schema: {
+      operationId: "listNativeAgentSessions",
+      summary:
+        "Read cached native Agent session history without waking the Environment",
+      tags: ["Terminal"],
+      response: { 200: dataEnvelope(nativeAgentSessionIndexSchema) },
+    },
+  }),
+  defineContract({
+    method: "POST",
+    url: "/api/v1/environments/:environmentId/native-sessions/refresh",
+    schema: {
+      operationId: "refreshNativeAgentSessions",
+      summary:
+        "Index bounded native session metadata while the Environment is running",
+      tags: ["Terminal"],
+      response: { 200: dataEnvelope(nativeAgentSessionIndexSchema) },
+    },
+  }),
+  defineContract({
+    method: "PUT",
+    url: "/api/v1/environments/:environmentId/native-sessions/selection",
+    schema: {
+      operationId: "selectNativeAgentSession",
+      summary:
+        "Stop the current Agent TUI and select native history or a new conversation",
+      tags: ["Terminal"],
+      body: openNativeAgentSessionSchema,
+      response: { 200: dataEnvelope(nativeAgentSessionIndexSchema) },
     },
   }),
   defineContract({

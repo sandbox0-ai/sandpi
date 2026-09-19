@@ -99,6 +99,7 @@ test("migration history contains every durable Sandpi boundary", async () => {
       "0068_native_agent_credentials",
       "0069_disable_legacy_automation",
       "0070_retire_legacy_app_server",
+      "0071_native_agent_session_index",
     ],
   );
 

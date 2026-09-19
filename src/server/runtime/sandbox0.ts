@@ -52,6 +52,12 @@ import {
 import { detectWorkspaceFilePreview } from "@/lib/workspace-file-preview";
 import { HttpError } from "@/server/http-error";
 import {
+  NATIVE_SESSION_DISCOVERY_SCRIPT,
+  nativeSessionRoot,
+  nativeSessionDiscoverySchema,
+  nativeSessionCommand,
+} from "@/server/agents/session-discovery";
+import {
   agentAdapter,
   agentSessionIdempotencyKey,
   agentSessionName,
@@ -591,10 +597,7 @@ export class Sandbox0Runtime implements RuntimeAdapter {
    * state already matches the requested limit. Read failures preserve the
    * original mutation error.
    */
-  private async environmentMemoryMatches(
-    sandboxId: string,
-    memoryMiB: number,
-  ) {
+  private async environmentMemoryMatches(sandboxId: string, memoryMiB: number) {
     try {
       const sandbox = await this.client.sandboxes.get(sandboxId);
       return sandboxMemoryQuantityMiB(sandbox.resources?.memory) === memoryMiB;
@@ -1859,16 +1862,10 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     name: string,
   ) {
     const skillName = requireRuntimeSkillName(name);
-    const destination = path.posix.join(
-      "/workspace/.agents/skills",
-      skillName,
-    );
+    const destination = path.posix.join("/workspace/.agents/skills", skillName);
     const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
     try {
-      const skill = await assertWorkspacePathHasNoSymlink(
-        sandbox,
-        destination,
-      );
+      const skill = await assertWorkspacePathHasNoSymlink(sandbox, destination);
       if (!skill || skill.type !== "dir") {
         throw new HttpError(
           404,
@@ -2307,7 +2304,9 @@ export class Sandbox0Runtime implements RuntimeAdapter {
   ): Promise<WorkspaceFile> {
     const parentPath = safeEditableWorkspacePath(requestedParentPath);
     const name = safeWorkspaceEntryName(requestedName);
-    const entryPath = safeEditableWorkspacePath(path.posix.join(parentPath, name));
+    const entryPath = safeEditableWorkspacePath(
+      path.posix.join(parentPath, name),
+    );
     if (isWorkspaceIdePathHidden(entryPath, kind === "folder")) {
       throw new HttpError(
         400,
@@ -2399,16 +2398,8 @@ export class Sandbox0Runtime implements RuntimeAdapter {
           "The Workspace entry no longer exists.",
         );
       }
-      const source = mutableWorkspaceEntryFromStat(
-        sourcePath,
-        sourceFile,
-      );
-      if (
-        isWorkspaceIdePathHidden(
-          destinationPath,
-          source.kind === "folder",
-        )
-      ) {
+      const source = mutableWorkspaceEntryFromStat(sourcePath, sourceFile);
+      if (isWorkspaceIdePathHidden(destinationPath, source.kind === "folder")) {
         throw new HttpError(
           400,
           "workspace_entry_hidden",
@@ -2469,10 +2460,7 @@ export class Sandbox0Runtime implements RuntimeAdapter {
           "The Workspace entry no longer exists.",
         );
       }
-      const entry = mutableWorkspaceEntryFromStat(
-        entryPath,
-        entryFile,
-      );
+      const entry = mutableWorkspaceEntryFromStat(entryPath, entryFile);
       await sandbox.deleteFile(entryPath);
       this.invalidateWorkspaceGitState(runtime);
       return entry;
@@ -2875,6 +2863,61 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     };
   }
 
+  async discoverNativeSessions(
+    runtime: EnvironmentRuntimeRecord,
+    agentId: EnvironmentAgentId,
+  ) {
+    const result = await this.client.sandboxes
+      .sandbox(runtime.sandboxId)
+      .cmd("index-native-agent-sessions", {
+        command: [
+          "node",
+          "-e",
+          NATIVE_SESSION_DISCOVERY_SCRIPT,
+          nativeSessionRoot(agentId),
+          agentId,
+        ],
+        cwd: "/workspace",
+        ttlSec: 10,
+      });
+    if (result.exitCode !== 0)
+      throw new HttpError(
+        502,
+        "native_session_scan_failed",
+        "Unable to read native session history.",
+      );
+    return nativeSessionDiscoverySchema.parse(JSON.parse(result.stdout));
+  }
+
+  /** Switching is explicit and serialized by the Environment lifecycle lock. */
+  async stopAgentTerminal(runtime: EnvironmentRuntimeRecord) {
+    this.agentSessionCache.delete(runtime.id);
+    if (!runtime.agentSessionId) return;
+    const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
+    try {
+      await sandbox.setSessionDesiredState(runtime.agentSessionId, "stopped");
+      const deadline = Date.now() + 15000;
+      while (Date.now() < deadline) {
+        const session = await sandbox.getSession(runtime.agentSessionId);
+        if (
+          ["stopped", "exited", "failed"].includes(session.phase) ||
+          session.attempt?.finishedAt
+        ) {
+          await sandbox.deleteSession(runtime.agentSessionId);
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      throw new HttpError(
+        409,
+        "agent_terminal_stopping",
+        "The current Agent is still stopping. Retry shortly.",
+      );
+    } catch (error) {
+      if (!isMissingResource(error)) throw error;
+    }
+  }
+
   async openAgentTerminal(
     runtime: EnvironmentRuntimeRecord,
     agentId: EnvironmentAgentId,
@@ -2903,6 +2946,11 @@ export class Sandbox0Runtime implements RuntimeAdapter {
     metadataRetry: boolean,
   ): Promise<RuntimeTerminalHandle> {
     const adapter = agentAdapter(agentId);
+    const command = nativeSessionCommand(
+      agentId,
+      runtime.agentNativeSessionId,
+      runtime.agentResumePath,
+    );
     const sandbox = this.client.sandboxes.sandbox(runtime.sandboxId);
 
     if (!this.agentPreparationMatches(runtime, agentId, options.credentialJson)) {
@@ -2948,7 +2996,7 @@ export class Sandbox0Runtime implements RuntimeAdapter {
       terminal = await sandbox.createSession(
         {
           name: agentSessionName(agentId),
-          command: [...adapter.command],
+          command,
           cwd: "/workspace",
           env: desiredEnvironment,
           io: {
@@ -2966,7 +3014,9 @@ export class Sandbox0Runtime implements RuntimeAdapter {
           },
         },
         {
-          idempotencyKey: agentSessionIdempotencyKey(runtime.id, agentId),
+          idempotencyKey:
+            agentSessionIdempotencyKey(runtime.id, agentId) +
+            (runtime.agentLaunchId ? `-${runtime.agentLaunchId}` : ""),
         },
       );
     }
@@ -2987,8 +3037,7 @@ export class Sandbox0Runtime implements RuntimeAdapter {
       terminal.spec.eventRetention?.maxBytes !== retention.maxBytes ||
       terminal.spec.eventRetention?.maxAgeSeconds !== retention.maxAgeSeconds;
     const commandNeedsUpdate =
-      terminalStopped &&
-      !stringArrayEqual(terminal.spec.command, adapter.command);
+      terminalStopped && !stringArrayEqual(terminal.spec.command, command);
     const environmentNeedsUpdate =
       terminalStopped &&
       Object.entries(desiredEnvironment).some(
@@ -2999,7 +3048,7 @@ export class Sandbox0Runtime implements RuntimeAdapter {
       // Migration of its launch contract happens only after the user exits it.
       terminal = await sandbox.updateSession(terminal.id, {
         ...terminal.spec,
-        ...(commandNeedsUpdate ? { command: [...adapter.command] } : {}),
+        ...(commandNeedsUpdate ? { command } : {}),
         ...(environmentNeedsUpdate ? { env: desiredEnvironment } : {}),
         eventRetention: retention,
       });

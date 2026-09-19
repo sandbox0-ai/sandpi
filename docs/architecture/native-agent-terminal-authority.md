@@ -217,3 +217,41 @@ longer prevent the Environment idle-pause policy from releasing compute.
 Future unattended automation must have an explicit headless adapter with its
 own durable execution contract. It must not inject keystrokes into the shared
 human TUI.
+
+## Native session navigation
+
+The Environment sidebar indexes up to 200 recent readable native sessions for
+Codex, Claude Code, and Pi. The index contains opaque IDs, titles, timestamps,
+and validated resume paths; it contains no conversation transcript. Native
+JSONL remains authoritative. Partial scans are explicitly labeled, including
+unsupported compressed-only history. Traversal, bytes read per file, and scan
+time are bounded.
+
+Reading the index never accesses the guest. The selected Environment refreshes
+its index every 30 seconds while the page is visible; users can explicitly
+refresh another Environment. Refresh checks Sandbox0 state and does not request
+resume for paused Environments. An Environment with no cached history displays
+an explicit empty index until it is refreshed while running.
+
+Opening history or creating a new session requires an explicit **Stop and open**
+confirmation. This release retains one active Agent TUI per Environment:
+changing sessions stops the current process, including unfinished work, and
+preserves saved native history and Workspace files. Selecting another
+Environment or disconnecting a browser does not stop its Agent. A process being
+alive is not interpreted as an Agent actively generating or executing tools.
+
+The server rechecks native history before stopping the old process, serializes
+selection under the Environment lifecycle lock, waits for termination, and
+removes the old supervised session. It commits a new launch ID and native resume
+reference, clears old terminal coordinates, and revokes old controller leases.
+The next terminal connection starts the exact native resume command. Launch-ID
+CAS rejects stale devices and late terminal-coordinate publication; retrying
+the same selection request is idempotent. The existing terminal protocol resets
+replay when the procd session changes. No ANSI parsing or hidden TUI keystrokes
+implement session switching.
+
+The highlighted row is the history selected through Sandpi, not an authoritative
+view of later native `/new` or `/resume` commands typed inside the TUI. Native
+history changes appear on the next refresh. Workspace restore clears the index
+and the old resume target; Environment forks build their own index rather than
+inheriting a source Environment's runtime binding.

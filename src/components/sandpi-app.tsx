@@ -75,6 +75,17 @@ function replaceEmptyWorkspaceUrl() {
 }
 
 export function SandpiApp({ initialData }: SandpiAppProps) {
+  const [agentLaunches, setAgentLaunches] = useState<Record<string, string>>({});
+  const handleAgentLaunchChange = useCallback(
+    (environmentId: string, launchId: string) => {
+      setAgentLaunches((current) =>
+        current[environmentId] === launchId
+          ? current
+          : { ...current, [environmentId]: launchId },
+      );
+    },
+    [],
+  );
   const [environments, setEnvironments] = useState(initialData.environments);
   const [preferences, setPreferences] = useState(initialData.preferences);
   const [selectedEnvironmentId, setSelectedEnvironmentId] = useState(() => {
@@ -510,6 +521,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
   } as CSSProperties;
   const sidebar = (
     <EnvironmentSidebar
+      onAgentLaunchChange={handleAgentLaunchChange}
       language={preferences.general.language}
       timeZone={preferences.general.timeZone}
       viewer={initialData.viewer}
@@ -630,6 +642,7 @@ export function SandpiApp({ initialData }: SandpiAppProps) {
 
       <div id="agent-terminal" style={{ display: "contents" }}>
         <AgentTerminalWorkspace
+          key={`${selectedEnvironment.id}:${agentLaunches[selectedEnvironment.id] ?? ""}`}
           environment={selectedEnvironment}
           onToggleSidebar={handleToggleNavigation}
           onOpenFiles={() => {

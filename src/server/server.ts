@@ -1,3 +1,5 @@
+import { NativeAgentSessionService } from "@/server/agents/session-service";
+import { openNativeAgentSessionSchema } from "@/lib/native-agent-sessions";
 import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { Buffer, isUtf8 } from "node:buffer";
@@ -1719,6 +1721,39 @@ export function registerApiRoutes(
       }),
   );
 
+  const nativeSessions = new NativeAgentSessionService(
+    services.store,
+    services.runtime,
+  );
+  app.get<{ Params: { environmentId: string } }>(
+    "/api/v1/environments/:environmentId/native-sessions",
+    async (request) => ({
+      data: await services.store.getNativeSessionIndex(
+        request.principal.userId,
+        request.params.environmentId,
+      ),
+    }),
+  );
+  app.post<{ Params: { environmentId: string } }>(
+    "/api/v1/environments/:environmentId/native-sessions/refresh",
+    async (request) => ({
+      data: await nativeSessions.refresh(
+        request.principal.userId,
+        request.params.environmentId,
+      ),
+    }),
+  );
+  app.put<{ Params: { environmentId: string } }>(
+    "/api/v1/environments/:environmentId/native-sessions/selection",
+    async (request) => ({
+      data: await nativeSessions.open(
+        request.principal.userId,
+        request.params.environmentId,
+        openNativeAgentSessionSchema.parse(request.body),
+      ),
+    }),
+  );
+
   app.get("/api/v1/sessions", async (request) => ({
     data: await services.store.listSessions(request.principal.userId),
   }));
@@ -2604,6 +2639,7 @@ export function registerApiRoutes(
             environmentId,
             opened.runtime.sandboxId,
             coordinates,
+            opened.runtime.agentLaunchId ?? "",
           );
         }
         if (agentCredential) {
