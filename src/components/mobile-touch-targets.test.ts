@@ -38,11 +38,11 @@ test("native terminal mobile controls keep a 44px touch target", async () => {
   );
   assert.match(
     terminal,
-    /\.menuButton,\s*\.header button,\s*\.viewerNotice button,\s*\.connectionNotice button\s*\{[^}]*min-width: 44px;[^}]*min-height: 44px;/,
+    /\.viewerNotice button,\s*\.connectionNotice button\s*\{[^}]*min-width: 44px;[^}]*min-height: 44px;/,
   );
   assert.match(
     terminal,
-    /\.virtualKeys button,\s*\.actions button\s*\{[^}]*min-height: 44px;/,
+    /\.panel button,\s*\.actions button\s*\{[^}]*min-height: 44px;/,
   );
   assert.match(
     sidebar,

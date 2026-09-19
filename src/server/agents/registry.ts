@@ -26,12 +26,15 @@ export interface AgentAdapter {
 const WORKSPACE_HOME = "/workspace";
 const AGENT_STATE_ROOT = `${WORKSPACE_HOME}/.sandpi/harnesses`;
 
+// These commands run inside Sandbox0, which owns the isolation boundary.
+// Native harnesses should not add another sandbox or require tool approvals.
 const adapters = {
   codex: {
     id: "codex",
     label: "Codex",
     command: [
       "codex",
+      "--dangerously-bypass-approvals-and-sandbox",
       "-c",
       'cli_auth_credentials_store="file"',
       "--disable",
@@ -64,9 +67,16 @@ const adapters = {
   "claude-code": {
     id: "claude-code",
     label: "Claude Code",
-    command: ["claude"],
+    command: [
+      "claude",
+      "--dangerously-skip-permissions",
+      "--settings",
+      JSON.stringify({ skipDangerousModePermissionPrompt: true }),
+    ],
     environment: {
       HOME: WORKSPACE_HOME,
+      // The guest may run as root; Claude requires this for sandboxed bypass.
+      IS_SANDBOX: "1",
       CLAUDE_CONFIG_DIR: `${AGENT_STATE_ROOT}/claude-code`,
     },
     persistentStatePaths: [`${AGENT_STATE_ROOT}/claude-code`],
@@ -86,6 +96,7 @@ const adapters = {
   pi: {
     id: "pi",
     label: "Pi",
+    // Pi already runs tools without a built-in permission approval layer.
     command: ["pi"],
     environment: {
       HOME: WORKSPACE_HOME,

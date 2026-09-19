@@ -7,13 +7,15 @@ import {
   FolderTree,
   GitFork,
   Hand,
-  Menu,
+  PanelLeftOpen,
+  Keyboard,
+  MoreHorizontal,
   Pause,
   Play,
   RotateCcw,
   Settings,
 } from "lucide-react";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 
 import type { Environment } from "@/lib/types";
 
@@ -57,6 +59,38 @@ export function AgentTerminalWorkspace({
   onResume,
   onOpenSandboxPreview,
 }: AgentTerminalWorkspaceProps) {
+  const [openPanel, setOpenPanel] = useState<"keys" | "actions">();
+  const controlsRef = useRef<HTMLElement>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const panelId = useId();
+
+  useEffect(() => {
+    if (!openPanel) return;
+    const dismiss = (event: PointerEvent) => {
+      if (!controlsRef.current?.contains(event.target as Node)) {
+        setOpenPanel(undefined);
+      }
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      setOpenPanel(undefined);
+      triggerRef.current?.focus();
+    };
+    document.addEventListener("pointerdown", dismiss);
+    document.addEventListener("keydown", escape, true);
+    return () => {
+      document.removeEventListener("pointerdown", dismiss);
+      document.removeEventListener("keydown", escape, true);
+    };
+  }, [openPanel]);
+
+  const togglePanel = (panel: "keys" | "actions", trigger: HTMLButtonElement) => {
+    triggerRef.current = trigger;
+    setOpenPanel((current) => (current === panel ? undefined : panel));
+  };
+
   const [lifecycleBusy, setLifecycleBusy] = useState(false);
   const [actionError, setActionError] = useState<string>();
   const noopSearch = useCallback(() => undefined, []);
@@ -123,11 +157,20 @@ export function AgentTerminalWorkspace({
       <header className={styles.header} data-native-titlebar-leading-content>
         <button
           type="button"
-          className={styles.menuButton}
+          className={`icon-button sidebar-expand-button ${styles.navigationButton}`}
+          aria-label="Expand navigation"
+          title="Expand navigation"
+          onClick={onToggleSidebar}
+        >
+          <PanelLeftOpen size={17} aria-hidden="true" />
+        </button>
+        <button
+          type="button"
+          className={`icon-button mobile-menu-button ${styles.navigationButton}`}
           aria-label="Open Environment navigation"
           onClick={onToggleSidebar}
         >
-          <Menu size={17} aria-hidden="true" />
+          <PanelLeftOpen size={17} aria-hidden="true" />
         </button>
         <div className={styles.identity}>
           <span className={styles.prompt} aria-hidden="true">
@@ -192,66 +235,108 @@ export function AgentTerminalWorkspace({
         ) : null}
       </div>
 
-      <nav className={styles.virtualKeys} aria-label="Terminal special keys">
-        {VIRTUAL_KEYS.map((key) => (
+      <footer
+        ref={controlsRef}
+        className={styles.controls}
+        aria-label="Terminal controls"
+        onBlur={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget)) {
+            setOpenPanel(undefined);
+          }
+        }}
+      >
+        {actionError ? (
+          <div className={styles.actionError} role="alert">
+            {actionError}
+          </div>
+        ) : null}
+        <div className={styles.actions}>
+          <button type="button" onClick={onOpenFiles}>
+            <FolderTree size={15} aria-hidden="true" /> Files
+          </button>
           <button
-            key={key.label}
             type="button"
             disabled={controlRole !== "controller"}
-            onClick={() => {
-              sendInput(key.data);
-              terminalRef.current?.focus();
-            }}
+            onClick={() => void pasteFromClipboard()}
           >
-            {key.label}
+            <ClipboardPaste size={15} aria-hidden="true" /> Paste
           </button>
-        ))}
-        <button
-          type="button"
-          disabled={controlRole !== "controller"}
-          onClick={() => void pasteFromClipboard()}
-        >
-          <ClipboardPaste size={13} aria-hidden="true" /> PASTE
-        </button>
-        <button type="button" onClick={clearTerminal}>
-          <Eraser size={13} aria-hidden="true" /> CLEAR
-        </button>
-      </nav>
-
-      <footer className={styles.actions} aria-label="Environment actions">
-        <button type="button" onClick={onOpenFiles}>
-          <FolderTree size={14} aria-hidden="true" /> [FILES]
-        </button>
-        <button type="button" onClick={onOpenSnapshots}>
-          <Camera size={14} aria-hidden="true" /> [SNAPSHOTS]
-        </button>
-        <button type="button" onClick={onOpenFork}>
-          <GitFork size={14} aria-hidden="true" /> [FORK]
-        </button>
-        <button
-          type="button"
-          disabled={lifecycleBusy || !terminalAvailable}
-          onClick={() =>
-            void runLifecycleAction(sandboxPaused ? onResume : onPause)
-          }
-        >
-          {sandboxPaused ? (
-            <Play size={14} aria-hidden="true" />
-          ) : (
-            <Pause size={14} aria-hidden="true" />
-          )}
-          [{sandboxPaused ? "RESUME" : "PAUSE"}]
-        </button>
-        <button type="button" onClick={onOpenSettings}>
-          <Settings size={14} aria-hidden="true" /> [SETTINGS]
-        </button>
-        <span className={styles.coordinates} title={environment.sandboxId}>
-          sandbox:{environment.sandboxId || "provisioning"}
-        </span>
-        {actionError ? (
-          <span className={styles.actionError} role="alert">
-            {actionError}
-          </span>
+          <button
+            type="button"
+            aria-expanded={openPanel === "keys"}
+            aria-controls={openPanel === "keys" ? panelId : undefined}
+            onClick={(event) => togglePanel("keys", event.currentTarget)}
+          >
+            <Keyboard size={15} aria-hidden="true" /> Keys
+          </button>
+          <button
+            type="button"
+            aria-expanded={openPanel === "actions"}
+            aria-controls={openPanel === "actions" ? panelId : undefined}
+            onClick={(event) => togglePanel("actions", event.currentTarget)}
+          >
+            <MoreHorizontal size={15} aria-hidden="true" /> More
+          </button>
+        </div>
+        {openPanel ? (
+          <div
+            id={panelId}
+            className={`${styles.panel} ${openPanel === "keys" ? styles.virtualKeys : styles.environmentActions}`}
+            role="group"
+            aria-label={openPanel === "keys" ? "Terminal special keys" : "Environment actions"}
+          >
+            {openPanel === "keys" ? VIRTUAL_KEYS.map((key) => (
+              <button
+                key={key.label}
+                type="button"
+                disabled={controlRole !== "controller"}
+                onClick={() => sendInput(key.data)}
+              >
+                {key.label}
+              </button>
+            )) : (
+              <>
+                <button type="button" onClick={() => {
+                    setOpenPanel(undefined);
+                    onOpenSnapshots();
+                  }}>
+                  <Camera size={15} aria-hidden="true" /> Snapshots
+                </button>
+                <button type="button" onClick={() => {
+                    setOpenPanel(undefined);
+                    onOpenFork();
+                  }}>
+                  <GitFork size={15} aria-hidden="true" /> Fork
+                </button>
+                <button
+                  type="button"
+                  disabled={lifecycleBusy || !terminalAvailable}
+                  onClick={() => {
+                    setOpenPanel(undefined);
+                    void runLifecycleAction(sandboxPaused ? onResume : onPause);
+                  }}
+                >
+                  {sandboxPaused ? <Play size={15} aria-hidden="true" /> : <Pause size={15} aria-hidden="true" />}
+                  {sandboxPaused ? "Resume" : "Pause"}
+                </button>
+                <button type="button" onClick={() => {
+                    setOpenPanel(undefined);
+                    onOpenSettings();
+                  }}>
+                  <Settings size={15} aria-hidden="true" /> Settings
+                </button>
+                <button type="button" onClick={() => {
+                    setOpenPanel(undefined);
+                    clearTerminal();
+                  }}>
+                  <Eraser size={15} aria-hidden="true" /> Clear terminal
+                </button>
+                <span className={styles.coordinates} title={environment.sandboxId}>
+                  sandbox:{environment.sandboxId || "provisioning"}
+                </span>
+              </>
+            )}
+          </div>
         ) : null}
       </footer>
     </section>
